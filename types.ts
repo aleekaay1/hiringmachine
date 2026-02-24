@@ -143,6 +143,10 @@ export interface Candidate {
 }
 
 export interface AssessmentData {
+  /** Eligibility (at top of assessment) */
+  financialInvestmentLicense?: 'yes' | 'no';
+  comfortableVirtualEnvironment?: 'yes' | 'no';
+  careerPathInterest?: 'Advisor' | 'Leadership';
   occupation: string;
   currentRole: string;
   backgroundAreas: string[];

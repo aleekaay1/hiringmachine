@@ -15,19 +15,26 @@ const Assessment: React.FC = () => {
   const topRef = useRef<HTMLDivElement>(null);
 
   // Form State
-  const [step, setStep] = useState<'intro' | 'background' | 'questions'>('intro');
+  const [step, setStep] = useState<'intro' | 'eligibility' | 'background' | 'questions'>('intro');
+  const [eligibility, setEligibility] = useState({
+    financialInvestmentLicense: '' as '' | 'yes' | 'no',
+    comfortableVirtualEnvironment: '' as '' | 'yes' | 'no',
+    careerPathInterest: '' as '' | 'Advisor' | 'Leadership',
+  });
   const [background, setBackground] = useState({
     occupation: '',
     currentRole: '',
     areas: [] as string[],
     salesExperience: ''
   });
-  
+
   // Question State
   const [competitiveness, setCompetitiveness] = useState<number>(5);
   const [moneyMotivation, setMoneyMotivation] = useState<number>(5);
   const [likertResponses, setLikertResponses] = useState<Record<number, number>>({});
   const [trueScaleResponses, setTrueScaleResponses] = useState<Record<number, number>>({});
+
+  const backgroundAreaList = ['Sales', 'Customer Service', 'Management / Leadership', 'Entrepreneurial / Business Owner', 'Corporate / Professional', 'Trades / Skilled Labour', 'Administrative / Office Support', 'Technical / Digital Skills', 'Social Media / Marketing', 'Other'];
 
   useEffect(() => {
     if (!id) {
@@ -47,6 +54,27 @@ const Assessment: React.FC = () => {
           setAlreadyCompleted(true);
         } else {
           setCandidate(c);
+          const aq = c.applicantQuestionnaire;
+          const eq = c.exitQuestionnaire;
+          if (aq) {
+            setBackground(prev => ({
+              ...prev,
+              occupation: aq.occupation || prev.occupation,
+              currentRole: aq.currentRole || prev.currentRole,
+              areas: Array.isArray(aq.backgroundAreas) ? aq.backgroundAreas.filter((a: string) => backgroundAreaList.includes(a)) : prev.areas,
+              salesExperience: aq.salesExperience || prev.salesExperience,
+            }));
+            if (aq.financialInvestmentLicense) setEligibility(prev => ({ ...prev, financialInvestmentLicense: aq.financialInvestmentLicense }));
+            if (aq.comfortableVirtualEnvironment) setEligibility(prev => ({ ...prev, comfortableVirtualEnvironment: aq.comfortableVirtualEnvironment }));
+            if (aq.positionInterest === 'Leadership Career Track') setEligibility(prev => ({ ...prev, careerPathInterest: 'Leadership' }));
+            if (aq.positionInterest === 'Agent Career Track') setEligibility(prev => ({ ...prev, careerPathInterest: 'Advisor' }));
+          }
+          if (eq) {
+            if (eq.financialInvestmentLicense) setEligibility(prev => ({ ...prev, financialInvestmentLicense: eq.financialInvestmentLicense }));
+            if (eq.comfortableVirtualEnvironment) setEligibility(prev => ({ ...prev, comfortableVirtualEnvironment: eq.comfortableVirtualEnvironment }));
+            if (eq.positionInterest === 'Leadership Career Track') setEligibility(prev => ({ ...prev, careerPathInterest: 'Leadership' }));
+            if (eq.positionInterest === 'Agent Career Track') setEligibility(prev => ({ ...prev, careerPathInterest: 'Advisor' }));
+          }
         }
       } catch (err) {
         console.error(err);
@@ -75,6 +103,9 @@ const Assessment: React.FC = () => {
     if (!candidate || submitting) return;
 
     const assessmentData: AssessmentData = {
+      financialInvestmentLicense: eligibility.financialInvestmentLicense || undefined,
+      comfortableVirtualEnvironment: eligibility.comfortableVirtualEnvironment || undefined,
+      careerPathInterest: eligibility.careerPathInterest || undefined,
       occupation: background.occupation,
       currentRole: background.currentRole,
       backgroundAreas: background.areas,
@@ -151,7 +182,55 @@ const Assessment: React.FC = () => {
               <p>Please answer each question honestly and thoughtfully.</p>
             </div>
             <div className="mt-8">
-              <Button onClick={() => setStep('background')} fullWidth>Continue to Background</Button>
+              <Button onClick={() => setStep('eligibility')} fullWidth>Continue to Eligibility</Button>
+            </div>
+          </div>
+        </div>
+      </Layout>
+    );
+  }
+
+  if (step === 'eligibility') {
+    return (
+      <Layout>
+        <div ref={topRef} className="p-6 max-w-lg mx-auto w-full pb-24">
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Eligibility — Final Interview</h2>
+          <p className="text-gray-500 text-sm mb-6">These answers help us determine eligibility for final interview callbacks.</p>
+          <div className="space-y-6">
+            <Select
+              label="1. If you were offered an opportunity to join our company, would you be prepared to make the financial investment to obtain your license?"
+              value={eligibility.financialInvestmentLicense}
+              onChange={(e) => setEligibility({ ...eligibility, financialInvestmentLicense: e.target.value as 'yes' | 'no' })}
+              options={[
+                { value: 'yes', label: 'Yes' },
+                { value: 'no', label: 'No' },
+              ]}
+              required
+            />
+            <Select
+              label="2. Are you comfortable working in a 100% virtual environment?"
+              value={eligibility.comfortableVirtualEnvironment}
+              onChange={(e) => setEligibility({ ...eligibility, comfortableVirtualEnvironment: e.target.value as 'yes' | 'no' })}
+              options={[
+                { value: 'yes', label: 'Yes' },
+                { value: 'no', label: 'No' },
+              ]}
+              required
+            />
+            <Select
+              label="3. Which career path are you most interested in?"
+              value={eligibility.careerPathInterest}
+              onChange={(e) => setEligibility({ ...eligibility, careerPathInterest: e.target.value as 'Advisor' | 'Leadership' })}
+              options={[
+                { value: 'Advisor', label: 'Advisor' },
+                { value: 'Leadership', label: 'Leadership' },
+              ]}
+              required
+            />
+          </div>
+          <div className="fixed bottom-0 left-0 right-0 p-6 bg-white border-t border-gray-100 z-10">
+            <div className="max-w-lg mx-auto">
+              <Button fullWidth onClick={() => { setStep('background'); scrollToTop(); }}>Next — Background</Button>
             </div>
           </div>
         </div>
@@ -164,7 +243,7 @@ const Assessment: React.FC = () => {
       <Layout>
         <div ref={topRef} className="p-6 max-w-lg mx-auto w-full pb-24">
           <h2 className="text-2xl font-bold text-gray-900 mb-6">Section A — Background</h2>
-          
+          <p className="text-gray-500 text-sm mb-4">Pre-filled from your initial application. You can update if needed.</p>
           <div className="space-y-8">
             <Select
               label="1. What is your current occupation and employment status?"
@@ -191,12 +270,7 @@ const Assessment: React.FC = () => {
                 3. Which areas best describe your background? (Select all that apply) <span className="text-red-500">*</span>
               </label>
               <div className="space-y-2">
-                {[
-                  'Sales', 'Customer Service', 'Management / Leadership', 
-                  'Entrepreneurial / Business Owner', 'Corporate / Professional',
-                  'Trades / Skilled Labour', 'Administrative / Office Support',
-                  'Technical / Digital Skills', 'Social Media / Marketing', 'Other'
-                ].map(area => (
+                {backgroundAreaList.map(area => (
                   <div 
                     key={area}
                     onClick={() => handleAreaToggle(area)}

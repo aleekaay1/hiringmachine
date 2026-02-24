@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { getCandidates, deleteCandidate, saveCandidate } from '../services/storageService';
 import { getAssessmentSummary } from '../services/assessmentSummary';
+import { sendEmail } from '../services/emailService';
+import { EMAIL_TEMPLATES, mergeTemplate } from '../services/emailTemplates';
 import { Candidate, QUESTIONS, DEFAULT_ADMIN_DATA, type PipelineStage, type AdminData } from '../types';
 import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare } from 'lucide-react';
 import { Button } from '../components/UI';
@@ -28,9 +30,14 @@ const AdminDashboard: React.FC = () => {
   const [pipelineFilter, setPipelineFilter] = useState<PipelineStage | ''>('');
   const [newNote, setNewNote] = useState('');
   const [showEmailModal, setShowEmailModal] = useState(false);
+  const [emailModalMode, setEmailModalMode] = useState<'template1' | 'template2' | 'template3' | 'compose' | null>(null);
   const [emailSubject, setEmailSubject] = useState('');
   const [copyToast, setCopyToast] = useState(false);
   const [emailBody, setEmailBody] = useState('');
+  const [emailBodyIsHtml, setEmailBodyIsHtml] = useState(true);
+  const [emailPreviewTab, setEmailPreviewTab] = useState<'preview' | 'edit'>('edit');
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailError, setEmailError] = useState<string | null>(null);
   const [savingAdmin, setSavingAdmin] = useState(false);
   const [newTag, setNewTag] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -422,18 +429,54 @@ const AdminDashboard: React.FC = () => {
     updateAdminData(prev => ({ ...prev, resumeReviewedAt: new Date().toISOString() }));
   };
 
+  const openEmailModal = (mode: 'template1' | 'template2' | 'template3' | 'compose') => {
+    setEmailModalMode(mode);
+    setEmailError(null);
+    setEmailPreviewTab('edit');
+    if (mode === 'compose') {
+      setEmailSubject('');
+      setEmailBody('');
+      setEmailBodyIsHtml(false);
+    } else if (selectedCandidate) {
+      const template = EMAIL_TEMPLATES.find(t => t.id === mode);
+      if (template) {
+        const { subject, bodyHtml } = mergeTemplate(template.subject, template.bodyHtml, selectedCandidate);
+        setEmailSubject(subject);
+        setEmailBody(bodyHtml);
+        setEmailBodyIsHtml(true);
+      }
+    }
+    setShowEmailModal(true);
+  };
+
   const handleSendEmail = async () => {
     if (!selectedCandidate || !emailSubject.trim()) return;
-    // SMTP integration later: call your backend to send email
-    const sentAt = new Date().toISOString();
-    await updateAdminData(prev => ({
-      ...prev,
-      emailsSent: [...prev.emailsSent, { sentAt, subject: emailSubject.trim(), type: 'manual' }],
-    }));
-    setShowEmailModal(false);
-    setEmailSubject('');
-    setEmailBody('');
-    alert('Email logged. Connect SMTP in settings to send real emails.');
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      setEmailError('Your session expired. Please sign in again.');
+      return;
+    }
+    setEmailSending(true);
+    setEmailError(null);
+    const to = selectedCandidate.email;
+    const subject = emailSubject.trim();
+    const bodyHtml = emailBodyIsHtml ? emailBody.trim() || undefined : undefined;
+    const bodyText = !emailBodyIsHtml ? emailBody.trim() || undefined : undefined;
+    const result = await sendEmail(session.access_token, { to, subject, bodyHtml, bodyText });
+    setEmailSending(false);
+    if (result.ok) {
+      const sentAt = new Date().toISOString();
+      await updateAdminData(prev => ({
+        ...prev,
+        emailsSent: [...prev.emailsSent, { sentAt, subject, type: emailModalMode || 'manual' }],
+      }));
+      setShowEmailModal(false);
+      setEmailModalMode(null);
+      setEmailSubject('');
+      setEmailBody('');
+    } else {
+      setEmailError(result.error || 'Failed to send email');
+    }
   };
 
   if (!isAuthenticated) {
@@ -830,13 +873,18 @@ const AdminDashboard: React.FC = () => {
                       <Button onClick={handleAddNote} disabled={!newNote.trim() || savingAdmin}>Add</Button>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button variant="outline" onClick={() => { setEmailSubject(''); setEmailBody(''); setShowEmailModal(true); }} className="text-sm">
-                      <Mail size={16} className="mr-2" /> Send email
+                  <div className="flex flex-wrap gap-2 items-center">
+                    {EMAIL_TEMPLATES.map(t => (
+                      <Button key={t.id} variant="outline" onClick={() => openEmailModal(t.id as 'template1' | 'template2' | 'template3')} className="text-sm">
+                        <Mail size={16} className="mr-2" /> {t.name}
+                      </Button>
+                    ))}
+                    <Button variant="outline" onClick={() => openEmailModal('compose')} className="text-sm">
+                      <Mail size={16} className="mr-2" /> Compose
                     </Button>
                     {getAdminData(selectedCandidate).emailsSent.length > 0 && (
                       <span className="text-xs text-gray-500 self-center">
-                        {getAdminData(selectedCandidate).emailsSent.length} email(s) logged
+                        {getAdminData(selectedCandidate).emailsSent.length} email(s) sent
                       </span>
                     )}
                   </div>
@@ -917,6 +965,29 @@ const AdminDashboard: React.FC = () => {
                         ))}
                       </div>
                     </div>
+
+                    {(selectedCandidate.assessment.financialInvestmentLicense != null || selectedCandidate.assessment.comfortableVirtualEnvironment != null || selectedCandidate.assessment.careerPathInterest != null) && (
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        {selectedCandidate.assessment.financialInvestmentLicense != null && (
+                          <div>
+                            <p className="text-sm text-gray-500">Financial investment for license</p>
+                            <p className="font-medium capitalize">{selectedCandidate.assessment.financialInvestmentLicense}</p>
+                          </div>
+                        )}
+                        {selectedCandidate.assessment.comfortableVirtualEnvironment != null && (
+                          <div>
+                            <p className="text-sm text-gray-500">Comfortable 100% virtual</p>
+                            <p className="font-medium capitalize">{selectedCandidate.assessment.comfortableVirtualEnvironment}</p>
+                          </div>
+                        )}
+                        {selectedCandidate.assessment.careerPathInterest != null && (
+                          <div>
+                            <p className="text-sm text-gray-500">Career path interest</p>
+                            <p className="font-medium">{selectedCandidate.assessment.careerPathInterest}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     <div className="grid grid-cols-2 gap-6">
                       <div>
@@ -1064,39 +1135,66 @@ const AdminDashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Email modal - SMTP to be connected later */}
+        {/* Email modal: preview + send */}
         {showEmailModal && selectedCandidate && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setShowEmailModal(false)}>
-            <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4" onClick={e => e.stopPropagation()}>
-              <h3 className="text-lg font-bold text-gray-900">Send email</h3>
-              <p className="text-xs text-gray-500">SMTP can be configured later to send real emails. For now, sending will log this email to the candidate record.</p>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">To</label>
-                <input type="email" value={selectedCandidate.email} readOnly className="w-full px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm" />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => !emailSending && (setShowEmailModal(false), setEmailModalMode(null))}>
+            <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+              <div className="p-6 space-y-4 overflow-y-auto">
+                <h3 className="text-lg font-bold text-gray-900">
+                  {emailModalMode === 'compose' ? 'Compose email' : `${EMAIL_TEMPLATES.find(t => t.id === emailModalMode)?.name ?? 'Email'} – preview & send`}
+                </h3>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">To</label>
+                  <input type="email" value={selectedCandidate.email} readOnly className="w-full px-3 py-2 rounded-lg border border-gray-200 bg-gray-50 text-sm" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Subject</label>
+                  <input
+                    type="text"
+                    value={emailSubject}
+                    onChange={e => setEmailSubject(e.target.value)}
+                    placeholder="Subject"
+                    className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-[#005EB8] focus:border-[#005EB8]"
+                  />
+                </div>
+                <div>
+                  <div className="flex gap-2 mb-1">
+                    <button
+                      type="button"
+                      onClick={() => setEmailPreviewTab('edit')}
+                      className={`text-sm font-medium px-2 py-1 rounded ${emailPreviewTab === 'edit' ? 'bg-[#005EB8] text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+                    >
+                      Edit
+                    </button>
+                    {emailBodyIsHtml && (
+                      <button
+                        type="button"
+                        onClick={() => setEmailPreviewTab('preview')}
+                        className={`text-sm font-medium px-2 py-1 rounded ${emailPreviewTab === 'preview' ? 'bg-[#005EB8] text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+                      >
+                        Preview
+                      </button>
+                    )}
+                  </div>
+                  {emailPreviewTab === 'edit' ? (
+                    <textarea
+                      value={emailBody}
+                      onChange={e => setEmailBody(e.target.value)}
+                      placeholder={emailBodyIsHtml ? 'HTML or plain text...' : 'Your message...'}
+                      rows={10}
+                      className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-[#005EB8] focus:border-[#005EB8] font-mono"
+                    />
+                  ) : (
+                    <div className="border border-gray-200 rounded-lg p-4 bg-gray-50 min-h-[200px] max-h-[300px] overflow-y-auto text-sm prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: emailBody || '<p class="text-gray-400">No content</p>' }} />
+                  )}
+                </div>
+                {emailError && <p className="text-sm text-red-600">{emailError}</p>}
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Subject</label>
-                <input
-                  type="text"
-                  value={emailSubject}
-                  onChange={e => setEmailSubject(e.target.value)}
-                  placeholder="e.g. Next steps - Paz Organization"
-                  className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-[#005EB8] focus:border-[#005EB8]"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Message</label>
-                <textarea
-                  value={emailBody}
-                  onChange={e => setEmailBody(e.target.value)}
-                  placeholder="Your message..."
-                  rows={4}
-                  className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-[#005EB8] focus:border-[#005EB8]"
-                />
-              </div>
-              <div className="flex gap-2 justify-end">
-                <Button variant="outline" onClick={() => setShowEmailModal(false)}>Cancel</Button>
-                <Button onClick={handleSendEmail} disabled={!emailSubject.trim()}>Log & send (SMTP coming soon)</Button>
+              <div className="flex gap-2 justify-end p-6 border-t border-gray-100">
+                <Button variant="outline" onClick={() => { setShowEmailModal(false); setEmailModalMode(null); }} disabled={emailSending}>Cancel</Button>
+                <Button onClick={handleSendEmail} disabled={!emailSubject.trim() || emailSending}>
+                  {emailSending ? 'Sending...' : 'Send'}
+                </Button>
               </div>
             </div>
           </div>
