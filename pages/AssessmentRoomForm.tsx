@@ -31,13 +31,6 @@ const AssessmentRoomForm: React.FC = () => {
     salesExperience: ''
   });
 
-  // Eligibility (at top)
-  const [eligibility, setEligibility] = useState({
-    financialInvestmentLicense: '' as '' | 'yes' | 'no',
-    comfortableVirtualEnvironment: '' as '' | 'yes' | 'no',
-    careerPathInterest: '' as '' | 'Advisor' | 'Leadership',
-  });
-
   // Section 3: Questions
   const [competitiveness, setCompetitiveness] = useState<number>(5);
   const [moneyMotivation, setMoneyMotivation] = useState<number>(5);
@@ -70,7 +63,6 @@ const AssessmentRoomForm: React.FC = () => {
             city: c.city || ''
           });
           const aq = c.applicantQuestionnaire;
-          const eq = c.exitQuestionnaire;
           if (aq) {
             setBackground(prev => ({
               ...prev,
@@ -79,17 +71,7 @@ const AssessmentRoomForm: React.FC = () => {
               areas: Array.isArray(aq.backgroundAreas) ? aq.backgroundAreas.filter((a: string) => ASSESSMENT_ROOM_BACKGROUND_AREAS.includes(a as any)) : prev.areas,
               salesExperience: aq.salesExperience || prev.salesExperience,
             }));
-            if (aq.financialInvestmentLicense) setEligibility(prev => ({ ...prev, financialInvestmentLicense: aq.financialInvestmentLicense }));
-            if (aq.comfortableVirtualEnvironment) setEligibility(prev => ({ ...prev, comfortableVirtualEnvironment: aq.comfortableVirtualEnvironment }));
-            if (aq.positionInterest === 'Leadership Career Track') setEligibility(prev => ({ ...prev, careerPathInterest: 'Leadership' }));
-            if (aq.positionInterest === 'Agent Career Track') setEligibility(prev => ({ ...prev, careerPathInterest: 'Advisor' }));
-          }
-          if (eq) {
-            if (eq.financialInvestmentLicense) setEligibility(prev => ({ ...prev, financialInvestmentLicense: eq.financialInvestmentLicense }));
-            if (eq.comfortableVirtualEnvironment) setEligibility(prev => ({ ...prev, comfortableVirtualEnvironment: eq.comfortableVirtualEnvironment }));
-            if (eq.positionInterest === 'Leadership Career Track') setEligibility(prev => ({ ...prev, careerPathInterest: 'Leadership' }));
-            if (eq.positionInterest === 'Agent Career Track') setEligibility(prev => ({ ...prev, careerPathInterest: 'Advisor' }));
-          }
+            }
         }
       } catch (err) {
         console.error(err);
@@ -114,9 +96,6 @@ const AssessmentRoomForm: React.FC = () => {
     if (!candidate || submitting) return;
 
     const assessmentData: AssessmentData = {
-      financialInvestmentLicense: eligibility.financialInvestmentLicense || undefined,
-      comfortableVirtualEnvironment: eligibility.comfortableVirtualEnvironment || undefined,
-      careerPathInterest: eligibility.careerPathInterest || undefined,
       occupation: background.occupation,
       currentRole: background.currentRole,
       backgroundAreas: background.areas,
@@ -240,10 +219,9 @@ const AssessmentRoomForm: React.FC = () => {
   const totalQuestions = 2 + QUESTIONS.likert.length + QUESTIONS.trueScale.length;
   const answeredCount = 2 + Object.keys(likertResponses).length + Object.keys(trueScaleResponses).length;
   const isQuestionsComplete = totalQuestions === answeredCount;
-  const isEligibilityValid = eligibility.financialInvestmentLicense && eligibility.comfortableVirtualEnvironment && eligibility.careerPathInterest;
   const isSection1Valid = basic.firstName.trim() && basic.lastName.trim() && basic.email.trim();
   const isSection2Valid = background.occupation && background.areas.length > 0 && background.salesExperience.trim();
-  const canSubmit = isEligibilityValid && isSection1Valid && isSection2Valid && isQuestionsComplete;
+  const canSubmit = isSection1Valid && isSection2Valid && isQuestionsComplete;
 
   if (loading) {
     return (
@@ -276,46 +254,7 @@ const AssessmentRoomForm: React.FC = () => {
       <div ref={topRef} className="p-6 max-w-lg mx-auto w-full pb-32 space-y-10">
         <div className="text-center border-b pb-4">
           <h1 className="text-2xl font-bold text-[#005EB8]">Leadership & Career Assessment</h1>
-          <p className="text-gray-600 text-sm mt-1">Please complete all sections. Answers from your initial application are pre-filled where available.</p>
-        </div>
-
-        {/* Eligibility — at top */}
-        <div className="space-y-4">
-          <h2 className="text-xl font-bold text-gray-900">Eligibility — Final Interview</h2>
-          <p className="text-gray-500 text-sm">These answers help us determine eligibility for final interview callbacks.</p>
-          <Select
-            label="1. If you were offered an opportunity to join our company, would you be prepared to make the financial investment to obtain your license?"
-            value={eligibility.financialInvestmentLicense}
-            onChange={(e) => setEligibility({ ...eligibility, financialInvestmentLicense: e.target.value as 'yes' | 'no' })}
-            options={[
-              { value: '', label: 'Select...' },
-              { value: 'yes', label: 'Yes' },
-              { value: 'no', label: 'No' },
-            ]}
-            required
-          />
-          <Select
-            label="2. Are you comfortable working in a 100% virtual environment?"
-            value={eligibility.comfortableVirtualEnvironment}
-            onChange={(e) => setEligibility({ ...eligibility, comfortableVirtualEnvironment: e.target.value as 'yes' | 'no' })}
-            options={[
-              { value: '', label: 'Select...' },
-              { value: 'yes', label: 'Yes' },
-              { value: 'no', label: 'No' },
-            ]}
-            required
-          />
-          <Select
-            label="3. Which career path are you most interested in?"
-            value={eligibility.careerPathInterest}
-            onChange={(e) => setEligibility({ ...eligibility, careerPathInterest: e.target.value as 'Advisor' | 'Leadership' })}
-            options={[
-              { value: '', label: 'Select...' },
-              { value: 'Advisor', label: 'Advisor' },
-              { value: 'Leadership', label: 'Leadership' },
-            ]}
-            required
-          />
+          <p className="text-gray-600 text-sm mt-1">Please complete all three sections. Answers from your initial application are pre-filled where available.</p>
         </div>
 
         {/* Section 1: Basic Info */}
@@ -358,7 +297,6 @@ const AssessmentRoomForm: React.FC = () => {
         {/* Section 2: Professional Background */}
         <div className="space-y-4">
           <h2 className="text-xl font-bold text-gray-900">Section 2 — Professional Background</h2>
-          <p className="text-gray-500 text-sm">Pre-filled from your initial application if you completed it. You can update if needed.</p>
           <Select
             label="Current occupation and employment status"
             value={background.occupation}

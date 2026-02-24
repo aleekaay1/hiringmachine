@@ -6,8 +6,8 @@ import { createCandidate, getCandidateByEmail, saveCandidate } from '../services
 import type { PostLiveExitQuestionnaire } from '../types';
 
 const POSITION_OPTIONS = [
-  { value: 'Leadership Career Track', label: 'Leadership Career Track' },
-  { value: 'Agent Career Track', label: 'Agent Career Track' },
+  { value: 'Advisor', label: 'Advisor' },
+  { value: 'Leadership', label: 'Leadership' },
 ];
 
 const CONTACT_PERMISSION_OPTIONS = [
@@ -75,7 +75,7 @@ const ExitQuestionnaireForm: React.FC = () => {
           legallyEntitledCanadaFullTime: eq.legallyEntitledCanadaFullTime || prev.legallyEntitledCanadaFullTime,
           comfortableVirtualEnvironment: eq.comfortableVirtualEnvironment || prev.comfortableVirtualEnvironment,
           excitedOffSiteSocial: eq.excitedOffSiteSocial || prev.excitedOffSiteSocial,
-          positionInterest: eq.positionInterest || prev.positionInterest,
+          positionInterest: (eq.positionInterest === 'Leadership Career Track' ? 'Leadership' : eq.positionInterest === 'Agent Career Track' ? 'Advisor' : eq.positionInterest) || prev.positionInterest,
           questionsAboutOpportunity: eq.questionsAboutOpportunity || prev.questionsAboutOpportunity,
           contactPermission: eq.contactPermission || prev.contactPermission,
         } : {}),
@@ -221,8 +221,40 @@ const ExitQuestionnaireForm: React.FC = () => {
 
           <div className="border-t border-gray-200 pt-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Applicant Questionnaire</h2>
-            <p className="text-sm text-gray-600 mb-4">Please answer the following questions.</p>
+            <p className="text-sm text-gray-600 mb-4">Please answer the following questions. These help us determine eligibility for final interview callbacks.</p>
           </div>
+
+          {/* Eligibility questions at top (last QR — exit form) */}
+          <Select
+            label="1. If you were offered an opportunity to join our company, would you be prepared to make the financial investment to obtain your license?"
+            required
+            options={[
+              { value: 'yes', label: 'Yes' },
+              { value: 'no', label: 'No' },
+            ]}
+            value={form.financialInvestmentLicense}
+            onChange={e => update('financialInvestmentLicense', e.target.value)}
+            error={errors.financialInvestmentLicense}
+          />
+          <Select
+            label="2. Are you comfortable working in a 100% virtual environment?"
+            required
+            options={[
+              { value: 'yes', label: 'Yes' },
+              { value: 'no', label: 'No' },
+            ]}
+            value={form.comfortableVirtualEnvironment}
+            onChange={e => update('comfortableVirtualEnvironment', e.target.value)}
+            error={errors.comfortableVirtualEnvironment}
+          />
+          <Select
+            label="3. Which career path are you most interested in?"
+            required
+            options={POSITION_OPTIONS}
+            value={form.positionInterest}
+            onChange={e => update('positionInterest', e.target.value)}
+            error={errors.positionInterest}
+          />
 
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -252,18 +284,6 @@ const ExitQuestionnaireForm: React.FC = () => {
           </div>
 
           <Select
-            label="If you were offered an opportunity to join our organization, would you be prepared to make the financial investment to obtain your license [$348 tuition fees for LLQP Registration]?"
-            required
-            options={[
-              { value: 'yes', label: 'Yes' },
-              { value: 'no', label: 'No' },
-            ]}
-            value={form.financialInvestmentLicense}
-            onChange={e => update('financialInvestmentLicense', e.target.value)}
-            error={errors.financialInvestmentLicense}
-          />
-
-          <Select
             label="Are you legally entitled to work in Canada on a FULL-TIME BASIS?"
             required
             options={[
@@ -273,18 +293,6 @@ const ExitQuestionnaireForm: React.FC = () => {
             value={form.legallyEntitledCanadaFullTime}
             onChange={e => update('legallyEntitledCanadaFullTime', e.target.value)}
             error={errors.legallyEntitledCanadaFullTime}
-          />
-
-          <Select
-            label="Are you comfortable with working in a 100% virtual environment?"
-            required
-            options={[
-              { value: 'yes', label: 'YES' },
-              { value: 'no', label: 'NO' },
-            ]}
-            value={form.comfortableVirtualEnvironment}
-            onChange={e => update('comfortableVirtualEnvironment', e.target.value)}
-            error={errors.comfortableVirtualEnvironment}
           />
 
           <Select
@@ -298,15 +306,6 @@ const ExitQuestionnaireForm: React.FC = () => {
             value={form.excitedOffSiteSocial}
             onChange={e => update('excitedOffSiteSocial', e.target.value)}
             error={errors.excitedOffSiteSocial}
-          />
-
-          <Select
-            label="Which position would you be the most interested in being considered for?"
-            required
-            options={POSITION_OPTIONS}
-            value={form.positionInterest}
-            onChange={e => update('positionInterest', e.target.value)}
-            error={errors.positionInterest}
           />
 
           <div className="mb-4">
