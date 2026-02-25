@@ -73,16 +73,6 @@ const AssessmentRoomForm: React.FC = () => {
             phone: c.phone || '',
             city: c.city || ''
           });
-          const aq = c.applicantQuestionnaire;
-          if (aq) {
-            setBackground(prev => ({
-              ...prev,
-              occupation: aq.occupation || prev.occupation,
-              currentRole: aq.currentRole || prev.currentRole,
-              areas: Array.isArray(aq.backgroundAreas) ? aq.backgroundAreas.filter((a: string) => ASSESSMENT_ROOM_BACKGROUND_AREAS.includes(a as any)) : prev.areas,
-              salesExperience: aq.salesExperience || prev.salesExperience,
-            }));
-            }
         }
       } catch (err) {
         console.error(err);
