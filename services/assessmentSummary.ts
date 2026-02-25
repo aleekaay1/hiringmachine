@@ -25,16 +25,22 @@ function moneyMotivationBand(v: number): Band {
 }
 
 function likertAverage(a: AssessmentData): number {
-  const vals = QUESTIONS.likert.map((q) => a.likertResponses[q.id]).filter((n) => n !== undefined && n !== null);
+  if (!a.likertResponses) return 0;
+  const vals = QUESTIONS.likert
+    .map((q) => a.likertResponses?.[q.id])
+    .filter((n) => n !== undefined && n !== null) as number[];
   if (vals.length === 0) return 0;
   return vals.reduce((s, n) => s + n, 0) / vals.length;
 }
 
 function trueScaleReversedAverage(a: AssessmentData): number {
-  const vals = QUESTIONS.trueScale.map((q) => {
-    const v = a.trueScaleResponses[q.id];
-    return v === undefined || v === null ? undefined : 3 - v;
-  }).filter((n): n is number => n !== undefined);
+  if (!a.trueScaleResponses) return 0;
+  const vals = QUESTIONS.trueScale
+    .map((q) => {
+      const v = a.trueScaleResponses?.[q.id];
+      return v === undefined || v === null ? undefined : 3 - v;
+    })
+    .filter((n): n is number => n !== undefined);
   if (vals.length === 0) return 0;
   return vals.reduce((s, n) => s + n, 0) / vals.length;
 }
