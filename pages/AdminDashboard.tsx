@@ -1135,6 +1135,7 @@ const AdminDashboard: React.FC = () => {
                       )}
                       {showAnswers && (
                         <div className="mt-4 space-y-4 text-sm">
+                          {/* Core drivers always shown */}
                           <div>
                             <p className="font-semibold text-gray-800">
                               Q1. On a scale of 1–10, how competitive are you?
@@ -1152,37 +1153,145 @@ const AdminDashboard: React.FC = () => {
                             </p>
                           </div>
 
-                          <div className="space-y-3">
-                            {QUESTIONS.likert.map(q => (
-                              <div key={q.id}>
-                                <p className="font-semibold text-gray-800">
-                                  Q{q.id}. {q.text}
-                                </p>
-                                <p className="text-gray-600">
-                                  Answer:{' '}
-                                  {getLikertLabel(
-                                    selectedCandidate.assessment.likertResponses?.[q.id]
-                                  ) || '—'}
-                                </p>
-                              </div>
-                            ))}
-                          </div>
+                          {/* New 50-question assessment responses */}
+                          {(selectedCandidate.assessment as any).personalityAnswers ||
+                          (selectedCandidate.assessment as any).scenarioAnswers ||
+                          (selectedCandidate.assessment as any).eqAnswers ||
+                          (selectedCandidate.assessment as any).openEndedAnswers ? (
+                            <>
+                              {/* Open-ended */}
+                              {(selectedCandidate.assessment as any).openEndedAnswers && (
+                                <div className="space-y-3 pt-2 border-t border-gray-100">
+                                  <p className="font-semibold text-gray-800">Open-ended questions</p>
+                                  {OPEN_ENDED_QUESTIONS.map(q => (
+                                    <div key={q.id}>
+                                      <p className="font-semibold text-gray-800">
+                                        Q{q.id}. {q.question}
+                                      </p>
+                                      <p className="text-gray-600 whitespace-pre-wrap">
+                                        Answer:{' '}
+                                        {(selectedCandidate.assessment as any).openEndedAnswers[q.id] ||
+                                          '—'}
+                                      </p>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
 
-                          <div className="space-y-3 pt-2 border-t border-gray-100">
-                            {QUESTIONS.trueScale.map(q => (
-                              <div key={q.id}>
-                                <p className="font-semibold text-gray-800">
-                                  Q{q.id}. {q.text}
-                                </p>
-                                <p className="text-gray-600">
-                                  Answer:{' '}
-                                  {getTrueScaleLabel(
-                                    selectedCandidate.assessment.trueScaleResponses?.[q.id]
-                                  ) || '—'}
-                                </p>
+                              {/* Personality Profile */}
+                              {(selectedCandidate.assessment as any).personalityAnswers && (
+                                <div className="space-y-3 pt-2 border-t border-gray-100">
+                                  <p className="font-semibold text-gray-800">Personality Profile</p>
+                                  {PERSONALITY_QUESTIONS.map(q => {
+                                    const key =
+                                      (selectedCandidate.assessment as any).personalityAnswers[
+                                        q.id
+                                      ] as keyof typeof PERSONALITY_LIKERT_OPTIONS | undefined;
+                                    const label = key
+                                      ? PERSONALITY_LIKERT_OPTIONS[key].label
+                                      : '—';
+                                    return (
+                                      <div key={q.id}>
+                                        <p className="font-semibold text-gray-800">
+                                          Q{q.id}. {q.question}
+                                        </p>
+                                        <p className="text-gray-600">
+                                          Answer: {label} {key ? `(${key})` : ''}
+                                        </p>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+
+                              {/* Scenario & Preference */}
+                              {(selectedCandidate.assessment as any).scenarioAnswers && (
+                                <div className="space-y-3 pt-2 border-t border-gray-100">
+                                  <p className="font-semibold text-gray-800">
+                                    Scenario & Preference Questions
+                                  </p>
+                                  {SCENARIO_QUESTIONS.map(q => {
+                                    const key =
+                                      (selectedCandidate.assessment as any).scenarioAnswers[
+                                        q.id
+                                      ] as string | undefined;
+                                    const label = key ? q.options[key] : undefined;
+                                    return (
+                                      <div key={q.id}>
+                                        <p className="font-semibold text-gray-800">
+                                          Q{q.id}. {q.question}
+                                        </p>
+                                        <p className="text-gray-600">
+                                          Answer: {label ? `${label} (${key})` : '—'}
+                                        </p>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+
+                              {/* EQ Test */}
+                              {(selectedCandidate.assessment as any).eqAnswers && (
+                                <div className="space-y-3 pt-2 border-t border-gray-100">
+                                  <p className="font-semibold text-gray-800">
+                                    Entrepreneurial Quotient (EQ) Test
+                                  </p>
+                                  {EQ_QUESTIONS.map(q => {
+                                    const key =
+                                      (selectedCandidate.assessment as any).eqAnswers[
+                                        q.id
+                                      ] as keyof typeof EQ_LIKERT_OPTIONS | undefined;
+                                    const label = key ? EQ_LIKERT_OPTIONS[key].label : '—';
+                                    return (
+                                      <div key={q.id}>
+                                        <p className="font-semibold text-gray-800">
+                                          Q{q.id}. {q.question}
+                                        </p>
+                                        <p className="text-gray-600">
+                                          Answer: {label} {key ? `(${key})` : ''}
+                                        </p>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              {/* Legacy 30-question responses */}
+                              <div className="space-y-3">
+                                {QUESTIONS.likert.map(q => (
+                                  <div key={q.id}>
+                                    <p className="font-semibold text-gray-800">
+                                      Q{q.id}. {q.text}
+                                    </p>
+                                    <p className="text-gray-600">
+                                      Answer:{' '}
+                                      {getLikertLabel(
+                                        selectedCandidate.assessment.likertResponses?.[q.id]
+                                      ) || '—'}
+                                    </p>
+                                  </div>
+                                ))}
                               </div>
-                            ))}
-                          </div>
+
+                              <div className="space-y-3 pt-2 border-t border-gray-100">
+                                {QUESTIONS.trueScale.map(q => (
+                                  <div key={q.id}>
+                                    <p className="font-semibold text-gray-800">
+                                      Q{q.id}. {q.text}
+                                    </p>
+                                    <p className="text-gray-600">
+                                      Answer:{' '}
+                                      {getTrueScaleLabel(
+                                        selectedCandidate.assessment.trueScaleResponses?.[q.id]
+                                      ) || '—'}
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
