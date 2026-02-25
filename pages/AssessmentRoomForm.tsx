@@ -1,9 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
-import { Button, Input, Select } from '../components/UI';
+import { Button } from '../components/UI';
 import { getCandidateById, saveCandidate, calculateScore } from '../services/storageService';
-import { Candidate, AssessmentData, QUESTIONS, ASSESSMENT_ROOM_BACKGROUND_AREAS } from '../types';
+import { Candidate, AssessmentData } from '../types';
+import {
+  OPEN_ENDED_QUESTIONS,
+  PERSONALITY_QUESTIONS,
+  PERSONALITY_LIKERT_OPTIONS,
+  SCENARIO_QUESTIONS,
+  EQ_QUESTIONS,
+  EQ_LIKERT_OPTIONS,
+  type LikertOptionKey,
+} from '../services/assessmentConfig';
 
 const AssessmentRoomForm: React.FC = () => {
   const { id } = useParams<{ id: string }>();
