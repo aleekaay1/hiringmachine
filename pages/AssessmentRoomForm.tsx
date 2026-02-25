@@ -84,15 +84,6 @@ const AssessmentRoomForm: React.FC = () => {
     fetchCandidate();
   }, [id, navigate]);
 
-  const handleAreaToggle = (area: string) => {
-    setBackground(prev => {
-      const areas = prev.areas.includes(area)
-        ? prev.areas.filter(a => a !== area)
-        : [...prev.areas, area];
-      return { ...prev, areas };
-    });
-  };
-
   const handleSubmit = async () => {
     if (!candidate || submitting) return;
 
@@ -105,8 +96,10 @@ const AssessmentRoomForm: React.FC = () => {
       salesExperience: aq?.salesExperience || '',
       competitiveness,
       moneyMotivation,
-      likertResponses,
-      trueScaleResponses
+      openEndedAnswers,
+      personalityAnswers,
+      scenarioAnswers,
+      eqAnswers,
     };
 
     const { score, fitCategory } = calculateScore(assessmentData);
@@ -154,29 +147,51 @@ const AssessmentRoomForm: React.FC = () => {
     </div>
   );
 
-  const renderLikert = (qId: number, text: string) => {
-    const val = likertResponses[qId];
+  const renderPersonality = (qId: number, text: string) => {
+    const val = personalityAnswers[qId];
     return (
       <div className="bg-white p-6 rounded-xl border border-gray-200 space-y-3" key={qId}>
         <p className="font-medium text-gray-800">{text}</p>
         <div className="grid grid-cols-2 gap-2">
-          {[
-            { label: 'Strongly Agree', score: 3 },
-            { label: 'Agree', score: 2 },
-            { label: 'Disagree', score: 1 },
-            { label: 'Strongly Disagree', score: 0 }
-          ].map(opt => (
+          {Object.entries(PERSONALITY_LIKERT_OPTIONS).map(([key, opt]) => (
             <button
-              key={opt.label}
+              key={key}
               type="button"
-              onClick={() => setLikertResponses(prev => ({ ...prev, [qId]: opt.score }))}
+              onClick={() =>
+                setPersonalityAnswers(prev => ({ ...prev, [qId]: key as LikertOptionKey }))
+              }
               className={`py-2 px-3 text-sm rounded-lg border transition-all ${
-                val === opt.score
+                val === (key as LikertOptionKey)
                   ? 'bg-[#005EB8] text-white border-[#005EB8]'
                   : 'bg-white text-gray-600 border-gray-200 hover:border-blue-200'
               }`}
             >
               {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const renderScenario = (qId: number, text: string, options: Record<string, string>) => {
+    const val = scenarioAnswers[qId];
+    return (
+      <div className="bg-white p-6 rounded-xl border border-gray-200 space-y-3" key={qId}>
+        <p className="font-medium text-gray-800">{text}</p>
+        <div className="grid grid-cols-2 gap-2">
+          {Object.entries(options).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setScenarioAnswers(prev => ({ ...prev, [qId]: key }))}
+              className={`py-2 px-3 text-sm rounded-lg border transition-all ${
+                val === key
+                  ? 'bg-[#005EB8] text-white border-[#005EB8]'
+                  : 'bg-white text-gray-600 border-gray-200 hover:border-blue-200'
+              }`}
+            >
+              {label}
             </button>
           ))}
         </div>
