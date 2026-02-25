@@ -226,7 +226,7 @@ const ExitQuestionnaireForm: React.FC = () => {
 
           {/* Eligibility questions at top (last QR — exit form) */}
           <Select
-            label="1. If you were offered an opportunity to join our company, would you be prepared to make the financial investment to obtain your license?"
+            label="1. If you were offered an opportunity to join our company, would you be prepared to make the financial investment to obtain your license [$348]?"
             required
             options={[
               { value: 'yes', label: 'Yes' },
