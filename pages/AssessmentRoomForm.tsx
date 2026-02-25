@@ -31,11 +31,13 @@ const AssessmentRoomForm: React.FC = () => {
     salesExperience: ''
   });
 
-  // Section 3: Questions
+  // Assessment questions
   const [competitiveness, setCompetitiveness] = useState<number>(5);
   const [moneyMotivation, setMoneyMotivation] = useState<number>(5);
-  const [likertResponses, setLikertResponses] = useState<Record<number, number>>({});
-  const [trueScaleResponses, setTrueScaleResponses] = useState<Record<number, number>>({});
+  const [openEndedAnswers, setOpenEndedAnswers] = useState<Record<number, string>>({});
+  const [personalityAnswers, setPersonalityAnswers] = useState<Record<number, LikertOptionKey>>({});
+  const [scenarioAnswers, setScenarioAnswers] = useState<Record<number, string>>({});
+  const [eqAnswers, setEqAnswers] = useState<Record<number, LikertOptionKey>>({});
 
   useEffect(() => {
     if (!id) {
@@ -95,11 +97,13 @@ const AssessmentRoomForm: React.FC = () => {
   const handleSubmit = async () => {
     if (!candidate || submitting) return;
 
+    const aq = candidate.applicantQuestionnaire;
+
     const assessmentData: AssessmentData = {
-      occupation: background.occupation,
-      currentRole: background.currentRole,
-      backgroundAreas: background.areas,
-      salesExperience: background.salesExperience,
+      occupation: aq?.occupation || '',
+      currentRole: aq?.currentRole || '',
+      backgroundAreas: aq?.backgroundAreas || [],
+      salesExperience: aq?.salesExperience || '',
       competitiveness,
       moneyMotivation,
       likertResponses,
@@ -110,11 +114,6 @@ const AssessmentRoomForm: React.FC = () => {
 
     const updatedCandidate: Candidate = {
       ...candidate,
-      firstName: basic.firstName.trim() || candidate.firstName,
-      lastName: basic.lastName.trim() || candidate.lastName,
-      email: basic.email.trim() || candidate.email,
-      phone: basic.phone.trim() || candidate.phone,
-      city: basic.city.trim() || candidate.city,
       status: 'assessment_complete',
       assessment: assessmentData,
       score,
@@ -186,24 +185,19 @@ const AssessmentRoomForm: React.FC = () => {
     );
   };
 
-  const renderTrueScale = (qId: number, text: string) => {
-    const val = trueScaleResponses[qId];
+  const renderEq = (qId: number, text: string) => {
+    const val = eqAnswers[qId];
     return (
       <div className="bg-white p-6 rounded-xl border border-gray-200 space-y-3" key={qId}>
         <p className="font-medium text-gray-800">{text}</p>
         <div className="grid grid-cols-2 gap-2">
-          {[
-            { label: 'Always True', score: 3 },
-            { label: 'Quite True', score: 2 },
-            { label: 'Rarely True', score: 1 },
-            { label: 'Never True', score: 0 }
-          ].map(opt => (
+          {Object.entries(EQ_LIKERT_OPTIONS).map(([key, opt]) => (
             <button
-              key={opt.label}
+              key={key}
               type="button"
-              onClick={() => setTrueScaleResponses(prev => ({ ...prev, [qId]: opt.score }))}
+              onClick={() => setEqAnswers(prev => ({ ...prev, [qId]: key as LikertOptionKey }))}
               className={`py-2 px-3 text-sm rounded-lg border transition-all ${
-                val === opt.score
+                val === (key as LikertOptionKey)
                   ? 'bg-[#005EB8] text-white border-[#005EB8]'
                   : 'bg-white text-gray-600 border-gray-200 hover:border-blue-200'
               }`}
@@ -216,12 +210,15 @@ const AssessmentRoomForm: React.FC = () => {
     );
   };
 
-  const totalQuestions = 2 + QUESTIONS.likert.length + QUESTIONS.trueScale.length;
-  const answeredCount = 2 + Object.keys(likertResponses).length + Object.keys(trueScaleResponses).length;
+  const totalQuestions =
+    2 + PERSONALITY_QUESTIONS.length + SCENARIO_QUESTIONS.length + EQ_QUESTIONS.length;
+  const answeredCount =
+    2 +
+    Object.keys(personalityAnswers).length +
+    Object.keys(scenarioAnswers).length +
+    Object.keys(eqAnswers).length;
   const isQuestionsComplete = totalQuestions === answeredCount;
-  const isSection1Valid = basic.firstName.trim() && basic.lastName.trim() && basic.email.trim();
-  const isSection2Valid = background.occupation && background.areas.length > 0 && background.salesExperience.trim();
-  const canSubmit = isSection1Valid && isSection2Valid && isQuestionsComplete;
+  const canSubmit = isQuestionsComplete;
 
   if (loading) {
     return (
@@ -254,123 +251,63 @@ const AssessmentRoomForm: React.FC = () => {
       <div ref={topRef} className="p-6 max-w-lg mx-auto w-full pb-32 space-y-10">
         <div className="text-center border-b pb-4">
           <h1 className="text-2xl font-bold text-[#005EB8]">Leadership & Career Assessment</h1>
-          <p className="text-gray-600 text-sm mt-1">Please complete all three sections. Answers from your initial application are pre-filled where available.</p>
+          <p className="text-gray-600 text-sm mt-1">
+            Please answer honestly. Answers from your initial application are already on file where
+            needed.
+          </p>
         </div>
 
-        {/* Section 1: Basic Info */}
-        <div className="space-y-4">
-          <h2 className="text-xl font-bold text-gray-900">Section 1 — Basic Information</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input
-              label="First name"
-              value={basic.firstName}
-              onChange={(e) => setBasic({ ...basic, firstName: e.target.value })}
-              required
-            />
-            <Input
-              label="Last name"
-              value={basic.lastName}
-              onChange={(e) => setBasic({ ...basic, lastName: e.target.value })}
-              required
-            />
-          </div>
-          <Input
-            label="Email"
-            type="email"
-            value={basic.email}
-            onChange={(e) => setBasic({ ...basic, email: e.target.value })}
-            required
-          />
-          <Input
-            label="Phone"
-            type="tel"
-            value={basic.phone}
-            onChange={(e) => setBasic({ ...basic, phone: e.target.value })}
-          />
-          <Input
-            label="City"
-            value={basic.city}
-            onChange={(e) => setBasic({ ...basic, city: e.target.value })}
-          />
-        </div>
-
-        {/* Section 2: Professional Background */}
-        <div className="space-y-4">
-          <h2 className="text-xl font-bold text-gray-900">Section 2 — Professional Background</h2>
-          <Select
-            label="Current occupation and employment status"
-            value={background.occupation}
-            onChange={(e) => setBackground({ ...background, occupation: e.target.value })}
-            options={[
-              { value: '', label: 'Select...' },
-              { value: 'full-time', label: 'Employed full-time' },
-              { value: 'part-time', label: 'Employed part-time' },
-              { value: 'self-employed', label: 'Self-employed' },
-              { value: 'student', label: 'Student' },
-              { value: 'unemployed', label: 'Not currently employed' },
-            ]}
-            required
-          />
-          <Input
-            label="Current role / company (if applicable)"
-            value={background.currentRole}
-            onChange={(e) => setBackground({ ...background, currentRole: e.target.value })}
-          />
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Which areas best describe your background? (Select all that apply) <span className="text-red-500">*</span>
-            </label>
-            <div className="space-y-2">
-              {ASSESSMENT_ROOM_BACKGROUND_AREAS.map(area => (
-                <div
-                  key={area}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => handleAreaToggle(area)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleAreaToggle(area)}
-                  className={`p-3 rounded-lg border cursor-pointer flex items-center transition-colors ${
-                    background.areas.includes(area) ? 'bg-blue-50 border-[#005EB8] text-[#005EB8]' : 'bg-white border-gray-200'
-                  }`}
-                >
-                  <div className={`w-5 h-5 rounded border mr-3 flex items-center justify-center ${
-                    background.areas.includes(area) ? 'bg-[#005EB8] border-[#005EB8]' : 'border-gray-300'
-                  }`}>
-                    {background.areas.includes(area) && <span className="text-white text-xs">✓</span>}
-                  </div>
-                  {area}
-                </div>
-              ))}
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Briefly describe any experience in sales, leadership, or generating revenue <span className="text-red-500">*</span>
-            </label>
-            <textarea
-              className="w-full p-3 rounded-lg border border-gray-300 focus:ring-[#005EB8] focus:ring-2 focus:outline-none min-h-[120px]"
-              value={background.salesExperience}
-              onChange={(e) => setBackground({ ...background, salesExperience: e.target.value })}
-              required
-            />
-          </div>
-        </div>
-
-        {/* Section 3: Leadership & EQ */}
+        {/* Core drivers (1–10 sliders) */}
         <div className="space-y-6">
-          <div>
-            <h2 className="text-xl font-bold text-gray-900">Section 3 — Leadership & EQ Assessment</h2>
-            <p className="text-gray-500 text-sm mt-1">Please answer honestly. There are no right or wrong answers.</p>
-          </div>
+          <h2 className="text-xl font-bold text-gray-900">Core drivers (1–10)</h2>
           <div className="space-y-4">
-            {renderScale1to10('On a scale of 1–10, how competitive are you?', competitiveness, setCompetitiveness)}
-            {renderScale1to10('On a scale of 1–10, how motivated are you by income growth?', moneyMotivation, setMoneyMotivation)}
+            {renderScale1to10(
+              'On a scale of 1–10, how competitive are you?',
+              competitiveness,
+              setCompetitiveness,
+            )}
+            {renderScale1to10(
+              'On a scale of 1–10, how motivated are you by income growth?',
+              moneyMotivation,
+              setMoneyMotivation,
+            )}
           </div>
-          <div className="space-y-4">
-            {QUESTIONS.likert.map(q => renderLikert(q.id, q.text))}
-          </div>
-          <div className="space-y-4">
-            {QUESTIONS.trueScale.map(q => renderTrueScale(q.id, q.text))}
-          </div>
+        </div>
+
+        {/* Open-ended questions */}
+        <div className="space-y-4">
+          <h2 className="text-xl font-bold text-gray-900">Open-ended questions</h2>
+          {OPEN_ENDED_QUESTIONS.map((q) => (
+            <div key={q.id} className="space-y-2">
+              <label className="block text-sm font-medium text-gray-700">{q.question}</label>
+              <textarea
+                rows={3}
+                className="w-full p-3 rounded-lg border border-gray-300 focus:ring-[#005EB8] focus:ring-2 focus:outline-none"
+                value={openEndedAnswers[q.id] || ''}
+                onChange={(e) =>
+                  setOpenEndedAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                }
+              />
+            </div>
+          ))}
+        </div>
+
+        {/* Personality Profile */}
+        <div className="space-y-4">
+          <h2 className="text-xl font-bold text-gray-900">Personality Profile</h2>
+          {PERSONALITY_QUESTIONS.map((q) => renderPersonality(q.id, q.question))}
+        </div>
+
+        {/* Scenario & Preference Questions */}
+        <div className="space-y-4">
+          <h2 className="text-xl font-bold text-gray-900">Scenario & Preference Questions</h2>
+          {SCENARIO_QUESTIONS.map((q) => renderScenario(q.id, q.question, q.options))}
+        </div>
+
+        {/* Entrepreneurial Quotient Test */}
+        <div className="space-y-4">
+          <h2 className="text-xl font-bold text-gray-900">Entrepreneurial Quotient (EQ) Test</h2>
+          {EQ_QUESTIONS.map((q) => renderEq(q.id, q.question))}
         </div>
 
         <div className="pt-4 border-t">

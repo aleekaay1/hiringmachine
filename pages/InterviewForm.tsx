@@ -158,7 +158,6 @@ const InterviewForm: React.FC = () => {
     if (!preForm.occupation) e.occupation = 'Required';
     if (!preForm.backgroundAreas.length) e.backgroundAreas = 'Select at least one';
     if (!preForm.salesExperience.trim()) e.salesExperience = 'Required';
-    if (!preForm.somethingAboutYourself.trim()) e.somethingAboutYourself = 'Required';
     if (!preForm.legallyEntitledCanada) e.legallyEntitledCanada = 'Required';
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -479,12 +478,6 @@ const InterviewForm: React.FC = () => {
               <label className="block text-sm font-medium text-gray-700 mb-2">Briefly describe any experience you have in sales, leadership, or generating revenue. *</label>
               <textarea className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-[#005EB8] focus:ring-2 focus:outline-none min-h-[100px]" value={preForm.salesExperience} onChange={(e) => setPreForm({ ...preForm, salesExperience: e.target.value })} />
               {errors.salesExperience && <p className="text-xs text-red-600 mt-1">{errors.salesExperience}</p>}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Before your initial interview, tell us something about yourself that is not on your resume. *</label>
-              <textarea className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-[#005EB8] focus:ring-2 focus:outline-none min-h-[100px]" value={preForm.somethingAboutYourself} onChange={(e) => setPreForm({ ...preForm, somethingAboutYourself: e.target.value })} />
-              {errors.somethingAboutYourself && <p className="text-xs text-red-600 mt-1">{errors.somethingAboutYourself}</p>}
             </div>
 
             <div>

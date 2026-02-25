@@ -1,5 +1,12 @@
 import type { AssessmentData } from '../types';
 import { QUESTIONS } from '../types';
+import {
+  PERSONALITY_LIKERT_OPTIONS,
+  PERSONALITY_TRAIT_GROUPS,
+  SCENARIO_QUESTIONS,
+  EQ_LIKERT_OPTIONS,
+  EQ_INTERPRETATION_THRESHOLDS,
+} from './assessmentConfig';
 import { calculateScore } from './storageService';
 
 // --- Bands (all possible answers are finite: 0-10 for Q1-2, 0-3 for Likert, 0-3 for TrueScale) ---
@@ -129,11 +136,7 @@ function pickPhrase<T>(phrases: T[], seed: number): T {
   return phrases[idx];
 }
 
-/**
- * Generates a deterministic psychological summary for the admin based only on
- * the assessment answers (no AI call). Uses pre-made phrases keyed by score bands.
- */
-export function getAssessmentSummary(assessment: AssessmentData): string[] {
+function buildLegacySummary(assessment: AssessmentData): string[] {
   const compBand = competitivenessBand(assessment.competitiveness);
   const moneyBand = moneyMotivationBand(assessment.moneyMotivation);
 
@@ -163,3 +166,160 @@ export function getAssessmentSummary(assessment: AssessmentData): string[] {
 
   return [paragraph1, paragraph2, paragraph3, paragraph4, paragraph5];
 }
+
+/**
+ * New-style summary for the 50-question assessment (core drivers, personality trait groups,
+ * scenario preferences, and EQ band).
+ */
+function buildNewAssessmentSummary(assessment: AssessmentData): string[] {
+  const paragraphs: string[] = [];
+
+  // Core drivers
+  const compBand = competitivenessBand(assessment.competitiveness);
+  const moneyBand = moneyMotivationBand(assessment.moneyMotivation);
+  const { fitCategory, eqBand } = calculateScore(assessment) as any;
+
+  const coreDrivers: Record<Band, string> = {
+    low: 'Self-reported competitiveness is on the lower side; they may prefer collaborative, stable environments over direct competition.',
+    moderate:
+      'Competitiveness is in the moderate range; they can operate in both collaborative and performance-driven settings.',
+    high: 'They report strong competitiveness and are likely comfortable in target-based, performance-oriented environments.',
+  };
+
+  const incomeDrivers: Record<Band, string> = {
+    low: 'Income growth is a weaker driver; they may be more motivated by stability, purpose, or work-life balance.',
+    moderate:
+      'Money motivation is moderate; earnings matter, but are balanced with other factors such as growth and culture.',
+    high: 'They are highly motivated by income growth and may respond well to commission and performance-based pay.',
+  };
+
+  paragraphs.push(coreDrivers[compBand]);
+  paragraphs.push(incomeDrivers[moneyBand]);
+
+  // Personality trait groups
+  if (assessment.personalityAnswers) {
+    const personalityLines: string[] = [];
+    Object.entries(PERSONALITY_TRAIT_GROUPS).forEach(([group, ids]) => {
+      const scores = ids
+        .map((id) => {
+          const key = assessment.personalityAnswers![id];
+          if (!key) return undefined;
+          const opt = PERSONALITY_LIKERT_OPTIONS[key];
+          return opt?.score;
+        })
+        .filter((v): v is number => v != null);
+      if (!scores.length) return;
+      const avg = scores.reduce((s, v) => s + v, 0) / scores.length;
+      let band: Band = 'moderate';
+      if (avg >= 3.4) band = 'high';
+      else if (avg <= 2.2) band = 'low';
+      const label =
+        group === 'leadership_and_drive'
+          ? 'leadership & drive'
+          : group === 'growth_and_self_improvement'
+          ? 'growth and self-improvement'
+          : group === 'stability_and_security'
+          ? 'stability and security orientation'
+          : group === 'social_and_helping_orientation'
+          ? 'social / helping orientation'
+          : group === 'energy_and_activity_level'
+          ? 'energy and activity level'
+          : 'openness and curiosity';
+      if (band === 'high') {
+        personalityLines.push(`Strong ${label}.`);
+      } else if (band === 'moderate') {
+        personalityLines.push(`Moderate ${label}.`);
+      } else {
+        personalityLines.push(`Lower emphasis on ${label}.`);
+      }
+    });
+    if (personalityLines.length) {
+      paragraphs.push(
+        `Personality profile summary: ${personalityLines.join(' ')}`,
+      );
+    }
+  }
+
+  // Scenario preferences (pick a few key scenarios)
+  if (assessment.scenarioAnswers) {
+    const prefs: string[] = [];
+    const ans = assessment.scenarioAnswers;
+    const q26 = ans[26];
+    if (q26) {
+      const opt = SCENARIO_QUESTIONS.find((q) => q.id === 26)?.options[q26];
+      if (opt) {
+        prefs.push(
+          `Supervision preference (Q26): "${opt}" – indicating how much direction they prefer.`,
+        );
+      }
+    }
+    const q30 = ans[30];
+    if (q30) {
+      const opt = SCENARIO_QUESTIONS.find((q) => q.id === 30)?.options[q30];
+      if (opt) {
+        prefs.push(
+          `Goal-setting style (Q30): "${opt}" – reveals their planning vs. flexibility bias.`,
+        );
+      }
+    }
+    const q34 = ans[34];
+    if (q34) {
+      const opt = SCENARIO_QUESTIONS.find((q) => q.id === 34)?.options[q34];
+      if (opt) {
+        prefs.push(
+          `Result focus (Q34): "${opt}" – shows whether they prioritize short- or long-term outcomes.`,
+        );
+      }
+    }
+    const q40 = ans[40];
+    if (q40) {
+      const opt = SCENARIO_QUESTIONS.find((q) => q.id === 40)?.options[q40];
+      if (opt) {
+        prefs.push(
+          `Rules vs. flexibility (Q40): "${opt}" – indicates their comfort with strict policy enforcement vs. pragmatic exceptions.`,
+        );
+      }
+    }
+    if (prefs.length) {
+      paragraphs.push(
+        `Scenario & preference snapshot: ${prefs.join(' ')}`,
+      );
+    }
+  }
+
+  // EQ band
+  if (assessment.eqAnswers) {
+    let eqScore = 0;
+    Object.values(assessment.eqAnswers).forEach((key) => {
+      const opt = EQ_LIKERT_OPTIONS[key];
+      if (opt) eqScore += opt.score;
+    });
+    const band =
+      EQ_INTERPRETATION_THRESHOLDS.find(
+        (b) => eqScore >= b.min && eqScore <= b.max,
+      ) ?? EQ_INTERPRETATION_THRESHOLDS[EQ_INTERPRETATION_THRESHOLDS.length - 1];
+    paragraphs.push(
+      `Entrepreneurial Quotient (EQ): total score ${eqScore}, band "${band.label}".`,
+    );
+  }
+
+  // Overall closing based on fitCategory
+  const closingKey = (fitCategory as string) ?? 'Review';
+  const closingPhrases =
+    FIT_CATEGORY_CLOSING[closingKey] ?? FIT_CATEGORY_CLOSING['Review'];
+  paragraphs.push(closingPhrases[0]);
+
+  return paragraphs;
+}
+
+/**
+ * Generates a psychological summary for the admin based only on assessment answers (no AI).
+ * Uses legacy phrases for the old 30-question assessment, and trait-based summary for the new one.
+ */
+export function getAssessmentSummary(assessment: AssessmentData): string[] {
+  if (assessment.personalityAnswers || assessment.scenarioAnswers || assessment.eqAnswers) {
+    return buildNewAssessmentSummary(assessment);
+  }
+  return buildLegacySummary(assessment);
+}
+

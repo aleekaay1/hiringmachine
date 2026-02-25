@@ -5,6 +5,14 @@ import { getCandidates, deleteCandidate, saveCandidate } from '../services/stora
 import { getAssessmentSummary } from '../services/assessmentSummary';
 import { sendEmail } from '../services/emailService';
 import { EMAIL_TEMPLATES, mergeTemplate } from '../services/emailTemplates';
+import {
+  OPEN_ENDED_QUESTIONS,
+  PERSONALITY_QUESTIONS,
+  PERSONALITY_LIKERT_OPTIONS,
+  SCENARIO_QUESTIONS,
+  EQ_QUESTIONS,
+  EQ_LIKERT_OPTIONS,
+} from '../services/assessmentConfig';
 import { Candidate, QUESTIONS, DEFAULT_ADMIN_DATA, type PipelineStage, type AdminData } from '../types';
 import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare } from 'lucide-react';
 import { Button } from '../components/UI';
@@ -189,22 +197,79 @@ const AdminDashboard: React.FC = () => {
 
   const buildAssessmentTextForAI = (): string => {
     if (!selectedCandidate?.assessment) return '';
-    const a = selectedCandidate.assessment;
+    const a = selectedCandidate.assessment as any;
+
     const lines: string[] = ['Candidate assessment – Q&A', ''];
-    lines.push('Q1. On a scale of 1–10, how competitive are you?');
-    lines.push(`Answer: ${a.competitiveness}/10`, '');
-    lines.push('Q2. On a scale of 1–10, how motivated are you by income growth?');
-    lines.push(`Answer: ${a.moneyMotivation}/10`, '');
-    QUESTIONS.likert.forEach(q => {
-      lines.push(`Q${q.id}. ${q.text}`);
-      lines.push(`Answer: ${getLikertLabel(a.likertResponses[q.id]) || '—'}`, '');
-    });
-    QUESTIONS.trueScale.forEach(q => {
-      lines.push(`Q${q.id}. ${q.text}`);
-      lines.push(`Answer: ${getTrueScaleLabel(a.trueScaleResponses[q.id]) || '—'}`, '');
-    });
+    // Core drivers
+    lines.push('Core drivers:');
+    lines.push(
+      `Q1. On a scale of 1–10, how competitive are you?\nAnswer: ${a.competitiveness}/10`,
+      '',
+    );
+    lines.push(
+      `Q2. On a scale of 1–10, how motivated are you by income growth?\nAnswer: ${a.moneyMotivation}/10`,
+      '',
+    );
+
+    if (a.personalityAnswers || a.scenarioAnswers || a.eqAnswers || a.openEndedAnswers) {
+      // Open-ended
+      if (a.openEndedAnswers) {
+        lines.push('Open-ended questions:');
+        OPEN_ENDED_QUESTIONS.forEach((q: any) => {
+          lines.push(`Q${q.id}. ${q.question}`);
+          lines.push(`Answer: ${a.openEndedAnswers[q.id] || '—'}`, '');
+        });
+      }
+
+      // Personality Profile
+      if (a.personalityAnswers) {
+        lines.push('Personality Profile (Likert – Strongly Agree to Strongly Disagree):');
+        PERSONALITY_QUESTIONS.forEach((q: any) => {
+          const key = a.personalityAnswers[q.id] as keyof typeof PERSONALITY_LIKERT_OPTIONS | undefined;
+          const label = key ? PERSONALITY_LIKERT_OPTIONS[key].label : '—';
+          lines.push(`Q${q.id}. ${q.question}`);
+          lines.push(`Answer: ${label} (${key ?? '-'})`, '');
+        });
+      }
+
+      // Scenario & preference
+      if (a.scenarioAnswers) {
+        lines.push('Scenario & Preference Questions:');
+        SCENARIO_QUESTIONS.forEach((q: any) => {
+          const key = a.scenarioAnswers[q.id] as string | undefined;
+          const label = key ? q.options[key] : undefined;
+          lines.push(`Q${q.id}. ${q.question}`);
+          lines.push(`Answer: ${label ? `${label} (${key})` : '—'}`, '');
+        });
+      }
+
+      // EQ test
+      if (a.eqAnswers) {
+        lines.push('Entrepreneurial Quotient (EQ) Test:');
+        EQ_QUESTIONS.forEach((q: any) => {
+          const key = a.eqAnswers[q.id] as keyof typeof EQ_LIKERT_OPTIONS | undefined;
+          const label = key ? EQ_LIKERT_OPTIONS[key].label : '—';
+          lines.push(`Q${q.id}. ${q.question}`);
+          lines.push(`Answer: ${label} (${key ?? '-'})`, '');
+        });
+      }
+    } else {
+      // Legacy 30-question format
+      lines.push('');
+      QUESTIONS.likert.forEach(q => {
+        lines.push(`Q${q.id}. ${q.text}`);
+        lines.push(`Answer: ${getLikertLabel(a.likertResponses?.[q.id]) || '—'}`, '');
+      });
+      QUESTIONS.trueScale.forEach(q => {
+        lines.push(`Q${q.id}. ${q.text}`);
+        lines.push(`Answer: ${getTrueScaleLabel(a.trueScaleResponses?.[q.id]) || '—'}`, '');
+      });
+    }
+
     lines.push('---', '');
-    lines.push('Analyze the above assessment answers and provide a concise psychological summary of this candidate for a sales/leadership role. Include: competitive drive, fit for performance-based pay, leadership potential, and any concerns.');
+    lines.push(
+      'Analyze the above assessment answers and provide a concise psychological summary of this candidate for a sales/leadership role. Include: competitive drive, leadership potential, entrepreneurial fit, comfort with performance-based pay, scenario-based decision style, and any concerns.',
+    );
     return lines.join('\n');
   };
 
@@ -958,7 +1023,9 @@ const AdminDashboard: React.FC = () => {
 
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 space-y-3">
                       <h4 className="text-sm font-bold text-slate-800">Assessment summary</h4>
-                      <p className="text-xs text-slate-500 mb-2">Interpretation based on answers (competitiveness, money motivation, leadership items, and fit-risk items).</p>
+                      <p className="text-xs text-slate-500 mb-2">
+                        Summary of core drivers, personality traits, scenario preferences, and entrepreneurial quotient based on the completed assessment.
+                      </p>
                       <div className="space-y-2 text-sm text-slate-700">
                         {getAssessmentSummary(selectedCandidate.assessment).map((paragraph, i) => (
                           <p key={i} className="leading-relaxed">{paragraph}</p>

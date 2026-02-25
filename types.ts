@@ -153,8 +153,14 @@ export interface AssessmentData {
   salesExperience: string;
   competitiveness: number; // 1-10
   moneyMotivation: number; // 1-10
-  likertResponses: Record<number, number>; // Q3-20
-  trueScaleResponses: Record<number, number>; // Q21-30
+  /** Legacy fields for the original 30-question assessment */
+  likertResponses?: Record<number, number>; // Q3-20
+  trueScaleResponses?: Record<number, number>; // Q21-30
+  /** New assessment (50-question) fields */
+  openEndedAnswers?: Record<number, string>; // ids 2-10
+  personalityAnswers?: Record<number, 'a' | 'b' | 'c' | 'd'>; // 1-25
+  scenarioAnswers?: Record<number, string>; // 26-40, option key
+  eqAnswers?: Record<number, 'a' | 'b' | 'c' | 'd'>; // 1-10
 }
 
 export const QUESTIONS = {

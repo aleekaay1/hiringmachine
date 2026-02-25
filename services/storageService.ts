@@ -1,4 +1,9 @@
 import { Candidate, AssessmentData, ApplicantQuestionnaire, AdminData, DEFAULT_ADMIN_DATA, PostLiveExitQuestionnaire } from '../types';
+import {
+  PERSONALITY_LIKERT_OPTIONS,
+  EQ_LIKERT_OPTIONS,
+  EQ_INTERPRETATION_THRESHOLDS,
+} from './assessmentConfig';
 import { supabase } from './supabaseClient';
 
 const TABLE_NAME = 'candidates';
@@ -196,6 +201,57 @@ export const deleteCandidate = async (id: string): Promise<void> => {
 
 // Auto-scoring logic
 export const calculateScore = (assessment: AssessmentData) => {
+  // --- New 50-question assessment scoring ---
+  if (assessment.personalityAnswers || assessment.eqAnswers) {
+    let score = 0;
+    let maxScore = 0;
+
+    // Core drivers sliders (1–10 each, max 20)
+    score += assessment.competitiveness;
+    score += assessment.moneyMotivation;
+    maxScore += 20;
+
+    // Personality profile (25 items, 1–4 each)
+    if (assessment.personalityAnswers) {
+      Object.entries(assessment.personalityAnswers).forEach(([_, key]) => {
+        const opt = PERSONALITY_LIKERT_OPTIONS[key];
+        if (opt) {
+          score += opt.score;
+          maxScore += 4;
+        }
+      });
+    }
+
+    // EQ test (10 items, 1–4 each, higher is more entrepreneurial)
+    let eqScore = 0;
+    if (assessment.eqAnswers) {
+      Object.entries(assessment.eqAnswers).forEach(([_, key]) => {
+        const opt = EQ_LIKERT_OPTIONS[key];
+        if (opt) {
+          eqScore += opt.score;
+          score += opt.score;
+          maxScore += 4;
+        }
+      });
+    }
+
+    const percentage = maxScore > 0 ? (score / maxScore) * 100 : 0;
+
+    let fitCategory: 'High Fit' | 'Review' | 'Not Aligned';
+    if (percentage >= 80) fitCategory = 'High Fit';
+    else if (percentage >= 50) fitCategory = 'Review';
+    else fitCategory = 'Not Aligned';
+
+    // Determine EQ interpretation (not stored separately, but useful for admin summary)
+    const eqBand =
+      EQ_INTERPRETATION_THRESHOLDS.find(
+        (band) => eqScore >= band.min && eqScore <= band.max,
+      ) ?? EQ_INTERPRETATION_THRESHOLDS[EQ_INTERPRETATION_THRESHOLDS.length - 1];
+
+    return { score, fitCategory, percentage, eqScore, eqBand: eqBand.label };
+  }
+
+  // --- Legacy 30-question scoring ---
   let score = 0;
   let maxScore = 0;
 
@@ -204,23 +260,27 @@ export const calculateScore = (assessment: AssessmentData) => {
   score += assessment.moneyMotivation;
   maxScore += 20;
 
-  // Q3-20: Likert (0-3) - Positive traits
-  // Strongly Agree (3) -> Strongly Disagree (0)
-  Object.values(assessment.likertResponses).forEach(val => {
-    score += val;
-    maxScore += 3;
-  });
+  if (assessment.likertResponses) {
+    // Q3-20: Likert (0-3) - Positive traits
+    // Strongly Agree (3) -> Strongly Disagree (0)
+    Object.values(assessment.likertResponses).forEach((val) => {
+      score += val;
+      maxScore += 3;
+    });
+  }
 
-  // Q21-30: True Scale (0-3) - Negative traits
-  // The input value is 3 (Always True) to 0 (Never True).
-  // These are negative traits for a sales role.
-  // We want to REVERSE score them for "Fit". 
-  // If user says "Never True" (0), that's good (score 3). 
-  // If user says "Always True" (3), that's bad (score 0).
-  Object.values(assessment.trueScaleResponses).forEach(val => {
-    score += (3 - val); // Reverse scoring
-    maxScore += 3;
-  });
+  if (assessment.trueScaleResponses) {
+    // Q21-30: True Scale (0-3) - Negative traits
+    // The input value is 3 (Always True) to 0 (Never True).
+    // These are negative traits for a sales role.
+    // We want to REVERSE score them for "Fit".
+    // If user says "Never True" (0), that's good (score 3).
+    // If user says "Always True" (3), that's bad (score 0).
+    Object.values(assessment.trueScaleResponses).forEach((val) => {
+      score += 3 - val; // Reverse scoring
+      maxScore += 3;
+    });
+  }
 
   const percentage = (score / maxScore) * 100;
   
