@@ -392,11 +392,11 @@ const AdminDashboard: React.FC = () => {
       ];
 
       const likertAnswers = QUESTIONS.likert.map(q =>
-        a ? getLikertLabel(a.likertResponses[q.id]) : ''
+        a?.likertResponses ? getLikertLabel(a.likertResponses?.[q.id]) || '' : ''
       );
 
       const trueScaleAnswers = QUESTIONS.trueScale.map(q =>
-        a ? getTrueScaleLabel(a.trueScaleResponses[q.id]) : ''
+        a?.trueScaleResponses ? getTrueScaleLabel(a.trueScaleResponses?.[q.id]) || '' : ''
       );
 
       return [...base, ...likertAnswers, ...trueScaleAnswers];
@@ -1161,7 +1161,7 @@ const AdminDashboard: React.FC = () => {
                                 <p className="text-gray-600">
                                   Answer:{' '}
                                   {getLikertLabel(
-                                    selectedCandidate.assessment.likertResponses[q.id]
+                                    selectedCandidate.assessment.likertResponses?.[q.id]
                                   ) || '—'}
                                 </p>
                               </div>
@@ -1177,7 +1177,7 @@ const AdminDashboard: React.FC = () => {
                                 <p className="text-gray-600">
                                   Answer:{' '}
                                   {getTrueScaleLabel(
-                                    selectedCandidate.assessment.trueScaleResponses[q.id]
+                                    selectedCandidate.assessment.trueScaleResponses?.[q.id]
                                   ) || '—'}
                                 </p>
                               </div>
