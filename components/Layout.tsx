@@ -18,12 +18,22 @@ const Layout: React.FC<LayoutProps> = ({ children, hideHeader = false, isAdmin =
     <div className="min-h-screen flex flex-col font-sans text-gray-800" style={{ backgroundColor: isAdmin ? '#f3f4f6' : COLORS.background }}>
       {!hideHeader && (
         <header className="bg-white shadow-sm sticky top-0 z-50 safe-area-top">
-          <div className={`mx-auto px-4 py-2 sm:py-3 flex items-center justify-between gap-2 min-h-[52px] sm:min-h-0 ${isAdmin ? 'max-w-7xl' : 'max-w-4xl'}`}>
-            <div className="flex items-center min-w-0 flex-1">
+          <div
+            className={`mx-auto w-full px-4 flex items-center gap-2 ${
+              isAdmin
+                ? 'max-w-7xl py-2 sm:py-3 justify-between min-h-[52px] sm:min-h-0'
+                : 'max-w-full justify-center py-3 sm:py-4 md:py-5'
+            }`}
+          >
+            <div className={`flex items-center min-w-0 ${isAdmin ? 'flex-1' : 'justify-center w-full'}`}>
               <img
                 src="/logo.png"
                 alt="Globe Life AIL Division - Paz Organization"
-                className="h-9 sm:h-10 w-auto max-w-full object-contain object-left"
+                className={
+                  isAdmin
+                    ? 'h-9 sm:h-10 w-auto max-w-full object-contain object-left'
+                    : 'h-[min(11.25rem,32vh)] sm:h-[min(12.5rem,28vh)] md:h-[12.5rem] lg:h-[13.75rem] w-auto max-w-[min(100%,42rem)] object-contain object-center'
+                }
                 onError={(e) => {
                   const target = e.target as HTMLImageElement;
                   target.style.display = 'none';

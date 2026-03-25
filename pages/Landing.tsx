@@ -9,30 +9,32 @@ const Landing: React.FC = () => {
 
   return (
     <Layout>
-      <div className="flex-grow flex flex-col items-center justify-center p-4 sm:p-6 text-center animate-fade-in safe-area-bottom">
-        <div className="max-w-md w-full space-y-6 sm:space-y-8">
-          <div className="space-y-3 sm:space-y-4">
-            <div className="flex justify-center mb-3 sm:mb-4 px-2">
+      <div className="flex-grow flex flex-col items-stretch justify-center w-full max-w-6xl xl:max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 py-6 sm:py-10 text-center animate-fade-in safe-area-bottom">
+        <div className="w-full space-y-6 sm:space-y-8 lg:space-y-10">
+          <div className="space-y-4 sm:space-y-5">
+            <div className="w-full mb-4 sm:mb-6 flex items-center justify-center rounded-xl sm:rounded-2xl shadow-md sm:shadow-lg bg-[#f8fafc] min-h-[12rem] sm:min-h-[16rem] lg:min-h-[20rem] overflow-hidden">
               <img
                 src="/header.PNG"
                 alt="Globe Life AIL Division - Paz Organization"
-                className="w-full max-w-md h-auto object-contain"
+                className="w-full h-auto max-h-[min(52vh,520px)] sm:max-h-[min(48vh,580px)] lg:max-h-[640px] object-contain object-center"
                 onError={(e) => {
                   const target = e.target as HTMLImageElement;
                   target.style.display = 'none';
                 }}
               />
             </div>
-            <h2 className="text-2xl sm:text-3xl font-bold text-[#005EB8]">Welcome</h2>
-            <p className="text-lg sm:text-xl font-medium text-gray-700">Paz Organization</p>
-            <div className="w-16 h-1 bg-[#37B06D] mx-auto rounded-full"></div>
-            <p className="text-sm sm:text-base text-gray-500 leading-relaxed px-1">
+            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-[#005EB8] tracking-tight">
+              Welcome
+            </h2>
+            <p className="text-xl sm:text-2xl lg:text-3xl font-medium text-gray-700">Paz Organization</p>
+            <div className="w-20 sm:w-24 h-1.5 bg-[#37B06D] mx-auto rounded-full"></div>
+            <p className="text-base sm:text-lg text-gray-500 leading-relaxed max-w-3xl mx-auto px-1">
               Globe Life AIL Division<br />
               Please complete the form as directed by the Management Team.
             </p>
           </div>
 
-          <div className="pt-6 sm:pt-8 space-y-4">
+          <div className="pt-2 sm:pt-4 space-y-4 max-w-2xl mx-auto w-full sm:max-w-3xl lg:max-w-4xl">
             <Button
               fullWidth
               onClick={() => navigate('/interview')}
