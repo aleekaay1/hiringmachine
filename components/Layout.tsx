@@ -6,9 +6,16 @@ interface LayoutProps {
   children: React.ReactNode;
   hideHeader?: boolean;
   isAdmin?: boolean;
+  /** When set (non-admin only), shows this image in the header instead of the logo — e.g. landing cover banner. */
+  headerBannerSrc?: string;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, hideHeader = false, isAdmin = false }) => {
+const Layout: React.FC<LayoutProps> = ({
+  children,
+  hideHeader = false,
+  isAdmin = false,
+  headerBannerSrc,
+}) => {
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -19,26 +26,44 @@ const Layout: React.FC<LayoutProps> = ({ children, hideHeader = false, isAdmin =
       {!hideHeader && (
         <header className="bg-white shadow-sm sticky top-0 z-50 safe-area-top">
           <div
-            className={`mx-auto w-full px-4 flex items-center gap-2 ${
+            className={`mx-auto w-full flex items-center gap-2 ${
               isAdmin
-                ? 'max-w-7xl py-2 sm:py-3 justify-between min-h-[52px] sm:min-h-0'
-                : 'max-w-full justify-center py-3 sm:py-4 md:py-5'
+                ? 'max-w-7xl px-4 py-2 sm:py-3 justify-between min-h-[52px] sm:min-h-0'
+                : headerBannerSrc
+                  ? 'max-w-full justify-center px-0 py-0'
+                  : 'max-w-full justify-center px-4 py-3 sm:py-4 md:py-5'
             }`}
           >
-            <div className={`flex items-center min-w-0 ${isAdmin ? 'flex-1' : 'justify-center w-full'}`}>
-              <img
-                src="/logo.png"
-                alt="Globe Life AIL Division - Paz Organization"
-                className={
-                  isAdmin
-                    ? 'h-9 sm:h-10 w-auto max-w-full object-contain object-left'
-                    : 'h-[min(11.25rem,32vh)] sm:h-[min(12.5rem,28vh)] md:h-[12.5rem] lg:h-[13.75rem] w-auto max-w-[min(100%,42rem)] object-contain object-center'
-                }
-                onError={(e) => {
-                  const target = e.target as HTMLImageElement;
-                  target.style.display = 'none';
-                }}
-              />
+            <div
+              className={`flex items-center min-w-0 ${
+                isAdmin ? 'flex-1' : headerBannerSrc ? 'justify-center w-full' : 'justify-center w-full'
+              }`}
+            >
+              {!isAdmin && headerBannerSrc ? (
+                <img
+                  src={headerBannerSrc}
+                  alt="Globe Life AIL Division - Paz Organization"
+                  className="w-full h-auto max-h-[min(44vh,520px)] sm:max-h-[min(40vh,560px)] lg:max-h-[600px] object-contain object-center bg-[#f8fafc]"
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement;
+                    target.style.display = 'none';
+                  }}
+                />
+              ) : (
+                <img
+                  src="/logo.png"
+                  alt="Globe Life AIL Division - Paz Organization"
+                  className={
+                    isAdmin
+                      ? 'h-9 sm:h-10 w-auto max-w-full object-contain object-left'
+                      : 'h-[min(11.25rem,32vh)] sm:h-[min(12.5rem,28vh)] md:h-[12.5rem] lg:h-[13.75rem] w-auto max-w-[min(100%,42rem)] object-contain object-center'
+                  }
+                  onError={(e) => {
+                    const target = e.target as HTMLImageElement;
+                    target.style.display = 'none';
+                  }}
+                />
+              )}
             </div>
             {isAdmin && (
               <nav className="flex items-center gap-1.5 sm:gap-2 text-sm shrink-0">

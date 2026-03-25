@@ -8,21 +8,10 @@ const Landing: React.FC = () => {
   const navigate = useNavigate();
 
   return (
-    <Layout>
+    <Layout headerBannerSrc="/header.PNG">
       <div className="flex-grow flex flex-col items-stretch justify-center w-full max-w-6xl xl:max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 py-6 sm:py-10 text-center animate-fade-in safe-area-bottom">
         <div className="w-full space-y-6 sm:space-y-8 lg:space-y-10">
           <div className="space-y-4 sm:space-y-5">
-            <div className="w-full mb-4 sm:mb-6 flex items-center justify-center rounded-xl sm:rounded-2xl shadow-md sm:shadow-lg bg-[#f8fafc] min-h-[12rem] sm:min-h-[16rem] lg:min-h-[20rem] overflow-hidden">
-              <img
-                src="/header.PNG"
-                alt="Globe Life AIL Division - Paz Organization"
-                className="w-full h-auto max-h-[min(52vh,520px)] sm:max-h-[min(48vh,580px)] lg:max-h-[640px] object-contain object-center"
-                onError={(e) => {
-                  const target = e.target as HTMLImageElement;
-                  target.style.display = 'none';
-                }}
-              />
-            </div>
             <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-[#005EB8] tracking-tight">
               Welcome
             </h2>
