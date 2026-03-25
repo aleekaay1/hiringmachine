@@ -43,7 +43,7 @@ const Layout: React.FC<LayoutProps> = ({
                 <img
                   src={headerBannerSrc}
                   alt="Globe Life AIL Division - Paz Organization"
-                  className="w-full h-auto max-h-[min(44vh,520px)] sm:max-h-[min(40vh,560px)] lg:max-h-[600px] object-contain object-center bg-[#f8fafc]"
+                  className="w-full h-auto max-h-[min(24vh,200px)] sm:max-h-[min(22vh,220px)] lg:max-h-[240px] object-contain object-center bg-[#f8fafc]"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
                     target.style.display = 'none';
