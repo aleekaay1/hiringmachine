@@ -185,6 +185,62 @@ const AdminDashboard: React.FC = () => {
     </span>
   );
 
+  const StatCard: React.FC<{
+    label: string;
+    value: React.ReactNode;
+    hint?: string;
+    accent?: 'blue' | 'green' | 'amber' | 'red' | 'slate';
+  }> = ({ label, value, hint, accent = 'slate' }) => {
+    const accentMap: Record<string, { ring: string; bg: string; text: string }> = {
+      blue: { ring: 'ring-[#005EB8]/15', bg: 'from-[#005EB8]/10 to-[#005EB8]/0', text: 'text-[#005EB8]' },
+      green: { ring: 'ring-[#37B06D]/15', bg: 'from-[#37B06D]/10 to-[#37B06D]/0', text: 'text-[#2d915a]' },
+      amber: { ring: 'ring-amber-500/15', bg: 'from-amber-500/10 to-amber-500/0', text: 'text-amber-700' },
+      red: { ring: 'ring-red-500/15', bg: 'from-red-500/10 to-red-500/0', text: 'text-red-700' },
+      slate: { ring: 'ring-slate-500/10', bg: 'from-slate-500/10 to-slate-500/0', text: 'text-slate-700' },
+    };
+    const a = accentMap[accent];
+    return (
+      <div className={`rounded-2xl border border-gray-200 bg-white shadow-sm ring-1 ${a.ring} overflow-hidden`}>
+        <div className={`p-4 bg-gradient-to-br ${a.bg}`}>
+          <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">{label}</p>
+          <div className={`mt-1 text-3xl font-extrabold leading-none ${a.text}`}>{value}</div>
+          {hint && <p className="mt-2 text-xs text-gray-500">{hint}</p>}
+        </div>
+      </div>
+    );
+  };
+
+  const dashboard = useMemo(() => {
+    const total = candidates.length;
+    const highFit = candidates.filter(c => c.fitCategory === 'High Fit').length;
+    const review = candidates.filter(c => c.fitCategory === 'Review').length;
+    const notAligned = candidates.filter(c => c.fitCategory === 'Not Aligned').length;
+    const assessmentComplete = candidates.filter(c => c.status === 'assessment_complete' || !!c.assessment).length;
+    const resumesUploaded = candidates.filter(c => c.applicantQuestionnaire?.resumeUrls?.length).length;
+    const resumesPendingReview = candidates.filter(c => (c.applicantQuestionnaire?.resumeUrls?.length || 0) > 0 && !getAdminData(c).resumeReviewedAt).length;
+
+    const stageCounts: Record<string, number> = {};
+    PIPELINE_STAGES.forEach(s => (stageCounts[s] = 0));
+    candidates.forEach(c => {
+      const s = getAdminData(c).pipelineStage;
+      stageCounts[s] = (stageCounts[s] || 0) + 1;
+    });
+
+    const activePipeline = total - (stageCounts['Rejected'] || 0) - (stageCounts['Withdrawn'] || 0) - (stageCounts['Hired'] || 0);
+
+    return {
+      total,
+      highFit,
+      review,
+      notAligned,
+      assessmentComplete,
+      resumesUploaded,
+      resumesPendingReview,
+      stageCounts,
+      activePipeline,
+    };
+  }, [candidates]);
+
   const getLikertLabel = (score: number | undefined) => {
     if (score === 3) return 'Strongly Agree';
     if (score === 2) return 'Agree';
@@ -589,32 +645,59 @@ const AdminDashboard: React.FC = () => {
 
   return (
     <Layout isAdmin>
-      <div className="max-w-7xl mx-auto w-full p-6">
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Candidate Dashboard</h1>
-            <p className="text-sm text-gray-500">
-              {loading ? 'Loading candidates...' : `${candidates.length} total submissions`}
-            </p>
+      <div className="max-w-7xl mx-auto w-full p-6 space-y-6">
+        {/* Top header */}
+        <div className="rounded-3xl border border-gray-200 bg-gradient-to-r from-[#005EB8]/10 via-white to-[#37B06D]/10 p-6 shadow-sm">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <div className="h-9 w-9 rounded-2xl bg-white border border-gray-200 shadow-sm flex items-center justify-center">
+                  <User className="text-[#005EB8]" size={18} />
+                </div>
+                <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight">Paz Hiring · Admin</h1>
+              </div>
+              <p className="text-sm text-gray-600 mt-1">
+                {loading ? 'Loading candidates…' : `${dashboard.total} candidates · ${dashboard.activePipeline} active in pipeline`}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" className="text-sm" onClick={() => navigate('/qr')}>
+                QR Codes
+              </Button>
+              <Button onClick={exportCSV} variant="outline" className="text-sm">
+                <Download size={16} className="mr-2" /> Export CSV
+              </Button>
+              <Button variant="outline" className="text-sm" onClick={handleLogout}>
+                Sign Out
+              </Button>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            <Button
-              variant="outline"
-              className="text-xs"
-              onClick={handleLogout}
-            >
-              Sign Out
-            </Button>
-            <Button
-              variant="outline"
-              className="text-sm"
-              onClick={() => navigate('/qr')}
-            >
-              QR Codes
-            </Button>
-            <Button onClick={exportCSV} variant="outline" className="text-sm">
-              <Download size={16} className="mr-2" /> Export CSV
-            </Button>
+
+          {/* KPIs */}
+          <div className="mt-6 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+            <StatCard label="Total" value={dashboard.total} hint="All time" accent="blue" />
+            <StatCard label="High fit" value={dashboard.highFit} hint="Score category" accent="green" />
+            <StatCard label="Review" value={dashboard.review} hint="Needs review" accent="amber" />
+            <StatCard label="Not aligned" value={dashboard.notAligned} hint="Low fit" accent="red" />
+            <StatCard label="Assessments" value={dashboard.assessmentComplete} hint="Completed" accent="slate" />
+            <StatCard label="Resumes" value={dashboard.resumesPendingReview} hint="Pending review" accent="blue" />
+          </div>
+
+          {/* Pipeline strip */}
+          <div className="mt-5">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">Pipeline snapshot</p>
+              <p className="text-xs text-gray-500">Click a stage in the filter to drill down.</p>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+              {PIPELINE_STAGES.map((s) => (
+                <div key={s} className="rounded-2xl border border-gray-200 bg-white/70 px-3 py-2">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">{s}</p>
+                  <p className="text-lg font-extrabold text-gray-900">{dashboard.stageCounts[s] ?? 0}</p>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -626,21 +709,21 @@ const AdminDashboard: React.FC = () => {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Candidate List */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden lg:col-span-1 h-[calc(100vh-200px)] flex flex-col">
-            <div className="p-4 border-b border-gray-100 bg-gray-50 space-y-2">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden lg:col-span-1 h-[calc(100vh-260px)] flex flex-col">
+            <div className="p-4 border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white space-y-2">
               <div className="relative">
                 <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
                 <input
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                   placeholder="Search by name, email, phone..."
-                  className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#005EB8]/30 focus:border-[#005EB8]/40 bg-white"
                 />
               </div>
               <select
                 value={pipelineFilter}
                 onChange={e => setPipelineFilter((e.target.value || '') as PipelineStage | '')}
-                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="w-full px-3 py-2.5 rounded-xl border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-[#005EB8]/30 focus:border-[#005EB8]/40 bg-white"
               >
                 <option value="">All stages</option>
                 {PIPELINE_STAGES.map(s => (
@@ -685,7 +768,11 @@ const AdminDashboard: React.FC = () => {
                   <div
                     key={c.id}
                     onClick={() => setSelectedCandidate(c)}
-                    className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-blue-50 transition-colors flex gap-2 ${selectedCandidate?.id === c.id ? 'bg-blue-50 border-l-4 border-l-[#005EB8]' : ''}`}
+                    className={`p-4 border-b border-gray-100 cursor-pointer transition-all flex gap-2 ${
+                      selectedCandidate?.id === c.id
+                        ? 'bg-gradient-to-r from-[#005EB8]/10 to-white border-l-4 border-l-[#005EB8]'
+                        : 'hover:bg-gradient-to-r hover:from-gray-50 hover:to-white'
+                    }`}
                   >
                     <input
                       type="checkbox"
@@ -717,6 +804,16 @@ const AdminDashboard: React.FC = () => {
                           Disqualified (questionnaire)
                         </span>
                       )}
+                      {!!c.applicantQuestionnaire?.resumeUrls?.length && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                          Resume
+                        </span>
+                      )}
+                      {(c.status === 'assessment_complete' || !!c.assessment) && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                          Assessment
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-gray-500 mb-2">{c.email}</p>
                     <div className="flex items-center justify-between text-xs text-gray-400">
@@ -731,7 +828,7 @@ const AdminDashboard: React.FC = () => {
           </div>
 
           {/* Candidate Detail */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 lg:col-span-2 h-[calc(100vh-200px)] overflow-y-auto p-8">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 lg:col-span-2 h-[calc(100vh-260px)] overflow-y-auto p-8">
             {selectedCandidate ? (
               <div className="space-y-8 animate-fade-in">
                 {/* Header */}
