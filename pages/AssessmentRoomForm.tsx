@@ -434,11 +434,10 @@ const AssessmentRoomForm: React.FC = () => {
                 <span className="text-gray-600 font-normal">[$348 tuition fees for LLQP Registration]</span>
               </label>
               <div className="text-[12px] text-gray-500 mb-2 leading-relaxed">
-                Course provider:{' '}
                 <a href="https://partners.remic.ca/globe-life-paz/" target="_blank" rel="noopener noreferrer" className="text-[#005EB8] underline">
                   Course provider
-                </a>{' '}
-                &nbsp;|&nbsp; Provincial Regulator:{' '}
+                </a>
+                &nbsp;|&nbsp;
                 <a href="https://www.fsrao.ca/licensing/life-and-accident-sickness-agent" target="_blank" rel="noopener noreferrer" className="text-[#005EB8] underline">
                   Provincial Regulator
                 </a>
