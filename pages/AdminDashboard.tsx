@@ -179,6 +179,12 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
+  const badge = (text: string, className: string) => (
+    <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide ${className}`}>
+      {text}
+    </span>
+  );
+
   const getLikertLabel = (score: number | undefined) => {
     if (score === 3) return 'Strongly Agree';
     if (score === 2) return 'Agree';
@@ -725,30 +731,43 @@ const AdminDashboard: React.FC = () => {
           </div>
 
           {/* Candidate Detail */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 lg:col-span-2 h-[calc(100vh-200px)] overflow-y-auto p-8">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 lg:col-span-2 h-[calc(100vh-200px)] overflow-y-auto p-8">
             {selectedCandidate ? (
               <div className="space-y-8 animate-fade-in">
                 {/* Header */}
-                <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between gap-4">
                   <div className="flex items-center gap-4">
-                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center text-gray-400">
+                    <div className="w-16 h-16 bg-gradient-to-br from-blue-50 to-emerald-50 rounded-2xl flex items-center justify-center text-[#005EB8] border border-blue-100">
                       <User size={32} />
                     </div>
                     <div>
-                      <h2 className="text-2xl font-bold text-gray-900">{selectedCandidate.firstName} {selectedCandidate.lastName}</h2>
-                      <div className="flex gap-2 text-sm text-gray-500 mt-1">
-                        <span>{selectedCandidate.email}</span>
-                        <span>•</span>
-                        <span>{selectedCandidate.phone}</span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-2xl font-extrabold text-gray-900 tracking-tight">
+                          {selectedCandidate.firstName} {selectedCandidate.lastName}
+                        </h2>
+                        {selectedCandidate.fitCategory &&
+                          badge(
+                            selectedCandidate.fitCategory,
+                            getStatusColor(selectedCandidate.fitCategory),
+                          )}
+                        {badge(getAdminData(selectedCandidate).pipelineStage, 'bg-white text-[#005EB8] border-[#005EB8]/30')}
                       </div>
-                      <div className="text-xs text-gray-400 mt-1">ID: {selectedCandidate.id}</div>
+
+                      <div className="flex flex-wrap gap-2 text-sm text-gray-600 mt-1">
+                        <span className="font-medium">{selectedCandidate.email}</span>
+                        {selectedCandidate.phone && <span className="text-gray-300">•</span>}
+                        {selectedCandidate.phone && <span className="font-medium">{selectedCandidate.phone}</span>}
+                      </div>
+                      <div className="text-xs text-gray-400 mt-1">
+                        ID: {selectedCandidate.id} • Submitted {new Date(selectedCandidate.timestamp).toLocaleString()}
+                      </div>
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-2">
                     {selectedCandidate.fitCategory && (
                       <div className="text-right">
-                        <div className="text-3xl font-bold text-[#005EB8]">{selectedCandidate.score}</div>
-                        <div className="text-xs text-gray-500 uppercase">Total Score</div>
+                        <div className="text-3xl font-extrabold text-[#005EB8] leading-none">{selectedCandidate.score}</div>
+                        <div className="text-[10px] text-gray-500 uppercase tracking-wide font-bold mt-1">Total Score</div>
                       </div>
                     )}
                     <Button
@@ -760,6 +779,40 @@ const AdminDashboard: React.FC = () => {
                     >
                       {deleting ? 'Deleting...' : 'Delete Candidate'}
                     </Button>
+                  </div>
+                </div>
+
+                {/* At-a-glance */}
+                <div className="rounded-2xl border border-gray-200 bg-gradient-to-r from-[#005EB8]/5 to-[#37B06D]/5 p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {badge(
+                        selectedCandidate.assessment || selectedCandidate.status === 'assessment_complete'
+                          ? 'Assessment: Complete'
+                          : 'Assessment: Not complete',
+                        selectedCandidate.assessment || selectedCandidate.status === 'assessment_complete'
+                          ? 'bg-green-50 text-green-800 border-green-200'
+                          : 'bg-gray-50 text-gray-700 border-gray-200',
+                      )}
+                      {badge(
+                        selectedCandidate.applicantQuestionnaire?.resumeUrls?.length
+                          ? `Resumes: ${selectedCandidate.applicantQuestionnaire.resumeUrls.length}`
+                          : 'Resumes: 0',
+                        selectedCandidate.applicantQuestionnaire?.resumeUrls?.length
+                          ? 'bg-blue-50 text-blue-800 border-blue-200'
+                          : 'bg-gray-50 text-gray-700 border-gray-200',
+                      )}
+                      {(selectedCandidate.applicantQuestionnaire as any)?.contactPermission != null &&
+                        badge(
+                          `Contact: ${(selectedCandidate.applicantQuestionnaire as any).contactPermission === 'yes' ? 'Yes' : 'No'}`,
+                          (selectedCandidate.applicantQuestionnaire as any).contactPermission === 'yes'
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            : 'bg-gray-50 text-gray-700 border-gray-200',
+                        )}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Tip: Use Pipeline stage + Next step to manage follow-ups.
+                    </div>
                   </div>
                 </div>
 
@@ -776,22 +829,6 @@ const AdminDashboard: React.FC = () => {
                     </p>
                   </div>
                 )}
-
-                {/* Status Cards */}
-                <div className="grid grid-cols-3 gap-4">
-                  <div className={`p-4 rounded-lg border ${selectedCandidate.postInterview?.interviewCompleted ? 'bg-green-50 border-green-200' : 'bg-gray-50'}`}>
-                    <p className="text-xs text-gray-500 uppercase">Interviewed</p>
-                    <p className="font-bold">{selectedCandidate.postInterview?.interviewCompleted ? 'Yes' : 'No'}</p>
-                  </div>
-                  <div className={`p-4 rounded-lg border ${selectedCandidate.postInterview?.ceoInvite === 'yes' ? 'bg-green-50 border-green-200' : 'bg-gray-50'}`}>
-                    <p className="text-xs text-gray-500 uppercase">CEO Invited</p>
-                    <p className="font-bold capitalize">{selectedCandidate.postInterview?.ceoInvite || '-'}</p>
-                  </div>
-                  <div className={`p-4 rounded-lg border bg-gray-50`}>
-                     <p className="text-xs text-gray-500 uppercase">Consent</p>
-                     <p className="font-bold">{selectedCandidate.postInterview?.consent ? 'Given' : 'No'}</p>
-                  </div>
-                </div>
 
                 {/* Resumes - prominent for admin review */}
                 {selectedCandidate.applicantQuestionnaire?.resumeUrls?.length ? (
@@ -865,7 +902,7 @@ const AdminDashboard: React.FC = () => {
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1"><Calendar size={12} /> Interview scheduled</label>
+                      <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1"><Calendar size={12} /> Session scheduled</label>
                       <input
                         key={`${selectedCandidate.id}-interview`}
                         type="datetime-local"
