@@ -12,7 +12,6 @@ import QrCodes from './pages/QrCodes';
 import AssessmentLookup from './pages/AssessmentLookup';
 import AssessmentRoomForm from './pages/AssessmentRoomForm';
 import CheckStatus from './pages/CheckStatus';
-import ExitQuestionnaireForm from './pages/ExitQuestionnaireForm';
 
 const App: React.FC = () => {
   return (
@@ -26,7 +25,6 @@ const App: React.FC = () => {
         <Route path="/assessment/:id" element={<Assessment />} />
         <Route path="/assessment-room/:id" element={<AssessmentRoomForm />} />
         <Route path="/assessment-lookup" element={<AssessmentLookup />} />
-        <Route path="/exit-questionnaire" element={<ExitQuestionnaireForm />} />
         <Route path="/thank-you" element={<ThankYou />} />
         <Route path="/not-eligible" element={<NotEligible />} />
         <Route path="/admin" element={<AdminDashboard />} />

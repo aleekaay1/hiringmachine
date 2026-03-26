@@ -65,30 +65,22 @@ const QrCodes: React.FC = () => {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const arrivalUrl = `${origin}/interview`;
   const assessmentUrl = `${origin}/assessment-lookup`;
-  const exitQuestionnaireUrl = `${origin}/exit-questionnaire`;
-  const [exitLinkCopied, setExitLinkCopied] = React.useState(false);
-  const copyExitLink = useCallback(() => {
-    navigator.clipboard.writeText(exitQuestionnaireUrl).then(() => {
-      setExitLinkCopied(true);
-      setTimeout(() => setExitLinkCopied(false), 2000);
-    });
-  }, [exitQuestionnaireUrl]);
 
   const downloadArrivalPdf = useCallback(() => {
     openPrintView({
-      title: 'Applicant Questionnaire',
-      subtitle: 'Reception / Check-in',
+      title: 'Candidate Checkin',
+      subtitle: 'Before the live Zoom session',
       url: arrivalUrl,
-      instruction: 'Place this at your front desk or entrance. Candidates scan to complete the Applicant Questionnaire when they arrive.',
+      instruction: 'Place this at your front desk or entrance. Candidates scan to complete the Candidate Checkin before joining the live Zoom session.',
     });
   }, [arrivalUrl]);
 
   const downloadAssessmentPdf = useCallback(() => {
     openPrintView({
-      title: 'Post-Overview · Career Assessment',
-      subtitle: 'After the Career Overview',
+      title: 'Leadership Assessment & Applicant Questionnaire',
+      subtitle: 'After the Career Overview Zoom session',
       url: assessmentUrl,
-      instruction: 'Place this in the waiting area after the Career Overview. Candidates scan and enter their email to complete post-overview questions and the Leadership & Career Assessment if invited.',
+      instruction: 'Candidates scan and enter their email to complete the merged Leadership Assessment and Applicant Questionnaire (after the Zoom session).',
     });
   }, [assessmentUrl]);
 
@@ -104,8 +96,8 @@ const QrCodes: React.FC = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <Card className="flex flex-col items-center text-center space-y-4">
-            <h2 className="font-semibold text-gray-900">1. Applicant Questionnaire</h2>
-            <p className="text-xs text-gray-500">Reception / entrance — candidates fill this when they arrive.</p>
+            <h2 className="font-semibold text-gray-900">1. Candidate Checkin</h2>
+            <p className="text-xs text-gray-500">Candidates scan to complete check-in before joining the live Zoom session.</p>
             <div className="bg-white p-4 rounded-xl border">
               <QRCode value={arrivalUrl} size={180} />
             </div>
@@ -116,8 +108,8 @@ const QrCodes: React.FC = () => {
           </Card>
 
           <Card className="flex flex-col items-center text-center space-y-4">
-            <h2 className="font-semibold text-gray-900">2. Post-Overview & Assessment</h2>
-            <p className="text-xs text-gray-500">After the Career Overview — lookup by email, then post-overview questions and assessment.</p>
+            <h2 className="font-semibold text-gray-900">2. Leadership Assessment (Merged)</h2>
+            <p className="text-xs text-gray-500">After the Zoom session — lookup by email and complete the merged form.</p>
             <div className="bg-white p-4 rounded-xl border">
               <QRCode value={assessmentUrl} size={180} />
             </div>
@@ -126,24 +118,12 @@ const QrCodes: React.FC = () => {
               Download PDF (branded, print-ready)
             </Button>
           </Card>
-
-          <Card className="flex flex-col items-center text-center space-y-4">
-            <h2 className="font-semibold text-gray-900">3. Post Live Career Overview Exit Questionnaire</h2>
-            <p className="text-xs text-gray-500">Email this link to candidates after the live session so they can complete the exit questionnaire.</p>
-            <div className="bg-white p-4 rounded-xl border">
-              <QRCode value={exitQuestionnaireUrl} size={180} />
-            </div>
-            <p className="text-[11px] text-gray-400 break-all">{exitQuestionnaireUrl}</p>
-            <Button variant="outline" onClick={copyExitLink} className="w-full">
-              {exitLinkCopied ? 'Copied to clipboard' : 'Copy link (for email)'}
-            </Button>
-          </Card>
         </div>
 
         <div className="text-xs text-gray-500 border-t border-gray-100 pt-4">
           <p className="font-medium text-gray-700 mb-1">QR & links</p>
           <p>
-            <strong>QR 1</strong>: Applicant Questionnaire at arrival. <strong>QR 2</strong>: After the overview, candidates scan and enter their email to confirm post-overview questions and complete the Leadership & Career Assessment if invited. <strong>QR 3 / Exit link</strong>: Post Live Career Overview Exit Questionnaire — copy the link and email it to candidates to fill out after the live session.
+            <strong>QR 1</strong>: Candidate Checkin before the live Zoom session. <strong>QR 2</strong>: After the Zoom session, candidates scan and enter their email to complete the merged Leadership Assessment & Applicant Questionnaire.
           </p>
         </div>
       </div>

@@ -17,6 +17,7 @@ export interface ApplicantQuestionnaire {
   positionInterest?: string;
   questionsAboutOpportunity?: string;
   contactPermission?: 'yes' | 'no';
+  backgroundCheckWilling?: 'yes' | 'no';
 }
 
 /** Post Live Career Overview Exit Questionnaire (link sent to candidate after live session) */

@@ -980,6 +980,7 @@ const AdminDashboard: React.FC = () => {
                           <div><p className="text-gray-500">Excited about off-site social</p><p className="font-medium capitalize">{(selectedCandidate.applicantQuestionnaire as any).excitedOffSiteSocial}</p></div>
                           <div><p className="text-gray-500">Position interest</p><p className="font-medium">{(selectedCandidate.applicantQuestionnaire as any).positionInterest}</p></div>
                           <div><p className="text-gray-500">Contact permission</p><p className="font-medium capitalize">{(selectedCandidate.applicantQuestionnaire as any).contactPermission}</p></div>
+                          <div><p className="text-gray-500">Background check willingness</p><p className="font-medium capitalize">{(selectedCandidate.applicantQuestionnaire as any).backgroundCheckWilling}</p></div>
                         </>
                       )}
                     </div>
@@ -990,7 +991,7 @@ const AdminDashboard: React.FC = () => {
                 )}
 
                 {/* Post Live Career Overview Exit Questionnaire */}
-                {selectedCandidate.exitQuestionnaire && (
+                {false && selectedCandidate.exitQuestionnaire && (
                   <div className="space-y-4">
                     <h3 className="text-lg font-bold border-b pb-2">Post Live Career Overview Exit Questionnaire</h3>
                     <p className="text-xs text-gray-500">

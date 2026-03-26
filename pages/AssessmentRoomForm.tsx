@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { getCandidateById, saveCandidate, calculateScore } from '../services/storageService';
-import { Candidate, AssessmentData } from '../types';
+import { Candidate, AssessmentData, ApplicantQuestionnaire } from '../types';
 import {
   OPEN_ENDED_QUESTIONS,
   PERSONALITY_QUESTIONS,
@@ -48,6 +48,21 @@ const AssessmentRoomForm: React.FC = () => {
   const [scenarioAnswers, setScenarioAnswers] = useState<Record<number, string>>({});
   const [eqAnswers, setEqAnswers] = useState<Record<number, LikertOptionKey>>({});
 
+  // --- Merged "exit" / applicant questionnaire (captured at the end of the leadership assessment). ---
+  const [mergedAnswers, setMergedAnswers] = useState({
+    whatStoodOut: '',
+    whyGoodFit: '',
+    financialInvestmentLicense: '' as '' | 'yes' | 'no',
+    legallyEntitledCanadaFullTime: '' as '' | 'yes' | 'no',
+    comfortableVirtualEnvironment: '' as '' | 'yes' | 'no',
+    excitedOffSiteSocial: '' as '' | 'yes' | 'no' | 'maybe',
+    positionInterest: '' as '' | 'Leadership Career Track' | 'Agent Career Track',
+    questionsAboutOpportunity: '',
+    contactPermission: '' as '' | 'yes' | 'no',
+    backgroundCheckWilling: '' as '' | 'yes' | 'no',
+  });
+  const [mergedErrors, setMergedErrors] = useState<Record<string, string>>({});
+
   useEffect(() => {
     if (!id) {
       setLoading(false);
@@ -88,6 +103,33 @@ const AssessmentRoomForm: React.FC = () => {
     if (!candidate || submitting) return;
 
     const aq = candidate.applicantQuestionnaire;
+    if (!aq) {
+      alert('Missing applicant questionnaire data. Please contact the management team.');
+      return;
+    }
+
+    const validateMerged = (): boolean => {
+      const e: Record<string, string> = {};
+      if (!mergedAnswers.whatStoodOut.trim()) e.whatStoodOut = 'Required';
+      if (!mergedAnswers.whyGoodFit.trim()) e.whyGoodFit = 'Required';
+      if (mergedAnswers.financialInvestmentLicense !== 'yes' && mergedAnswers.financialInvestmentLicense !== 'no')
+        e.financialInvestmentLicense = 'Required';
+      if (mergedAnswers.legallyEntitledCanadaFullTime !== 'yes' && mergedAnswers.legallyEntitledCanadaFullTime !== 'no')
+        e.legallyEntitledCanadaFullTime = 'Required';
+      if (mergedAnswers.comfortableVirtualEnvironment !== 'yes' && mergedAnswers.comfortableVirtualEnvironment !== 'no')
+        e.comfortableVirtualEnvironment = 'Required';
+      if (!mergedAnswers.excitedOffSiteSocial) e.excitedOffSiteSocial = 'Required';
+      if (!mergedAnswers.positionInterest) e.positionInterest = 'Required';
+      if (!mergedAnswers.questionsAboutOpportunity.trim()) e.questionsAboutOpportunity = 'Required';
+      if (mergedAnswers.contactPermission !== 'yes' && mergedAnswers.contactPermission !== 'no') e.contactPermission = 'Required';
+      if (mergedAnswers.backgroundCheckWilling !== 'yes' && mergedAnswers.backgroundCheckWilling !== 'no')
+        e.backgroundCheckWilling = 'Required';
+
+      setMergedErrors(e);
+      return Object.keys(e).length === 0;
+    };
+
+    if (!validateMerged()) return;
 
     const assessmentData: AssessmentData = {
       occupation: aq?.occupation || '',
@@ -109,13 +151,29 @@ const AssessmentRoomForm: React.FC = () => {
       status: 'assessment_complete',
       assessment: assessmentData,
       score,
-      fitCategory
+      fitCategory,
+      applicantQuestionnaire: {
+        ...(aq as ApplicantQuestionnaire),
+        whatStoodOut: mergedAnswers.whatStoodOut.trim(),
+        whyGoodFit: mergedAnswers.whyGoodFit.trim(),
+        financialInvestmentLicense: mergedAnswers.financialInvestmentLicense as 'yes' | 'no',
+        legallyEntitledCanadaFullTime: mergedAnswers.legallyEntitledCanadaFullTime as 'yes' | 'no',
+        comfortableVirtualEnvironment: mergedAnswers.comfortableVirtualEnvironment as 'yes' | 'no',
+        excitedOffSiteSocial: mergedAnswers.excitedOffSiteSocial as 'yes' | 'no' | 'maybe',
+        positionInterest:
+          mergedAnswers.positionInterest === 'Leadership Career Track'
+            ? 'Leadership'
+            : 'Advisor',
+        questionsAboutOpportunity: mergedAnswers.questionsAboutOpportunity.trim(),
+        contactPermission: mergedAnswers.contactPermission as 'yes' | 'no',
+        backgroundCheckWilling: mergedAnswers.backgroundCheckWilling as 'yes' | 'no',
+      },
     };
 
     try {
       setSubmitting(true);
       await saveCandidate(updatedCandidate);
-      navigate('/thank-you');
+      navigate('/thank-you', { state: { fromMergedAssessment: true } });
     } catch (err) {
       console.error(err);
       alert('There was an issue submitting your assessment. Please try again.');
@@ -232,7 +290,18 @@ const AssessmentRoomForm: React.FC = () => {
     Object.keys(scenarioAnswers).length +
     Object.keys(eqAnswers).length;
   const isQuestionsComplete = totalQuestions === answeredCount;
-  const canSubmit = isQuestionsComplete;
+  const isMergedComplete =
+    !!mergedAnswers.whatStoodOut.trim() &&
+    !!mergedAnswers.whyGoodFit.trim() &&
+    !!mergedAnswers.financialInvestmentLicense &&
+    !!mergedAnswers.legallyEntitledCanadaFullTime &&
+    !!mergedAnswers.comfortableVirtualEnvironment &&
+    !!mergedAnswers.excitedOffSiteSocial &&
+    !!mergedAnswers.positionInterest &&
+    !!mergedAnswers.questionsAboutOpportunity.trim() &&
+    !!mergedAnswers.contactPermission &&
+    !!mergedAnswers.backgroundCheckWilling;
+  const canSubmit = isQuestionsComplete && isMergedComplete;
 
   if (loading) {
     return (
@@ -322,6 +391,195 @@ const AssessmentRoomForm: React.FC = () => {
         <div className="space-y-4">
           <h2 className="text-xl font-bold text-gray-900">Entrepreneurial Quotient (EQ) Test</h2>
           {EQ_QUESTIONS.map((q) => renderEq(q.id, q.question))}
+        </div>
+
+        {/* Merged Applicant Questionnaire */}
+        <div className="space-y-4 pt-8 border-t">
+          <div className="space-y-2">
+            <h2 className="text-xl font-bold text-gray-900">Applicant Questionnaire</h2>
+            <p className="text-sm text-gray-600">Please answer the following Questions.</p>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                What stood out to you most about our career opportunity? <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                rows={3}
+                value={mergedAnswers.whatStoodOut}
+                onChange={(e) => setMergedAnswers((p) => ({ ...p, whatStoodOut: e.target.value }))}
+                className={`w-full p-3 rounded-lg border ${mergedErrors.whatStoodOut ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-[#005EB8]'} focus:ring-2 focus:outline-none bg-white`}
+              />
+              {mergedErrors.whatStoodOut && <p className="mt-1 text-xs text-red-600">{mergedErrors.whatStoodOut}</p>}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Why do you feel you would be a good fit for our organization? <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                rows={3}
+                value={mergedAnswers.whyGoodFit}
+                onChange={(e) => setMergedAnswers((p) => ({ ...p, whyGoodFit: e.target.value }))}
+                className={`w-full p-3 rounded-lg border ${mergedErrors.whyGoodFit ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-[#005EB8]'} focus:ring-2 focus:outline-none bg-white`}
+              />
+              {mergedErrors.whyGoodFit && <p className="mt-1 text-xs text-red-600">{mergedErrors.whyGoodFit}</p>}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                If you were offered an opportunity to join our organization, would you be prepared to make the financial investment to obtain your license?{' '}
+                <span className="text-red-500">*</span>{' '}
+                <span className="text-gray-600 font-normal">[$348 tuition fees for LLQP Registration]</span>
+              </label>
+              <div className="text-[12px] text-gray-500 mb-2 leading-relaxed">
+                Course provider:{' '}
+                <a href="https://partners.remic.ca/globe-life-paz/" target="_blank" rel="noopener noreferrer" className="text-[#005EB8] underline">
+                  Course provider
+                </a>{' '}
+                &nbsp;|&nbsp; Provincial Regulator:{' '}
+                <a href="https://www.fsrao.ca/licensing/life-and-accident-sickness-agent" target="_blank" rel="noopener noreferrer" className="text-[#005EB8] underline">
+                  Provincial Regulator
+                </a>
+              </div>
+              <select
+                value={mergedAnswers.financialInvestmentLicense}
+                onChange={(e) => setMergedAnswers((p) => ({ ...p, financialInvestmentLicense: e.target.value as any }))}
+                className={`w-full px-4 py-3 rounded-lg border ${mergedErrors.financialInvestmentLicense ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-[#005EB8]'} focus:ring-2 focus:outline-none bg-white`}
+              >
+                <option value="" disabled>Select an option</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+              {mergedErrors.financialInvestmentLicense && (
+                <p className="mt-1 text-xs text-red-600">{mergedErrors.financialInvestmentLicense}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Are you legally entitled to work in Canada on a FULL-TIME BASIS? <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={mergedAnswers.legallyEntitledCanadaFullTime}
+                onChange={(e) => setMergedAnswers((p) => ({ ...p, legallyEntitledCanadaFullTime: e.target.value as any }))}
+                className={`w-full px-4 py-3 rounded-lg border ${mergedErrors.legallyEntitledCanadaFullTime ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-[#005EB8]'} focus:ring-2 focus:outline-none bg-white`}
+              >
+                <option value="" disabled>Select an option</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+              {mergedErrors.legallyEntitledCanadaFullTime && (
+                <p className="mt-1 text-xs text-red-600">{mergedErrors.legallyEntitledCanadaFullTime}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Are you comfortable with working in a 100% virtual environment ? <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={mergedAnswers.comfortableVirtualEnvironment}
+                onChange={(e) => setMergedAnswers((p) => ({ ...p, comfortableVirtualEnvironment: e.target.value as any }))}
+                className={`w-full px-4 py-3 rounded-lg border ${mergedErrors.comfortableVirtualEnvironment ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-[#005EB8]'} focus:ring-2 focus:outline-none bg-white`}
+              >
+                <option value="" disabled>Select an option</option>
+                <option value="yes">YES</option>
+                <option value="no">NO</option>
+              </select>
+              {mergedErrors.comfortableVirtualEnvironment && (
+                <p className="mt-1 text-xs text-red-600">{mergedErrors.comfortableVirtualEnvironment}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                If we welcome you to our team, would you be excited to join our lively off-site social functions? These are fantastic opportunities to connect with colleagues, meet leadership, and build lasting relationships. <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={mergedAnswers.excitedOffSiteSocial}
+                onChange={(e) => setMergedAnswers((p) => ({ ...p, excitedOffSiteSocial: e.target.value as any }))}
+                className={`w-full px-4 py-3 rounded-lg border ${mergedErrors.excitedOffSiteSocial ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-[#005EB8]'} focus:ring-2 focus:outline-none bg-white`}
+              >
+                <option value="" disabled>Select an option</option>
+                <option value="yes">YES</option>
+                <option value="no">NO</option>
+                <option value="maybe">Maybe</option>
+              </select>
+              {mergedErrors.excitedOffSiteSocial && (
+                <p className="mt-1 text-xs text-red-600">{mergedErrors.excitedOffSiteSocial}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Which position would you be the most interested in being considered for? <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={mergedAnswers.positionInterest}
+                onChange={(e) => setMergedAnswers((p) => ({ ...p, positionInterest: e.target.value as any }))}
+                className={`w-full px-4 py-3 rounded-lg border ${mergedErrors.positionInterest ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-[#005EB8]'} focus:ring-2 focus:outline-none bg-white`}
+              >
+                <option value="" disabled>Select an option</option>
+                <option value="Leadership Career Track">Leadership Career Track</option>
+                <option value="Agent Career Track">Agent Career Track</option>
+              </select>
+              {mergedErrors.positionInterest && <p className="mt-1 text-xs text-red-600">{mergedErrors.positionInterest}</p>}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                What questions, if any, do you have about the career opportunity? <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                rows={2}
+                value={mergedAnswers.questionsAboutOpportunity}
+                onChange={(e) => setMergedAnswers((p) => ({ ...p, questionsAboutOpportunity: e.target.value }))}
+                className={`w-full p-3 rounded-lg border ${mergedErrors.questionsAboutOpportunity ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-[#005EB8]'} focus:ring-2 focus:outline-none bg-white`}
+              />
+              {mergedErrors.questionsAboutOpportunity && (
+                <p className="mt-1 text-xs text-red-600">{mergedErrors.questionsAboutOpportunity}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Contact Permission <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={mergedAnswers.contactPermission}
+                onChange={(e) => setMergedAnswers((p) => ({ ...p, contactPermission: e.target.value as any }))}
+                className={`w-full px-4 py-3 rounded-lg border ${mergedErrors.contactPermission ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-[#005EB8]'} focus:ring-2 focus:outline-none bg-white`}
+              >
+                <option value="" disabled>Select an option</option>
+                <option value="yes">Yes, I agree to receiving communications regarding future career opportunities</option>
+                <option value="no">No, I do not agree to receiving communications regarding future career opportunities</option>
+              </select>
+              {mergedErrors.contactPermission && (
+                <p className="mt-1 text-xs text-red-600">{mergedErrors.contactPermission}</p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                As per regulatory requirements, would you be willing to complete a BACKGROUND CHECK to ensure Advisor/Leader Suitability?{' '}
+                <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={mergedAnswers.backgroundCheckWilling}
+                onChange={(e) => setMergedAnswers((p) => ({ ...p, backgroundCheckWilling: e.target.value as any }))}
+                className={`w-full px-4 py-3 rounded-lg border ${mergedErrors.backgroundCheckWilling ? 'border-red-500 focus:ring-red-500' : 'border-gray-300 focus:ring-[#005EB8]'} focus:ring-2 focus:outline-none bg-white`}
+              >
+                <option value="" disabled>Select an option</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+              {mergedErrors.backgroundCheckWilling && (
+                <p className="mt-1 text-xs text-red-600">{mergedErrors.backgroundCheckWilling}</p>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="pt-4 border-t">

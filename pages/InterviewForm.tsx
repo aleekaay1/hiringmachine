@@ -8,6 +8,7 @@ import { RECEPTION_BACKGROUND_AREAS, DEFAULT_ADMIN_DATA } from '../types';
 import QRCode from 'react-qr-code';
 
 const RECEPTION_STORAGE_KEY = 'reception_candidate_id';
+const ZOOM_MEETING_URL = 'https://us02web.zoom.us/j/6478311787';
 
 const OCCUPATION_OPTIONS = [
   { value: 'full-time', label: 'Employed full-time' },
@@ -158,6 +159,7 @@ const InterviewForm: React.FC = () => {
     if (!preForm.occupation) e.occupation = 'Required';
     if (!preForm.backgroundAreas.length) e.backgroundAreas = 'Select at least one';
     if (!preForm.salesExperience.trim()) e.salesExperience = 'Required';
+    if (!resumeFiles.length) e.resumeFiles = 'Please upload your resume.';
     if (!preForm.legallyEntitledCanada) e.legallyEntitledCanada = 'Required';
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -345,91 +347,30 @@ const InterviewForm: React.FC = () => {
         </div>
         {loadLookupError && <p className="text-sm text-amber-600 mb-4">{loadLookupError}</p>}
 
-        {/* Post-Interview Completion Status & Assessment Access */}
-        {candidate && candidate.postInterview && candidate.postInterview.ceoInvite === 'yes' && (
-          <div className="mb-6 rounded-lg border border-purple-200 bg-purple-50 p-6 space-y-4">
-            <div className="flex items-start gap-3">
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-purple-600 flex items-center justify-center">
-                <span className="text-white text-sm font-bold">✓</span>
-              </div>
-              <div className="flex-grow">
-                <h3 className="font-bold text-purple-900 mb-1">Post-Interview Form Completed</h3>
-                <p className="text-sm text-purple-700 mb-3">
-                  Thank you! You have completed the post-interview form and were invited to the Career Overview Session.
-                </p>
-                
-                {candidate.assessment || candidate.status === 'assessment_complete' ? (
-                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                    <p className="font-semibold text-green-800 mb-1">✓ Assessment Completed</p>
-                    <p className="text-sm text-green-700">
-                      You have already completed the Leadership & Career Assessment. Our team will review your responses and contact you regarding next steps.
-                    </p>
-                    <Button
-                      variant="outline"
-                      onClick={() => navigate('/thank-you')}
-                      className="mt-3"
-                    >
-                      View Thank You Page
-                    </Button>
-                  </div>
-                ) : (
-                  <>
-                    <p className="text-sm font-semibold text-purple-800 mb-4">
-                      Next Step: Complete the Leadership & Career Assessment
-                    </p>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="bg-white p-4 rounded-lg border border-purple-200">
-                        <p className="text-xs font-semibold text-gray-700 mb-2">Scan this QR code on another device:</p>
-                        <div className="flex justify-center mb-2">
-                          <div className="bg-white p-2 rounded border">
-                            <QRCode 
-                              value={`${typeof window !== 'undefined' ? window.location.origin : ''}/assessment-room/${candidate.id}`}
-                              size={120}
-                            />
-                          </div>
-                        </div>
-                        <p className="text-[10px] text-gray-500 text-center break-all">
-                          {typeof window !== 'undefined' ? window.location.origin : ''}/assessment-room/{candidate.id}
-                        </p>
-                      </div>
-                      
-                      <div className="flex flex-col justify-center">
-                        <Button
-                          fullWidth
-                          onClick={() => navigate(`/assessment-room/${candidate.id}`)}
-                          className="mb-2"
-                        >
-                          Go to Assessment Form
-                        </Button>
-                        <p className="text-xs text-gray-600 text-center">
-                          Or click the button above to start the assessment now
-                        </p>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
+        {/* Post-interview flow removed (now Zoom check-in + merged assessment). */}
+        {false && candidate && candidate.postInterview && candidate.postInterview.ceoInvite === 'yes' && (
+          <div />
         )}
 
-        {/* Show message if post-interview completed but not invited */}
-        {candidate && candidate.postInterview && candidate.postInterview.ceoInvite !== 'yes' && (
-          <div className="mb-6 rounded-lg border border-green-200 bg-green-50 p-4">
-            <p className="font-medium text-green-800 mb-1">Post-Interview Form Completed</p>
-            <p className="text-sm text-green-700">
-              Thank you for completing the post-interview form. Our team will review your application and contact you regarding next steps.
-            </p>
-          </div>
-        )}
+        {/* Post-interview flow removed (now Zoom check-in + merged assessment). */}
+        {false && candidate && candidate.postInterview && candidate.postInterview.ceoInvite !== 'yes' && <div />}
 
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Reception — Pre-Interview</h2>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">Candidate Checkin</h2>
 
         {preSubmitted ? (
           <div className="rounded-lg border border-green-200 bg-green-50 p-4 mb-6">
-            <p className="font-medium text-green-800">You have already submitted this section.</p>
-            <p className="text-sm text-green-700 mt-1">Please wait for your initial interview. When you are done, fill out the Post-Interview section below.</p>
+            <p className="font-medium text-green-800">Thank you for checking in.</p>
+            <p className="text-sm text-green-700 mt-1">
+              Use the Zoom link below to join your scheduled Career Overview Session.
+            </p>
+            <a
+              href={ZOOM_MEETING_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex justify-center w-full mt-4 px-4 py-3 rounded-lg font-semibold bg-[#005EB8] text-white hover:bg-[#004c94] transition-all touch-manipulation"
+            >
+              Join Zoom Meeting
+            </a>
           </div>
         ) : (
           <form onSubmit={handlePreSubmit} className="space-y-4 mb-8">
@@ -481,15 +422,21 @@ const InterviewForm: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Upload your resume (optional)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Upload your resume <span className="text-red-500">*</span>
+              </label>
               <input
                 type="file"
                 multiple
                 accept=".pdf,.doc,.docx,.rtf,.txt,image/*"
+                required
                 onChange={handleResumeChange}
                 className="block w-full text-sm text-gray-700 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-[#005EB8] file:text-white hover:file:bg-[#004a93]"
               />
-              <p className="text-xs text-gray-500 mt-1">You can attach your resume now. If you have already provided a resume previously, uploading again will add additional files to your record.</p>
+              <p className="text-xs text-gray-500 mt-1">
+                If you have already provided a resume previously, uploading again will add additional files to your record.
+              </p>
+              {errors.resumeFiles && <p className="text-xs text-red-600 mt-1">{errors.resumeFiles}</p>}
               {resumeFiles.length > 0 && (
                 <ul className="mt-2 text-xs text-gray-600 space-y-1">
                   {resumeFiles.map((file) => (
@@ -512,51 +459,8 @@ const InterviewForm: React.FC = () => {
           </form>
         )}
 
-        {/* Only show post-interview section if it hasn't been completed yet */}
-        {!candidate?.postInterview && (
-          <div className={`border-t border-gray-200 pt-6 ${!preSubmitted ? 'opacity-60 pointer-events-none' : ''}`}>
-            <h2 className="text-xl font-bold text-gray-900 mb-2">Post-Interview Confirmation</h2>
-            {preSubmitted && !postInterviewUnlocked && (
-              <div className="mb-4 p-4 rounded-lg bg-amber-50 border border-amber-200">
-                <p className="text-sm text-amber-800">Once you are done with your initial interview, fill out the form below.</p>
-                <Button type="button" className="mt-3" onClick={() => setPostInterviewUnlocked(true)}>
-                  I have completed my interview
-                </Button>
-              </div>
-            )}
-
-            {preSubmitted && postInterviewUnlocked && (
-              <form onSubmit={handlePostSubmit} className="space-y-4">
-              <div>
-                <p className="text-sm font-medium text-gray-700 mb-2">Has your initial interview been completed by a member of the Management Team? *</p>
-                <div className="flex gap-6">
-                  <Option name="done" value="yes" label="Yes" checked={postForm.interviewCompleted === true} onChange={() => setPostForm({ ...postForm, interviewCompleted: true })} />
-                  <Option name="done" value="no" label="No" checked={postForm.interviewCompleted === false} onChange={() => setPostForm({ ...postForm, interviewCompleted: false })} />
-                </div>
-                {errors.interviewCompleted && <p className="text-xs text-red-600 mt-1">{errors.interviewCompleted}</p>}
-              </div>
-              <div>
-                <p className="text-sm font-medium text-gray-700 mb-2">Do you consent to stay in communication for future openings with Globe Life AIL Division? *</p>
-                <div className="flex gap-6">
-                  <Option name="consent" value="yes" label="Yes" checked={postForm.consent === true} onChange={() => setPostForm({ ...postForm, consent: true })} />
-                  <Option name="consent" value="no" label="No" checked={postForm.consent === false} onChange={() => setPostForm({ ...postForm, consent: false })} />
-                </div>
-                {errors.consent && <p className="text-xs text-red-600 mt-1">{errors.consent}</p>}
-              </div>
-              <div>
-                <p className="text-sm font-medium text-gray-700 mb-2">Were you invited to attend the Career Overview Session with the CEO? *</p>
-                <div className="space-y-2">
-                  <Option name="ceo" value="yes" label="Yes" checked={postForm.ceoInvite === 'yes'} onChange={() => setPostForm({ ...postForm, ceoInvite: 'yes' })} />
-                  <Option name="ceo" value="no" label="No" checked={postForm.ceoInvite === 'no'} onChange={() => setPostForm({ ...postForm, ceoInvite: 'no' })} />
-                  <Option name="ceo" value="declined" label="I elected not to participate" checked={postForm.ceoInvite === 'declined'} onChange={() => setPostForm({ ...postForm, ceoInvite: 'declined' })} />
-                </div>
-                {errors.ceoInvite && <p className="text-xs text-red-600 mt-1">{errors.ceoInvite}</p>}
-              </div>
-              <Button type="submit" fullWidth disabled={submittingPost}>{submittingPost ? 'Submitting...' : 'Submit post-interview'}</Button>
-              </form>
-            )}
-          </div>
-        )}
+        {/* Post-interview confirmation removed */}
+        {false && candidate?.postInterview}
       </div>
     </Layout>
   );

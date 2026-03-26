@@ -5,7 +5,7 @@ import { CheckCircle } from 'lucide-react';
 
 const ThankYou: React.FC = () => {
   const location = useLocation();
-  const fromExitQuestionnaire = (location.state as { fromExitQuestionnaire?: boolean } | null)?.fromExitQuestionnaire;
+  const fromMergedAssessment = (location.state as { fromMergedAssessment?: boolean } | null)?.fromMergedAssessment;
 
   return (
     <Layout>
@@ -17,28 +17,19 @@ const ThankYou: React.FC = () => {
         <h2 className="text-3xl font-bold text-gray-900 mb-6">Thank You</h2>
 
         <div className="max-w-md space-y-4 text-gray-600">
-          {fromExitQuestionnaire ? (
+          {fromMergedAssessment ? (
             <>
-              <p className="text-lg">
-                Your exit questionnaire has been submitted.
-              </p>
+              <p className="text-lg">Thank you for your submission.</p>
               <p>
-                A team member will contact you to confirm next steps.
+                Your application will be reviewed by our management team, and you will be contacted if you are selected.
               </p>
               <p className="text-sm text-gray-400 mt-8">Thank you for your time and professionalism.</p>
             </>
           ) : (
             <>
-              <p className="text-lg">
-                Your information has been submitted.
-              </p>
+              <p className="text-lg">Your information has been submitted.</p>
               <div className="h-px bg-gray-200 w-1/2 mx-auto my-6"></div>
-              <p>
-                If you have just checked in, please wait to be called by a member of the Management Team.
-              </p>
-              <p>
-                If you have completed the assessment, our Leadership Team will review your responses and contact you regarding next steps.
-              </p>
+              <p>If you have just checked in, please wait for further instructions from our team.</p>
               <p className="text-sm text-gray-400 mt-8">Thank you for your time and professionalism.</p>
             </>
           )}
