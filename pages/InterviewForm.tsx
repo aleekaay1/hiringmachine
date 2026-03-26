@@ -5,7 +5,6 @@ import { Button, Input } from '../components/UI';
 import { createCandidate, saveCandidate, getCandidateByEmail, uploadResume } from '../services/storageService';
 import type { ApplicantQuestionnaire } from '../types';
 import { RECEPTION_BACKGROUND_AREAS, DEFAULT_ADMIN_DATA } from '../types';
-import QRCode from 'react-qr-code';
 
 const RECEPTION_STORAGE_KEY = 'reception_candidate_id';
 const ZOOM_MEETING_URL = 'https://us02web.zoom.us/j/6478311787';
@@ -24,9 +23,7 @@ const InterviewForm: React.FC = () => {
   const [loadEmail, setLoadEmail] = useState('');
   const [loadLookupError, setLoadLookupError] = useState('');
   const [preSubmitted, setPreSubmitted] = useState(false);
-  const [postInterviewUnlocked, setPostInterviewUnlocked] = useState(false);
   const [submittingPre, setSubmittingPre] = useState(false);
-  const [submittingPost, setSubmittingPost] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [resumeFiles, setResumeFiles] = useState<File[]>([]);
 
@@ -45,12 +42,6 @@ const InterviewForm: React.FC = () => {
     legallyEntitledCanada: '' as '' | 'yes' | 'no',
   });
 
-  const [postForm, setPostForm] = useState({
-    interviewCompleted: null as boolean | null,
-    consent: null as boolean | null,
-    ceoInvite: null as 'yes' | 'no' | 'declined' | null,
-  });
-
   useEffect(() => {
     const storedId = sessionStorage.getItem(RECEPTION_STORAGE_KEY);
     if (!storedId || candidate) return;
@@ -61,7 +52,6 @@ const InterviewForm: React.FC = () => {
         const q = c.applicantQuestionnaire as ApplicantQuestionnaire | undefined;
         if (q && q.occupation) {
           setPreSubmitted(true);
-          setPostInterviewUnlocked(!!c.postInterview);
           setPreForm({
             firstName: c.firstName,
             lastName: c.lastName,
@@ -76,13 +66,6 @@ const InterviewForm: React.FC = () => {
             somethingAboutYourself: q.somethingAboutYourself || '',
             legallyEntitledCanada: (q.legallyEntitledCanada as '' | 'yes' | 'no') || '',
           });
-          if (c.postInterview) {
-            setPostForm({
-              interviewCompleted: c.postInterview.interviewCompleted,
-              consent: c.postInterview.consent,
-              ceoInvite: c.postInterview.ceoInvite,
-            });
-          }
         }
       });
     });
@@ -108,7 +91,6 @@ const InterviewForm: React.FC = () => {
       const q = c.applicantQuestionnaire as ApplicantQuestionnaire | undefined;
       if (q && q.occupation) {
         setPreSubmitted(true);
-        setPostInterviewUnlocked(!!c.postInterview);
         setPreForm({
           firstName: c.firstName,
           lastName: c.lastName,
@@ -123,13 +105,6 @@ const InterviewForm: React.FC = () => {
           somethingAboutYourself: q.somethingAboutYourself || '',
           legallyEntitledCanada: (q.legallyEntitledCanada as '' | 'yes' | 'no') || '',
         });
-        if (c.postInterview) {
-          setPostForm({
-            interviewCompleted: c.postInterview.interviewCompleted,
-            consent: c.postInterview.consent,
-            ceoInvite: c.postInterview.ceoInvite,
-          });
-        }
       } else {
         setPreForm((prev) => ({ ...prev, email: c.email, firstName: c.firstName, lastName: c.lastName, phone: c.phone, city: c.city || '' }));
       }
@@ -168,15 +143,6 @@ const InterviewForm: React.FC = () => {
   const handleResumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     setResumeFiles(files);
-  };
-
-  const validatePost = (): boolean => {
-    const e: Record<string, string> = {};
-    if (postForm.interviewCompleted === null) e.interviewCompleted = 'Required';
-    if (postForm.consent === null) e.consent = 'Required';
-    if (postForm.ceoInvite === null) e.ceoInvite = 'Required';
-    setErrors((prev) => ({ ...prev, ...e }));
-    return Object.keys(e).length === 0;
   };
 
   const handlePreSubmit = async (e: React.FormEvent) => {
@@ -277,35 +243,12 @@ const InterviewForm: React.FC = () => {
       await uploadAllResumes(baseCandidate, questionnaireBase);
       setResumeFiles([]);
       setPreSubmitted(true);
+      sessionStorage.removeItem(RECEPTION_STORAGE_KEY);
     } catch (err) {
       console.error(err);
       alert('There was an issue saving. Please try again.');
     } finally {
       setSubmittingPre(false);
-    }
-  };
-
-  const handlePostSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!validatePost() || !candidate) return;
-    try {
-      setSubmittingPost(true);
-      await saveCandidate({
-        ...candidate,
-        status: 'interview_complete',
-        postInterview: {
-          interviewCompleted: postForm.interviewCompleted!,
-          consent: postForm.consent!,
-          ceoInvite: postForm.ceoInvite!,
-        },
-      });
-      sessionStorage.removeItem(RECEPTION_STORAGE_KEY);
-      navigate('/thank-you');
-    } catch (err) {
-      console.error(err);
-      alert('There was an issue saving. Please try again.');
-    } finally {
-      setSubmittingPost(false);
     }
   };
 
@@ -346,14 +289,6 @@ const InterviewForm: React.FC = () => {
           </button>
         </div>
         {loadLookupError && <p className="text-sm text-amber-600 mb-4">{loadLookupError}</p>}
-
-        {/* Post-interview flow removed (now Zoom check-in + merged assessment). */}
-        {false && candidate && candidate.postInterview && candidate.postInterview.ceoInvite === 'yes' && (
-          <div />
-        )}
-
-        {/* Post-interview flow removed (now Zoom check-in + merged assessment). */}
-        {false && candidate && candidate.postInterview && candidate.postInterview.ceoInvite !== 'yes' && <div />}
 
         <h2 className="text-2xl font-bold text-gray-900 mb-2">Candidate Checkin</h2>
 
@@ -455,12 +390,9 @@ const InterviewForm: React.FC = () => {
               {errors.legallyEntitledCanada && <p className="text-xs text-red-600 mt-1">{errors.legallyEntitledCanada}</p>}
             </div>
 
-            <Button type="submit" fullWidth disabled={submittingPre}>{submittingPre ? 'Submitting...' : 'Submit pre-interview'}</Button>
+            <Button type="submit" fullWidth disabled={submittingPre}>{submittingPre ? 'Submitting...' : 'Submit'}</Button>
           </form>
         )}
-
-        {/* Post-interview confirmation removed */}
-        {false && candidate?.postInterview}
       </div>
     </Layout>
   );
