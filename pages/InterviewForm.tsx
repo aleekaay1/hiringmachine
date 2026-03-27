@@ -290,7 +290,7 @@ const InterviewForm: React.FC = () => {
         </div>
         {loadLookupError && <p className="text-sm text-amber-600 mb-4">{loadLookupError}</p>}
 
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Candidate Checkin</h2>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">Check-In</h2>
 
         {preSubmitted ? (
           <div className="rounded-lg border border-green-200 bg-green-50 p-4 mb-6">
