@@ -8,7 +8,8 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+  // apikey: required by Supabase gateway + browser preflight when calling from the web app
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type, apikey, x-client-info',
 };
 
 function getTransport() {
