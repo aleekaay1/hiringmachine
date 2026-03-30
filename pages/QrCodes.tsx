@@ -68,10 +68,10 @@ const QrCodes: React.FC = () => {
 
   const downloadArrivalPdf = useCallback(() => {
     openPrintView({
-      title: 'Candidate Checkin',
+      title: 'Check-In',
       subtitle: 'Before the live Zoom session',
       url: arrivalUrl,
-      instruction: 'Place this at your front desk or entrance. Candidates scan to complete the Candidate Checkin before joining the live Zoom session.',
+      instruction: 'Place this at your front desk or entrance. Candidates scan to complete Check-In before joining the live Zoom session.',
     });
   }, [arrivalUrl]);
 
@@ -96,7 +96,7 @@ const QrCodes: React.FC = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <Card className="flex flex-col items-center text-center space-y-4">
-            <h2 className="font-semibold text-gray-900">1. Candidate Checkin</h2>
+            <h2 className="font-semibold text-gray-900">1. Check-In</h2>
             <p className="text-xs text-gray-500">Candidates scan to complete check-in before joining the live Zoom session.</p>
             <div className="bg-white p-4 rounded-xl border">
               <QRCode value={arrivalUrl} size={180} />
@@ -123,7 +123,7 @@ const QrCodes: React.FC = () => {
         <div className="text-xs text-gray-500 border-t border-gray-100 pt-4">
           <p className="font-medium text-gray-700 mb-1">QR & links</p>
           <p>
-            <strong>QR 1</strong>: Candidate Checkin before the live Zoom session. <strong>QR 2</strong>: After the Zoom session, candidates scan and enter their email to complete the merged Leadership Assessment & Applicant Questionnaire.
+            <strong>QR 1</strong>: Check-In before the live Zoom session. <strong>QR 2</strong>: After the Zoom session, candidates scan and enter their email to complete the merged Leadership Assessment & Applicant Questionnaire.
           </p>
         </div>
       </div>

@@ -268,7 +268,7 @@ const InterviewForm: React.FC = () => {
           }} />
         </div>
 
-        <h2 className="text-2xl font-bold text-gray-900 mb-2 w-full">Candidate Checkin</h2>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2 w-full">Check-In</h2>
 
         <p className="text-sm text-gray-600 mb-4 max-w-md mx-auto">
           Already started? Enter your email to load your form.
