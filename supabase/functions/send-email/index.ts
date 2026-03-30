@@ -1,4 +1,4 @@
-// Send email via G Suite / Gmail SMTP. Requires auth.
+// Send email via G Suite / Gmail SMTP. Requires auth (validated below; gateway verify_jwt off in config).
 // Deploy: supabase functions deploy send-email
 // Secrets (Dashboard → Edge Functions → Secrets): SMTP_HOSTNAME, SMTP_PORT, SMTP_SECURE, SMTP_USERNAME, SMTP_PASSWORD, SMTP_FROM
 
@@ -50,11 +50,20 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
-    const token = authHeader.slice(7);
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    // Use anon key + forwarded JWT (Supabase-recommended). Avoids failures when
+    // SUPABASE_SERVICE_ROLE_KEY was overridden with a wrong value in Dashboard secrets.
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+    if (!anonKey) {
+      return new Response(JSON.stringify({ error: 'Server misconfiguration (missing SUPABASE_ANON_KEY)' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    const supabase = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const { data: { user }, error } = await supabase.auth.getUser();
     if (error || !user) {
       return new Response(JSON.stringify({ error: 'Invalid or expired session' }), {
         status: 401,

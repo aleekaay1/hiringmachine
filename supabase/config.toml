@@ -368,6 +368,10 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# Gateway JWT check can 401 valid ES256 user sessions; we authenticate in the function instead.
+[functions.send-email]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
