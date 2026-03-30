@@ -38,7 +38,9 @@ const AdminDashboard: React.FC = () => {
   const [pipelineFilter, setPipelineFilter] = useState<PipelineStage | ''>('');
   const [newNote, setNewNote] = useState('');
   const [showEmailModal, setShowEmailModal] = useState(false);
-  const [emailModalMode, setEmailModalMode] = useState<'template1' | 'template2' | 'template3' | 'compose' | null>(null);
+  const [emailModalMode, setEmailModalMode] = useState<
+    'stage2_post_checkin' | 'stage3_assessment_link' | 'stage5_evaluation' | 'compose' | null
+  >(null);
   const [emailSubject, setEmailSubject] = useState('');
   const [copyToast, setCopyToast] = useState(false);
   const [emailBody, setEmailBody] = useState('');
@@ -556,7 +558,9 @@ const AdminDashboard: React.FC = () => {
     updateAdminData(prev => ({ ...prev, resumeReviewedAt: new Date().toISOString() }));
   };
 
-  const openEmailModal = (mode: 'template1' | 'template2' | 'template3' | 'compose') => {
+  const openEmailModal = (
+    mode: 'stage2_post_checkin' | 'stage3_assessment_link' | 'stage5_evaluation' | 'compose'
+  ) => {
     setEmailModalMode(mode);
     setEmailError(null);
     setEmailPreviewTab('edit');
@@ -565,9 +569,14 @@ const AdminDashboard: React.FC = () => {
       setEmailBody('');
       setEmailBodyIsHtml(false);
     } else if (selectedCandidate) {
-      const template = EMAIL_TEMPLATES.find(t => t.id === mode);
+      const template = EMAIL_TEMPLATES.find((t) => t.id === mode);
       if (template) {
-        const { subject, bodyHtml } = mergeTemplate(template.subject, template.bodyHtml, selectedCandidate);
+        const origin = typeof window !== 'undefined' ? window.location.origin : '';
+        const extras =
+          mode === 'stage3_assessment_link'
+            ? { '{{assessmentLookupUrl}}': `${origin}/assessment-lookup` }
+            : undefined;
+        const { subject, bodyHtml } = mergeTemplate(template.subject, template.bodyHtml, selectedCandidate, extras);
         setEmailSubject(subject);
         setEmailBody(bodyHtml);
         setEmailBodyIsHtml(true);
@@ -1072,10 +1081,22 @@ const AdminDashboard: React.FC = () => {
                       <Button onClick={handleAddNote} disabled={!newNote.trim() || savingAdmin}>Add</Button>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2 items-center">
-                    {EMAIL_TEMPLATES.map(t => (
-                      <Button key={t.id} variant="outline" onClick={() => openEmailModal(t.id as 'template1' | 'template2' | 'template3')} className="text-sm">
-                        <Mail size={16} className="mr-2" /> {t.name}
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">Stage emails</p>
+                    <div className="flex flex-wrap gap-2 items-center">
+                    {EMAIL_TEMPLATES.map((t) => (
+                      <Button
+                        key={t.id}
+                        variant="outline"
+                        onClick={() =>
+                          openEmailModal(
+                            t.id as 'stage2_post_checkin' | 'stage3_assessment_link' | 'stage5_evaluation'
+                          )
+                        }
+                        className="text-sm"
+                        title={t.hint}
+                      >
+                        <Mail size={16} className="mr-2 shrink-0" /> {t.name}
                       </Button>
                     ))}
                     <Button variant="outline" onClick={() => openEmailModal('compose')} className="text-sm">
@@ -1086,6 +1107,10 @@ const AdminDashboard: React.FC = () => {
                         {getAdminData(selectedCandidate).emailsSent.length} email(s) sent
                       </span>
                     )}
+                    </div>
+                    <p className="text-[11px] text-gray-400 max-w-xl">
+                      Automated sends (check-in + assessment thank-you) are prepared but off—use these buttons until you enable automation in code.
+                    </p>
                   </div>
                 </div>
 

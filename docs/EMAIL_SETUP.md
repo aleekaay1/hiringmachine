@@ -45,11 +45,11 @@ From the project root:
 supabase functions deploy send-email
 ```
 
-Then open a candidate in the admin panel and use **Template 1 / 2 / 3** or **Compose** → preview → **Send**. The email will be sent via G Suite and logged on the candidate.
+Then open a candidate in the admin panel and use **Stage 2 / 3 / 5** emails or **Compose** → preview → **Send**. The email will be sent via G Suite and logged on the candidate.
 
 ## 5. Sending and receiving inside the app (optional later)
 
-- **Sending:** Already done; the 3 templates and Compose all use the Edge Function above.
+- **Sending:** Stage email buttons and Compose use the Edge Function above. Automated sends (check-in, post-assessment thank-you) are defined in `services/emailAutomation.ts` and stay disabled until you set `AUTOMATED_EMAILS_ENABLED` and wire triggers.
 - **Receiving (inbox in app):** Would require either:
   - **Gmail API** with OAuth (user signs in with Google; we read/send via API), or
   - **IMAP** with credentials stored only on the server (e.g. another Edge Function that fetches inbox and returns JSON).  
@@ -63,5 +63,4 @@ Templates support placeholders that are replaced with the candidate’s data:
 - `{{lastName}}` – Last name  
 - `{{email}}` – Email  
 - `{{phone}}` – Phone  
-
-You can add more later (e.g. `{{positionInterest}}`) in the template definitions in the admin app.
+- `{{assessmentLookupUrl}}` – Full URL to `/assessment-lookup` (Stage 3 template; filled in admin when you open that template)
