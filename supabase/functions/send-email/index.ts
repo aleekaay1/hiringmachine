@@ -13,11 +13,12 @@ const corsHeaders = {
 };
 
 function getTransport() {
-  const host = Deno.env.get('SMTP_HOSTNAME');
+  const host = Deno.env.get('SMTP_HOSTNAME')?.trim();
   const port = Number(Deno.env.get('SMTP_PORT') ?? 587);
   const secure = (Deno.env.get('SMTP_SECURE') ?? 'false') === 'true';
-  const user = Deno.env.get('SMTP_USERNAME');
-  const pass = Deno.env.get('SMTP_PASSWORD');
+  // Trim: pasted secrets often include accidental newlines/spaces (breaks Gmail auth).
+  const user = Deno.env.get('SMTP_USERNAME')?.trim();
+  const pass = Deno.env.get('SMTP_PASSWORD')?.trim();
   if (!host || !user || !pass) {
     throw new Error('Missing SMTP config (SMTP_HOSTNAME, SMTP_USERNAME, SMTP_PASSWORD)');
   }
@@ -84,7 +85,10 @@ Deno.serve(async (req) => {
       });
     }
 
-    const from = Deno.env.get('SMTP_FROM') || Deno.env.get('SMTP_USERNAME') || 'noreply@example.com';
+    const from =
+      Deno.env.get('SMTP_FROM')?.trim() ||
+      Deno.env.get('SMTP_USERNAME')?.trim() ||
+      'noreply@example.com';
     const transport = getTransport();
     await new Promise<void>((resolve, reject) => {
       transport.sendMail(
