@@ -84,7 +84,6 @@ const InterviewForm: React.FC = () => {
         setLoadLookupError('No record found. Please fill out the form below to start.');
         setCandidate(null);
         setPreSubmitted(false);
-        setPostInterviewUnlocked(false);
         return;
       }
       setCandidate(c);
@@ -261,36 +260,36 @@ const InterviewForm: React.FC = () => {
 
   return (
     <Layout>
-      <div className="flex-grow flex flex-col p-4 sm:p-6 max-w-lg mx-auto w-full pb-24">
-        <div className="flex justify-center mb-4">
-          <img src="/header.PNG" alt="Globe Life AIL Division" className="w-full max-w-md h-auto object-contain" onError={(e) => {
+      <div className="flex-grow flex flex-col items-center text-center p-4 sm:p-6 max-w-lg mx-auto w-full pb-24">
+        <div className="flex justify-center mb-5 w-full">
+          <img src="/header.PNG" alt="Globe Life AIL Division" className="w-full max-w-md h-auto object-contain mx-auto" onError={(e) => {
             const target = e.target as HTMLImageElement;
             target.style.display = 'none';
           }} />
         </div>
 
-        <p className="text-sm text-gray-600 mb-4">
+        <h2 className="text-2xl font-bold text-gray-900 mb-2 w-full">Candidate Checkin</h2>
+
+        <p className="text-sm text-gray-600 mb-4 max-w-md mx-auto">
           Already started? Enter your email to load your form.
         </p>
-        <div className="flex items-center gap-2 mb-6">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2 mb-6 w-full max-w-md mx-auto">
           <input
             type="email"
             placeholder="you@example.com"
             value={loadEmail}
             onChange={(e) => setLoadEmail(e.target.value)}
-            className="flex-1 min-h-[48px] px-4 py-3 rounded-lg border border-gray-300 focus:ring-[#005EB8] focus:outline-none focus:ring-2 transition-all bg-white"
+            className="flex-1 min-h-[48px] px-4 py-3 rounded-lg border border-gray-300 focus:ring-[#005EB8] focus:outline-none focus:ring-2 transition-all bg-white text-left"
           />
           <button
             type="button"
             onClick={handleLoadByEmail}
-            className="min-h-[48px] px-4 py-3 rounded-lg font-semibold bg-[#005EB8] text-white hover:bg-[#004c94] transition-all whitespace-nowrap text-sm"
+            className="min-h-[48px] px-4 py-3 rounded-lg font-semibold bg-[#005EB8] text-white hover:bg-[#004c94] transition-all whitespace-nowrap text-sm shrink-0"
           >
             Load my form
           </button>
         </div>
-        {loadLookupError && <p className="text-sm text-amber-600 mb-4">{loadLookupError}</p>}
-
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Check-In</h2>
+        {loadLookupError && <p className="text-sm text-amber-600 mb-4 max-w-md mx-auto">{loadLookupError}</p>}
 
         {preSubmitted ? (
           <div className="rounded-lg border border-green-200 bg-green-50 p-4 mb-6">
