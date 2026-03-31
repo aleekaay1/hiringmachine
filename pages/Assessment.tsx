@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { Button, Input, Select, Card } from '../components/UI';
 import { getCandidateById, saveCandidate, calculateScore } from '../services/storageService';
+import { triggerPostAssessmentSubmitEmail } from '../services/candidateEmailTrigger';
 import { Candidate, AssessmentData, QUESTIONS } from '../types';
 
 const Assessment: React.FC = () => {
@@ -110,6 +111,7 @@ const Assessment: React.FC = () => {
     try {
       setSubmitting(true);
       await saveCandidate(updatedCandidate);
+      void triggerPostAssessmentSubmitEmail(updatedCandidate.id, updatedCandidate.email);
       navigate('/thank-you');
     } catch (err) {
       console.error(err);

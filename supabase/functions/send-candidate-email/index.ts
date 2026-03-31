@@ -1,10 +1,14 @@
-// Sends transactional emails after candidate actions (e.g. check-in submit). Uses service role to verify candidate row.
+// Sends transactional emails after candidate actions: post_checkin (check-in submit), post_assessment_submit (Leadership Assessment submit).
 // Secrets: same SMTP as send-email + SUPABASE_SERVICE_ROLE_KEY (auto in hosted project).
 // Deploy: supabase functions deploy send-candidate-email
 
 import nodemailer from 'npm:nodemailer@6.9.10';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { applyPostCheckinMerge, POST_CHECKIN_EMAIL_SUBJECT } from '../_shared/postCheckinEmailTemplate.ts';
+import {
+  applyPostAssessmentSubmitMerge,
+  POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT,
+} from '../_shared/postAssessmentSubmitEmailTemplate.ts';
 import { buildEmailSignatureHtml } from '../_shared/emailSignatureHtml.ts';
 import { ZOOM_MEETING_URL } from '../_shared/hiringUrls.ts';
 
@@ -57,8 +61,10 @@ Deno.serve(async (req) => {
     const candidateId = typeof body?.candidateId === 'string' ? body.candidateId.trim() : '';
     const candidateEmail = typeof body?.candidateEmail === 'string' ? body.candidateEmail.trim().toLowerCase() : '';
     const trigger = body?.trigger;
+    const isPostCheckin = trigger === 'post_checkin';
+    const isPostAssessmentSubmit = trigger === 'post_assessment_submit';
 
-    if (!candidateId || !candidateEmail || trigger !== 'post_checkin') {
+    if (!candidateId || !candidateEmail || (!isPostCheckin && !isPostAssessmentSubmit)) {
       return new Response(JSON.stringify({ error: 'Invalid request' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -87,10 +93,20 @@ Deno.serve(async (req) => {
       });
     }
 
+    const firstName = ((row.first_name as string) || '').trim();
     const candidateName =
-      `${(row.first_name as string) || ''} ${(row.last_name as string) || ''}`.trim() || 'Candidate';
+      `${firstName} ${(row.last_name as string) || ''}`.trim() || 'Candidate';
     const sig = buildEmailSignatureHtml();
-    const html = applyPostCheckinMerge(candidateName, ZOOM_MEETING_URL, sig);
+
+    let subject: string;
+    let html: string;
+    if (isPostCheckin) {
+      subject = POST_CHECKIN_EMAIL_SUBJECT;
+      html = applyPostCheckinMerge(candidateName, ZOOM_MEETING_URL, sig);
+    } else {
+      subject = POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT;
+      html = applyPostAssessmentSubmitMerge(firstName || 'there', sig);
+    }
 
     const from =
       Deno.env.get('SMTP_FROM')?.trim() ||
@@ -102,7 +118,7 @@ Deno.serve(async (req) => {
         {
           from,
           to: candidateEmail,
-          subject: POST_CHECKIN_EMAIL_SUBJECT,
+          subject,
           text: html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
           html,
         },

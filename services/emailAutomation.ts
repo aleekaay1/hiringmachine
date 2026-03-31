@@ -31,6 +31,6 @@ export const AUTOMATION_TRIGGERS: AutomationTrigger[] = [
     description:
       'Send Stage 4 acknowledgment after Leadership Assessment submission (no score in email).',
     template: POST_ASSESSMENT_SUBMIT_TEMPLATE,
-    hookHint: 'AssessmentRoomForm (or save path): after merged assessment + questionnaire submit.',
+    hookHint: 'Implemented: triggerPostAssessmentSubmitEmail after save in AssessmentRoomForm and Assessment.',
   },
 ];

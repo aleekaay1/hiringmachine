@@ -1,14 +1,20 @@
 /**
  * Triggers Supabase Edge Function send-candidate-email (no admin JWT).
- * Called after successful check-in submit (eligible candidates).
+ * post_checkin: after check-in submit. post_assessment_submit: after Leadership Assessment submit.
  */
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-export async function triggerPostCheckinEmail(candidateId: string, candidateEmail: string): Promise<void> {
+type CandidateEmailTrigger = 'post_checkin' | 'post_assessment_submit';
+
+async function triggerSendCandidateEmail(
+  candidateId: string,
+  candidateEmail: string,
+  trigger: CandidateEmailTrigger
+): Promise<void> {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    console.warn('Check-in email: missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY');
+    console.warn('Candidate email: missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY');
     return;
   }
   try {
@@ -22,14 +28,22 @@ export async function triggerPostCheckinEmail(candidateId: string, candidateEmai
       body: JSON.stringify({
         candidateId,
         candidateEmail: candidateEmail.trim().toLowerCase(),
-        trigger: 'post_checkin',
+        trigger,
       }),
     });
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));
-      console.warn('Check-in automated email failed:', res.status, j);
+      console.warn('Automated candidate email failed:', trigger, res.status, j);
     }
   } catch (e) {
-    console.error('Check-in email trigger error', e);
+    console.error('Candidate email trigger error', trigger, e);
   }
+}
+
+export async function triggerPostCheckinEmail(candidateId: string, candidateEmail: string): Promise<void> {
+  return triggerSendCandidateEmail(candidateId, candidateEmail, 'post_checkin');
+}
+
+export async function triggerPostAssessmentSubmitEmail(candidateId: string, candidateEmail: string): Promise<void> {
+  return triggerSendCandidateEmail(candidateId, candidateEmail, 'post_assessment_submit');
 }

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { getCandidateById, saveCandidate, calculateScore } from '../services/storageService';
+import { triggerPostAssessmentSubmitEmail } from '../services/candidateEmailTrigger';
 import { Candidate, AssessmentData, ApplicantQuestionnaire } from '../types';
 import {
   OPEN_ENDED_QUESTIONS,
@@ -173,6 +174,7 @@ const AssessmentRoomForm: React.FC = () => {
     try {
       setSubmitting(true);
       await saveCandidate(updatedCandidate);
+      void triggerPostAssessmentSubmitEmail(updatedCandidate.id, updatedCandidate.email);
       navigate('/thank-you', { state: { fromMergedAssessment: true } });
     } catch (err) {
       console.error(err);

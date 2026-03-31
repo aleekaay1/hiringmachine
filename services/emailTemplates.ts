@@ -83,7 +83,7 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
 
 /**
  * Stage 4 – sent after Leadership Assessment submission (automation only; not a manual button).
- * When automation is enabled, use this template with mergeTemplate(..., assessmentExtras).
+ * Sync HTML/subject with supabase/functions/_shared/postAssessmentSubmitEmailTemplate.ts (Edge Function).
  */
 export const POST_ASSESSMENT_SUBMIT_TEMPLATE: EmailTemplate = {
   id: 'stage4_assessment_received',
