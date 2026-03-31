@@ -77,6 +77,8 @@ Deno.serve(async (req) => {
     const subject = body?.subject?.trim();
     const bodyHtml = body?.bodyHtml;
     const bodyText = body?.bodyText;
+    const cc = typeof body?.cc === 'string' ? body.cc.trim() : '';
+    const rawAttachments = Array.isArray(body?.attachments) ? body.attachments : [];
 
     if (!to || !subject) {
       return new Response(JSON.stringify({ error: 'Missing to or subject' }), {
@@ -89,15 +91,36 @@ Deno.serve(async (req) => {
       Deno.env.get('SMTP_FROM')?.trim() ||
       Deno.env.get('SMTP_USERNAME')?.trim() ||
       'noreply@example.com';
+    const attachments = rawAttachments
+      .map((a: { filename?: string; content?: string; contentType?: string }) => {
+        const filename = typeof a?.filename === 'string' && a.filename.trim() ? a.filename.trim() : 'attachment';
+        const content = typeof a?.content === 'string' ? a.content.trim() : '';
+        if (!content) return null;
+        return {
+          filename,
+          content,
+          encoding: 'base64' as const,
+          contentType: typeof a?.contentType === 'string' ? a.contentType : undefined,
+        };
+      })
+      .filter(Boolean) as Array<{
+      filename: string;
+      content: string;
+      encoding: 'base64';
+      contentType?: string;
+    }>;
+
     const transport = getTransport();
     await new Promise<void>((resolve, reject) => {
       transport.sendMail(
         {
           from,
           to,
+          ...(cc ? { cc } : {}),
           subject,
           text: bodyText || (typeof bodyHtml === 'string' ? bodyHtml.replace(/<[^>]*>/g, '') : ''),
           html: typeof bodyHtml === 'string' ? bodyHtml : undefined,
+          ...(attachments.length ? { attachments } : {}),
         },
         (err: Error | null) => (err ? reject(err) : resolve())
       );

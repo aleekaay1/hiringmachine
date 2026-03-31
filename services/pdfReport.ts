@@ -54,7 +54,15 @@ const getMergedExitQaData = (candidate: Candidate): ExitQAData | null => {
   return hasAny ? data : null;
 };
 
-export function downloadCandidateReportPdf(candidate: Candidate) {
+function candidateReportFilename(candidate: Candidate): string {
+  const fileNameSafe = `${(candidate.firstName || 'candidate')}_${(candidate.lastName || 'report')}`
+    .replace(/[^a-z0-9_-]+/gi, '_')
+    .replace(/_+/g, '_');
+  return `${fileNameSafe}_report.pdf`;
+}
+
+/** Build PDF in memory (used for download and email attachment). */
+export function buildCandidateReportPdf(candidate: Candidate): { doc: jsPDF; filename: string } {
   const doc = new jsPDF({ unit: 'pt', format: 'letter' });
 
   const page = {
@@ -99,11 +107,9 @@ export function downloadCandidateReportPdf(candidate: Candidate) {
     }
   };
 
-  // Title + score
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(18);
-  const title = `Candidate Report`;
-  doc.text(title, page.margin, y);
+  doc.text('Candidate Report', page.margin, y);
   y += 22;
 
   const scoreValue = candidate.score != null ? String(candidate.score) : 'N/A';
@@ -123,7 +129,6 @@ export function downloadCandidateReportPdf(candidate: Candidate) {
   doc.setTextColor(0);
   y += 20;
 
-  // 1) Basic info
   addHeading('1) Candidate information');
   addKeyValues([
     { label: 'Name', value: `${safeText(candidate.firstName)} ${safeText(candidate.lastName)}`.trim() },
@@ -131,7 +136,6 @@ export function downloadCandidateReportPdf(candidate: Candidate) {
     { label: 'Phone', value: safeText(candidate.phone) },
   ]);
 
-  // 2) Exit questionnaire (plus legal entitlement from initial form)
   addHeading('2) Post Live Career Overview Exit Questionnaire');
 
   const legalCanada = (candidate.applicantQuestionnaire as any)?.legallyEntitledCanada;
@@ -192,7 +196,6 @@ export function downloadCandidateReportPdf(candidate: Candidate) {
     }
   }
 
-  // 3) Assessment summary
   addHeading('3) Assessment summary');
   if (!candidate.assessment) {
     addTextBlock('No assessment submitted.');
@@ -205,9 +208,18 @@ export function downloadCandidateReportPdf(candidate: Candidate) {
     }
   }
 
-  const fileNameSafe = `${(candidate.firstName || 'candidate')}_${(candidate.lastName || 'report')}`
-    .replace(/[^a-z0-9_-]+/gi, '_')
-    .replace(/_+/g, '_');
-  doc.save(`${fileNameSafe}_report.pdf`);
+  return { doc, filename: candidateReportFilename(candidate) };
 }
 
+export function downloadCandidateReportPdf(candidate: Candidate) {
+  const { doc, filename } = buildCandidateReportPdf(candidate);
+  doc.save(filename);
+}
+
+/** Base64 payload for Edge Function email attachment (no data: prefix). */
+export function getCandidateReportPdfBase64(candidate: Candidate): { base64: string; filename: string } {
+  const { doc, filename } = buildCandidateReportPdf(candidate);
+  const dataUri = doc.output('datauristring') as string;
+  const base64 = dataUri.includes(',') ? dataUri.split(',')[1]! : dataUri;
+  return { base64, filename };
+}

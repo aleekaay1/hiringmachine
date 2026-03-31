@@ -13,7 +13,7 @@ import {
   EQ_QUESTIONS,
   EQ_LIKERT_OPTIONS,
 } from '../services/assessmentConfig';
-import { downloadCandidateReportPdf } from '../services/pdfReport';
+import { downloadCandidateReportPdf, getCandidateReportPdfBase64 } from '../services/pdfReport';
 import { Candidate, QUESTIONS, DEFAULT_ADMIN_DATA, type PipelineStage, type AdminData } from '../types';
 import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare } from 'lucide-react';
 import { Button } from '../components/UI';
@@ -21,6 +21,8 @@ import { supabase } from '../services/supabaseClient';
 
 const PIPELINE_STAGES: PipelineStage[] = ['Applied', 'Screening', 'Interview Scheduled', 'Interviewed', 'Offer', 'Hired', 'Rejected', 'Withdrawn'];
 const SUGGESTED_TAGS = ['Strong fit', 'Follow up', 'Licensing needed', 'High potential', 'Second interview', 'Offer extended'];
+/** Always CC when emailing a candidate PDF report from admin. */
+const REPORT_PDF_EMAIL_CC = 'alex@globelife-paz.com';
 
 const getAdminData = (c: Candidate): AdminData => ({ ...DEFAULT_ADMIN_DATA, ...c.adminData });
 
@@ -54,10 +56,19 @@ const AdminDashboard: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkStage, setBulkStage] = useState<PipelineStage | ''>('');
   const [nextStepEdit, setNextStepEdit] = useState('');
+  const [reportStaffEmail, setReportStaffEmail] = useState('');
+  const [reportEmailSending, setReportEmailSending] = useState(false);
+  const [reportEmailError, setReportEmailError] = useState<string | null>(null);
+  const [reportEmailSent, setReportEmailSent] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
     if (selectedCandidate) setNextStepEdit(getAdminData(selectedCandidate).nextStep);
+  }, [selectedCandidate?.id]);
+
+  useEffect(() => {
+    setReportEmailError(null);
+    setReportEmailSent(false);
   }, [selectedCandidate?.id]);
 
   const toggleSelect = (id: string) => {
@@ -586,6 +597,49 @@ const AdminDashboard: React.FC = () => {
     setShowEmailModal(true);
   };
 
+  const handleEmailCandidateReportPdf = async () => {
+    if (!selectedCandidate) return;
+    const to = reportStaffEmail.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+      setReportEmailError('Enter a valid staff email address.');
+      setReportEmailSent(false);
+      return;
+    }
+    setReportEmailError(null);
+    setReportEmailSent(false);
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      setReportEmailError('Your session expired. Please sign in again.');
+      return;
+    }
+    setReportEmailSending(true);
+    try {
+      const { base64, filename } = getCandidateReportPdfBase64(selectedCandidate);
+      const name = `${selectedCandidate.firstName} ${selectedCandidate.lastName}`.trim();
+      const subject = `Candidate report: ${name || 'Candidate'}`;
+      const bodyHtml = `<p>Attached is the candidate PDF report for <strong>${name || 'candidate'}</strong>.</p><p>Candidate email: <a href="mailto:${selectedCandidate.email}">${selectedCandidate.email}</a><br/>Phone: ${selectedCandidate.phone || 'N/A'}</p>`;
+      const result = await sendEmail(session.access_token, {
+        to,
+        cc: REPORT_PDF_EMAIL_CC,
+        subject,
+        bodyHtml,
+        attachments: [{ filename, contentBase64: base64, contentType: 'application/pdf' }],
+      });
+      if (result.ok) {
+        setReportEmailSent(true);
+        setReportEmailError(null);
+      } else {
+        setReportEmailError(result.error || 'Failed to send email');
+        setReportEmailSent(false);
+      }
+    } catch (e) {
+      setReportEmailError(e instanceof Error ? e.message : 'Failed to send email');
+      setReportEmailSent(false);
+    } finally {
+      setReportEmailSending(false);
+    }
+  };
+
   const handleSendEmail = async () => {
     if (!selectedCandidate || !emailSubject.trim()) return;
     const { data: { session } } = await supabase.auth.getSession();
@@ -877,14 +931,48 @@ const AdminDashboard: React.FC = () => {
                         <div className="text-[10px] text-gray-500 uppercase tracking-wide font-bold mt-1">Total Score</div>
                       </div>
                     )}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="text-[11px] px-3 py-1"
-                      onClick={() => downloadCandidateReportPdf(selectedCandidate)}
-                    >
-                      Generate report (PDF)
-                    </Button>
+                    <div className="flex flex-col items-end gap-2 max-w-full">
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="text-[11px] px-3 py-1"
+                          onClick={() => downloadCandidateReportPdf(selectedCandidate)}
+                        >
+                          Generate report (PDF)
+                        </Button>
+                        <input
+                          type="email"
+                          placeholder="Staff email"
+                          value={reportStaffEmail}
+                          onChange={e => {
+                            setReportStaffEmail(e.target.value);
+                            setReportEmailError(null);
+                            setReportEmailSent(false);
+                          }}
+                          className="min-w-[180px] max-w-[220px] px-3 py-1.5 text-xs rounded-lg border border-gray-300 focus:ring-[#005EB8] focus:border-[#005EB8]"
+                          aria-label="Staff email for PDF report"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="text-[11px] px-3 py-1 border-[#005EB8]/40 text-[#005EB8]"
+                          onClick={handleEmailCandidateReportPdf}
+                          disabled={reportEmailSending}
+                        >
+                          {reportEmailSending ? 'Sending…' : 'Email report (PDF)'}
+                        </Button>
+                      </div>
+                      <p className="text-[10px] text-gray-500 text-right max-w-sm">
+                        CC {REPORT_PDF_EMAIL_CC}
+                      </p>
+                      {reportEmailError && (
+                        <p className="text-[11px] text-red-600 text-right max-w-sm">{reportEmailError}</p>
+                      )}
+                      {reportEmailSent && !reportEmailError && (
+                        <p className="text-[11px] text-green-700 text-right">Report emailed.</p>
+                      )}
+                    </div>
                     <Button
                       type="button"
                       variant="outline"

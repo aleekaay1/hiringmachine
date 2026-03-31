@@ -1,11 +1,21 @@
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
+export interface EmailAttachmentPayload {
+  filename: string;
+  /** Raw base64 (no data: prefix). */
+  contentBase64: string;
+  contentType?: string;
+}
+
 export interface SendEmailParams {
   to: string;
   subject: string;
   bodyHtml?: string;
   bodyText?: string;
+  /** Comma-separated addresses, e.g. CC for staff. */
+  cc?: string;
+  attachments?: EmailAttachmentPayload[];
 }
 
 /** Send email via Edge Function. Requires auth token. */
@@ -32,6 +42,13 @@ export async function sendEmail(
       subject: params.subject.trim(),
       bodyHtml: params.bodyHtml || undefined,
       bodyText: params.bodyText || undefined,
+      cc: params.cc?.trim() || undefined,
+      attachments:
+        params.attachments?.map((a) => ({
+          filename: a.filename,
+          content: a.contentBase64,
+          contentType: a.contentType || 'application/pdf',
+        })) || undefined,
     }),
   });
   const data = await res.json().catch(() => ({}));
