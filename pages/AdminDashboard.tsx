@@ -5,6 +5,7 @@ import { getCandidates, deleteCandidate, saveCandidate } from '../services/stora
 import { getAssessmentSummary } from '../services/assessmentSummary';
 import { sendEmail } from '../services/emailService';
 import { EMAIL_TEMPLATES, mergeTemplate } from '../services/emailTemplates';
+import { appendEmailSignatureToHtml, getSiteOriginForEmail, CC_EMAIL_ALEX } from '../services/emailSignature';
 import {
   OPEN_ENDED_QUESTIONS,
   PERSONALITY_QUESTIONS,
@@ -21,8 +22,6 @@ import { supabase } from '../services/supabaseClient';
 
 const PIPELINE_STAGES: PipelineStage[] = ['Applied', 'Screening', 'Interview Scheduled', 'Interviewed', 'Offer', 'Hired', 'Rejected', 'Withdrawn'];
 const SUGGESTED_TAGS = ['Strong fit', 'Follow up', 'Licensing needed', 'High potential', 'Second interview', 'Offer extended'];
-/** Always CC when emailing a candidate PDF report from admin. */
-const REPORT_PDF_EMAIL_CC = 'alex@globelife-paz.com';
 
 const getAdminData = (c: Candidate): AdminData => ({ ...DEFAULT_ADMIN_DATA, ...c.adminData });
 
@@ -57,6 +56,7 @@ const AdminDashboard: React.FC = () => {
   const [bulkStage, setBulkStage] = useState<PipelineStage | ''>('');
   const [nextStepEdit, setNextStepEdit] = useState('');
   const [reportStaffEmail, setReportStaffEmail] = useState('');
+  const [reportCcAlex, setReportCcAlex] = useState(false);
   const [reportEmailSending, setReportEmailSending] = useState(false);
   const [reportEmailError, setReportEmailError] = useState<string | null>(null);
   const [reportEmailSent, setReportEmailSent] = useState(false);
@@ -583,12 +583,14 @@ const AdminDashboard: React.FC = () => {
     } else if (selectedCandidate) {
       const template = EMAIL_TEMPLATES.find((t) => t.id === mode);
       if (template) {
-        const origin = typeof window !== 'undefined' ? window.location.origin : '';
+        const origin = getSiteOriginForEmail();
         const extras =
           mode === 'stage3_assessment_link'
             ? { '{{assessmentLookupUrl}}': `${origin}/assessment-lookup` }
             : undefined;
-        const { subject, bodyHtml } = mergeTemplate(template.subject, template.bodyHtml, selectedCandidate, extras);
+        const { subject, bodyHtml } = mergeTemplate(template.subject, template.bodyHtml, selectedCandidate, extras, {
+          siteOrigin: origin,
+        });
         setEmailSubject(subject);
         setEmailBody(bodyHtml);
         setEmailBodyIsHtml(true);
@@ -617,10 +619,12 @@ const AdminDashboard: React.FC = () => {
       const { base64, filename } = getCandidateReportPdfBase64(selectedCandidate);
       const name = `${selectedCandidate.firstName} ${selectedCandidate.lastName}`.trim();
       const subject = `Candidate report: ${name || 'Candidate'}`;
-      const bodyHtml = `<p>Attached is the candidate PDF report for <strong>${name || 'candidate'}</strong>.</p><p>Candidate email: <a href="mailto:${selectedCandidate.email}">${selectedCandidate.email}</a><br/>Phone: ${selectedCandidate.phone || 'N/A'}</p>`;
+      const origin = getSiteOriginForEmail();
+      const bodyCore = `<p>Attached is the candidate PDF report for <strong>${name || 'candidate'}</strong>.</p><p>Candidate email: <a href="mailto:${selectedCandidate.email}">${selectedCandidate.email}</a><br/>Phone: ${selectedCandidate.phone || 'N/A'}</p>`;
+      const bodyHtml = appendEmailSignatureToHtml(bodyCore, origin);
       const result = await sendEmail(session.access_token, {
         to,
-        cc: REPORT_PDF_EMAIL_CC,
+        cc: reportCcAlex ? CC_EMAIL_ALEX : undefined,
         subject,
         bodyHtml,
         attachments: [{ filename, contentBase64: base64, contentType: 'application/pdf' }],
@@ -651,7 +655,11 @@ const AdminDashboard: React.FC = () => {
     setEmailError(null);
     const to = selectedCandidate.email;
     const subject = emailSubject.trim();
-    const bodyHtml = emailBodyIsHtml ? emailBody.trim() || undefined : undefined;
+    const origin = getSiteOriginForEmail();
+    const rawHtml = emailBody.trim();
+    const bodyHtml = emailBodyIsHtml
+      ? (rawHtml ? appendEmailSignatureToHtml(rawHtml, origin) : undefined)
+      : undefined;
     const bodyText = !emailBodyIsHtml ? emailBody.trim() || undefined : undefined;
     const result = await sendEmail(session.access_token, { to, subject, bodyHtml, bodyText });
     setEmailSending(false);
@@ -963,9 +971,15 @@ const AdminDashboard: React.FC = () => {
                           {reportEmailSending ? 'Sending…' : 'Email report (PDF)'}
                         </Button>
                       </div>
-                      <p className="text-[10px] text-gray-500 text-right max-w-sm">
-                        CC {REPORT_PDF_EMAIL_CC}
-                      </p>
+                      <label className="flex items-center justify-end gap-2 text-[11px] text-gray-700 cursor-pointer select-none max-w-sm ml-auto">
+                        <input
+                          type="checkbox"
+                          checked={reportCcAlex}
+                          onChange={e => setReportCcAlex(e.target.checked)}
+                          className="rounded border-gray-300 text-[#005EB8] focus:ring-[#005EB8]"
+                        />
+                        <span>CC {CC_EMAIL_ALEX}</span>
+                      </label>
                       {reportEmailError && (
                         <p className="text-[11px] text-red-600 text-right max-w-sm">{reportEmailError}</p>
                       )}
