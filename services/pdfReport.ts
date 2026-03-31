@@ -4,6 +4,19 @@ import { getAssessmentSummary } from './assessmentSummary';
 
 type LineItem = { label: string; value: string };
 
+type ExitQAData = {
+  whatStoodOut?: unknown;
+  whyGoodFit?: unknown;
+  financialInvestmentLicense?: unknown;
+  legallyEntitledCanadaFullTime?: unknown;
+  comfortableVirtualEnvironment?: unknown;
+  excitedOffSiteSocial?: unknown;
+  positionInterest?: unknown;
+  contactPermission?: unknown;
+  backgroundCheckWilling?: unknown;
+  questionsAboutOpportunity?: unknown;
+};
+
 const toYesNoMaybe = (v: unknown): string => {
   if (v === 'yes') return 'Yes';
   if (v === 'no') return 'No';
@@ -15,6 +28,30 @@ const toYesNoMaybe = (v: unknown): string => {
 const safeText = (v: unknown): string => {
   const s = (v ?? '').toString().trim();
   return s ? s : 'N/A';
+};
+
+const getMergedExitQaData = (candidate: Candidate): ExitQAData | null => {
+  const eq = candidate.exitQuestionnaire as any;
+  const aq = candidate.applicantQuestionnaire as any;
+  const a = candidate.assessment as any;
+
+  const data: ExitQAData = {
+    whatStoodOut: eq?.whatStoodOut ?? aq?.whatStoodOut,
+    whyGoodFit: eq?.whyGoodFit ?? aq?.whyGoodFit,
+    financialInvestmentLicense: eq?.financialInvestmentLicense ?? aq?.financialInvestmentLicense ?? a?.financialInvestmentLicense,
+    legallyEntitledCanadaFullTime: eq?.legallyEntitledCanadaFullTime ?? aq?.legallyEntitledCanadaFullTime,
+    comfortableVirtualEnvironment: eq?.comfortableVirtualEnvironment ?? aq?.comfortableVirtualEnvironment ?? a?.comfortableVirtualEnvironment,
+    excitedOffSiteSocial: eq?.excitedOffSiteSocial ?? aq?.excitedOffSiteSocial,
+    positionInterest: eq?.positionInterest ?? aq?.positionInterest ?? a?.careerPathInterest,
+    contactPermission: eq?.contactPermission ?? aq?.contactPermission,
+    backgroundCheckWilling: aq?.backgroundCheckWilling,
+    questionsAboutOpportunity: eq?.questionsAboutOpportunity ?? aq?.questionsAboutOpportunity,
+  };
+
+  const hasAny =
+    Object.values(data).some(v => v !== undefined && v !== null && String(v).trim() !== '');
+
+  return hasAny ? data : null;
 };
 
 export function downloadCandidateReportPdf(candidate: Candidate) {
@@ -100,52 +137,52 @@ export function downloadCandidateReportPdf(candidate: Candidate) {
   const legalCanada = (candidate.applicantQuestionnaire as any)?.legallyEntitledCanada;
   addTextBlock(`Legally entitled to work in Canada: ${toYesNoMaybe(legalCanada)}`, { bold: true });
 
-  const eq = candidate.exitQuestionnaire as any;
-  if (!eq) {
+  const merged = getMergedExitQaData(candidate);
+  if (!merged) {
     addTextBlock('No exit questionnaire submitted.', { bold: false });
   } else {
     const qas: LineItem[] = [
       {
         label: 'What stood out to you most about our career opportunity?',
-        value: safeText(eq.whatStoodOut),
+        value: safeText(merged.whatStoodOut),
       },
       {
         label: 'Why do you feel you would be a good fit for our organization?',
-        value: safeText(eq.whyGoodFit),
+        value: safeText(merged.whyGoodFit),
       },
       {
         label:
           'If you were offered an opportunity to join our company, would you be prepared to make the financial investment to obtain your license [Tuition $348]?',
-        value: toYesNoMaybe(eq.financialInvestmentLicense),
+        value: toYesNoMaybe(merged.financialInvestmentLicense),
       },
       {
         label: 'Are you legally entitled to work in Canada on a FULL-TIME BASIS?',
-        value: toYesNoMaybe(eq.legallyEntitledCanadaFullTime),
+        value: toYesNoMaybe(merged.legallyEntitledCanadaFullTime),
       },
       {
         label: 'Are you comfortable working in a 100% virtual environment?',
-        value: toYesNoMaybe(eq.comfortableVirtualEnvironment),
+        value: toYesNoMaybe(merged.comfortableVirtualEnvironment),
       },
       {
         label:
           'If we welcome you to our team, would you be excited to join our lively off-site social functions?',
-        value: toYesNoMaybe(eq.excitedOffSiteSocial),
+        value: toYesNoMaybe(merged.excitedOffSiteSocial),
       },
       {
         label: 'Which career path are you most interested in?',
-        value: safeText(eq.positionInterest),
+        value: safeText(merged.positionInterest),
       },
       {
         label: 'Contact permission',
-        value: toYesNoMaybe(eq.contactPermission),
+        value: toYesNoMaybe(merged.contactPermission),
       },
       {
         label: 'Background check willingness',
-        value: toYesNoMaybe((candidate.applicantQuestionnaire as any)?.backgroundCheckWilling),
+        value: toYesNoMaybe(merged.backgroundCheckWilling),
       },
       {
         label: 'What questions, if any, do you have about the career opportunity?',
-        value: safeText(eq.questionsAboutOpportunity),
+        value: safeText(merged.questionsAboutOpportunity),
       },
     ];
 
