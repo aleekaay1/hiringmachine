@@ -1,5 +1,4 @@
 /**
- * Synced copy of services/emailSignatureHtml.ts — update both when changing.
  * HTML signature only (safe for Edge / Vite). No import.meta.
  */
 
@@ -13,13 +12,15 @@ const ICONS = {
   linkedin: 'https://img.icons8.com/color/48/linkedin.png',
   facebook: 'https://img.icons8.com/color/48/facebook.png',
   instagram: 'https://img.icons8.com/color/48/instagram-new.png',
+  youtube: 'https://img.icons8.com/color/48/youtube-play.png',
 } as const;
 
 const SOCIAL_LINKS = {
   website: 'https://globelife-paz.com',
-  linkedin: 'https://globelife-paz.com',
-  facebook: 'https://globelife-paz.com',
-  instagram: 'https://globelife-paz.com',
+  facebook: 'https://www.facebook.com/BPAgenciesofAIL/',
+  youtube: 'https://youtube.com/@Paz_organization',
+  linkedin: 'https://www.linkedin.com/company/globe-life-ail-division-paz-organization/',
+  instagram: 'https://www.instagram.com/paz_organization/',
 } as const;
 
 export function buildEmailSignatureHtml(_siteOrigin?: string): string {
@@ -46,7 +47,8 @@ export function buildEmailSignatureHtml(_siteOrigin?: string): string {
           <td style="padding-right:10px;"><a href="${SOCIAL_LINKS.website}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;"><img src="${ICONS.website}" width="26" height="26" alt="Website" style="display:block; border:0;" /></a></td>
           <td style="padding-right:10px;"><a href="${SOCIAL_LINKS.linkedin}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;"><img src="${ICONS.linkedin}" width="26" height="26" alt="LinkedIn" style="display:block; border:0;" /></a></td>
           <td style="padding-right:10px;"><a href="${SOCIAL_LINKS.facebook}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;"><img src="${ICONS.facebook}" width="26" height="26" alt="Facebook" style="display:block; border:0;" /></a></td>
-          <td><a href="${SOCIAL_LINKS.instagram}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;"><img src="${ICONS.instagram}" width="26" height="26" alt="Instagram" style="display:block; border:0;" /></a></td>
+          <td style="padding-right:10px;"><a href="${SOCIAL_LINKS.instagram}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;"><img src="${ICONS.instagram}" width="26" height="26" alt="Instagram" style="display:block; border:0;" /></a></td>
+          <td><a href="${SOCIAL_LINKS.youtube}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;"><img src="${ICONS.youtube}" width="26" height="26" alt="YouTube" style="display:block; border:0;" /></a></td>
         </tr>
       </table>
     </td>
