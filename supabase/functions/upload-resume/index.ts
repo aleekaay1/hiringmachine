@@ -1,90 +1,84 @@
-// Resume upload via Edge Function so we use the service role and bypass Storage RLS.
+// Resume upload via Edge Function (service role bypasses Storage RLS).
 // Deploy: supabase functions deploy upload-resume
-// Set secret: SUPABASE_SERVICE_ROLE_KEY (Dashboard → Project Settings → Edge Functions → Secrets)
+// Secrets: SUPABASE_SERVICE_ROLE_KEY (auto on hosted projects)
 
-import { Application } from 'https://deno.land/x/oak@v11.1.0/mod.ts';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const MB = 1024 * 1024;
 const BUCKET = 'candidate-resumes';
 
-const corsHeaders = {
+const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type, apikey, x-client-info',
   'Access-Control-Max-Age': '86400',
 };
 
-const app = new Application();
+function json(status: number, body: Record<string, unknown>) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+}
 
-// CORS: handle preflight and add headers to all responses
-app.use(async (ctx, next) => {
-  ctx.response.headers.set('Access-Control-Allow-Origin', ctx.request.headers.get('Origin') ?? '*');
-  ctx.response.headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  ctx.response.headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-  ctx.response.headers.set('Access-Control-Max-Age', '86400');
-  if (ctx.request.method === 'OPTIONS') {
-    ctx.response.status = 204;
-    return;
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
-  await next();
-});
 
-app.use(async (ctx) => {
-  if (ctx.request.method !== 'POST') {
-    ctx.response.status = 405;
-    ctx.response.body = { error: 'Method not allowed' };
-    return;
+  if (req.method !== 'POST') {
+    return json(405, { error: 'Method not allowed' });
   }
 
   try {
-    const body = ctx.request.body({ type: 'form-data' });
-    const formData = await body.value.read({
-      maxSize: 10 * MB,
-    });
+    const contentType = req.headers.get('content-type') || '';
+    if (!contentType.includes('multipart/form-data')) {
+      return json(400, { error: 'Expected multipart/form-data' });
+    }
 
-    const candidateId = formData.fields?.candidateId as string | undefined;
-    const file = formData.files?.[0];
-    if (!candidateId?.trim() || !file) {
-      ctx.response.status = 400;
-      ctx.response.body = { error: 'Missing candidateId or file' };
-      return;
+    const formData = await req.formData();
+    const candidateId = String(formData.get('candidateId') ?? '').trim();
+    const fileEntry = formData.get('file');
+
+    if (!candidateId || !fileEntry || !(fileEntry instanceof Blob)) {
+      return json(400, { error: 'Missing candidateId or file' });
+    }
+
+    if (fileEntry.size > 10 * MB) {
+      return json(400, { error: 'File too large (max 10MB)' });
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL');
     const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
     if (!supabaseUrl || !serviceRoleKey) {
-      ctx.response.status = 500;
-      ctx.response.body = { error: 'Server configuration error' };
-      return;
+      return json(500, { error: 'Server configuration error' });
     }
 
-    const supabase = createClient(supabaseUrl, serviceRoleKey);
-    const safeName = (file.name || 'file').replace(/[^a-zA-Z0-9.-]/g, '_');
-    const path = `${candidateId.trim()}/${Date.now()}-${safeName}`;
+    const safeName =
+      fileEntry instanceof File
+        ? (fileEntry.name || 'file').replace(/[^a-zA-Z0-9.-]/g, '_')
+        : 'upload.bin';
+    const path = `${candidateId}/${Date.now()}-${safeName}`;
 
-    const { error } = await supabase.storage.from(BUCKET).upload(path, file.content!.buffer, {
-      contentType: file.contentType ?? 'application/octet-stream',
+    const buffer = await fileEntry.arrayBuffer();
+    const mime = fileEntry instanceof File && fileEntry.type ? fileEntry.type : 'application/octet-stream';
+
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    const { error } = await supabase.storage.from(BUCKET).upload(path, buffer, {
+      contentType: mime,
       cacheControl: '3600',
       upsert: false,
     });
 
     if (error) {
       console.error('Storage upload error:', error);
-      ctx.response.status = 500;
-      ctx.response.body = { error: error.message };
-      return;
+      return json(500, { error: error.message });
     }
 
     const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
-    ctx.response.status = 200;
-    ctx.response.type = 'json';
-    ctx.response.body = { url: data.publicUrl };
+    return json(200, { url: data.publicUrl });
   } catch (e) {
-    console.error(e);
-    ctx.response.status = 500;
-    ctx.response.body = { error: 'Upload failed' };
+    console.error('upload-resume:', e);
+    return json(500, { error: e instanceof Error ? e.message : 'Upload failed' });
   }
 });
-
-await app.listen({ port: 8000 });

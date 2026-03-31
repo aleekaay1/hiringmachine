@@ -169,7 +169,10 @@ export const uploadResume = async (candidateId: string, file: File): Promise<str
     form.set('file', file);
     const res = await fetch(`${supabaseUrl}/functions/v1/upload-resume`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${anonKey}` },
+      headers: {
+        Authorization: `Bearer ${anonKey}`,
+        apikey: anonKey,
+      },
       body: form,
     });
     if (!res.ok) {
