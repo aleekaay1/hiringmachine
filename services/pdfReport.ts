@@ -165,7 +165,7 @@ export function downloadCandidateReportPdf(candidate: Candidate) {
       },
       {
         label:
-          'If we welcome you to our team, would you be excited to join our lively off-site social functions?',
+          'If we welcome you to our team, would you be excited to join our lively off-site social functions? These are fantastic opportunities to connect with colleagues, meet leadership, and build lasting relationships.',
         value: toYesNoMaybe(merged.excitedOffSiteSocial),
       },
       {
@@ -173,7 +173,7 @@ export function downloadCandidateReportPdf(candidate: Candidate) {
         value: safeText(merged.positionInterest),
       },
       {
-        label: 'Contact permission',
+        label: 'Contact Permission',
         value: toYesNoMaybe(merged.contactPermission),
       },
       {
