@@ -17,6 +17,14 @@ async function triggerSendCandidateEmail(
     console.warn('Candidate email: missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY');
     return;
   }
+  const id = String(candidateId ?? '').trim();
+  const email = String(candidateEmail ?? '')
+    .trim()
+    .toLowerCase();
+  if (!id || !email) {
+    console.warn('Candidate email: missing candidate id or email', { trigger, id: id || '(empty)' });
+    return;
+  }
   try {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/send-candidate-email`, {
       method: 'POST',
@@ -26,8 +34,8 @@ async function triggerSendCandidateEmail(
         Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
       },
       body: JSON.stringify({
-        candidateId,
-        candidateEmail: candidateEmail.trim().toLowerCase(),
+        candidateId: id,
+        candidateEmail: email,
         trigger,
       }),
     });

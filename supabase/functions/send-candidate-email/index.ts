@@ -58,17 +58,40 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json();
-    const candidateId = typeof body?.candidateId === 'string' ? body.candidateId.trim() : '';
-    const candidateEmail = typeof body?.candidateEmail === 'string' ? body.candidateEmail.trim().toLowerCase() : '';
-    const trigger = body?.trigger;
+    const candidateId =
+      body?.candidateId != null && body.candidateId !== '' ? String(body.candidateId).trim() : '';
+    const candidateEmail =
+      typeof body?.candidateEmail === 'string' ? body.candidateEmail.trim().toLowerCase() : '';
+    const trigger = typeof body?.trigger === 'string' ? body.trigger.trim() : '';
     const isPostCheckin = trigger === 'post_checkin';
     const isPostAssessmentSubmit = trigger === 'post_assessment_submit';
 
-    if (!candidateId || !candidateEmail || (!isPostCheckin && !isPostAssessmentSubmit)) {
-      return new Response(JSON.stringify({ error: 'Invalid request' }), {
+    if (!candidateId) {
+      return new Response(JSON.stringify({ error: 'Invalid request', detail: 'missing_candidate_id' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
+    }
+    if (!candidateEmail) {
+      return new Response(JSON.stringify({ error: 'Invalid request', detail: 'missing_candidate_email' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    if (!isPostCheckin && !isPostAssessmentSubmit) {
+      return new Response(
+        JSON.stringify({
+          error: 'Invalid request',
+          detail: 'invalid_trigger',
+          trigger: trigger || null,
+          hint:
+            'Expected post_checkin or post_assessment_submit. Redeploy send-candidate-email if you see this with post_assessment_submit.',
+        }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      );
     }
 
     const admin = createClient(supabaseUrl, serviceRole);
