@@ -1,6 +1,6 @@
 /**
  * Post check-in email (Live Online Career Session). Used by admin templates + send-candidate-email Edge Function.
- * Keep merge placeholders: {{firstName}}, {{zoomUrl}}, {{emailSignature}}
+ * Keep merge placeholders: {{candidateName}}, {{zoomUrl}}, {{emailSignature}}
  */
 
 export const POST_CHECKIN_EMAIL_SUBJECT =
@@ -8,7 +8,7 @@ export const POST_CHECKIN_EMAIL_SUBJECT =
 
 /** Body with placeholders for mergeTemplate / Edge Function. */
 export const POST_CHECKIN_EMAIL_BODY_HTML = `
-<p>Dear {{firstName}},</p>
+<p>Dear {{candidateName}},</p>
 <p>The check-in form has been successfully received and reviewed.</p>
 <p>You have been selected to attend the <strong>Live Online Career Session</strong>, an exclusive and interactive presentation designed for individuals who are seriously evaluating a long-term professional opportunity.</p>
 <p>This is not a pre-recorded webinar. The session will be hosted live by the CEO and Agency Owner, Alex Paz, providing a direct and transparent breakdown of the business, expectations, and the standards required to succeed within the organization.</p>
@@ -45,12 +45,12 @@ At the conclusion of the session, candidates who wish to proceed will complete a
 `.trim();
 
 export function applyPostCheckinMerge(
-  firstName: string,
+  candidateName: string,
   zoomUrl: string,
   emailSignatureHtml: string
 ): string {
-  return POST_CHECKIN_EMAIL_BODY_HTML.split('{{firstName}}')
-    .join(firstName)
+  return POST_CHECKIN_EMAIL_BODY_HTML.split('{{candidateName}}')
+    .join(candidateName)
     .split('{{zoomUrl}}')
     .join(zoomUrl)
     .split('{{emailSignature}}')

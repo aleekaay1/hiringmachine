@@ -87,9 +87,10 @@ Deno.serve(async (req) => {
       });
     }
 
-    const firstName = (row.first_name as string) || 'Candidate';
+    const candidateName =
+      `${(row.first_name as string) || ''} ${(row.last_name as string) || ''}`.trim() || 'Candidate';
     const sig = buildEmailSignatureHtml();
-    const html = applyPostCheckinMerge(firstName, ZOOM_MEETING_URL, sig);
+    const html = applyPostCheckinMerge(candidateName, ZOOM_MEETING_URL, sig);
 
     const from =
       Deno.env.get('SMTP_FROM')?.trim() ||
