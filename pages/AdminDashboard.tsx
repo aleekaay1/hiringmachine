@@ -5,7 +5,7 @@ import { getCandidates, deleteCandidate, saveCandidate } from '../services/stora
 import { getAssessmentSummary } from '../services/assessmentSummary';
 import { sendEmail } from '../services/emailService';
 import { EMAIL_TEMPLATES, mergeTemplate } from '../services/emailTemplates';
-import { appendEmailSignatureToHtml, getSiteOriginForEmail, CC_EMAIL_ALEX } from '../services/emailSignature';
+import { appendEmailSignatureToHtml, getSiteOriginForEmail, CC_EMAIL_ALEX, SIGNATURE_LOGO_URL } from '../services/emailSignature';
 import { getAssessmentLookupUrlForClient } from '../services/hiringUrls';
 import {
   OPEN_ENDED_QUESTIONS,
@@ -658,8 +658,13 @@ const AdminDashboard: React.FC = () => {
     const subject = emailSubject.trim();
     const origin = getSiteOriginForEmail();
     const rawHtml = emailBody.trim();
+    // mergeTemplate() already replaced {{emailSignature}} — do not append again.
     const bodyHtml = emailBodyIsHtml
-      ? (rawHtml ? appendEmailSignatureToHtml(rawHtml, origin) : undefined)
+      ? (rawHtml
+          ? rawHtml.includes(SIGNATURE_LOGO_URL)
+            ? rawHtml
+            : appendEmailSignatureToHtml(rawHtml, origin)
+          : undefined)
       : undefined;
     const bodyText = !emailBodyIsHtml ? emailBody.trim() || undefined : undefined;
     const result = await sendEmail(session.access_token, { to, subject, bodyHtml, bodyText });
