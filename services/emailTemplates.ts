@@ -1,4 +1,6 @@
-import { buildEmailSignatureHtml } from './emailSignature';
+import { buildEmailSignatureHtml } from './emailSignatureHtml';
+import { POST_CHECKIN_EMAIL_SUBJECT, POST_CHECKIN_EMAIL_BODY_HTML } from './postCheckinEmailTemplate';
+import { DEFAULT_ASSESSMENT_LOOKUP_URL, ZOOM_MEETING_URL } from './hiringUrls';
 
 /** Merge fields for candidate data in email templates */
 export const EMAIL_MERGE_FIELDS = [
@@ -7,6 +9,8 @@ export const EMAIL_MERGE_FIELDS = [
   'email',
   'phone',
   'assessmentLookupUrl',
+  'candidateName',
+  'zoomUrl',
 ] as const;
 export type EmailMergeField = (typeof EMAIL_MERGE_FIELDS)[number];
 
@@ -21,23 +25,16 @@ export interface EmailTemplate {
 }
 
 /**
- * Manual stage emails (admin buttons). Stage 4 is automation-only (see emailAutomation.ts).
- * Stage 2 → after check-in (auto later). Stage 3 → assessment link after overview. Stage 5 → evaluation.
+ * Manual stage emails (admin buttons). Check-in is also sent automatically on form submit (Edge Function).
+ * Stage 3 → assessment link. Stage 5 → evaluation (manual only).
  */
 export const EMAIL_TEMPLATES: EmailTemplate[] = [
   {
     id: 'stage2_post_checkin',
     name: 'Stage 2 – Post check-in',
-    hint: 'After they submit the check-in form (automate later).',
-    subject: 'Thank you for checking in – Paz Organization / Globe Life AIL',
-    bodyHtml: `
-      <p>Hi {{firstName}},</p>
-      <p>Thank you for completing your check-in with us. We’re glad you’re exploring a career opportunity with the Paz Organization / Globe Life AIL Division.</p>
-      <p>If you joined your scheduled Career Overview Session on Zoom, we appreciate you taking the time. If you still need to join, please use the Zoom information you received at check-in.</p>
-      <p>We’ll be in touch with next steps as you move forward in the process.</p>
-      <p>Best regards,</p>
-      {{emailSignature}}
-    `.trim(),
+    hint: 'Sent automatically when someone submits check-in; also available in admin.',
+    subject: POST_CHECKIN_EMAIL_SUBJECT,
+    bodyHtml: POST_CHECKIN_EMAIL_BODY_HTML,
   },
   {
     id: 'stage3_assessment_link',
@@ -45,28 +42,41 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
     hint: 'After they attend the online overview; sends the assessment lookup link.',
     subject: 'Your Leadership Assessment – next step',
     bodyHtml: `
-      <p>Hi {{firstName}},</p>
-      <p>Thank you for attending the online Career Overview Session. The next step is to complete your <strong>Leadership &amp; Career Assessment</strong>.</p>
-      <p>Please use the link below. You’ll enter the email address you used when you checked in so we can load your record:</p>
-      <p><a href="{{assessmentLookupUrl}}">{{assessmentLookupUrl}}</a></p>
-      <p>If you have any trouble accessing the form, reply to this email and we’ll help.</p>
-      <p>Best regards,</p>
-      {{emailSignature}}
+<p>Dear {{firstName}},</p>
+<p>Thank you for attending the Live Online Career Session.</p>
+<p>This session was designed to provide a clear and transparent overview of the business, expectations, and long-term opportunity within the Globe Life AIL Division – Paz Organization. Attendance reflects a level of interest and initiative that is recognized and appreciated.</p>
+<p>The next step in the selection process is to complete the <strong>Leadership &amp; Career Assessment</strong>.</p>
+<p>This assessment is designed to evaluate alignment, mindset, and overall fit for a performance-driven, leadership-oriented environment. It is a critical step in determining which candidates will move forward in the hiring process.</p>
+<p>Please use the link below to access the assessment. The same email address used during the check-in process will be required to retrieve the record:</p>
+<p><strong><a href="{{assessmentLookupUrl}}">{{assessmentLookupUrl}}</a></strong></p>
+<p><strong>Important Guidelines:</strong></p>
+<ul>
+<li>Complete the assessment in one sitting</li>
+<li>Set aside uninterrupted time to provide thoughtful and accurate responses</li>
+<li>Ensure all answers reflect personal perspective and professional intent</li>
+</ul>
+<p>Only candidates who successfully complete this step and meet the required standards will be contacted for a final one-on-one hiring interview. During that conversation, alignment, goals, and long-term growth potential within the organization will be further evaluated.</p>
+<p>If there are any issues accessing the assessment, a reply to this email will ensure prompt support.</p>
+<p>Best regards,</p>
+{{emailSignature}}
     `.trim(),
   },
   {
     id: 'stage5_evaluation',
     name: 'Stage 5 – Evaluation & callback',
-    hint: 'They are under evaluation; final interview if selected.',
+    hint: 'Manual only; no form trigger.',
     subject: 'Your application – under review',
     bodyHtml: `
-      <p>Hi {{firstName}},</p>
-      <p>Thank you for your time and engagement throughout our hiring process so far.</p>
-      <p>Your profile is <strong>currently under evaluation</strong> by our team. We are reviewing your information carefully and will follow up with you as the process continues.</p>
-      <p>If you are selected to move forward, you will receive a separate message inviting you to a <strong>final interview</strong> with additional details.</p>
-      <p>We appreciate your patience and interest in joining our team.</p>
-      <p>Best regards,</p>
-      {{emailSignature}}
+<p>Dear {{firstName}},</p>
+<p>Thank you for your time, effort, and engagement throughout the hiring process to this point.</p>
+<p>Your profile is currently under careful review by the CEO and members of the Leadership Team. Each submission is evaluated with intention, as the focus remains on identifying individuals who demonstrate strong alignment with the standards, expectations, and long-term vision of the organization.</p>
+<p>This stage of the process is selective. Consideration is being given to factors such as professionalism, responsiveness, assessment quality, consistency, and overall leadership potential.</p>
+<p>The organization places a strong emphasis on attitude, coachability, and the ability to persevere through challenges. Technical skills can be developed through training; however, long-term success is most often achieved by individuals who demonstrate resilience, discipline, and a strong internal drive. Notably, many of the top performers within the organization began without prior experience in the insurance industry.</p>
+<p>If selected to move forward, a separate communication will be sent with an invitation to a final one-on-one interview, including full details on next steps and expectations.</p>
+<p>While this review process is ongoing, patience is appreciated. Every candidate is being given thoughtful and thorough consideration.</p>
+<p>Interest in joining the Globe Life AIL Division – Paz Organization is both recognized and respected.</p>
+<p>Best regards,</p>
+{{emailSignature}}
     `.trim(),
   },
 ];
@@ -97,14 +107,18 @@ export function mergeTemplate(
   extras?: Record<string, string>,
   options?: { siteOrigin?: string }
 ): { subject: string; bodyHtml: string } {
+  const candidateName = `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim();
   const map: Record<string, string> = {
     '{{firstName}}': candidate.firstName || '',
     '{{lastName}}': candidate.lastName || '',
     '{{email}}': candidate.email || '',
     '{{phone}}': candidate.phone || '',
+    '{{candidateName}}': candidateName,
+    '{{zoomUrl}}': ZOOM_MEETING_URL,
+    '{{assessmentLookupUrl}}': DEFAULT_ASSESSMENT_LOOKUP_URL,
     ...(extras || {}),
   };
-  const signature = options?.siteOrigin ? buildEmailSignatureHtml(options.siteOrigin) : '';
+  const signature = buildEmailSignatureHtml(options?.siteOrigin);
   map['{{emailSignature}}'] = signature;
 
   let sub = subject;

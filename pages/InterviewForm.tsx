@@ -5,9 +5,10 @@ import { Button, Input } from '../components/UI';
 import { createCandidate, saveCandidate, getCandidateByEmail, uploadResume } from '../services/storageService';
 import type { ApplicantQuestionnaire } from '../types';
 import { RECEPTION_BACKGROUND_AREAS, DEFAULT_ADMIN_DATA } from '../types';
+import { ZOOM_MEETING_URL } from '../services/hiringUrls';
+import { triggerPostCheckinEmail } from '../services/candidateEmailTrigger';
 
 const RECEPTION_STORAGE_KEY = 'reception_candidate_id';
-const ZOOM_MEETING_URL = 'https://us02web.zoom.us/j/6478311787';
 
 const OCCUPATION_OPTIONS = [
   { value: 'full-time', label: 'Employed full-time' },
@@ -243,6 +244,7 @@ const InterviewForm: React.FC = () => {
       setResumeFiles([]);
       setPreSubmitted(true);
       sessionStorage.removeItem(RECEPTION_STORAGE_KEY);
+      void triggerPostCheckinEmail(baseCandidate.id, baseCandidate.email);
     } catch (err) {
       console.error(err);
       alert('There was an issue saving. Please try again.');

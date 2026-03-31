@@ -1,6 +1,6 @@
 /**
  * Automated hiring emails (check-in submit, assessment submit).
- * Keep AUTOMATED_EMAILS_ENABLED false until you explicitly turn it on in code and wire triggers.
+ * Check-in: triggerPostCheckinEmail in InterviewForm → send-candidate-email Edge Function.
  */
 import type { EmailTemplate } from './emailTemplates';
 import { EMAIL_TEMPLATES, POST_ASSESSMENT_SUBMIT_TEMPLATE } from './emailTemplates';
@@ -22,9 +22,9 @@ export const AUTOMATION_TRIGGERS: AutomationTrigger[] = [
   {
     id: 'postCheckin',
     description:
-      'Send Stage 2 email after the candidate submits the check-in form (Interview flow).',
+      'Sends Stage 2 (post check-in) email after eligible candidate submits check-in (InterviewForm → send-candidate-email).',
     template: EMAIL_TEMPLATES.find((t) => t.id === 'stage2_post_checkin')!,
-    hookHint: 'InterviewForm: after successful saveCandidate / check-in submit (non-disqualified path).',
+    hookHint: 'Implemented: candidateEmailTrigger.triggerPostCheckinEmail after successful save.',
   },
   {
     id: 'postAssessmentSubmit',

@@ -6,6 +6,7 @@ import { getAssessmentSummary } from '../services/assessmentSummary';
 import { sendEmail } from '../services/emailService';
 import { EMAIL_TEMPLATES, mergeTemplate } from '../services/emailTemplates';
 import { appendEmailSignatureToHtml, getSiteOriginForEmail, CC_EMAIL_ALEX } from '../services/emailSignature';
+import { getAssessmentLookupUrlForClient } from '../services/hiringUrls';
 import {
   OPEN_ENDED_QUESTIONS,
   PERSONALITY_QUESTIONS,
@@ -586,7 +587,7 @@ const AdminDashboard: React.FC = () => {
         const origin = getSiteOriginForEmail();
         const extras =
           mode === 'stage3_assessment_link'
-            ? { '{{assessmentLookupUrl}}': `${origin}/assessment-lookup` }
+            ? { '{{assessmentLookupUrl}}': getAssessmentLookupUrlForClient() }
             : undefined;
         const { subject, bodyHtml } = mergeTemplate(template.subject, template.bodyHtml, selectedCandidate, extras, {
           siteOrigin: origin,

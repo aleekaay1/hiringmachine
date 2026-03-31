@@ -372,6 +372,9 @@ deno_version = 2
 [functions.send-email]
 verify_jwt = false
 
+[functions.send-candidate-email]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
