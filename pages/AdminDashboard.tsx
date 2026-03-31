@@ -13,6 +13,7 @@ import {
   EQ_QUESTIONS,
   EQ_LIKERT_OPTIONS,
 } from '../services/assessmentConfig';
+import { downloadCandidateReportPdf } from '../services/pdfReport';
 import { Candidate, QUESTIONS, DEFAULT_ADMIN_DATA, type PipelineStage, type AdminData } from '../types';
 import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare } from 'lucide-react';
 import { Button } from '../components/UI';
@@ -876,6 +877,14 @@ const AdminDashboard: React.FC = () => {
                         <div className="text-[10px] text-gray-500 uppercase tracking-wide font-bold mt-1">Total Score</div>
                       </div>
                     )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="text-[11px] px-3 py-1"
+                      onClick={() => downloadCandidateReportPdf(selectedCandidate)}
+                    >
+                      Generate report (PDF)
+                    </Button>
                     <Button
                       type="button"
                       variant="outline"
