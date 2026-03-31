@@ -5,7 +5,6 @@ import { Button, Input } from '../components/UI';
 import { createCandidate, saveCandidate, getCandidateByEmail, uploadResume } from '../services/storageService';
 import type { ApplicantQuestionnaire } from '../types';
 import { RECEPTION_BACKGROUND_AREAS, DEFAULT_ADMIN_DATA } from '../types';
-import { ZOOM_MEETING_URL } from '../services/hiringUrls';
 import { triggerPostCheckinEmail } from '../services/candidateEmailTrigger';
 
 const RECEPTION_STORAGE_KEY = 'reception_candidate_id';
@@ -296,17 +295,6 @@ const InterviewForm: React.FC = () => {
         {preSubmitted ? (
           <div className="rounded-lg border border-green-200 bg-green-50 p-4 mb-6">
             <p className="font-medium text-green-800">Thank you for checking in.</p>
-            <p className="text-sm text-green-700 mt-1">
-              Use the Zoom link below to join your scheduled Career Overview Session.
-            </p>
-            <a
-              href={ZOOM_MEETING_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex justify-center w-full mt-4 px-4 py-3 rounded-lg font-semibold bg-[#005EB8] text-white hover:bg-[#004c94] transition-all touch-manipulation"
-            >
-              Join Zoom Meeting
-            </a>
           </div>
         ) : (
           <form onSubmit={handlePreSubmit} className="space-y-4 mb-8">

@@ -25,19 +25,25 @@ async function triggerSendCandidateEmail(
     console.warn('Candidate email: missing candidate id or email', { trigger, id: id || '(empty)' });
     return;
   }
+  const path =
+    trigger === 'post_assessment_submit'
+      ? `${SUPABASE_URL}/functions/v1/send-assessment-email`
+      : `${SUPABASE_URL}/functions/v1/send-candidate-email`;
+
   try {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/send-candidate-email`, {
+    const body =
+      trigger === 'post_assessment_submit'
+        ? JSON.stringify({ candidateId: id, candidateEmail: email })
+        : JSON.stringify({ candidateId: id, candidateEmail: email, trigger });
+
+    const res = await fetch(path, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         apikey: SUPABASE_ANON_KEY,
         Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
       },
-      body: JSON.stringify({
-        candidateId: id,
-        candidateEmail: email,
-        trigger,
-      }),
+      body,
     });
     if (!res.ok) {
       const j = await res.json().catch(() => ({}));

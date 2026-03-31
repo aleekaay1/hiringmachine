@@ -1,6 +1,6 @@
 /**
  * Automated hiring emails (check-in submit, assessment submit).
- * Check-in: triggerPostCheckinEmail in InterviewForm → send-candidate-email Edge Function.
+ * Check-in: triggerPostCheckinEmail → send-candidate-email. Assessment submit → send-assessment-email.
  */
 import type { EmailTemplate } from './emailTemplates';
 import { EMAIL_TEMPLATES, POST_ASSESSMENT_SUBMIT_TEMPLATE } from './emailTemplates';
