@@ -68,14 +68,41 @@ export const ASSESSMENT_ROOM_BACKGROUND_AREAS = [
 ] as const;
 
 export type PipelineStage =
-  | 'Applied'
-  | 'Screening'
-  | 'Interview Scheduled'
-  | 'Interviewed'
-  | 'Offer'
+  | 'Check in'
+  | 'Attended Live Session'
+  | 'Leadership Assessment Received Under Review'
+  | 'Interview scheduled'
   | 'Hired'
-  | 'Rejected'
-  | 'Withdrawn';
+  | 'Not Hired / Withdrawn';
+
+/** Admin pipeline dropdown, filters, and stats — single source of truth */
+export const PIPELINE_STAGES: PipelineStage[] = [
+  'Check in',
+  'Attended Live Session',
+  'Leadership Assessment Received Under Review',
+  'Interview scheduled',
+  'Hired',
+  'Not Hired / Withdrawn',
+];
+
+/** Map legacy DB values to current stages */
+const LEGACY_PIPELINE_STAGE: Record<string, PipelineStage> = {
+  Applied: 'Check in',
+  Screening: 'Leadership Assessment Received Under Review',
+  'Interview Scheduled': 'Interview scheduled',
+  Interviewed: 'Interview scheduled',
+  Offer: 'Interview scheduled',
+  Hired: 'Hired',
+  Rejected: 'Not Hired / Withdrawn',
+  Withdrawn: 'Not Hired / Withdrawn',
+};
+
+export function normalizePipelineStage(raw: unknown): PipelineStage {
+  const s = typeof raw === 'string' ? raw : '';
+  if ((PIPELINE_STAGES as readonly string[]).includes(s)) return s as PipelineStage;
+  if (LEGACY_PIPELINE_STAGE[s] !== undefined) return LEGACY_PIPELINE_STAGE[s];
+  return 'Check in';
+}
 
 export interface AdminNote {
   id: string;
@@ -110,7 +137,7 @@ export interface AdminData {
 
 export const DEFAULT_ADMIN_DATA: AdminData = {
   notes: [],
-  pipelineStage: 'Applied',
+  pipelineStage: 'Check in',
   rating: null,
   interviewScheduledAt: null,
   nextStep: '',

@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { Button, Input } from '../components/UI';
 import { getCandidateByEmail } from '../services/storageService';
-import { Candidate, PipelineStage } from '../types';
-import { CheckCircle, Clock, XCircle, Calendar, FileText, Mail } from 'lucide-react';
+import { Candidate, PipelineStage, normalizePipelineStage } from '../types';
+import { CheckCircle, XCircle, Calendar, FileText, Mail, Video, ClipboardList } from 'lucide-react';
 
 const CheckStatus: React.FC = () => {
   const navigate = useNavigate();
@@ -13,66 +13,59 @@ const CheckStatus: React.FC = () => {
   const [error, setError] = useState('');
   const [candidate, setCandidate] = useState<Candidate | null>(null);
 
-  const getStatusInfo = (stage: PipelineStage) => {
+  const getStatusInfo = (stage: PipelineStage | string | undefined) => {
+    const s = normalizePipelineStage(stage);
     const statusMap: Record<PipelineStage, { label: string; color: string; bgColor: string; icon: React.ReactNode; message: string }> = {
-      'Applied': {
-        label: 'Application Received',
+      'Check in': {
+        label: 'Check in',
         color: 'text-blue-700',
         bgColor: 'bg-blue-50 border-blue-200',
         icon: <FileText className="w-6 h-6 text-blue-600" />,
-        message: 'Thank you for your application. We have received your information and it is currently under review.'
+        message:
+          'Thank you for checking in. We have received your information and will follow up with next steps.',
       },
-      'Screening': {
-        label: 'Under Review',
+      'Attended Live Session': {
+        label: 'Attended Live Session',
+        color: 'text-sky-700',
+        bgColor: 'bg-sky-50 border-sky-200',
+        icon: <Video className="w-6 h-6 text-sky-600" />,
+        message:
+          'Thank you for attending the Live Online Career Session. We appreciate your time and interest.',
+      },
+      'Leadership Assessment Received Under Review': {
+        label: 'Leadership Assessment — Under Review',
         color: 'text-amber-700',
         bgColor: 'bg-amber-50 border-amber-200',
-        icon: <Clock className="w-6 h-6 text-amber-600" />,
-        message: 'Your application is being reviewed by our team. We will contact you soon with next steps.'
+        icon: <ClipboardList className="w-6 h-6 text-amber-600" />,
+        message:
+          'We have received your Leadership Assessment. Our team is reviewing your responses and will contact you when there is an update.',
       },
-      'Interview Scheduled': {
-        label: 'Interview Scheduled',
+      'Interview scheduled': {
+        label: 'Interview scheduled',
         color: 'text-purple-700',
         bgColor: 'bg-purple-50 border-purple-200',
         icon: <Calendar className="w-6 h-6 text-purple-600" />,
-        message: 'Great news! An interview has been scheduled for you. Please check your email for details.'
+        message:
+          'An interview has been scheduled. Please check your email for date, time, and preparation details.',
       },
-      'Interviewed': {
-        label: 'Interview Completed',
-        color: 'text-indigo-700',
-        bgColor: 'bg-indigo-50 border-indigo-200',
-        icon: <CheckCircle className="w-6 h-6 text-indigo-600" />,
-        message: 'Thank you for completing your interview. Our team is evaluating candidates and will be in touch soon.'
-      },
-      'Offer': {
-        label: 'Offer Extended',
-        color: 'text-green-700',
-        bgColor: 'bg-green-50 border-green-200',
-        icon: <CheckCircle className="w-6 h-6 text-green-600" />,
-        message: 'Congratulations! We have extended an offer to you. Please check your email for details and next steps.'
-      },
-      'Hired': {
+      Hired: {
         label: 'Hired',
         color: 'text-green-700',
         bgColor: 'bg-green-50 border-green-200',
         icon: <CheckCircle className="w-6 h-6 text-green-600" />,
-        message: 'Congratulations! You have been hired. Welcome to the team! Please check your email for onboarding information.'
+        message:
+          'Congratulations! You have been hired. Welcome to the team — please check your email for onboarding information.',
       },
-      'Rejected': {
-        label: 'Not Selected',
-        color: 'text-red-700',
-        bgColor: 'bg-red-50 border-red-200',
-        icon: <XCircle className="w-6 h-6 text-red-600" />,
-        message: 'Thank you for your interest. Unfortunately, we have decided to move forward with other candidates at this time.'
-      },
-      'Withdrawn': {
-        label: 'Application Withdrawn',
+      'Not Hired / Withdrawn': {
+        label: 'Not Hired / Withdrawn',
         color: 'text-gray-700',
         bgColor: 'bg-gray-50 border-gray-200',
-        icon: <FileText className="w-6 h-6 text-gray-600" />,
-        message: 'Your application has been withdrawn. If you would like to reapply, please contact us.'
-      }
+        icon: <XCircle className="w-6 h-6 text-gray-600" />,
+        message:
+          'This application is closed. Thank you for your interest in the opportunity. If you have questions, reply to our team by email.',
+      },
     };
-    return statusMap[stage];
+    return statusMap[s];
   };
 
   const handleCheckStatus = async (e: React.FormEvent) => {
@@ -138,7 +131,7 @@ const CheckStatus: React.FC = () => {
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 space-y-6">
               <div className="flex items-start gap-4">
                 <div className="flex-shrink-0">
-                  {getStatusInfo(candidate.adminData?.pipelineStage || 'Applied').icon}
+                  {getStatusInfo(candidate.adminData?.pipelineStage).icon}
                 </div>
                 <div className="flex-grow">
                   <h2 className="text-xl font-bold text-gray-900 mb-1">
@@ -162,15 +155,15 @@ const CheckStatus: React.FC = () => {
 
               {!candidate.adminData?.questionnaireDisqualified && (
                 <>
-                  <div className={`rounded-lg border p-4 ${getStatusInfo(candidate.adminData?.pipelineStage || 'Applied').bgColor}`}>
+                  <div className={`rounded-lg border p-4 ${getStatusInfo(candidate.adminData?.pipelineStage).bgColor}`}>
                     <div className="flex items-center gap-3 mb-2">
-                      {getStatusInfo(candidate.adminData?.pipelineStage || 'Applied').icon}
-                      <h3 className={`text-lg font-bold ${getStatusInfo(candidate.adminData?.pipelineStage || 'Applied').color}`}>
-                        {getStatusInfo(candidate.adminData?.pipelineStage || 'Applied').label}
+                      {getStatusInfo(candidate.adminData?.pipelineStage).icon}
+                      <h3 className={`text-lg font-bold ${getStatusInfo(candidate.adminData?.pipelineStage).color}`}>
+                        {getStatusInfo(candidate.adminData?.pipelineStage).label}
                       </h3>
                     </div>
                     <p className="text-gray-700 text-sm">
-                      {getStatusInfo(candidate.adminData?.pipelineStage || 'Applied').message}
+                      {getStatusInfo(candidate.adminData?.pipelineStage).message}
                     </p>
                   </div>
 

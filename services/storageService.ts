@@ -1,4 +1,12 @@
-import { Candidate, AssessmentData, ApplicantQuestionnaire, AdminData, DEFAULT_ADMIN_DATA, PostLiveExitQuestionnaire } from '../types';
+import {
+  Candidate,
+  AssessmentData,
+  ApplicantQuestionnaire,
+  AdminData,
+  DEFAULT_ADMIN_DATA,
+  PostLiveExitQuestionnaire,
+  normalizePipelineStage,
+} from '../types';
 import {
   PERSONALITY_LIKERT_OPTIONS,
   EQ_LIKERT_OPTIONS,
@@ -38,7 +46,13 @@ const fromRow = (row: CandidateRow): Candidate => ({
   city: row.city || '',
   timestamp: row.timestamp,
   status: row.status,
-  adminData: row.admin_data ? { ...DEFAULT_ADMIN_DATA, ...row.admin_data } : undefined,
+  adminData: row.admin_data
+    ? {
+        ...DEFAULT_ADMIN_DATA,
+        ...row.admin_data,
+        pipelineStage: normalizePipelineStage(row.admin_data.pipelineStage),
+      }
+    : undefined,
   applicantQuestionnaire: row.applicant_questionnaire || undefined,
   postInterview: row.post_interview || undefined,
   assessment: row.assessment || undefined,

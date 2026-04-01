@@ -16,15 +16,25 @@ import {
   EQ_LIKERT_OPTIONS,
 } from '../services/assessmentConfig';
 import { downloadCandidateReportPdf, getCandidateReportPdfBase64 } from '../services/pdfReport';
-import { Candidate, QUESTIONS, DEFAULT_ADMIN_DATA, type PipelineStage, type AdminData } from '../types';
+import {
+  Candidate,
+  QUESTIONS,
+  DEFAULT_ADMIN_DATA,
+  PIPELINE_STAGES,
+  normalizePipelineStage,
+  type PipelineStage,
+  type AdminData,
+} from '../types';
 import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare } from 'lucide-react';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 
-const PIPELINE_STAGES: PipelineStage[] = ['Applied', 'Screening', 'Interview Scheduled', 'Interviewed', 'Offer', 'Hired', 'Rejected', 'Withdrawn'];
 const SUGGESTED_TAGS = ['Strong fit', 'Follow up', 'Licensing needed', 'High potential', 'Second interview', 'Offer extended'];
 
-const getAdminData = (c: Candidate): AdminData => ({ ...DEFAULT_ADMIN_DATA, ...c.adminData });
+const getAdminData = (c: Candidate): AdminData => {
+  const merged = { ...DEFAULT_ADMIN_DATA, ...c.adminData };
+  return { ...merged, pipelineStage: normalizePipelineStage(merged.pipelineStage) };
+};
 
 const AdminDashboard: React.FC = () => {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -241,7 +251,10 @@ const AdminDashboard: React.FC = () => {
       stageCounts[s] = (stageCounts[s] || 0) + 1;
     });
 
-    const activePipeline = total - (stageCounts['Rejected'] || 0) - (stageCounts['Withdrawn'] || 0) - (stageCounts['Hired'] || 0);
+    const activePipeline =
+      total -
+      (stageCounts['Hired'] || 0) -
+      (stageCounts['Not Hired / Withdrawn'] || 0);
 
     return {
       total,
@@ -768,7 +781,7 @@ const AdminDashboard: React.FC = () => {
               <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">Pipeline snapshot</p>
               <p className="text-xs text-gray-500">Click a stage in the filter to drill down.</p>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
               {PIPELINE_STAGES.map((s) => (
                 <div key={s} className="rounded-2xl border border-gray-200 bg-white/70 px-3 py-2">
                   <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">{s}</p>
