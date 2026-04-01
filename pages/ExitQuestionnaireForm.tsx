@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { Button, Input, Select } from '../components/UI';
-import { createCandidate, getCandidateByEmail, saveCandidate } from '../services/storageService';
+import { createCandidate, getCandidateByEmail, saveCandidate, DuplicateApplicationError } from '../services/storageService';
 import type { PostLiveExitQuestionnaire } from '../types';
 
 const POSITION_OPTIONS = [
@@ -147,7 +147,11 @@ const ExitQuestionnaireForm: React.FC = () => {
       navigate('/thank-you', { state: { fromExitQuestionnaire: true } });
     } catch (err) {
       console.error(err);
-      setErrors(prev => ({ ...prev, _form: 'Something went wrong. Please try again.' }));
+      if (err instanceof DuplicateApplicationError) {
+        setErrors(prev => ({ ...prev, _form: err.message }));
+      } else {
+        setErrors(prev => ({ ...prev, _form: 'Something went wrong. Please try again.' }));
+      }
       setSubmitting(false);
     }
   };

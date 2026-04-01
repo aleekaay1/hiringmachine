@@ -2,7 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { Button, Input } from '../components/UI';
-import { createCandidate, saveCandidate, getCandidateByEmail, uploadResume } from '../services/storageService';
+import {
+  createCandidate,
+  saveCandidate,
+  getCandidateByEmail,
+  uploadResume,
+  DuplicateApplicationError,
+} from '../services/storageService';
 import type { ApplicantQuestionnaire } from '../types';
 import { RECEPTION_BACKGROUND_AREAS, DEFAULT_ADMIN_DATA } from '../types';
 import { triggerPostCheckinEmail } from '../services/candidateEmailTrigger';
@@ -149,6 +155,7 @@ const InterviewForm: React.FC = () => {
     if (!validatePre()) return;
     try {
       setSubmittingPre(true);
+      setErrors((prev) => ({ ...prev, _form: '' }));
       const questionnaireBase: ApplicantQuestionnaire = {
         occupation: preForm.occupation,
         currentRole: preForm.currentRole.trim(),
@@ -246,7 +253,11 @@ const InterviewForm: React.FC = () => {
       void triggerPostCheckinEmail(baseCandidate.id, baseCandidate.email);
     } catch (err) {
       console.error(err);
-      alert('There was an issue saving. Please try again.');
+      if (err instanceof DuplicateApplicationError) {
+        setErrors((prev) => ({ ...prev, _form: err.message }));
+      } else {
+        alert('There was an issue saving. Please try again.');
+      }
     } finally {
       setSubmittingPre(false);
     }
@@ -379,6 +390,9 @@ const InterviewForm: React.FC = () => {
               {errors.legallyEntitledCanada && <p className="text-xs text-red-600 mt-1">{errors.legallyEntitledCanada}</p>}
             </div>
 
+            {errors._form && (
+              <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-left">{errors._form}</p>
+            )}
             <Button type="submit" fullWidth disabled={submittingPre}>{submittingPre ? 'Submitting...' : 'Submit'}</Button>
           </form>
         )}

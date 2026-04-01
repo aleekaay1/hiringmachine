@@ -17,6 +17,66 @@ import { supabase } from './supabaseClient';
 const TABLE_NAME = 'candidates';
 const RESUMES_BUCKET = 'candidate-resumes';
 
+/** Shown when a new application would duplicate an existing CRM record. */
+export const DUPLICATE_APPLICATION_MESSAGE =
+  'You have already applied. Please contact HR for information.';
+
+export class DuplicateApplicationError extends Error {
+  constructor(message = DUPLICATE_APPLICATION_MESSAGE) {
+    super(message);
+    this.name = 'DuplicateApplicationError';
+  }
+}
+
+function normalizeNamePart(s: string): string {
+  return (s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function namesMatchNormalized(c: Candidate, firstNorm: string, lastNorm: string): boolean {
+  return normalizeNamePart(c.firstName) === firstNorm && normalizeNamePart(c.lastName) === lastNorm;
+}
+
+/**
+ * Detects whether creating a new candidate would duplicate an existing application:
+ * - Same email as an existing record (one email = one application), or
+ * - Same normalized full name and email as an existing record (explicit pair match), or
+ * - Same normalized full name and phone as an existing record with a different email (same person, new email).
+ */
+export async function findDuplicateApplication(input: {
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+}): Promise<Candidate | null> {
+  const emailNorm = (input.email || '').trim().toLowerCase();
+  const firstNorm = normalizeNamePart(input.firstName);
+  const lastNorm = normalizeNamePart(input.lastName);
+  const phoneNorm = (input.phone || '').replace(/\D/g, '');
+
+  const byEmail = await getCandidateByEmail(emailNorm);
+  if (byEmail) {
+    return byEmail;
+  }
+
+  if (phoneNorm.length >= 7) {
+    const { data, error } = await supabase
+      .from(TABLE_NAME)
+      .select('*')
+      .eq('phone', phoneNorm);
+    if (error) {
+      console.error('Error checking duplicate by phone', error);
+      throw error;
+    }
+    for (const row of data || []) {
+      const c = fromRow(row as CandidateRow);
+      if (c.email.trim().toLowerCase() === emailNorm) continue;
+      if (namesMatchNormalized(c, firstNorm, lastNorm)) return c;
+    }
+  }
+
+  return null;
+}
+
 // --- Mapping helpers between DB rows and Candidate type ---
 
 type CandidateRow = {
@@ -148,6 +208,16 @@ export const saveCandidate = async (candidate: Candidate): Promise<void> => {
 export const createCandidate = async (initialData: Partial<Candidate>): Promise<Candidate> => {
   const normalizedEmail = (initialData.email || '').trim().toLowerCase();
   const normalizedPhone = (initialData.phone || '').replace(/\D/g, '');
+
+  const duplicate = await findDuplicateApplication({
+    email: normalizedEmail,
+    firstName: initialData.firstName || '',
+    lastName: initialData.lastName || '',
+    phone: normalizedPhone,
+  });
+  if (duplicate) {
+    throw new DuplicateApplicationError();
+  }
 
   const newCandidate: Candidate = {
     id: crypto.randomUUID().split('-')[0].toUpperCase(),
