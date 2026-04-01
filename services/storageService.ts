@@ -29,52 +29,24 @@ export class DuplicateApplicationError extends Error {
 }
 
 function normalizeNamePart(s: string): string {
-  return (s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  return (s || '')
+    .normalize('NFKC')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
 }
 
 function namesMatchNormalized(c: Candidate, firstNorm: string, lastNorm: string): boolean {
   return normalizeNamePart(c.firstName) === firstNorm && normalizeNamePart(c.lastName) === lastNorm;
 }
 
-/**
- * Detects whether creating a new candidate would duplicate an existing application:
- * - Same email as an existing record (one email = one application), or
- * - Same normalized full name and email as an existing record (explicit pair match), or
- * - Same normalized full name and phone as an existing record with a different email (same person, new email).
- */
-export async function findDuplicateApplication(input: {
-  email: string;
-  firstName: string;
-  lastName: string;
-  phone: string;
-}): Promise<Candidate | null> {
-  const emailNorm = (input.email || '').trim().toLowerCase();
-  const firstNorm = normalizeNamePart(input.firstName);
-  const lastNorm = normalizeNamePart(input.lastName);
-  const phoneNorm = (input.phone || '').replace(/\D/g, '');
+/** Escape % and _ so ILIKE matches literal characters (exact name, case-insensitive). */
+function escapeIlikePattern(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+}
 
-  const byEmail = await getCandidateByEmail(emailNorm);
-  if (byEmail) {
-    return byEmail;
-  }
-
-  if (phoneNorm.length >= 7) {
-    const { data, error } = await supabase
-      .from(TABLE_NAME)
-      .select('*')
-      .eq('phone', phoneNorm);
-    if (error) {
-      console.error('Error checking duplicate by phone', error);
-      throw error;
-    }
-    for (const row of data || []) {
-      const c = fromRow(row as CandidateRow);
-      if (c.email.trim().toLowerCase() === emailNorm) continue;
-      if (namesMatchNormalized(c, firstNorm, lastNorm)) return c;
-    }
-  }
-
-  return null;
+function normalizePhoneDigits(s: string): string {
+  return (s || '').replace(/\D/g, '');
 }
 
 // --- Mapping helpers between DB rows and Candidate type ---
@@ -187,6 +159,55 @@ export const getCandidateByEmail = async (email: string): Promise<Candidate | nu
   return data ? fromRow(data as CandidateRow) : null;
 };
 
+/**
+ * Detects whether creating a new candidate would duplicate an existing application:
+ * - Same email as an existing record (one email = one application), or
+ * - Same normalized full name (case- and Unicode-insensitive) and same phone digits as an existing record
+ *   with a different email (handles formatted vs plain phone in the DB).
+ */
+export async function findDuplicateApplication(input: {
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+}): Promise<Candidate | null> {
+  const emailNorm = (input.email || '').trim().toLowerCase();
+  const firstNorm = normalizeNamePart(input.firstName);
+  const lastNorm = normalizeNamePart(input.lastName);
+  const phoneNorm = normalizePhoneDigits(input.phone);
+
+  const byEmail = await getCandidateByEmail(emailNorm);
+  if (byEmail) {
+    return byEmail;
+  }
+
+  if (!firstNorm || !lastNorm) {
+    return null;
+  }
+
+  const { data: nameRows, error: nameErr } = await supabase
+    .from(TABLE_NAME)
+    .select('*')
+    .ilike('first_name', escapeIlikePattern(firstNorm))
+    .ilike('last_name', escapeIlikePattern(lastNorm));
+
+  if (nameErr) {
+    console.error('Error checking duplicate by name', nameErr);
+    throw nameErr;
+  }
+
+  for (const row of nameRows || []) {
+    const c = fromRow(row as CandidateRow);
+    if (!namesMatchNormalized(c, firstNorm, lastNorm)) continue;
+    if (c.email.trim().toLowerCase() === emailNorm) return c;
+    if (phoneNorm.length >= 7 && normalizePhoneDigits(c.phone) === phoneNorm) {
+      return c;
+    }
+  }
+
+  return null;
+};
+
 export const saveCandidate = async (candidate: Candidate): Promise<void> => {
   const row = toRow(candidate);
   const { data: existing } = await supabase.from(TABLE_NAME).select('id').eq('id', candidate.id).maybeSingle();
@@ -207,7 +228,7 @@ export const saveCandidate = async (candidate: Candidate): Promise<void> => {
 
 export const createCandidate = async (initialData: Partial<Candidate>): Promise<Candidate> => {
   const normalizedEmail = (initialData.email || '').trim().toLowerCase();
-  const normalizedPhone = (initialData.phone || '').replace(/\D/g, '');
+  const normalizedPhone = normalizePhoneDigits(initialData.phone || '');
 
   const duplicate = await findDuplicateApplication({
     email: normalizedEmail,
