@@ -128,7 +128,7 @@ Deno.serve(async (req) => {
       html = applyPostCheckinMerge(candidateName, ZOOM_MEETING_URL, sig);
     } else {
       subject = POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT;
-      html = applyPostAssessmentSubmitMerge(firstName || 'there', sig);
+      html = applyPostAssessmentSubmitMerge(candidateName, sig);
     }
 
     const from =

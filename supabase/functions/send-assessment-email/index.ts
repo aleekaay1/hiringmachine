@@ -97,9 +97,11 @@ Deno.serve(async (req) => {
     }
 
     const firstName = ((row.first_name as string) || '').trim();
+    const lastName = ((row.last_name as string) || '').trim();
+    const candidateName = `${firstName} ${lastName}`.trim() || 'Candidate';
     const sig = buildEmailSignatureHtml();
     const subject = POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT;
-    const html = applyPostAssessmentSubmitMerge(firstName || 'there', sig);
+    const html = applyPostAssessmentSubmitMerge(candidateName, sig);
 
     const from =
       Deno.env.get('SMTP_FROM')?.trim() ||

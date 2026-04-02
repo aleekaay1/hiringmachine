@@ -1,23 +1,30 @@
 /**
  * Synced with services/emailTemplates.ts — POST_ASSESSMENT_SUBMIT_TEMPLATE.
- * Stage 4: sent after Leadership Assessment submission (send-candidate-email).
- * Placeholders: {{firstName}}, {{emailSignature}}
+ * Stage 4: sent after Leadership Assessment submission (send-candidate-email, send-assessment-email).
+ * Placeholders: {{candidateName}}, {{emailSignature}}
  */
 
-export const POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT = 'We received your Leadership Assessment';
+export const POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT =
+  'Thank you for completing the Leadership & Career Assessment';
 
 export const POST_ASSESSMENT_SUBMIT_EMAIL_BODY_HTML = `
-    <p>Hi {{firstName}},</p>
-    <p>Thank you for submitting your Leadership &amp; Career Assessment. We have successfully received your responses.</p>
-    <p>Your assessment produces a score that our team uses as one part of our evaluation. <strong>We are not sharing individual scores by email</strong>; we have recorded that your assessment is complete and will review it along with the rest of your information.</p>
-    <p>We will evaluate your profile and get back to you with next steps when there is an update.</p>
-    <p>Best regards,</p>
-    {{emailSignature}}
+<p>Dear {{candidateName}},</p>
+<p>Thank you for completing the Leadership &amp; Career Assessment.</p>
+<p>Your responses have been successfully received and recorded. This assessment generates an internal score that serves as one component of the overall evaluation process. Individual scores are not distributed; however, confirmation has been logged that this step has been completed.</p>
+<p>The submitted assessment will be reviewed alongside the rest of your profile by the CEO and members of the Leadership Team. As part of this process, consideration is given to alignment with organizational standards, mindset, and long-term leadership potential.</p>
+<p>The organization continues to prioritize attitude, coachability, and consistency as key indicators of success. Many of the top-performing individuals within the organization began without prior industry experience, reinforcing the focus on personal drive and the ability to develop through training.</p>
+<p>Should your profile meet the required standards, a separate communication will be issued with next steps, including details regarding the final stage of the hiring process.</p>
+<p>Appreciation is extended for the time and effort invested in completing this step. Further updates will be provided as the review process progresses.</p>
+<p>Best regards,</p>
+{{emailSignature}}
   `.trim();
 
-export function applyPostAssessmentSubmitMerge(firstName: string, emailSignatureHtml: string): string {
-  return POST_ASSESSMENT_SUBMIT_EMAIL_BODY_HTML.split('{{firstName}}')
-    .join(firstName)
+export function applyPostAssessmentSubmitMerge(
+  candidateName: string,
+  emailSignatureHtml: string
+): string {
+  return POST_ASSESSMENT_SUBMIT_EMAIL_BODY_HTML.split('{{candidateName}}')
+    .join(candidateName)
     .split('{{emailSignature}}')
     .join(emailSignatureHtml);
 }
