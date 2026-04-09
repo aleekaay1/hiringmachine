@@ -11,6 +11,10 @@ import {
 } from '../_shared/postAssessmentSubmitEmailTemplate.ts';
 import { buildEmailSignatureHtml } from '../_shared/emailSignatureHtml.ts';
 import { ZOOM_MEETING_URL } from '../_shared/hiringUrls.ts';
+import {
+  sendAssessmentInternalNotificationIfConfigured,
+  type AssessmentNotifyCandidateRow,
+} from '../_shared/assessmentCompleteInternalNotification.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -97,7 +101,7 @@ Deno.serve(async (req) => {
     const admin = createClient(supabaseUrl, serviceRole);
     const { data: row, error: qErr } = await admin
       .from('candidates')
-      .select('id, email, first_name, last_name')
+      .select('id, email, first_name, last_name, phone, city, timestamp, status, fit_category, score')
       .eq('id', candidateId)
       .maybeSingle();
 
@@ -148,6 +152,15 @@ Deno.serve(async (req) => {
         (err: Error | null) => (err ? reject(err) : resolve())
       );
     });
+
+    if (isPostAssessmentSubmit) {
+      const notifyRow = row as AssessmentNotifyCandidateRow;
+      try {
+        await sendAssessmentInternalNotificationIfConfigured(transport, from, notifyRow);
+      } catch (notifyErr) {
+        console.error('send-candidate-email: internal notification failed:', notifyErr);
+      }
+    }
 
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
