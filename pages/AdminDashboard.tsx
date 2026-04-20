@@ -1374,7 +1374,9 @@ const AdminDashboard: React.FC = () => {
                       </div>
                     )}
                     <p className="text-[11px] text-gray-400 max-w-xl">
-                      Automated sends (check-in + assessment thank-you) are prepared but off—use these buttons until you enable automation in code.
+                      Check-in submit and assessment submit each trigger their own automated email to the candidate. Use the
+                      stage buttons below when you want to send a template manually (for example Stage 3 assessment link
+                      or Stage 5 evaluation).
                     </p>
                   </div>
                 </div>
