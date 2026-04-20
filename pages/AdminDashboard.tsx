@@ -806,9 +806,8 @@ const AdminDashboard: React.FC = () => {
 
           {/* Pipeline strip */}
           <div className="mt-5">
-            <div className="flex items-center justify-between mb-2">
+            <div className="mb-2">
               <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">Pipeline snapshot</p>
-              <p className="text-xs text-gray-500">Click a stage in the filter to drill down.</p>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
               {PIPELINE_STAGES.map((s) => (
@@ -1017,11 +1016,6 @@ const AdminDashboard: React.FC = () => {
                             Current stage:{' '}
                             <span className="font-semibold text-gray-900">{journeyStage}</span>
                           </p>
-                          <p className="mt-1.5 text-center text-[10px] text-gray-500 max-w-xl mx-auto leading-snug">
-                            Check-in and leadership assessment submissions update this automatically. Set{' '}
-                            <span className="font-medium text-gray-600">Attended Live Session</span> and later stages
-                            using the pipeline dropdown below when you are ready.
-                          </p>
                         </div>
                       </div>
                     </div>
@@ -1151,9 +1145,6 @@ const AdminDashboard: React.FC = () => {
                             ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
                             : 'bg-gray-50 text-gray-700 border-gray-200',
                         )}
-                    </div>
-                    <div className="text-xs text-gray-500">
-                      Tip: Use Pipeline stage + Next step to manage follow-ups.
                     </div>
                   </div>
                 </div>
@@ -1350,10 +1341,6 @@ const AdminDashboard: React.FC = () => {
                     </div>
                     {emailLogOpen && (
                       <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3 shadow-sm">
-                        <p className="text-[11px] text-gray-500">
-                          Includes emails sent from this dashboard and automated candidate emails (check-in invite and
-                          assessment thank-you) recorded when those messages are delivered.
-                        </p>
                         {getAdminData(selectedCandidate).emailsSent.length === 0 ? (
                           <p className="text-sm text-gray-600">No emails logged yet for this candidate.</p>
                         ) : (
@@ -1378,11 +1365,6 @@ const AdminDashboard: React.FC = () => {
                         )}
                       </div>
                     )}
-                    <p className="text-[11px] text-gray-400 max-w-xl">
-                      Check-in submit and assessment submit each trigger their own automated email to the candidate. Use the
-                      stage buttons below when you want to send a template manually (for example Stage 3 assessment link
-                      or Stage 5 evaluation).
-                    </p>
                   </div>
                 </div>
 
