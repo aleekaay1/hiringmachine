@@ -27,27 +27,86 @@ The **Live sessions** page (`/live-sessions`) loads data through the Edge Functi
    - Calendly → Integrations → API & Webhooks → **Personal access tokens** → Generate.
    - The token is used as `CALENDLY_API_TOKEN`.
 
-## Supabase secrets
+## Where each credential comes from
 
-In the Supabase Dashboard: **Project Settings → Edge Functions → Secrets**, add:
+### Zoom (Marketplace → your Server-to-Server OAuth app)
 
-| Secret | Description |
-|--------|-------------|
-| `ZOOM_ACCOUNT_ID` | From the Server-to-Server OAuth app |
-| `ZOOM_CLIENT_ID` | From the same app |
-| `ZOOM_CLIENT_SECRET` | From the same app |
-| `ZOOM_HOST_USER_EMAIL` | Zoom login email for the host whose meetings appear |
+| Supabase secret name | Where you copy it from in Zoom |
+|---------------------|--------------------------------|
+| `ZOOM_ACCOUNT_ID` | App **App Credentials** tab → **Account ID** |
+| `ZOOM_CLIENT_ID` | Same tab → **Client ID** |
+| `ZOOM_CLIENT_SECRET` | Same tab → **Client Secret** (click show / regenerate if needed) |
+| `ZOOM_HOST_USER_EMAIL` | **Not** from the app — this is the **Zoom sign-in email** of the person whose meetings you want on the dashboard (must be a user in your Zoom account). Example: `alex@yourcompany.com` |
+
+Do **not** put Zoom secrets in `.env` or `VITE_*` — only in Supabase Edge Function secrets below.
+
+### Calendly
+
+| Supabase secret name | Where you copy it from |
+|---------------------|-------------------------|
+| `CALENDLY_API_TOKEN` | Calendly → **Integrations** → **API & Webhooks** → **Personal access tokens** → **Generate new token** (copy once; Calendly may not show it again). |
+
+The token is tied to **your Calendly user**; scheduled events and invitees are loaded for that user’s calendar.
+
+### Supabase (automatic — do not set manually)
+
+Edge Functions already receive `SUPABASE_URL` and `SUPABASE_ANON_KEY` from the project. You do **not** add these as custom secrets for this integration.
+
+---
+
+## Supabase secrets (what to put in the dashboard)
+
+**Dashboard path:** Supabase project → **Project Settings** (gear) → **Edge Functions** → **Secrets** → **Add new secret**.
+
+Add **five** secrets (names must match exactly):
+
+| Name | Value |
+|------|--------|
+| `ZOOM_ACCOUNT_ID` | Zoom app **Account ID** |
+| `ZOOM_CLIENT_ID` | Zoom app **Client ID** |
+| `ZOOM_CLIENT_SECRET` | Zoom app **Client Secret** |
+| `ZOOM_HOST_USER_EMAIL` | Host’s Zoom login email (plain text, no quotes) |
 | `CALENDLY_API_TOKEN` | Calendly personal access token |
 
-`SUPABASE_URL` and `SUPABASE_ANON_KEY` are provided automatically to functions; you do not set them manually.
-
-## Deploy the function
-
-From the repo root (with Supabase CLI linked to your project):
+**CLI alternative** (from repo root, after `supabase link` — see deploy section):
 
 ```bash
-supabase functions deploy integrations-zoom-calendly
+supabase secrets set ZOOM_ACCOUNT_ID="paste_account_id" ZOOM_CLIENT_ID="paste_client_id" ZOOM_CLIENT_SECRET="paste_secret" ZOOM_HOST_USER_EMAIL="host@yourdomain.com" CALENDLY_API_TOKEN="paste_calendly_pat"
 ```
+
+(On Windows PowerShell you may need to set secrets one at a time if quoting is awkward; the Dashboard is often easier.)
+
+---
+
+## Deploy the Edge Function
+
+Deployment must be run on **your** machine (or CI) while logged into Supabase — the repo does not contain your project ref.
+
+1. **Install CLI** (if needed): `npm i -g supabase` or use `npx supabase`.
+2. **Log in:** `supabase login`
+3. **Link this repo to your project** (project ref is in the Supabase Dashboard URL: **Project Settings → General → Reference ID**, or the subdomain of `https://YOUR_REF.supabase.co`):
+
+   ```bash
+   cd /path/to/POhiring
+   supabase link --project-ref YOUR_PROJECT_REF
+   ```
+
+4. **Set secrets** (Dashboard or `supabase secrets set` above).
+5. **Deploy:**
+
+   ```bash
+   supabase functions deploy integrations-zoom-calendly
+   ```
+
+   Or without a linked project:
+
+   ```bash
+   supabase functions deploy integrations-zoom-calendly --project-ref YOUR_PROJECT_REF
+   ```
+
+6. Confirm in Dashboard: **Edge Functions** → `integrations-zoom-calendly` appears and logs are empty or 200 on first test.
+
+After deploy, open your **hosted** app (or local dev with valid `VITE_SUPABASE_*`) and go to **`/live-sessions`**, sign in with admin credentials, and tap **Refresh**.
 
 ## How matching works
 
