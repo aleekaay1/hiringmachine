@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import Layout from '../components/Layout';
 import { Button, Input } from '../components/UI';
-import { getCandidates } from '../services/storageService';
+import { getCandidateByEmail } from '../services/storageService';
 import { useNavigate } from 'react-router-dom';
 
 const AssessmentLookup: React.FC = () => {
@@ -20,13 +20,8 @@ const AssessmentLookup: React.FC = () => {
 
     try {
       setLoading(true);
-      const candidates = await getCandidates();
       const normalizedEmail = email.trim().toLowerCase();
-
-      const match = candidates.find((c) => {
-        const cEmail = c.email.trim().toLowerCase();
-        return cEmail === normalizedEmail;
-      });
+      const match = await getCandidateByEmail(normalizedEmail);
 
       if (!match) {
         alert('We could not find a matching record. Please confirm your details with the management team.');

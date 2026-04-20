@@ -1,7 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
-import { getCandidates, deleteCandidate, saveCandidate } from '../services/storageService';
+import {
+  getCandidates,
+  getCandidatesForAdminList,
+  getCandidateById,
+  deleteCandidate,
+  saveCandidate,
+} from '../services/storageService';
 import { getAssessmentSummary } from '../services/assessmentSummary';
 import { sendEmail } from '../services/emailService';
 import { EMAIL_TEMPLATES, mergeTemplate } from '../services/emailTemplates';
@@ -185,7 +191,7 @@ const AdminDashboard: React.FC = () => {
         try {
           setLoading(true);
           setError(null);
-          const data = await getCandidates();
+          const data = await getCandidatesForAdminList();
           setCandidates(data);
         } catch (err) {
           console.error(err);
@@ -197,6 +203,16 @@ const AdminDashboard: React.FC = () => {
       load();
     }
   }, [isAuthenticated]);
+
+  /** List rows are lean (no assessment JSON); load full row when opening detail. Stale fetch guard avoids wrong candidate after fast clicks. */
+  const selectCandidate = (c: Candidate) => {
+    const id = c.id;
+    setSelectedCandidate(c);
+    void getCandidateById(id).then((full) => {
+      if (!full) return;
+      setSelectedCandidate((prev) => (prev?.id === id ? full : prev));
+    });
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -425,7 +441,16 @@ const AdminDashboard: React.FC = () => {
     return s;
   };
 
-  const exportCSV = () => {
+  const exportCSV = async () => {
+    let fullRows: Candidate[];
+    try {
+      fullRows = await getCandidates();
+    } catch (err) {
+      console.error(err);
+      alert('Could not load candidates for export. Please try again.');
+      return;
+    }
+
     const headers = [
       'ID',
       'Name',
@@ -467,7 +492,7 @@ const AdminDashboard: React.FC = () => {
       ...QUESTIONS.trueScale.map(q => `Q${q.id}`),
     ];
 
-    const rows = candidates.map(c => {
+    const rows = fullRows.map(c => {
       const a = c.assessment;
       const q = c.applicantQuestionnaire;
       const ad = getAdminData(c);
@@ -886,7 +911,7 @@ const AdminDashboard: React.FC = () => {
                 return (
                   <div
                     key={c.id}
-                    onClick={() => setSelectedCandidate(c)}
+                    onClick={() => selectCandidate(c)}
                     className={`p-4 border-b border-gray-100 cursor-pointer transition-all flex gap-2 ${
                       selectedCandidate?.id === c.id
                         ? 'bg-gradient-to-r from-[#005EB8]/10 to-white border-l-4 border-l-[#005EB8]'

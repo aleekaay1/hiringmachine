@@ -142,6 +142,24 @@ export const getCandidates = async (): Promise<Candidate[]> => {
   return (data as CandidateRow[]).map(fromRow);
 };
 
+/** Columns for admin list — excludes `assessment` (large JSON) for faster loads. Fetch full row with getCandidateById when opening a candidate. */
+const ADMIN_LIST_COLUMNS =
+  'id, first_name, last_name, email, phone, city, timestamp, status, score, fit_category, admin_data, applicant_questionnaire, post_interview, exit_questionnaire';
+
+export const getCandidatesForAdminList = async (): Promise<Candidate[]> => {
+  const { data, error } = await supabase
+    .from(TABLE_NAME)
+    .select(ADMIN_LIST_COLUMNS)
+    .order('timestamp', { ascending: false });
+
+  if (error) {
+    console.error('Error fetching candidates (admin list) from Supabase', error);
+    throw error;
+  }
+
+  return (data as CandidateRow[]).map(fromRow);
+};
+
 export const getCandidateById = async (id: string): Promise<Candidate | null> => {
   const { data, error } = await supabase
     .from(TABLE_NAME)
@@ -226,7 +244,7 @@ export async function findDuplicateApplication(input: {
 export const saveCandidate = async (candidate: Candidate): Promise<void> => {
   const { data: existing } = await supabase
     .from(TABLE_NAME)
-    .select('id, admin_data')
+    .select('id, admin_data, assessment, applicant_questionnaire, post_interview, exit_questionnaire, score, fit_category, status')
     .eq('id', candidate.id)
     .maybeSingle();
 
@@ -253,6 +271,32 @@ export const saveCandidate = async (candidate: Candidate): Promise<void> => {
         ...candidate,
         adminData: serverAdmin,
       };
+    }
+  }
+
+  /** Lean list rows omit large JSON; never wipe stored assessment / questionnaire on partial saves. */
+  if (existing && typeof existing === 'object') {
+    const row = existing as CandidateRow;
+    if (candidate.assessment === undefined && row.assessment != null) {
+      candidateToSave = { ...candidateToSave, assessment: row.assessment };
+    }
+    if (candidate.applicantQuestionnaire === undefined && row.applicant_questionnaire != null) {
+      candidateToSave = { ...candidateToSave, applicantQuestionnaire: row.applicant_questionnaire };
+    }
+    if (candidate.postInterview === undefined && row.post_interview != null) {
+      candidateToSave = { ...candidateToSave, postInterview: row.post_interview };
+    }
+    if (candidate.exitQuestionnaire === undefined && row.exit_questionnaire != null) {
+      candidateToSave = { ...candidateToSave, exitQuestionnaire: row.exit_questionnaire };
+    }
+    if (candidate.score === undefined && row.score != null) {
+      candidateToSave = { ...candidateToSave, score: row.score };
+    }
+    if (candidate.fitCategory === undefined && row.fit_category != null) {
+      candidateToSave = { ...candidateToSave, fitCategory: row.fit_category };
+    }
+    if (candidate.status === undefined && row.status != null) {
+      candidateToSave = { ...candidateToSave, status: row.status };
     }
   }
 
