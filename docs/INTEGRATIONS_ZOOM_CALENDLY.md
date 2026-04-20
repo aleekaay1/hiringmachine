@@ -6,12 +6,20 @@ The **Live sessions** page (`/live-sessions`) loads data through the Edge Functi
 
 1. **Zoom — Server-to-Server OAuth app** (Zoom Marketplace → Develop → Build App → Server-to-Server OAuth).
    - Activate the app and note **Account ID**, **Client ID**, and **Client Secret**.
-   - Add scopes (at minimum):
-     - `user:read:user` (or `user:read:list_users`)
-     - `meeting:read:list_meetings`
-     - `meeting:read:list_past_instances` (if required by your account)
-     - `report:read:admin` (participant reports on past meetings)
-   - If Zoom reports missing scope errors, open the app’s **Scopes** tab and add the scopes the error names.
+   - Zoom uses **granular scopes** (names like `resource:action:object:admin`). In the app’s **Scopes** tab, use the search box and add these exact strings (they are the current names from Zoom’s [granular scopes reference](https://developers.zoom.us/docs/integrations/oauth-scopes-granular/)):
+
+   | Scope to search / add | Used for |
+   |------------------------|----------|
+   | `user:read:user:admin` | Resolve the host user (`GET /users/{userId}`) |
+   | `meeting:read:list_meetings:admin` | List past meetings for a user |
+   | `meeting:read:list_upcoming_meetings:admin` | List upcoming meetings for a user |
+   | `report:read:list_meeting_participants:admin` | Participant report (who joined) for past meetings |
+
+   Optional if Zoom returns an error for a specific endpoint: `meeting:read:list_past_instances:admin` (past instances).
+
+   **If the UI doesn’t show these:** ensure the app type is **Server-to-Server OAuth**, open **Scopes** → **Add** → search **granular** (or paste the full string). If your account still uses legacy “classic” scopes, the Zoom docs above map each API method to the required granular scope.
+
+   After any **403** or “invalid scope” from the API, add the scope the error message names, or find the API method in the [granular scopes doc](https://developers.zoom.us/docs/integrations/oauth-scopes-granular/) and add the listed scope.
 
 2. **Host user email** — the Zoom user whose meetings you list (same account as the OAuth app), e.g. `alex@yourdomain.com`. Set as `ZOOM_HOST_USER_EMAIL`.
 
