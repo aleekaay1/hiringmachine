@@ -1017,6 +1017,11 @@ const AdminDashboard: React.FC = () => {
                             Current stage:{' '}
                             <span className="font-semibold text-gray-900">{journeyStage}</span>
                           </p>
+                          <p className="mt-1.5 text-center text-[10px] text-gray-500 max-w-xl mx-auto leading-snug">
+                            Check-in and leadership assessment submissions update this automatically. Set{' '}
+                            <span className="font-medium text-gray-600">Attended Live Session</span> and later stages
+                            using the pipeline dropdown below when you are ready.
+                          </p>
                         </div>
                       </div>
                     </div>

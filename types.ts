@@ -104,6 +104,25 @@ export function normalizePipelineStage(raw: unknown): PipelineStage {
   return 'Check in';
 }
 
+/**
+ * After check-in form submit: pipeline is always at least "Check in" (persisted on candidate.adminData).
+ */
+export const PIPELINE_STAGE_AFTER_CHECK_IN: PipelineStage = 'Check in';
+
+/**
+ * After leadership assessment submit: move to "Leadership Assessment Received Under Review" when the
+ * candidate is still at or before that step. Does not downgrade or override Interview / Hired / Not hired.
+ */
+export function pipelineStageAfterAssessmentComplete(current: unknown): PipelineStage {
+  const cur = normalizePipelineStage(current);
+  const target: PipelineStage = 'Leadership Assessment Received Under Review';
+  if (cur === 'Hired' || cur === 'Not Hired / Withdrawn') return cur;
+  const ti = PIPELINE_STAGES.indexOf(target);
+  const ci = PIPELINE_STAGES.indexOf(cur);
+  if (ci > ti) return cur;
+  return target;
+}
+
 export interface AdminNote {
   id: string;
   createdAt: string;

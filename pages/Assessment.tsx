@@ -4,7 +4,13 @@ import Layout from '../components/Layout';
 import { Button, Input, Select, Card } from '../components/UI';
 import { getCandidateById, saveCandidate, calculateScore } from '../services/storageService';
 import { triggerPostAssessmentSubmitEmail } from '../services/candidateEmailTrigger';
-import { Candidate, AssessmentData, QUESTIONS } from '../types';
+import {
+  Candidate,
+  AssessmentData,
+  QUESTIONS,
+  DEFAULT_ADMIN_DATA,
+  pipelineStageAfterAssessmentComplete,
+} from '../types';
 
 const Assessment: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -105,7 +111,12 @@ const Assessment: React.FC = () => {
       status: 'assessment_complete',
       assessment: assessmentData,
       score,
-      fitCategory
+      fitCategory,
+      adminData: {
+        ...DEFAULT_ADMIN_DATA,
+        ...candidate.adminData,
+        pipelineStage: pipelineStageAfterAssessmentComplete(candidate.adminData?.pipelineStage),
+      },
     };
 
     try {

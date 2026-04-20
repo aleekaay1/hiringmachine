@@ -4,7 +4,13 @@ import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { getCandidateById, saveCandidate, calculateScore } from '../services/storageService';
 import { triggerPostAssessmentSubmitEmail } from '../services/candidateEmailTrigger';
-import { Candidate, AssessmentData, ApplicantQuestionnaire } from '../types';
+import {
+  Candidate,
+  AssessmentData,
+  ApplicantQuestionnaire,
+  DEFAULT_ADMIN_DATA,
+  pipelineStageAfterAssessmentComplete,
+} from '../types';
 import {
   OPEN_ENDED_QUESTIONS,
   PERSONALITY_QUESTIONS,
@@ -153,6 +159,11 @@ const AssessmentRoomForm: React.FC = () => {
       assessment: assessmentData,
       score,
       fitCategory,
+      adminData: {
+        ...DEFAULT_ADMIN_DATA,
+        ...candidate.adminData,
+        pipelineStage: pipelineStageAfterAssessmentComplete(candidate.adminData?.pipelineStage),
+      },
       applicantQuestionnaire: {
         ...(aq as ApplicantQuestionnaire),
         whatStoodOut: mergedAnswers.whatStoodOut.trim(),

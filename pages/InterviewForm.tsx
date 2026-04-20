@@ -10,7 +10,7 @@ import {
   DuplicateApplicationError,
 } from '../services/storageService';
 import type { ApplicantQuestionnaire } from '../types';
-import { RECEPTION_BACKGROUND_AREAS, DEFAULT_ADMIN_DATA } from '../types';
+import { RECEPTION_BACKGROUND_AREAS, DEFAULT_ADMIN_DATA, PIPELINE_STAGE_AFTER_CHECK_IN } from '../types';
 import { triggerPostCheckinEmail } from '../services/candidateEmailTrigger';
 
 const RECEPTION_STORAGE_KEY = 'reception_candidate_id';
@@ -228,9 +228,18 @@ const InterviewForm: React.FC = () => {
         return;
       }
 
+      const mergeCheckInPipeline = (c: import('../types').Candidate): import('../types').Candidate => ({
+        ...c,
+        adminData: {
+          ...DEFAULT_ADMIN_DATA,
+          ...c.adminData,
+          pipelineStage: PIPELINE_STAGE_AFTER_CHECK_IN,
+        },
+      });
+
       let baseCandidate: import('../types').Candidate;
       if (candidate) {
-        baseCandidate = { ...candidate, applicantQuestionnaire: questionnaireBase };
+        baseCandidate = mergeCheckInPipeline({ ...candidate, applicantQuestionnaire: questionnaireBase });
         await saveCandidate(baseCandidate);
         setCandidate(baseCandidate);
       } else {
@@ -242,8 +251,9 @@ const InterviewForm: React.FC = () => {
           city: preForm.city.trim(),
           applicantQuestionnaire: questionnaireBase,
         });
-        baseCandidate = created;
-        setCandidate(created);
+        baseCandidate = mergeCheckInPipeline(created);
+        await saveCandidate(baseCandidate);
+        setCandidate(baseCandidate);
         sessionStorage.setItem(RECEPTION_STORAGE_KEY, created.id);
       }
       await uploadAllResumes(baseCandidate, questionnaireBase);
