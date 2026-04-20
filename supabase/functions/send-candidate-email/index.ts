@@ -15,6 +15,7 @@ import {
   sendAssessmentInternalNotificationIfConfigured,
   type AssessmentNotifyCandidateRow,
 } from '../_shared/assessmentCompleteInternalNotification.ts';
+import { appendCandidateEmailLog } from '../_shared/candidateEmailLog.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -151,6 +152,13 @@ Deno.serve(async (req) => {
         },
         (err: Error | null) => (err ? reject(err) : resolve())
       );
+    });
+
+    const sentAt = new Date().toISOString();
+    await appendCandidateEmailLog(admin, candidateId, {
+      sentAt,
+      subject,
+      type: isPostCheckin ? 'automated_post_checkin' : 'automated_post_assessment_submit',
     });
 
     if (isPostAssessmentSubmit) {

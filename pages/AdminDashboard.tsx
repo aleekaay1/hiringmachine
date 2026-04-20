@@ -54,6 +54,8 @@ function formatEmailLogType(type: string | undefined): string {
     stage5_evaluation: 'Stage 5 – Evaluation',
     compose: 'Compose (manual)',
     manual: 'Compose (manual)',
+    automated_post_checkin: 'Automated – Post check-in (session invite)',
+    automated_post_assessment_submit: 'Automated – Assessment thank-you',
   };
   return map[type] ?? type;
 }
@@ -1344,8 +1346,8 @@ const AdminDashboard: React.FC = () => {
                     {emailLogOpen && (
                       <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3 shadow-sm">
                         <p className="text-[11px] text-gray-500">
-                          Log of emails sent from this admin dashboard (subject, time, template type). System-triggered
-                          emails from form submits may not appear here unless also recorded server-side.
+                          Includes emails sent from this dashboard and automated candidate emails (check-in invite and
+                          assessment thank-you) recorded when those messages are delivered.
                         </p>
                         {getAdminData(selectedCandidate).emailsSent.length === 0 ? (
                           <p className="text-sm text-gray-600">No emails logged yet for this candidate.</p>

@@ -13,6 +13,7 @@ import {
   sendAssessmentInternalNotificationIfConfigured,
   type AssessmentNotifyCandidateRow,
 } from '../_shared/assessmentCompleteInternalNotification.ts';
+import { appendCandidateEmailLog } from '../_shared/candidateEmailLog.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -123,6 +124,12 @@ Deno.serve(async (req) => {
         },
         (err: Error | null) => (err ? reject(err) : resolve())
       );
+    });
+
+    await appendCandidateEmailLog(admin, candidateId, {
+      sentAt: new Date().toISOString(),
+      subject,
+      type: 'automated_post_assessment_submit',
     });
 
     const notifyRow = row as AssessmentNotifyCandidateRow;
