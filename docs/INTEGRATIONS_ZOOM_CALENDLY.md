@@ -148,6 +148,7 @@ If times differ by more than your tolerance or events use different hosts, you m
 - Same Supabase Auth as Admin (use your admin email/password).
 - Requires `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the web app (already used elsewhere).
 - On **Admin** routes (Dashboard, Live sessions, QR), the header shows **Zoom / Calendly** status dots (green = API OK, red = error, gray Calendly dot = token not set). This calls `GET .../integrations-zoom-calendly?health=1` (lightweight, no meeting list).
+- **Upcoming schedule:** each row expands to show **Calendly invitee names** (from the matched scheduled event). **Past meetings** still show invitees + Zoom attendance after the session.
 
 ## Troubleshooting
 

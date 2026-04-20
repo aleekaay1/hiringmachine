@@ -53,6 +53,13 @@ export interface PastMeetingRow {
   stats: PastMeetingStats;
 }
 
+export interface UpcomingMeetingInvitee {
+  email: string;
+  name: string;
+  status: string;
+  no_show?: boolean;
+}
+
 export interface UpcomingMeetingRow {
   source: 'scheduled';
   zoom: ZoomMeetingCore;
@@ -63,6 +70,8 @@ export interface UpcomingMeetingRow {
     status?: string;
     uri?: string;
   } | null;
+  /** Calendly invitation list for this session (when matched). */
+  invitees: UpcomingMeetingInvitee[];
 }
 
 export interface LiveSessionsDashboardPayload {

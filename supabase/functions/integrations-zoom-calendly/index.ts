@@ -536,33 +536,55 @@ Deno.serve(async (req) => {
       }),
     );
 
-    const upcomingRows = scheduledMeetings.map((m) => {
-      const start = String(m.start_time || '');
-      const startMs = parseZoomStartToUtcMs(m);
-      const calMatch =
-        calendlyEnabled && Number.isFinite(startMs) ? findMatchingCalendly(startMs) : null;
-      return {
-        source: 'scheduled' as const,
-        zoom: {
-          uuid: String(m.uuid || ''),
-          topic: String(m.topic || ''),
-          start_time: start,
-          duration_minutes: Number(m.duration || 0),
-          host_email: String((m as { host_email?: string }).host_email || zoomHostEmail),
-          join_url: String((m as { join_url?: string }).join_url || ''),
-          meeting_id: m.id,
-        },
-        calendly: calMatch
-          ? {
-              name: calMatch.name,
-              start_time: calMatch.start_time,
-              end_time: calMatch.end_time,
-              status: calMatch.status,
-              uri: calMatch.uri,
-            }
-          : null,
-      };
-    });
+    const upcomingRows = await Promise.all(
+      scheduledMeetings.map(async (m) => {
+        const start = String(m.start_time || '');
+        const startMs = parseZoomStartToUtcMs(m);
+        const calMatch =
+          calendlyEnabled && Number.isFinite(startMs) ? findMatchingCalendly(startMs) : null;
+
+        let invitees: Array<{
+          email: string;
+          name: string;
+          status: string;
+          no_show: boolean;
+        }> = [];
+        if (calendlyEnabled && calMatch?.uri && calendlyToken) {
+          const raw = await loadInvitees(calMatch.uri, calendlyToken);
+          invitees = raw
+            .filter((i) => i.status !== 'canceled')
+            .map((i) => ({
+              email: i.email,
+              name: i.name,
+              status: i.status,
+              no_show: i.no_show,
+            }));
+        }
+
+        return {
+          source: 'scheduled' as const,
+          zoom: {
+            uuid: String(m.uuid || ''),
+            topic: String(m.topic || ''),
+            start_time: start,
+            duration_minutes: Number(m.duration || 0),
+            host_email: String((m as { host_email?: string }).host_email || zoomHostEmail),
+            join_url: String((m as { join_url?: string }).join_url || ''),
+            meeting_id: m.id,
+          },
+          calendly: calMatch
+            ? {
+                name: calMatch.name,
+                start_time: calMatch.start_time,
+                end_time: calMatch.end_time,
+                status: calMatch.status,
+                uri: calMatch.uri,
+              }
+            : null,
+          invitees,
+        };
+      }),
+    );
 
     return new Response(
       JSON.stringify({

@@ -8,6 +8,7 @@ import {
   fetchLiveSessionsDashboard,
   type LiveSessionsDashboardPayload,
   type PastMeetingRow,
+  type UpcomingMeetingRow,
 } from '../services/liveSessionsIntegrations';
 import {
   RefreshCw,
@@ -29,7 +30,8 @@ const LiveSessionsDashboard: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<LiveSessionsDashboardPayload | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [expandedPast, setExpandedPast] = useState<string | null>(null);
+  const [expandedUpcoming, setExpandedUpcoming] = useState<string | null>(null);
 
   useEffect(() => {
     const check = async () => {
@@ -192,25 +194,22 @@ const LiveSessionsDashboard: React.FC = () => {
                   <p className="text-2xl font-extrabold text-[#005EB8]">{data.upcoming_meetings.length}</p>
                 </div>
               </div>
-              {data.zoom_topic_filter && (
-                <div className="rounded-xl border border-[#005EB8]/40 bg-[#005EB8]/10 px-4 py-3 text-sm text-slate-200">
-                  <span className="font-medium text-white">Zoom topic filter active.</span>{' '}
-                  Only meetings whose Zoom <span className="text-white font-medium">topic</span> contains:{' '}
-                  <span className="text-white font-mono text-xs break-all">{data.zoom_topic_filter}</span>
-                  {' '}(pipe <code className="text-slate-400">|</code> = match any).
-                </div>
-              )}
-              {data.calendly_configured && data.calendly_event_name_filter && (
-                <div className="rounded-xl border border-emerald-800/50 bg-emerald-950/30 px-4 py-3 text-sm text-slate-200">
-                  <span className="font-medium text-emerald-200">Calendly name filter active.</span>{' '}
-                  Only events whose <span className="text-white font-medium">event name</span> contains:{' '}
-                  <span className="text-white font-mono text-xs break-all">
-                    {data.calendly_event_name_filter}
-                  </span>{' '}
-                  — invitees vs Zoom attendance use these events (matched by start time, ±
-                  {data.match_tolerance_minutes ?? 120} min).
-                </div>
-              )}
+              <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500">
+                {data.zoom_topic_filter && (
+                  <span>
+                    <span className="text-[#005EB8] font-medium">Zoom filter</span> — topic contains{' '}
+                    <code className="text-slate-300 break-all">{data.zoom_topic_filter}</code>
+                  </span>
+                )}
+                {data.calendly_configured && data.calendly_event_name_filter && (
+                  <span>
+                    <span className="text-emerald-500 font-medium">Calendly filter</span> — event name contains{' '}
+                    <code className="text-slate-300 break-all">{data.calendly_event_name_filter}</code>
+                    {' · '}
+                    match ±{data.match_tolerance_minutes ?? 120}m
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-slate-500">
                 Data as of {new Date(data.generated_at).toLocaleString()}
                 {data.calendly_configured
@@ -222,7 +221,7 @@ const LiveSessionsDashboard: React.FC = () => {
 
           <section>
             <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3 flex items-center gap-2">
-              <Calendar size={16} /> Past meetings & attendance
+              <Calendar size={16} /> Past meetings
             </h2>
             <div className="space-y-3">
               {!data && !fetchError && loading && (
@@ -241,9 +240,9 @@ const LiveSessionsDashboard: React.FC = () => {
                   row={row}
                   calendlyConfigured={data.calendly_configured}
                   matchToleranceMinutes={data.match_tolerance_minutes ?? 120}
-                  expanded={expanded === row.zoom.uuid}
+                  expanded={expandedPast === row.zoom.uuid}
                   onToggle={() =>
-                    setExpanded((e) => (e === row.zoom.uuid ? null : row.zoom.uuid))
+                    setExpandedPast((e) => (e === row.zoom.uuid ? null : row.zoom.uuid))
                   }
                 />
               ))}
@@ -252,52 +251,37 @@ const LiveSessionsDashboard: React.FC = () => {
 
           <section>
             <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3 flex items-center gap-2">
-              <Video size={16} /> Upcoming Zoom meetings
+              <Video size={16} /> Upcoming schedule
             </h2>
-            <div className="overflow-x-auto rounded-xl border border-slate-800">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-800 bg-slate-900/80 text-left text-slate-400">
-                    <th className="px-4 py-3 font-medium">Start</th>
-                    <th className="px-4 py-3 font-medium">Topic</th>
-                    <th className="px-4 py-3 font-medium">Host</th>
-                    <th className="px-4 py-3 font-medium">Calendly match</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data?.upcoming_meetings.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
-                        {data.zoom_topic_filter
-                          ? 'No upcoming meetings matched the topic filter.'
-                          : 'No upcoming meetings'}
-                      </td>
-                    </tr>
-                  )}
-                  {data?.upcoming_meetings.map((u) => (
-                    <tr key={u.zoom.uuid + String(u.zoom.start_time)} className="border-b border-slate-800/80">
-                      <td className="px-4 py-3 text-slate-300 whitespace-nowrap">
-                        {u.zoom.start_time
-                          ? new Date(u.zoom.start_time).toLocaleString()
-                          : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-white font-medium">{u.zoom.topic}</td>
-                      <td className="px-4 py-3 text-slate-400">{u.zoom.host_email}</td>
-                      <td className="px-4 py-3">
-                        {!data.calendly_configured ? (
-                          <span className="text-slate-500 text-xs">—</span>
-                        ) : u.calendly ? (
-                          <span className="text-emerald-400 text-xs">{u.calendly.name || 'Matched'}</span>
-                        ) : (
-                          <span className="text-slate-500 text-xs">
-                            No Calendly match (within ±{data.match_tolerance_minutes ?? 120} min)
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <p className="text-xs text-slate-500 mb-3">
+              Tap to expand and see Calendly invitee names for each session.
+            </p>
+            <div className="space-y-3">
+              {!data && !fetchError && loading && (
+                <p className="text-slate-500 text-sm">Loading schedule…</p>
+              )}
+              {data?.upcoming_meetings.length === 0 && !loading && (
+                <p className="text-slate-500 text-sm border border-dashed border-slate-800 rounded-xl p-8 text-center">
+                  {data?.zoom_topic_filter
+                    ? 'No upcoming meetings matched the topic filter.'
+                    : 'No upcoming meetings'}
+                </p>
+              )}
+              {data?.upcoming_meetings.map((row) => {
+                const key = `${row.zoom.uuid}|${row.zoom.start_time}`;
+                return (
+                  <UpcomingMeetingCard
+                    key={key}
+                    row={row}
+                    calendlyConfigured={data.calendly_configured}
+                    matchToleranceMinutes={data.match_tolerance_minutes ?? 120}
+                    expanded={expandedUpcoming === key}
+                    onToggle={() =>
+                      setExpandedUpcoming((e) => (e === key ? null : key))
+                    }
+                  />
+                );
+              })}
             </div>
           </section>
         </div>
@@ -408,6 +392,96 @@ function PastMeetingCard({
               </p>
             )}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UpcomingMeetingCard({
+  row,
+  calendlyConfigured,
+  matchToleranceMinutes,
+  expanded,
+  onToggle,
+}: {
+  row: UpcomingMeetingRow;
+  calendlyConfigured: boolean;
+  matchToleranceMinutes: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const z = row.zoom;
+  const st = z.start_time ? new Date(z.start_time).toLocaleString() : '—';
+  const listKey = z.uuid + z.start_time;
+  const invited = row.invitees.length;
+
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full text-left px-4 py-4 flex flex-wrap items-start justify-between gap-3 hover:bg-slate-800/30"
+      >
+        <div className="flex items-start gap-3 min-w-0 flex-1">
+          <span className="text-slate-500 mt-0.5 shrink-0">
+            {expanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+          </span>
+          <div className="min-w-0">
+            <p className="font-semibold text-white text-base leading-snug">{z.topic}</p>
+            <p className="text-xs text-slate-500 mt-1">
+              {st} · {z.duration_minutes} min · {z.host_email}
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 shrink-0 justify-end">
+          {calendlyConfigured && row.calendly && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-950/50 border border-emerald-800/40 px-2.5 py-1 text-xs text-emerald-300">
+              <Mail size={12} /> {invited} invited
+            </span>
+          )}
+          {calendlyConfigured && row.calendly && (
+            <span className="inline-flex max-w-[14rem] truncate rounded-full bg-slate-800 px-2.5 py-1 text-xs text-slate-300" title={row.calendly.name}>
+              {row.calendly.name || 'Calendly'}
+            </span>
+          )}
+          {calendlyConfigured && !row.calendly && (
+            <span className="inline-flex items-center rounded-full bg-slate-800/80 px-2.5 py-1 text-xs text-slate-500">
+              No Calendly link (±{matchToleranceMinutes}m)
+            </span>
+          )}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-slate-800 px-4 py-4 text-sm">
+          <h4 className="text-xs font-bold uppercase text-slate-500 mb-3">Invited via Calendly</h4>
+          {calendlyConfigured === false && (
+            <p className="text-slate-500 text-sm">Add a Calendly API token in Supabase to see invitees.</p>
+          )}
+          {calendlyConfigured && !row.calendly && (
+            <p className="text-slate-500 text-sm">
+              No Calendly event matched this Zoom start time (within ±{matchToleranceMinutes} minutes).
+            </p>
+          )}
+          {calendlyConfigured && row.calendly && row.invitees.length === 0 && (
+            <p className="text-slate-500 text-sm">No invitees listed yet for this event.</p>
+          )}
+          {calendlyConfigured && row.calendly && row.invitees.length > 0 && (
+            <ul className="space-y-2">
+              {row.invitees.map((i) => (
+                <li key={listKey + i.email} className="text-slate-200">
+                  <span className="font-medium text-white">{i.name?.trim() || i.email}</span>
+                  {i.name?.trim() ? (
+                    <span className="block text-xs text-slate-500">{i.email}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-xs text-slate-600 mt-4">
+            After the meeting runs, check <span className="text-slate-500">Past meetings</span> for Zoom attendance.
+          </p>
         </div>
       )}
     </div>
