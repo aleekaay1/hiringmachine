@@ -4,10 +4,6 @@ import { fetchIntegrationHealth } from '../services/liveSessionsIntegrations';
 
 type Light = 'loading' | 'ok' | 'error' | 'off';
 
-/**
- * Two small dots: Zoom API vs Calendly API (admin toolbar).
- * Green = reachable; red = misconfigured or API error; gray = Calendly token not set.
- */
 const IntegrationStatusLights: React.FC<{ className?: string; dark?: boolean }> = ({
   className = '',
   dark = false,

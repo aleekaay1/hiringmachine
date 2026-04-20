@@ -85,7 +85,7 @@ const LiveSessionsDashboard: React.FC = () => {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
         <div className="bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-sm">
-          <h2 className="text-xl font-bold text-white mb-1 text-center">Live sessions</h2>
+          <h2 className="text-xl font-bold text-white mb-1 text-center">Sessions</h2>
           <p className="text-sm text-slate-400 text-center mb-6">Sign in with your admin account</p>
           <form onSubmit={handleLogin} className="space-y-4">
             <div>
@@ -133,8 +133,8 @@ const LiveSessionsDashboard: React.FC = () => {
               <div className="flex items-center gap-2 min-w-0">
                 <Video className="text-[#37B06D] shrink-0" size={22} />
                 <div className="min-w-0">
-                  <h1 className="text-lg sm:text-xl font-bold text-white truncate">Live overview sessions</h1>
-                  <p className="text-xs text-slate-500 truncate">Zoom meetings + Calendly attendance</p>
+                  <h1 className="text-lg sm:text-xl font-bold text-white truncate">Online career sessions</h1>
+                  <p className="text-xs text-slate-500 truncate">Zoom & Calendly</p>
                 </div>
               </div>
             </div>
@@ -186,7 +186,7 @@ const LiveSessionsDashboard: React.FC = () => {
                   </p>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Past meetings (loaded)</p>
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Past</p>
                   <p className="text-2xl font-extrabold text-[#37B06D]">{data.past_meetings.length}</p>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
@@ -194,27 +194,8 @@ const LiveSessionsDashboard: React.FC = () => {
                   <p className="text-2xl font-extrabold text-[#005EB8]">{data.upcoming_meetings.length}</p>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-slate-500">
-                {data.zoom_topic_filter && (
-                  <span>
-                    <span className="text-[#005EB8] font-medium">Zoom filter</span> — topic contains{' '}
-                    <code className="text-slate-300 break-all">{data.zoom_topic_filter}</code>
-                  </span>
-                )}
-                {data.calendly_configured && data.calendly_event_name_filter && (
-                  <span>
-                    <span className="text-emerald-500 font-medium">Calendly filter</span> — event name contains{' '}
-                    <code className="text-slate-300 break-all">{data.calendly_event_name_filter}</code>
-                    {' · '}
-                    match ±{data.match_tolerance_minutes ?? 120}m
-                  </span>
-                )}
-              </div>
               <p className="text-xs text-slate-500">
-                Data as of {new Date(data.generated_at).toLocaleString()}
-                {data.calendly_configured
-                  ? ` · Calendly events in range (after filter): ${data.calendly_events_in_range}`
-                  : ' · Add CALENDLY_API_TOKEN in Supabase secrets to merge invitees.'}
+                Updated {new Date(data.generated_at).toLocaleString()}
               </p>
             </>
           )}
@@ -229,9 +210,7 @@ const LiveSessionsDashboard: React.FC = () => {
               )}
               {data?.past_meetings.length === 0 && !loading && (
                 <p className="text-slate-500 text-sm border border-dashed border-slate-800 rounded-xl p-8 text-center">
-                  {data.zoom_topic_filter
-                    ? 'No past meetings matched the topic filter. Check that your recurring session uses the same Zoom topic text (Edge Function secret ZOOM_LIVE_SESSION_TOPIC_FILTER).'
-                    : 'No past meetings returned from Zoom for this host (or report scope is empty).'}
+                  {data.zoom_topic_filter ? 'No past meetings match the filter.' : 'No past meetings.'}
                 </p>
               )}
               {data?.past_meetings.map((row) => (
@@ -239,7 +218,6 @@ const LiveSessionsDashboard: React.FC = () => {
                   key={row.zoom.uuid + row.zoom.start_time}
                   row={row}
                   calendlyConfigured={data.calendly_configured}
-                  matchToleranceMinutes={data.match_tolerance_minutes ?? 120}
                   expanded={expandedPast === row.zoom.uuid}
                   onToggle={() =>
                     setExpandedPast((e) => (e === row.zoom.uuid ? null : row.zoom.uuid))
@@ -253,9 +231,6 @@ const LiveSessionsDashboard: React.FC = () => {
             <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500 mb-3 flex items-center gap-2">
               <Video size={16} /> Upcoming schedule
             </h2>
-            <p className="text-xs text-slate-500 mb-3">
-              Tap to expand and see Calendly invitee names for each session.
-            </p>
             <div className="space-y-3">
               {!data && !fetchError && loading && (
                 <p className="text-slate-500 text-sm">Loading schedule…</p>
@@ -274,7 +249,6 @@ const LiveSessionsDashboard: React.FC = () => {
                     key={key}
                     row={row}
                     calendlyConfigured={data.calendly_configured}
-                    matchToleranceMinutes={data.match_tolerance_minutes ?? 120}
                     expanded={expandedUpcoming === key}
                     onToggle={() =>
                       setExpandedUpcoming((e) => (e === key ? null : key))
@@ -293,13 +267,11 @@ const LiveSessionsDashboard: React.FC = () => {
 function PastMeetingCard({
   row,
   calendlyConfigured,
-  matchToleranceMinutes,
   expanded,
   onToggle,
 }: {
   row: PastMeetingRow;
   calendlyConfigured: boolean;
-  matchToleranceMinutes: number;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -338,26 +310,12 @@ function PastMeetingCard({
           </span>
         </div>
       </button>
-      {row.calendly && (
-        <div className="px-4 pb-2 text-xs text-emerald-400/90">
-          Calendly: {row.calendly.name} · matched by start time (±{matchToleranceMinutes} min)
-        </div>
-      )}
-      {!row.calendly && (
-        <div className="px-4 pb-2 text-xs text-slate-500">
-          {calendlyConfigured === false
-            ? 'Calendly not connected — Zoom participants only.'
-            : 'No Calendly event matched to this meeting time'}
-        </div>
-      )}
       {expanded && (
         <div className="border-t border-slate-800 px-4 py-4 grid md:grid-cols-2 gap-6 text-sm">
           <div>
             <h4 className="text-xs font-bold uppercase text-slate-500 mb-2">Invitees (Calendly)</h4>
             <ul className="space-y-1.5 max-h-56 overflow-y-auto">
-              {calendlyConfigured === false && (
-                <li className="text-slate-500">Add Calendly token in Supabase to load invitees.</li>
-              )}
+              {calendlyConfigured === false && <li className="text-slate-500">Calendly not connected.</li>}
               {calendlyConfigured !== false && row.invitees.length === 0 && (
                 <li className="text-slate-500">None</li>
               )}
@@ -401,13 +359,11 @@ function PastMeetingCard({
 function UpcomingMeetingCard({
   row,
   calendlyConfigured,
-  matchToleranceMinutes,
   expanded,
   onToggle,
 }: {
   row: UpcomingMeetingRow;
   calendlyConfigured: boolean;
-  matchToleranceMinutes: number;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -447,7 +403,7 @@ function UpcomingMeetingCard({
           )}
           {calendlyConfigured && !row.calendly && (
             <span className="inline-flex items-center rounded-full bg-slate-800/80 px-2.5 py-1 text-xs text-slate-500">
-              No Calendly link (±{matchToleranceMinutes}m)
+              No Calendly match
             </span>
           )}
         </div>
@@ -456,13 +412,9 @@ function UpcomingMeetingCard({
       {expanded && (
         <div className="border-t border-slate-800 px-4 py-4 text-sm">
           <h4 className="text-xs font-bold uppercase text-slate-500 mb-3">Invited via Calendly</h4>
-          {calendlyConfigured === false && (
-            <p className="text-slate-500 text-sm">Add a Calendly API token in Supabase to see invitees.</p>
-          )}
+          {calendlyConfigured === false && <p className="text-slate-500 text-sm">Calendly not connected.</p>}
           {calendlyConfigured && !row.calendly && (
-            <p className="text-slate-500 text-sm">
-              No Calendly event matched this Zoom start time (within ±{matchToleranceMinutes} minutes).
-            </p>
+            <p className="text-slate-500 text-sm">No Calendly match for this time.</p>
           )}
           {calendlyConfigured && row.calendly && row.invitees.length === 0 && (
             <p className="text-slate-500 text-sm">No invitees listed yet for this event.</p>
@@ -479,9 +431,6 @@ function UpcomingMeetingCard({
               ))}
             </ul>
           )}
-          <p className="text-xs text-slate-600 mt-4">
-            After the meeting runs, check <span className="text-slate-500">Past meetings</span> for Zoom attendance.
-          </p>
         </div>
       )}
     </div>

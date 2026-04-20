@@ -88,7 +88,7 @@ const Layout: React.FC<LayoutProps> = ({
                       : 'bg-white text-gray-600 border-gray-200 hover:bg-blue-50 active:bg-blue-50'
                   }`}
                 >
-                  Live sessions
+                  Sessions
                 </button>
                 <button
                   type="button"

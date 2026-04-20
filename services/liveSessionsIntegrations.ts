@@ -1,7 +1,3 @@
-/**
- * Fetches aggregated Zoom + Calendly data via Supabase Edge Function (secrets stay server-side).
- */
-
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
@@ -70,29 +66,23 @@ export interface UpcomingMeetingRow {
     status?: string;
     uri?: string;
   } | null;
-  /** Calendly invitation list for this session (when matched). */
   invitees: UpcomingMeetingInvitee[];
 }
 
 export interface LiveSessionsDashboardPayload {
   ok: boolean;
   generated_at: string;
-  /** False when CALENDLY_API_TOKEN is not set — Zoom still loads. */
   calendly_configured: boolean;
   zoom_user: { id: string; email: string };
   calendly_user: { name?: string; email?: string } | null;
-  /** Present when Edge secret `ZOOM_LIVE_SESSION_TOPIC_FILTER` is set. */
   zoom_topic_filter?: string | null;
-  /** Present when Edge secret `CALENDLY_EVENT_NAME_FILTER` is set (Calendly event name, not Zoom). */
   calendly_event_name_filter?: string | null;
   past_meetings: PastMeetingRow[];
   upcoming_meetings: UpcomingMeetingRow[];
   calendly_events_in_range: number;
-  /** Max |Δ| minutes between Zoom and Calendly start used when matching (Edge default 120). */
   match_tolerance_minutes?: number;
 }
 
-/** Lightweight probe: Zoom OAuth + user lookup; Calendly `/users/me` when token is set. */
 export interface IntegrationHealthPayload {
   ok: boolean;
   health: boolean;
