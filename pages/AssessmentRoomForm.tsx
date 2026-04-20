@@ -185,7 +185,7 @@ const AssessmentRoomForm: React.FC = () => {
     try {
       setSubmitting(true);
       await saveCandidate(updatedCandidate);
-      void triggerPostAssessmentSubmitEmail(updatedCandidate.id, updatedCandidate.email);
+      await triggerPostAssessmentSubmitEmail(updatedCandidate.id, updatedCandidate.email);
       navigate('/thank-you', { state: { fromMergedAssessment: true } });
     } catch (err) {
       console.error(err);

@@ -3,6 +3,7 @@ import {
   AssessmentData,
   ApplicantQuestionnaire,
   AdminData,
+  EmailLogEntry,
   DEFAULT_ADMIN_DATA,
   PostLiveExitQuestionnaire,
   normalizePipelineStage,
@@ -111,6 +112,20 @@ const toRow = (candidate: Candidate): CandidateRow => ({
   exit_questionnaire: candidate.exitQuestionnaire ?? null,
 });
 
+/** Union email logs (dedupe by time + subject + type) so edge-function appends are not lost on the next client save. */
+function mergeEmailLogsDistinct(...lists: (EmailLogEntry[] | undefined)[]): EmailLogEntry[] {
+  const key = (e: EmailLogEntry) => `${e.sentAt}\u0000${e.subject}\u0000${e.type ?? ''}`;
+  const map = new Map<string, EmailLogEntry>();
+  for (const list of lists) {
+    for (const e of list || []) {
+      map.set(key(e), e);
+    }
+  }
+  return Array.from(map.values()).sort(
+    (a, b) => new Date(a.sentAt).getTime() - new Date(b.sentAt).getTime()
+  );
+}
+
 // --- Public API used by components (now async + Supabase-backed) ---
 
 export const getCandidates = async (): Promise<Candidate[]> => {
@@ -209,9 +224,40 @@ export async function findDuplicateApplication(input: {
 };
 
 export const saveCandidate = async (candidate: Candidate): Promise<void> => {
-  const row = toRow(candidate);
-  const { data: existing } = await supabase.from(TABLE_NAME).select('id').eq('id', candidate.id).maybeSingle();
-  if (existing) {
+  const { data: existing } = await supabase
+    .from(TABLE_NAME)
+    .select('id, admin_data')
+    .eq('id', candidate.id)
+    .maybeSingle();
+
+  let candidateToSave = candidate;
+
+  if (existing?.id && existing.admin_data && typeof existing.admin_data === 'object') {
+    const serverAdmin: AdminData = {
+      ...DEFAULT_ADMIN_DATA,
+      ...(existing.admin_data as AdminData),
+      pipelineStage: normalizePipelineStage((existing.admin_data as AdminData).pipelineStage),
+    };
+
+    if (candidate.adminData) {
+      candidateToSave = {
+        ...candidate,
+        adminData: {
+          ...serverAdmin,
+          ...candidate.adminData,
+          emailsSent: mergeEmailLogsDistinct(candidate.adminData.emailsSent, serverAdmin.emailsSent),
+        },
+      };
+    } else {
+      candidateToSave = {
+        ...candidate,
+        adminData: serverAdmin,
+      };
+    }
+  }
+
+  const row = toRow(candidateToSave);
+  if (existing?.id) {
     const { error } = await supabase.from(TABLE_NAME).update(row).eq('id', candidate.id);
     if (error) {
       console.error('Error updating candidate in Supabase', error);

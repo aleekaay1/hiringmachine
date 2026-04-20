@@ -260,7 +260,7 @@ const InterviewForm: React.FC = () => {
       setResumeFiles([]);
       setPreSubmitted(true);
       sessionStorage.removeItem(RECEPTION_STORAGE_KEY);
-      void triggerPostCheckinEmail(baseCandidate.id, baseCandidate.email);
+      await triggerPostCheckinEmail(baseCandidate.id, baseCandidate.email);
     } catch (err) {
       console.error(err);
       if (err instanceof DuplicateApplicationError) {

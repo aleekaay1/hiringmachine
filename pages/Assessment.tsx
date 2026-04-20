@@ -122,7 +122,7 @@ const Assessment: React.FC = () => {
     try {
       setSubmitting(true);
       await saveCandidate(updatedCandidate);
-      void triggerPostAssessmentSubmitEmail(updatedCandidate.id, updatedCandidate.email);
+      await triggerPostAssessmentSubmitEmail(updatedCandidate.id, updatedCandidate.email);
       navigate('/thank-you');
     } catch (err) {
       console.error(err);
