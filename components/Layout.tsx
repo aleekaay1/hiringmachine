@@ -80,6 +80,17 @@ const Layout: React.FC<LayoutProps> = ({
                 </button>
                 <button
                   type="button"
+                  onClick={() => navigate('/live-sessions')}
+                  className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center px-3 py-2 rounded-full border text-xs font-medium transition-colors touch-manipulation ${
+                    isActive('/live-sessions')
+                      ? 'bg-[#005EB8] text-white border-[#005EB8]'
+                      : 'bg-white text-gray-600 border-gray-200 hover:bg-blue-50 active:bg-blue-50'
+                  }`}
+                >
+                  Live sessions
+                </button>
+                <button
+                  type="button"
                   onClick={() => navigate('/qr')}
                   className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center px-3 py-2 rounded-full border text-xs font-medium transition-colors touch-manipulation ${
                     isActive('/qr')

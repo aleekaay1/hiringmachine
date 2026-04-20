@@ -12,6 +12,7 @@ import QrCodes from './pages/QrCodes';
 import AssessmentLookup from './pages/AssessmentLookup';
 import AssessmentRoomForm from './pages/AssessmentRoomForm';
 import CheckStatus from './pages/CheckStatus';
+import LiveSessionsDashboard from './pages/LiveSessionsDashboard';
 
 const App: React.FC = () => {
   return (
@@ -28,6 +29,7 @@ const App: React.FC = () => {
         <Route path="/thank-you" element={<ThankYou />} />
         <Route path="/not-eligible" element={<NotEligible />} />
         <Route path="/admin" element={<AdminDashboard />} />
+        <Route path="/live-sessions" element={<LiveSessionsDashboard />} />
         <Route path="/qr" element={<QrCodes />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

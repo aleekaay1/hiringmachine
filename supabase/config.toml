@@ -381,6 +381,9 @@ verify_jwt = false
 [functions.upload-resume]
 verify_jwt = false
 
+[functions.integrations-zoom-calendly]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
