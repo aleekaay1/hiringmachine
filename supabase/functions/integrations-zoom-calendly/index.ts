@@ -4,11 +4,13 @@
  * Optional ZOOM_LIVE_SESSION_TOPIC_FILTER: only Zoom meetings whose **topic** matches (pipe OR).
  * Optional CALENDLY_EVENT_NAME_FILTER: only Calendly scheduled events whose **name** matches (pipe OR).
  *   Use e.g. "career" for "Live Online Career Session"; independent from the Zoom topic filter.
+ * Optional INTEGRATION_MATCH_TOLERANCE_MINUTES (default 120): max |Δ| between Zoom start and Calendly start.
  * Auth: Supabase JWT (same as send-email).
  * Deploy: supabase functions deploy integrations-zoom-calendly
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { DateTime } from 'npm:luxon@3.5.0';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -20,6 +22,15 @@ const ZOOM_API = 'https://api.zoom.us/v2';
 const CALENDLY_API = 'https://api.calendly.com';
 
 type ZoomTokenResponse = { access_token: string; expires_in: number };
+
+type CalendlyScheduledEvent = {
+  uri?: string;
+  name?: string;
+  start_time?: string;
+  end_time?: string;
+  status?: string;
+  location?: { type?: string; join_url?: string; data?: { id?: string } };
+};
 
 async function getZoomAccessToken(): Promise<string> {
   const accountId = Deno.env.get('ZOOM_ACCOUNT_ID')?.trim();
@@ -109,12 +120,76 @@ async function zoomListPastMeetings(
 async function zoomListUpcomingMeetings(
   token: string,
   userId: string,
+  maxPages = 15,
 ): Promise<Array<Record<string, unknown>>> {
-  const j = (await zoomGet(
-    token,
-    `/users/${encodeURIComponent(userId)}/meetings?type=upcoming&page_size=50`,
-  )) as { meetings?: Array<Record<string, unknown>> };
-  return j.meetings || [];
+  const all: Array<Record<string, unknown>> = [];
+  let next: string | null =
+    `/users/${encodeURIComponent(userId)}/meetings?type=upcoming&page_size=100`;
+  let pages = 0;
+  while (next && pages < maxPages) {
+    const res = await fetch(`${ZOOM_API}${next}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(`Zoom list meetings (upcoming): ${res.status} ${t}`);
+    }
+    const j = (await res.json()) as {
+      meetings?: Array<Record<string, unknown>>;
+      next_page_token?: string;
+    };
+    for (const m of j.meetings || []) all.push(m);
+    if (j.next_page_token) {
+      next =
+        `/users/${encodeURIComponent(userId)}/meetings?type=upcoming&page_size=100&next_page_token=${encodeURIComponent(j.next_page_token)}`;
+    } else {
+      next = null;
+    }
+    pages++;
+  }
+  return all;
+}
+
+/** Calendly caps count at 100; follow pagination so bookings beyond page 1 are not dropped. */
+async function calendlyListScheduledEventsInRange(
+  token: string,
+  calUserUri: string,
+  minStart: Date,
+  maxStart: Date,
+): Promise<CalendlyScheduledEvent[]> {
+  const collected: CalendlyScheduledEvent[] = [];
+  let nextPath: string | null =
+    `/scheduled_events?user=${encodeURIComponent(calUserUri)}` +
+    `&min_start_time=${encodeURIComponent(minStart.toISOString())}` +
+    `&max_start_time=${encodeURIComponent(maxStart.toISOString())}` +
+    `&count=100`;
+  let safety = 0;
+  while (nextPath && safety < 50) {
+    safety++;
+    const body = (await calendlyGet(token, nextPath)) as {
+      collection?: CalendlyScheduledEvent[];
+      pagination?: { next_page?: string | null; next_page_token?: string | null };
+    };
+    collected.push(...(body.collection || []));
+    const pag = body.pagination;
+    if (pag?.next_page) {
+      try {
+        const u = new URL(pag.next_page);
+        nextPath = u.pathname + u.search;
+      } catch {
+        nextPath = null;
+      }
+    } else if (pag?.next_page_token) {
+      nextPath =
+        `/scheduled_events?user=${encodeURIComponent(calUserUri)}` +
+        `&min_start_time=${encodeURIComponent(minStart.toISOString())}` +
+        `&max_start_time=${encodeURIComponent(maxStart.toISOString())}` +
+        `&count=100&page_token=${encodeURIComponent(pag.next_page_token)}`;
+    } else {
+      nextPath = null;
+    }
+  }
+  return collected;
 }
 
 async function zoomMeetingParticipants(
@@ -170,6 +245,32 @@ function matchesSubstringFilter(text: string, patterns: string[]): boolean {
   if (patterns.length === 0) return true;
   const t = text.toLowerCase();
   return patterns.some((p) => t.includes(p));
+}
+
+/** Zoom sometimes omits Z/offset; interpret wall time in meeting.timezone (not as UTC). */
+function parseZoomStartToUtcMs(m: Record<string, unknown>): number {
+  const raw = String(m.start_time ?? '').trim();
+  if (!raw) return NaN;
+  const hasOffset =
+    /Z$/i.test(raw) || /T[^Z]*[+-]\d{2}:\d{2}$/.test(raw) || /T[^Z]*[+-]\d{4}$/.test(raw);
+  if (hasOffset) {
+    const t = new Date(raw).getTime();
+    return Number.isFinite(t) ? t : NaN;
+  }
+  const tz = String((m as { timezone?: string }).timezone ?? '').trim();
+  if (tz) {
+    const dt = DateTime.fromISO(raw, { zone: tz });
+    if (dt.isValid) return dt.toUTC().toMillis();
+  }
+  const t = new Date(raw).getTime();
+  return Number.isFinite(t) ? t : NaN;
+}
+
+function matchToleranceMs(): number {
+  const raw = Deno.env.get('INTEGRATION_MATCH_TOLERANCE_MINUTES')?.trim();
+  const n = raw ? Number.parseInt(raw, 10) : NaN;
+  const minutes = Number.isFinite(n) && n > 0 && n <= 24 * 60 ? n : 120;
+  return minutes * 60 * 1000;
 }
 
 Deno.serve(async (req) => {
@@ -283,17 +384,9 @@ Deno.serve(async (req) => {
       matchesSubstringFilter(String(m.topic || ''), topicPatterns),
     );
 
-    type CalEvent = {
-      uri?: string;
-      name?: string;
-      start_time?: string;
-      end_time?: string;
-      status?: string;
-      location?: { type?: string; join_url?: string; data?: { id?: string } };
-    };
-
-    let calEvents: CalEvent[] = [];
+    let calEvents: CalendlyScheduledEvent[] = [];
     let calUser: { resource?: { uri?: string; name?: string; email?: string } } = {};
+    const toleranceMs = matchToleranceMs();
 
     const calInviteesCache = new Map<
       string,
@@ -337,16 +430,12 @@ Deno.serve(async (req) => {
       const maxStart = new Date(now);
       maxStart.setDate(maxStart.getDate() + 60);
 
-      const calEventsUrl =
-        `/scheduled_events?user=${encodeURIComponent(calUserUri)}` +
-        `&min_start_time=${encodeURIComponent(minStart.toISOString())}` +
-        `&max_start_time=${encodeURIComponent(maxStart.toISOString())}` +
-        `&count=100`;
-
-      const calEventsRes = (await calendlyGet(calendlyToken, calEventsUrl)) as {
-        collection?: CalEvent[];
-      };
-      let allCal = calEventsRes.collection || [];
+      let allCal = await calendlyListScheduledEventsInRange(
+        calendlyToken,
+        calUserUri,
+        minStart,
+        maxStart,
+      );
       if (calendlyNamePatterns.length > 0) {
         allCal = allCal.filter((ev) =>
           matchesSubstringFilter(String(ev.name || ''), calendlyNamePatterns),
@@ -359,14 +448,17 @@ Deno.serve(async (req) => {
       }
     }
 
-    function findMatchingCalendly(zoomStart: string): CalEvent | null {
-      let best: CalEvent | null = null;
+    function findMatchingCalendly(zoomStartMs: number): CalendlyScheduledEvent | null {
+      if (!Number.isFinite(zoomStartMs)) return null;
+      let best: CalendlyScheduledEvent | null = null;
       let bestDelta = Infinity;
       for (const ev of calEvents) {
         const st = ev.start_time;
         if (!st) continue;
-        const d = Math.abs(new Date(st).getTime() - new Date(zoomStart).getTime());
-        if (d < bestDelta && d <= 10 * 60 * 1000) {
+        const evMs = new Date(st).getTime();
+        if (!Number.isFinite(evMs)) continue;
+        const d = Math.abs(evMs - zoomStartMs);
+        if (d < bestDelta && d <= toleranceMs) {
           bestDelta = d;
           best = ev;
         }
@@ -379,6 +471,7 @@ Deno.serve(async (req) => {
         const uuid = String(m.uuid || '');
         const topic = String(m.topic || '');
         const start = String(m.start_time || '');
+        const startMs = parseZoomStartToUtcMs(m);
         const duration = Number(m.duration || 0);
         const host = String((m as { host_email?: string }).host_email || zoomHostEmail);
         const participants = uuid ? await zoomMeetingParticipants(zoomToken, uuid) : [];
@@ -386,7 +479,8 @@ Deno.serve(async (req) => {
           participants.map((p) => normalizeEmail(p.user_email)).filter(Boolean),
         );
 
-        const calMatch = calendlyEnabled && start ? findMatchingCalendly(start) : null;
+        const calMatch =
+          calendlyEnabled && Number.isFinite(startMs) ? findMatchingCalendly(startMs) : null;
         let invitees: Array<{ email: string; name: string; status: string; no_show: boolean }> = [];
         if (calendlyEnabled && calMatch?.uri && calendlyToken) {
           invitees = await loadInvitees(calMatch.uri, calendlyToken);
@@ -444,7 +538,9 @@ Deno.serve(async (req) => {
 
     const upcomingRows = scheduledMeetings.map((m) => {
       const start = String(m.start_time || '');
-      const calMatch = calendlyEnabled && start ? findMatchingCalendly(start) : null;
+      const startMs = parseZoomStartToUtcMs(m);
+      const calMatch =
+        calendlyEnabled && Number.isFinite(startMs) ? findMatchingCalendly(startMs) : null;
       return {
         source: 'scheduled' as const,
         zoom: {
@@ -482,6 +578,7 @@ Deno.serve(async (req) => {
           : null,
         zoom_topic_filter: topicPatterns.length > 0 ? topicFilterRaw : null,
         calendly_event_name_filter: calendlyNamePatterns.length > 0 ? calendlyEventFilterRaw : null,
+        match_tolerance_minutes: Math.round(toleranceMs / 60000),
         past_meetings: combinedPast.sort(
           (a, b) =>
             new Date(b.zoom.start_time).getTime() - new Date(a.zoom.start_time).getTime(),

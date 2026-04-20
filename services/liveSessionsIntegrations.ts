@@ -79,6 +79,8 @@ export interface LiveSessionsDashboardPayload {
   past_meetings: PastMeetingRow[];
   upcoming_meetings: UpcomingMeetingRow[];
   calendly_events_in_range: number;
+  /** Max |Δ| minutes between Zoom and Calendly start used when matching (Edge default 120). */
+  match_tolerance_minutes?: number;
 }
 
 /** Lightweight probe: Zoom OAuth + user lookup; Calendly `/users/me` when token is set. */

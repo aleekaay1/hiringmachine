@@ -69,6 +69,7 @@ Add the **required** Zoom secrets below. Optionally add Calendly and/or a **topi
 | `ZOOM_HOST_USER_EMAIL` | Yes | Host’s Zoom login email (plain text, no quotes) |
 | `ZOOM_LIVE_SESSION_TOPIC_FILTER` | No | Zoom **meeting topic** substring filter — see below |
 | `CALENDLY_EVENT_NAME_FILTER` | No | Calendly **event name** substring filter (e.g. `career` for “Live Online Career Session”) — independent from Zoom |
+| `INTEGRATION_MATCH_TOLERANCE_MINUTES` | No | Max start-time difference for Zoom↔Calendly pairing (default **120**; integer, max 1440) |
 | `CALENDLY_API_TOKEN` | No | Calendly personal access token |
 
 **CLI alternative** (from repo root, after `supabase link` — see deploy section):
@@ -91,7 +92,7 @@ These are **two separate** optional secrets:
 
 Use **`|`** for OR alternatives, e.g. `career|online session`.
 
-**Why two filters:** Your Zoom meeting title and Calendly event name are often **worded differently**. Calendly loads **invitees** only from events that pass the Calendly filter; those are **matched to Zoom** by **start time (±10 minutes)**. Zoom lists **participants** from meetings that pass the Zoom filter. Both filters should describe the **same real-world session** so invitee vs attendance rows line up.
+**Why two filters:** Your Zoom meeting title and Calendly event name are often **worded differently**. Calendly loads **invitees** only from events that pass the Calendly filter; those are **matched to Zoom** by **UTC start time** within a tolerance window (default **120 minutes**, override with **`INTEGRATION_MATCH_TOLERANCE_MINUTES`** in Edge secrets). Calendly results are **paginated** (all pages), so bookings are not limited to the first 100 events. Zoom lists **participants** from meetings that pass the Zoom filter. Both filters should describe the **same real-world session** so invitee vs attendance rows line up.
 
 If **`CALENDLY_EVENT_NAME_FILTER`** is unset (empty), all Calendly events in the date range are considered (can be noisy). If **`ZOOM_LIVE_SESSION_TOPIC_FILTER`** is unset, all Zoom meetings for the host are listed.
 
@@ -136,10 +137,10 @@ After deploy, open your **hosted** app (or local dev with valid `VITE_SUPABASE_*
 - **Past Zoom meetings** are listed for `ZOOM_HOST_USER_EMAIL`.
 - **Participant emails** come from Zoom’s **report** API (past meetings).
 - **Calendly** events are loaded for the token’s user over a date range (past ~120 days, future ~60 days).
-- A Calendly event is **matched** to a Zoom meeting when **start times** are within **10 minutes** (same session, minor clock / timezone differences).
+- A Calendly event is **matched** to a Zoom meeting when **UTC start times** differ by no more than **`INTEGRATION_MATCH_TOLERANCE_MINUTES`** (default **120**). Zoom `start_time` is interpreted using the meeting **`timezone`** when the API omits `Z`/offset (avoids “same wall time” appearing hours apart from Calendly).
 - **Invited** = Calendly invitees (excluding canceled). **Attended (matched)** = invitee email also appears in the Zoom participant report. **Absent** = invited but email not in Zoom participants. **Zoom-only** = joined Zoom but not on the Calendly invite list for that matched event.
 
-If times differ by more than 10 minutes or events use different hosts, you may see “No Calendly match” for a meeting; adjust your scheduling so Zoom and Calendly share the same start time, or narrow the window in `integrations-zoom-calendly/index.ts` (`10 * 60 * 1000`).
+If times differ by more than your tolerance or events use different hosts, you may see “No Calendly match”. Ensure Calendly and Zoom use the **same start instant**, or increase **`INTEGRATION_MATCH_TOLERANCE_MINUTES`** (still keep it tight to avoid wrong-pair matches).
 
 ## Frontend
 

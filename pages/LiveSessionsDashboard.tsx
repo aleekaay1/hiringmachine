@@ -207,7 +207,8 @@ const LiveSessionsDashboard: React.FC = () => {
                   <span className="text-white font-mono text-xs break-all">
                     {data.calendly_event_name_filter}
                   </span>{' '}
-                  — invitees vs Zoom attendance use these events (matched by start time ±10 min).
+                  — invitees vs Zoom attendance use these events (matched by start time, ±
+                  {data.match_tolerance_minutes ?? 120} min).
                 </div>
               )}
               <p className="text-xs text-slate-500">
@@ -239,6 +240,7 @@ const LiveSessionsDashboard: React.FC = () => {
                   key={row.zoom.uuid + row.zoom.start_time}
                   row={row}
                   calendlyConfigured={data.calendly_configured}
+                  matchToleranceMinutes={data.match_tolerance_minutes ?? 120}
                   expanded={expanded === row.zoom.uuid}
                   onToggle={() =>
                     setExpanded((e) => (e === row.zoom.uuid ? null : row.zoom.uuid))
@@ -287,7 +289,9 @@ const LiveSessionsDashboard: React.FC = () => {
                         ) : u.calendly ? (
                           <span className="text-emerald-400 text-xs">{u.calendly.name || 'Matched'}</span>
                         ) : (
-                          <span className="text-slate-500 text-xs">No Calendly match (time window)</span>
+                          <span className="text-slate-500 text-xs">
+                            No Calendly match (within ±{data.match_tolerance_minutes ?? 120} min)
+                          </span>
                         )}
                       </td>
                     </tr>
@@ -305,11 +309,13 @@ const LiveSessionsDashboard: React.FC = () => {
 function PastMeetingCard({
   row,
   calendlyConfigured,
+  matchToleranceMinutes,
   expanded,
   onToggle,
 }: {
   row: PastMeetingRow;
   calendlyConfigured: boolean;
+  matchToleranceMinutes: number;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -350,7 +356,7 @@ function PastMeetingCard({
       </button>
       {row.calendly && (
         <div className="px-4 pb-2 text-xs text-emerald-400/90">
-          Calendly: {row.calendly.name} · matched by start time (±10 min)
+          Calendly: {row.calendly.name} · matched by start time (±{matchToleranceMinutes} min)
         </div>
       )}
       {!row.calendly && (
