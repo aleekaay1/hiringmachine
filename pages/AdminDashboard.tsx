@@ -25,7 +25,7 @@ import {
   type PipelineStage,
   type AdminData,
 } from '../types';
-import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare } from 'lucide-react';
+import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 
@@ -35,6 +35,28 @@ const getAdminData = (c: Candidate): AdminData => {
   const merged = { ...DEFAULT_ADMIN_DATA, ...c.adminData };
   return { ...merged, pipelineStage: normalizePipelineStage(merged.pipelineStage) };
 };
+
+/** Short labels for the horizontal journey timeline (full names in title/tooltip) */
+const TIMELINE_SHORT_LABELS: Record<PipelineStage, string> = {
+  'Check in': 'Check-in',
+  'Attended Live Session': 'Live session',
+  'Leadership Assessment Received Under Review': 'Assessment',
+  'Interview scheduled': 'Interview',
+  Hired: 'Hired',
+  'Not Hired / Withdrawn': 'Not hired',
+};
+
+function formatEmailLogType(type: string | undefined): string {
+  if (!type) return 'Custom / compose';
+  const map: Record<string, string> = {
+    stage2_post_checkin: 'Stage 2 – Post check-in',
+    stage3_assessment_link: 'Stage 3 – Leadership Assessment link',
+    stage5_evaluation: 'Stage 5 – Evaluation',
+    compose: 'Compose (manual)',
+    manual: 'Compose (manual)',
+  };
+  return map[type] ?? type;
+}
 
 const AdminDashboard: React.FC = () => {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -71,6 +93,7 @@ const AdminDashboard: React.FC = () => {
   const [reportEmailSending, setReportEmailSending] = useState(false);
   const [reportEmailError, setReportEmailError] = useState<string | null>(null);
   const [reportEmailSent, setReportEmailSent] = useState(false);
+  const [emailLogOpen, setEmailLogOpen] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -80,6 +103,10 @@ const AdminDashboard: React.FC = () => {
   useEffect(() => {
     setReportEmailError(null);
     setReportEmailSent(false);
+  }, [selectedCandidate?.id]);
+
+  useEffect(() => {
+    setEmailLogOpen(false);
   }, [selectedCandidate?.id]);
 
   const toggleSelect = (id: string) => {
@@ -922,6 +949,78 @@ const AdminDashboard: React.FC = () => {
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 lg:col-span-2 h-[calc(100vh-260px)] overflow-y-auto p-8">
             {selectedCandidate ? (
               <div className="space-y-8 animate-fade-in">
+                {/* Hiring journey — pipeline position */}
+                {(() => {
+                  const journeyStage = getAdminData(selectedCandidate).pipelineStage;
+                  const activeIdx = Math.max(0, PIPELINE_STAGES.indexOf(journeyStage));
+                  const n = PIPELINE_STAGES.length;
+                  const isWithdrawn = journeyStage === 'Not Hired / Withdrawn';
+                  return (
+                    <div className="rounded-2xl border border-gray-200 bg-gradient-to-r from-slate-50 via-white to-emerald-50/40 px-3 py-4 sm:px-5 sm:py-5 shadow-sm">
+                      <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-4">Hiring journey</p>
+                      <div className="overflow-x-auto pb-1 -mx-1">
+                        <div className="min-w-[560px] sm:min-w-0 relative px-1">
+                          <div
+                            className="pointer-events-none absolute left-3 right-3 top-[22px] h-[3px] rounded-full bg-gray-200 z-0"
+                            aria-hidden
+                          />
+                          {n > 1 && (
+                            <div
+                              className="pointer-events-none absolute left-3 top-[22px] h-[3px] rounded-full bg-[#005EB8] z-0 transition-all duration-300"
+                              style={{
+                                width: `calc((100% - 24px) * ${activeIdx / (n - 1)})`,
+                              }}
+                              aria-hidden
+                            />
+                          )}
+                          <div className="relative z-10 flex justify-between items-start gap-0">
+                            {PIPELINE_STAGES.map((stage, i) => {
+                              const done = i <= activeIdx;
+                              const active = i === activeIdx;
+                              return (
+                                <div
+                                  key={stage}
+                                  className="flex flex-col items-center flex-1 min-w-0 max-w-[100px] sm:max-w-none"
+                                  title={stage}
+                                >
+                                  <div
+                                    className={`relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 shadow-sm transition-transform ${
+                                      active
+                                        ? isWithdrawn
+                                          ? 'scale-110 border-red-500 bg-red-500 text-white'
+                                          : 'scale-110 border-[#005EB8] bg-[#005EB8] text-white'
+                                        : done
+                                          ? 'border-[#005EB8] bg-white text-[#005EB8]'
+                                          : 'border-gray-300 bg-white text-gray-400'
+                                    }`}
+                                  >
+                                    {active ? (
+                                      <User size={18} strokeWidth={2.5} aria-hidden />
+                                    ) : (
+                                      <span className="text-[11px] font-bold">{i + 1}</span>
+                                    )}
+                                  </div>
+                                  <p
+                                    className={`mt-2 text-[9px] sm:text-[10px] font-semibold text-center leading-tight px-0.5 ${
+                                      active ? (isWithdrawn ? 'text-red-700' : 'text-[#005EB8]') : 'text-gray-600'
+                                    }`}
+                                  >
+                                    {TIMELINE_SHORT_LABELS[stage]}
+                                  </p>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <p className="mt-3 text-center text-xs text-gray-600">
+                            Current stage:{' '}
+                            <span className="font-semibold text-gray-900">{journeyStage}</span>
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Header */}
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-center gap-4">
@@ -1232,12 +1331,46 @@ const AdminDashboard: React.FC = () => {
                     <Button variant="outline" onClick={() => openEmailModal('compose')} className="text-sm">
                       <Mail size={16} className="mr-2" /> Compose
                     </Button>
-                    {getAdminData(selectedCandidate).emailsSent.length > 0 && (
-                      <span className="text-xs text-gray-500 self-center">
-                        {getAdminData(selectedCandidate).emailsSent.length} email(s) sent
-                      </span>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => setEmailLogOpen((o) => !o)}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#005EB8] hover:text-[#004a94] self-center rounded-lg px-2 py-1 hover:bg-blue-50/80 border border-transparent hover:border-blue-100 transition-colors"
+                      aria-expanded={emailLogOpen}
+                    >
+                      Emails sent: {getAdminData(selectedCandidate).emailsSent.length}
+                      {emailLogOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    </button>
                     </div>
+                    {emailLogOpen && (
+                      <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-3 shadow-sm">
+                        <p className="text-[11px] text-gray-500">
+                          Log of emails sent from this admin dashboard (subject, time, template type). System-triggered
+                          emails from form submits may not appear here unless also recorded server-side.
+                        </p>
+                        {getAdminData(selectedCandidate).emailsSent.length === 0 ? (
+                          <p className="text-sm text-gray-600">No emails logged yet for this candidate.</p>
+                        ) : (
+                          <ul className="space-y-3 max-h-64 overflow-y-auto">
+                            {[...getAdminData(selectedCandidate).emailsSent]
+                              .sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime())
+                              .map((entry, idx) => (
+                                <li
+                                  key={`${entry.sentAt}-${idx}`}
+                                  className="border-b border-gray-100 pb-3 last:border-0 last:pb-0 text-sm"
+                                >
+                                  <p className="font-semibold text-gray-900 leading-snug">{entry.subject}</p>
+                                  <p className="text-xs text-gray-500 mt-1">
+                                    {new Date(entry.sentAt).toLocaleString()}
+                                  </p>
+                                  <p className="text-xs text-gray-600 mt-0.5">
+                                    Type: <span className="font-medium">{formatEmailLogType(entry.type)}</span>
+                                  </p>
+                                </li>
+                              ))}
+                          </ul>
+                        )}
+                      </div>
+                    )}
                     <p className="text-[11px] text-gray-400 max-w-xl">
                       Automated sends (check-in + assessment thank-you) are prepared but off—use these buttons until you enable automation in code.
                     </p>
