@@ -72,9 +72,47 @@ export interface LiveSessionsDashboardPayload {
   calendly_configured: boolean;
   zoom_user: { id: string; email: string };
   calendly_user: { name?: string; email?: string } | null;
+  /** Present when Edge secret `ZOOM_LIVE_SESSION_TOPIC_FILTER` is set. */
+  zoom_topic_filter?: string | null;
+  /** Present when Edge secret `CALENDLY_EVENT_NAME_FILTER` is set (Calendly event name, not Zoom). */
+  calendly_event_name_filter?: string | null;
   past_meetings: PastMeetingRow[];
   upcoming_meetings: UpcomingMeetingRow[];
   calendly_events_in_range: number;
+}
+
+/** Lightweight probe: Zoom OAuth + user lookup; Calendly `/users/me` when token is set. */
+export interface IntegrationHealthPayload {
+  ok: boolean;
+  health: boolean;
+  zoom_ok: boolean;
+  zoom_error: string | null;
+  calendly_configured: boolean;
+  calendly_ok: boolean | null;
+  calendly_error: string | null;
+}
+
+export async function fetchIntegrationHealth(
+  accessToken: string
+): Promise<{ ok: true; data: IntegrationHealthPayload } | { ok: false; error: string }> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return { ok: false, error: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY' };
+  }
+  const url = `${SUPABASE_URL}/functions/v1/integrations-zoom-calendly?health=1`;
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      apikey: SUPABASE_ANON_KEY,
+    },
+  });
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) {
+    const err = (json.error as string) || res.statusText || 'Request failed';
+    const hint = typeof json.hint === 'string' ? ` ${json.hint}` : '';
+    return { ok: false, error: `${err}${hint}` };
+  }
+  return { ok: true, data: json as IntegrationHealthPayload };
 }
 
 export async function fetchLiveSessionsDashboard(

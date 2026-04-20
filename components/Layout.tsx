@@ -1,6 +1,7 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { COLORS } from '../constants';
+import IntegrationStatusLights from './IntegrationStatusLights';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -66,7 +67,7 @@ const Layout: React.FC<LayoutProps> = ({
               )}
             </div>
             {isAdmin && (
-              <nav className="flex items-center gap-1.5 sm:gap-2 text-sm shrink-0">
+              <nav className="flex items-center gap-2 sm:gap-3 text-sm shrink-0 flex-wrap justify-end">
                 <button
                   type="button"
                   onClick={() => navigate('/admin')}
@@ -100,6 +101,7 @@ const Layout: React.FC<LayoutProps> = ({
                 >
                   QR Codes
                 </button>
+                <IntegrationStatusLights />
               </nav>
             )}
           </div>

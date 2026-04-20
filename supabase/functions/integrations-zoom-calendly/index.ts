@@ -1,6 +1,9 @@
 /**
  * Aggregates Zoom meeting + participant data; optionally Calendly invitees when CALENDLY_API_TOKEN is set.
  * Zoom-only: omit CALENDLY_API_TOKEN — Calendly fields will be empty / null.
+ * Optional ZOOM_LIVE_SESSION_TOPIC_FILTER: only Zoom meetings whose **topic** matches (pipe OR).
+ * Optional CALENDLY_EVENT_NAME_FILTER: only Calendly scheduled events whose **name** matches (pipe OR).
+ *   Use e.g. "career" for "Live Online Career Session"; independent from the Zoom topic filter.
  * Auth: Supabase JWT (same as send-email).
  * Deploy: supabase functions deploy integrations-zoom-calendly
  */
@@ -153,6 +156,22 @@ function normalizeEmail(e: string | undefined): string {
   return (e || '').trim().toLowerCase();
 }
 
+/** Pipe-separated OR; each token must appear as substring (case-insensitive). */
+function parseSubstringFilter(raw: string | undefined): string[] {
+  const s = raw?.trim();
+  if (!s) return [];
+  return s
+    .split('|')
+    .map((p) => p.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function matchesSubstringFilter(text: string, patterns: string[]): boolean {
+  if (patterns.length === 0) return true;
+  const t = text.toLowerCase();
+  return patterns.some((p) => t.includes(p));
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -188,6 +207,48 @@ Deno.serve(async (req) => {
       });
     }
 
+    const reqUrl = new URL(req.url);
+    if (reqUrl.searchParams.get('health') === '1') {
+      const calTok = Deno.env.get('CALENDLY_API_TOKEN')?.trim();
+      const hostEmail = Deno.env.get('ZOOM_HOST_USER_EMAIL')?.trim();
+      let zoom_ok = false;
+      let zoom_error: string | null = null;
+      if (hostEmail) {
+        try {
+          const zt = await getZoomAccessToken();
+          await zoomGetUserIdByEmail(zt, hostEmail);
+          zoom_ok = true;
+        } catch (e) {
+          zoom_error = e instanceof Error ? e.message : String(e);
+        }
+      } else {
+        zoom_error = 'Missing ZOOM_HOST_USER_EMAIL';
+      }
+      let calendly_ok: boolean | null = null;
+      let calendly_error: string | null = null;
+      if (calTok) {
+        try {
+          await calendlyGet(calTok, '/users/me');
+          calendly_ok = true;
+        } catch (e) {
+          calendly_ok = false;
+          calendly_error = e instanceof Error ? e.message : String(e);
+        }
+      }
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          health: true,
+          zoom_ok,
+          zoom_error,
+          calendly_configured: !!calTok,
+          calendly_ok,
+          calendly_error,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+
     const calendlyToken = Deno.env.get('CALENDLY_API_TOKEN')?.trim();
     const zoomHostEmail = Deno.env.get('ZOOM_HOST_USER_EMAIL')?.trim();
     const calendlyEnabled = !!calendlyToken;
@@ -202,13 +263,25 @@ Deno.serve(async (req) => {
       );
     }
 
+    const topicFilterRaw = Deno.env.get('ZOOM_LIVE_SESSION_TOPIC_FILTER')?.trim() ?? '';
+    const topicPatterns = parseSubstringFilter(topicFilterRaw);
+    const calendlyEventFilterRaw = Deno.env.get('CALENDLY_EVENT_NAME_FILTER')?.trim() ?? '';
+    const calendlyNamePatterns = parseSubstringFilter(calendlyEventFilterRaw);
+
     const zoomToken = await getZoomAccessToken();
     const zoomUserId = await zoomGetUserIdByEmail(zoomToken, zoomHostEmail);
 
-    const [pastMeetings, scheduledMeetings] = await Promise.all([
+    const [pastMeetingsRaw, scheduledMeetingsRaw] = await Promise.all([
       zoomListPastMeetings(zoomToken, zoomUserId),
       zoomListUpcomingMeetings(zoomToken, zoomUserId),
     ]);
+
+    const pastMeetings = pastMeetingsRaw.filter((m) =>
+      matchesSubstringFilter(String(m.topic || ''), topicPatterns),
+    );
+    const scheduledMeetings = scheduledMeetingsRaw.filter((m) =>
+      matchesSubstringFilter(String(m.topic || ''), topicPatterns),
+    );
 
     type CalEvent = {
       uri?: string;
@@ -273,7 +346,13 @@ Deno.serve(async (req) => {
       const calEventsRes = (await calendlyGet(calendlyToken, calEventsUrl)) as {
         collection?: CalEvent[];
       };
-      calEvents = calEventsRes.collection || [];
+      let allCal = calEventsRes.collection || [];
+      if (calendlyNamePatterns.length > 0) {
+        allCal = allCal.filter((ev) =>
+          matchesSubstringFilter(String(ev.name || ''), calendlyNamePatterns),
+        );
+      }
+      calEvents = allCal;
 
       for (const ev of calEvents) {
         if (ev.uri) await loadInvitees(ev.uri, calendlyToken);
@@ -401,6 +480,8 @@ Deno.serve(async (req) => {
               email: calUser.resource?.email,
             }
           : null,
+        zoom_topic_filter: topicPatterns.length > 0 ? topicFilterRaw : null,
+        calendly_event_name_filter: calendlyNamePatterns.length > 0 ? calendlyEventFilterRaw : null,
         past_meetings: combinedPast.sort(
           (a, b) =>
             new Date(b.zoom.start_time).getTime() - new Date(a.zoom.start_time).getTime(),

@@ -59,15 +59,17 @@ Edge Functions already receive `SUPABASE_URL` and `SUPABASE_ANON_KEY` from the p
 
 **Dashboard path:** Supabase project → **Project Settings** (gear) → **Edge Functions** → **Secrets** → **Add new secret**.
 
-Add **five** secrets (names must match exactly):
+Add the **required** Zoom secrets below. Optionally add Calendly and/or a **topic filter** (recommended if the host runs many personal meetings).
 
-| Name | Value |
-|------|--------|
-| `ZOOM_ACCOUNT_ID` | Zoom app **Account ID** |
-| `ZOOM_CLIENT_ID` | Zoom app **Client ID** |
-| `ZOOM_CLIENT_SECRET` | Zoom app **Client Secret** |
-| `ZOOM_HOST_USER_EMAIL` | Host’s Zoom login email (plain text, no quotes) |
-| `CALENDLY_API_TOKEN` | Calendly personal access token |
+| Name | Required? | Value |
+|------|-----------|--------|
+| `ZOOM_ACCOUNT_ID` | Yes | Zoom app **Account ID** |
+| `ZOOM_CLIENT_ID` | Yes | Zoom app **Client ID** |
+| `ZOOM_CLIENT_SECRET` | Yes | Zoom app **Client Secret** |
+| `ZOOM_HOST_USER_EMAIL` | Yes | Host’s Zoom login email (plain text, no quotes) |
+| `ZOOM_LIVE_SESSION_TOPIC_FILTER` | No | Zoom **meeting topic** substring filter — see below |
+| `CALENDLY_EVENT_NAME_FILTER` | No | Calendly **event name** substring filter (e.g. `career` for “Live Online Career Session”) — independent from Zoom |
+| `CALENDLY_API_TOKEN` | No | Calendly personal access token |
 
 **CLI alternative** (from repo root, after `supabase link` — see deploy section):
 
@@ -75,7 +77,25 @@ Add **five** secrets (names must match exactly):
 supabase secrets set ZOOM_ACCOUNT_ID="paste_account_id" ZOOM_CLIENT_ID="paste_client_id" ZOOM_CLIENT_SECRET="paste_secret" ZOOM_HOST_USER_EMAIL="host@yourdomain.com" CALENDLY_API_TOKEN="paste_calendly_pat"
 ```
 
+Add the topic filter in a second command if needed (see below).
+
 (On Windows PowerShell you may need to set secrets one at a time if quoting is awkward; the Dashboard is often easier.)
+
+### Filters: Zoom topic vs Calendly event name (independent)
+
+These are **two separate** optional secrets:
+
+1. **`ZOOM_LIVE_SESSION_TOPIC_FILTER`** — applies only to **Zoom** (`GET /users/.../meetings`). The Zoom **Topic** field must **contain** one of the pipe-separated substrings (case-insensitive). Example: `overview` if your Zoom title always includes that word.
+
+2. **`CALENDLY_EVENT_NAME_FILTER`** — applies only to **Calendly** scheduled events. The Calendly **event type name** (what guests see, e.g. “Live Online Career Session”) must **contain** one of the substrings. Example: `career` or `Live Online Career`.
+
+Use **`|`** for OR alternatives, e.g. `career|online session`.
+
+**Why two filters:** Your Zoom meeting title and Calendly event name are often **worded differently**. Calendly loads **invitees** only from events that pass the Calendly filter; those are **matched to Zoom** by **start time (±10 minutes)**. Zoom lists **participants** from meetings that pass the Zoom filter. Both filters should describe the **same real-world session** so invitee vs attendance rows line up.
+
+If **`CALENDLY_EVENT_NAME_FILTER`** is unset (empty), all Calendly events in the date range are considered (can be noisy). If **`ZOOM_LIVE_SESSION_TOPIC_FILTER`** is unset, all Zoom meetings for the host are listed.
+
+Redeploy the Edge Function after **code** changes; secret-only updates apply on the next request.
 
 ---
 
@@ -111,6 +131,8 @@ After deploy, open your **hosted** app (or local dev with valid `VITE_SUPABASE_*
 
 ## How matching works
 
+- **Zoom topic filter:** If `ZOOM_LIVE_SESSION_TOPIC_FILTER` is set, only Zoom meetings whose **topic** contains one of the pipe-separated substrings are listed.
+- **Calendly name filter:** If `CALENDLY_EVENT_NAME_FILTER` is set, only Calendly events whose **name** contains one of the substrings are loaded (invitees + matching to Zoom).
 - **Past Zoom meetings** are listed for `ZOOM_HOST_USER_EMAIL`.
 - **Participant emails** come from Zoom’s **report** API (past meetings).
 - **Calendly** events are loaded for the token’s user over a date range (past ~120 days, future ~60 days).
@@ -124,6 +146,7 @@ If times differ by more than 10 minutes or events use different hosts, you may s
 - Route: `/live-sessions`
 - Same Supabase Auth as Admin (use your admin email/password).
 - Requires `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the web app (already used elsewhere).
+- On **Admin** routes (Dashboard, Live sessions, QR), the header shows **Zoom / Calendly** status dots (green = API OK, red = error, gray Calendly dot = token not set). This calls `GET .../integrations-zoom-calendly?health=1` (lightweight, no meeting list).
 
 ## Troubleshooting
 

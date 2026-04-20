@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
+import IntegrationStatusLights from '../components/IntegrationStatusLights';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import {
@@ -135,7 +136,8 @@ const LiveSessionsDashboard: React.FC = () => {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              <IntegrationStatusLights dark />
               <Button
                 type="button"
                 variant="outline"
@@ -190,10 +192,28 @@ const LiveSessionsDashboard: React.FC = () => {
                   <p className="text-2xl font-extrabold text-[#005EB8]">{data.upcoming_meetings.length}</p>
                 </div>
               </div>
+              {data.zoom_topic_filter && (
+                <div className="rounded-xl border border-[#005EB8]/40 bg-[#005EB8]/10 px-4 py-3 text-sm text-slate-200">
+                  <span className="font-medium text-white">Zoom topic filter active.</span>{' '}
+                  Only meetings whose Zoom <span className="text-white font-medium">topic</span> contains:{' '}
+                  <span className="text-white font-mono text-xs break-all">{data.zoom_topic_filter}</span>
+                  {' '}(pipe <code className="text-slate-400">|</code> = match any).
+                </div>
+              )}
+              {data.calendly_configured && data.calendly_event_name_filter && (
+                <div className="rounded-xl border border-emerald-800/50 bg-emerald-950/30 px-4 py-3 text-sm text-slate-200">
+                  <span className="font-medium text-emerald-200">Calendly name filter active.</span>{' '}
+                  Only events whose <span className="text-white font-medium">event name</span> contains:{' '}
+                  <span className="text-white font-mono text-xs break-all">
+                    {data.calendly_event_name_filter}
+                  </span>{' '}
+                  — invitees vs Zoom attendance use these events (matched by start time ±10 min).
+                </div>
+              )}
               <p className="text-xs text-slate-500">
                 Data as of {new Date(data.generated_at).toLocaleString()}
                 {data.calendly_configured
-                  ? ` · Calendly events in range: ${data.calendly_events_in_range}`
+                  ? ` · Calendly events in range (after filter): ${data.calendly_events_in_range}`
                   : ' · Add CALENDLY_API_TOKEN in Supabase secrets to merge invitees.'}
               </p>
             </>
@@ -209,7 +229,9 @@ const LiveSessionsDashboard: React.FC = () => {
               )}
               {data?.past_meetings.length === 0 && !loading && (
                 <p className="text-slate-500 text-sm border border-dashed border-slate-800 rounded-xl p-8 text-center">
-                  No past meetings returned from Zoom for this host (or report scope is empty).
+                  {data.zoom_topic_filter
+                    ? 'No past meetings matched the topic filter. Check that your recurring session uses the same Zoom topic text (Edge Function secret ZOOM_LIVE_SESSION_TOPIC_FILTER).'
+                    : 'No past meetings returned from Zoom for this host (or report scope is empty).'}
                 </p>
               )}
               {data?.past_meetings.map((row) => (
@@ -244,7 +266,9 @@ const LiveSessionsDashboard: React.FC = () => {
                   {data?.upcoming_meetings.length === 0 && (
                     <tr>
                       <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
-                        No upcoming meetings
+                        {data.zoom_topic_filter
+                          ? 'No upcoming meetings matched the topic filter.'
+                          : 'No upcoming meetings'}
                       </td>
                     </tr>
                   )}
