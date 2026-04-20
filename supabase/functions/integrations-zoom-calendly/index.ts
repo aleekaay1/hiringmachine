@@ -1,6 +1,7 @@
 /**
- * Aggregates Zoom meeting + participant data with Calendly scheduled events + invitees.
- * Auth: Supabase JWT (same as send-email). Secrets: Zoom Server-to-Server OAuth + Calendly PAT.
+ * Aggregates Zoom meeting + participant data; optionally Calendly invitees when CALENDLY_API_TOKEN is set.
+ * Zoom-only: omit CALENDLY_API_TOKEN — Calendly fields will be empty / null.
+ * Auth: Supabase JWT (same as send-email).
  * Deploy: supabase functions deploy integrations-zoom-calendly
  */
 
@@ -189,15 +190,8 @@ Deno.serve(async (req) => {
 
     const calendlyToken = Deno.env.get('CALENDLY_API_TOKEN')?.trim();
     const zoomHostEmail = Deno.env.get('ZOOM_HOST_USER_EMAIL')?.trim();
-    if (!calendlyToken) {
-      return new Response(
-        JSON.stringify({
-          error: 'Missing CALENDLY_API_TOKEN',
-          hint: 'Create a Personal Access Token in Calendly Integrations and add it to Edge Function secrets.',
-        }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      );
-    }
+    const calendlyEnabled = !!calendlyToken;
+
     if (!zoomHostEmail) {
       return new Response(
         JSON.stringify({
@@ -216,48 +210,28 @@ Deno.serve(async (req) => {
       zoomListUpcomingMeetings(zoomToken, zoomUserId),
     ]);
 
-    const calUser = (await calendlyGet(calendlyToken, '/users/me')) as {
-      resource?: { uri?: string; name?: string; email?: string };
+    type CalEvent = {
+      uri?: string;
+      name?: string;
+      start_time?: string;
+      end_time?: string;
+      status?: string;
+      location?: { type?: string; join_url?: string; data?: { id?: string } };
     };
-    const calUserUri = calUser.resource?.uri;
-    if (!calUserUri) {
-      throw new Error('Calendly /users/me did not return resource.uri');
-    }
 
-    const now = new Date();
-    const minStart = new Date(now);
-    minStart.setDate(minStart.getDate() - 120);
-    const maxStart = new Date(now);
-    maxStart.setDate(maxStart.getDate() + 60);
-
-    const calEventsUrl =
-      `/scheduled_events?user=${encodeURIComponent(calUserUri)}` +
-      `&min_start_time=${encodeURIComponent(minStart.toISOString())}` +
-      `&max_start_time=${encodeURIComponent(maxStart.toISOString())}` +
-      `&count=100`;
-
-    const calEventsRes = (await calendlyGet(calendlyToken, calEventsUrl)) as {
-      collection?: Array<{
-        uri?: string;
-        name?: string;
-        start_time?: string;
-        end_time?: string;
-        status?: string;
-        location?: { type?: string; join_url?: string; data?: { id?: string } };
-      }>;
-    };
-    const calEvents = calEventsRes.collection || [];
+    let calEvents: CalEvent[] = [];
+    let calUser: { resource?: { uri?: string; name?: string; email?: string } } = {};
 
     const calInviteesCache = new Map<
       string,
       Array<{ email: string; name: string; status: string; no_show?: boolean }>
     >();
 
-    async function loadInvitees(eventUri: string) {
+    async function loadInvitees(eventUri: string, token: string) {
       if (calInviteesCache.has(eventUri)) return calInviteesCache.get(eventUri)!;
       const uuid = eventUri.replace(/\/$/, '').split('/').pop() || '';
       const inv = (await calendlyGet(
-        calendlyToken,
+        token,
         `/scheduled_events/${encodeURIComponent(uuid)}/invitees?count=100`,
       )) as {
         collection?: Array<{
@@ -277,12 +251,37 @@ Deno.serve(async (req) => {
       return list;
     }
 
-    for (const ev of calEvents) {
-      if (ev.uri) await loadInvitees(ev.uri);
+    if (calendlyEnabled && calendlyToken) {
+      calUser = (await calendlyGet(calendlyToken, '/users/me')) as typeof calUser;
+      const calUserUri = calUser.resource?.uri;
+      if (!calUserUri) {
+        throw new Error('Calendly /users/me did not return resource.uri');
+      }
+
+      const now = new Date();
+      const minStart = new Date(now);
+      minStart.setDate(minStart.getDate() - 120);
+      const maxStart = new Date(now);
+      maxStart.setDate(maxStart.getDate() + 60);
+
+      const calEventsUrl =
+        `/scheduled_events?user=${encodeURIComponent(calUserUri)}` +
+        `&min_start_time=${encodeURIComponent(minStart.toISOString())}` +
+        `&max_start_time=${encodeURIComponent(maxStart.toISOString())}` +
+        `&count=100`;
+
+      const calEventsRes = (await calendlyGet(calendlyToken, calEventsUrl)) as {
+        collection?: CalEvent[];
+      };
+      calEvents = calEventsRes.collection || [];
+
+      for (const ev of calEvents) {
+        if (ev.uri) await loadInvitees(ev.uri, calendlyToken);
+      }
     }
 
-    function findMatchingCalendly(zoomStart: string): (typeof calEvents)[0] | null {
-      let best: (typeof calEvents)[0] | null = null;
+    function findMatchingCalendly(zoomStart: string): CalEvent | null {
+      let best: CalEvent | null = null;
       let bestDelta = Infinity;
       for (const ev of calEvents) {
         const st = ev.start_time;
@@ -308,10 +307,10 @@ Deno.serve(async (req) => {
           participants.map((p) => normalizeEmail(p.user_email)).filter(Boolean),
         );
 
-        const calMatch = start ? findMatchingCalendly(start) : null;
+        const calMatch = calendlyEnabled && start ? findMatchingCalendly(start) : null;
         let invitees: Array<{ email: string; name: string; status: string; no_show: boolean }> = [];
-        if (calMatch?.uri) {
-          invitees = await loadInvitees(calMatch.uri);
+        if (calendlyEnabled && calMatch?.uri && calendlyToken) {
+          invitees = await loadInvitees(calMatch.uri, calendlyToken);
         }
 
         const invitedActive = invitees.filter((i) => i.status !== 'canceled');
@@ -366,7 +365,7 @@ Deno.serve(async (req) => {
 
     const upcomingRows = scheduledMeetings.map((m) => {
       const start = String(m.start_time || '');
-      const calMatch = start ? findMatchingCalendly(start) : null;
+      const calMatch = calendlyEnabled && start ? findMatchingCalendly(start) : null;
       return {
         source: 'scheduled' as const,
         zoom: {
@@ -394,11 +393,14 @@ Deno.serve(async (req) => {
       JSON.stringify({
         ok: true,
         generated_at: new Date().toISOString(),
+        calendly_configured: calendlyEnabled,
         zoom_user: { id: zoomUserId, email: zoomHostEmail },
-        calendly_user: {
-          name: calUser.resource?.name,
-          email: calUser.resource?.email,
-        },
+        calendly_user: calendlyEnabled
+          ? {
+              name: calUser.resource?.name,
+              email: calUser.resource?.email,
+            }
+          : null,
         past_meetings: combinedPast.sort(
           (a, b) =>
             new Date(b.zoom.start_time).getTime() - new Date(a.zoom.start_time).getTime(),

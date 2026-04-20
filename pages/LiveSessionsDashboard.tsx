@@ -176,7 +176,9 @@ const LiveSessionsDashboard: React.FC = () => {
                 <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
                   <p className="text-xs uppercase tracking-wide text-slate-500">Calendly</p>
                   <p className="text-sm font-semibold text-white mt-1 truncate">
-                    {data.calendly_user.email || '—'}
+                    {data.calendly_configured
+                      ? data.calendly_user?.email || '—'
+                      : 'Not connected (Zoom-only)'}
                   </p>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
@@ -189,8 +191,10 @@ const LiveSessionsDashboard: React.FC = () => {
                 </div>
               </div>
               <p className="text-xs text-slate-500">
-                Data as of {new Date(data.generated_at).toLocaleString()} · Calendly events in range:{' '}
-                {data.calendly_events_in_range}
+                Data as of {new Date(data.generated_at).toLocaleString()}
+                {data.calendly_configured
+                  ? ` · Calendly events in range: ${data.calendly_events_in_range}`
+                  : ' · Add CALENDLY_API_TOKEN in Supabase secrets to merge invitees.'}
               </p>
             </>
           )}
@@ -212,6 +216,7 @@ const LiveSessionsDashboard: React.FC = () => {
                 <PastMeetingCard
                   key={row.zoom.uuid + row.zoom.start_time}
                   row={row}
+                  calendlyConfigured={data.calendly_configured}
                   expanded={expanded === row.zoom.uuid}
                   onToggle={() =>
                     setExpanded((e) => (e === row.zoom.uuid ? null : row.zoom.uuid))
@@ -253,7 +258,9 @@ const LiveSessionsDashboard: React.FC = () => {
                       <td className="px-4 py-3 text-white font-medium">{u.zoom.topic}</td>
                       <td className="px-4 py-3 text-slate-400">{u.zoom.host_email}</td>
                       <td className="px-4 py-3">
-                        {u.calendly ? (
+                        {!data.calendly_configured ? (
+                          <span className="text-slate-500 text-xs">—</span>
+                        ) : u.calendly ? (
                           <span className="text-emerald-400 text-xs">{u.calendly.name || 'Matched'}</span>
                         ) : (
                           <span className="text-slate-500 text-xs">No Calendly match (time window)</span>
@@ -273,10 +280,12 @@ const LiveSessionsDashboard: React.FC = () => {
 
 function PastMeetingCard({
   row,
+  calendlyConfigured,
   expanded,
   onToggle,
 }: {
   row: PastMeetingRow;
+  calendlyConfigured: boolean;
   expanded: boolean;
   onToggle: () => void;
 }) {
@@ -321,14 +330,23 @@ function PastMeetingCard({
         </div>
       )}
       {!row.calendly && (
-        <div className="px-4 pb-2 text-xs text-slate-500">No Calendly event matched to this meeting time</div>
+        <div className="px-4 pb-2 text-xs text-slate-500">
+          {calendlyConfigured === false
+            ? 'Calendly not connected — Zoom participants only.'
+            : 'No Calendly event matched to this meeting time'}
+        </div>
       )}
       {expanded && (
         <div className="border-t border-slate-800 px-4 py-4 grid md:grid-cols-2 gap-6 text-sm">
           <div>
             <h4 className="text-xs font-bold uppercase text-slate-500 mb-2">Invitees (Calendly)</h4>
             <ul className="space-y-1.5 max-h-56 overflow-y-auto">
-              {row.invitees.length === 0 && <li className="text-slate-500">None</li>}
+              {calendlyConfigured === false && (
+                <li className="text-slate-500">Add Calendly token in Supabase to load invitees.</li>
+              )}
+              {calendlyConfigured !== false && row.invitees.length === 0 && (
+                <li className="text-slate-500">None</li>
+              )}
               {row.invitees.map((i) => (
                 <li
                   key={key + i.email}
@@ -354,7 +372,7 @@ function PastMeetingCard({
                 </li>
               ))}
             </ul>
-            {row.stats.zoom_only_emails.length > 0 && (
+            {calendlyConfigured && row.stats.zoom_only_emails.length > 0 && (
               <p className="text-xs text-slate-500 mt-2">
                 On Zoom but not on Calendly invite list: {row.stats.zoom_only_emails.join(', ')}
               </p>

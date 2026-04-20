@@ -23,9 +23,10 @@ The **Live sessions** page (`/live-sessions`) loads data through the Edge Functi
 
 2. **Host user email** — the Zoom user whose meetings you list (same account as the OAuth app), e.g. `alex@yourdomain.com`. Set as `ZOOM_HOST_USER_EMAIL`.
 
-3. **Calendly — Personal Access Token**
-   - Calendly → Integrations → API & Webhooks → **Personal access tokens** → Generate.
-   - The token is used as `CALENDLY_API_TOKEN`.
+3. **Calendly — Personal Access Token (optional)**
+   - Omit this to run **Zoom-only**: past/upcoming meetings and Zoom participants still load; Calendly columns stay empty.
+   - When you are ready: Calendly → Integrations → API & Webhooks → **Personal access tokens** → Generate.
+   - Set as `CALENDLY_API_TOKEN` in Supabase secrets.
 
 ## Where each credential comes from
 
@@ -40,11 +41,11 @@ The **Live sessions** page (`/live-sessions`) loads data through the Edge Functi
 
 Do **not** put Zoom secrets in `.env` or `VITE_*` — only in Supabase Edge Function secrets below.
 
-### Calendly
+### Calendly (optional)
 
 | Supabase secret name | Where you copy it from |
 |---------------------|-------------------------|
-| `CALENDLY_API_TOKEN` | Calendly → **Integrations** → **API & Webhooks** → **Personal access tokens** → **Generate new token** (copy once; Calendly may not show it again). |
+| `CALENDLY_API_TOKEN` | Calendly → **Integrations** → **API & Webhooks** → **Personal access tokens** → **Generate new token** (copy once; Calendly may not show it again). If unset, the dashboard shows Zoom data only (`calendly_configured: false` in the API response). |
 
 The token is tied to **your Calendly user**; scheduled events and invitees are loaded for that user’s calendar.
 

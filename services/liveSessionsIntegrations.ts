@@ -68,8 +68,10 @@ export interface UpcomingMeetingRow {
 export interface LiveSessionsDashboardPayload {
   ok: boolean;
   generated_at: string;
+  /** False when CALENDLY_API_TOKEN is not set — Zoom still loads. */
+  calendly_configured: boolean;
   zoom_user: { id: string; email: string };
-  calendly_user: { name?: string; email?: string };
+  calendly_user: { name?: string; email?: string } | null;
   past_meetings: PastMeetingRow[];
   upcoming_meetings: UpcomingMeetingRow[];
   calendly_events_in_range: number;
