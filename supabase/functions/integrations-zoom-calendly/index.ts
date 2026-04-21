@@ -12,6 +12,15 @@
  * Calendly↔Zoom pairing: scheduled events whose **location / join URL** contains that meeting id, or whose
  * **event name** matches the Zoom PMI topic (`Alex Paz's Personal Meeting Room`) when the PMI filter is on.
  * Optional INTEGRATION_MATCH_TOLERANCE_MINUTES (default 120): max |Δ| between Zoom start and Calendly start.
+ *
+ * Optional **ZOOM_LIVE_SESSION_TOPIC_REQUIRES_MEETING_ID** = `1` / `true` / `yes` / `on`: when the PMI filter
+ * is active, also require Zoom **topic** to contain the numeric meeting id (substring), so attendance rows match
+ * sessions whose title includes that id (e.g. if you embed `6478311787` in the topic).
+ *
+ * Optional **ZOOM_LIVE_SESSION_STRICT_TIME_SLOTS** = `1` / `true` / `yes` / `on`: only keep Zoom rows (and
+ * Calendly events used for matching) whose start time in **America/Toronto** falls in:
+ * **Tuesday 18:00–19:00** or **Wednesday 11:30–12:30** (live overview windows).
+ *
  * Auth: Supabase JWT (same as send-email).
  * Deploy: supabase functions deploy integrations-zoom-calendly
  */
@@ -323,16 +332,46 @@ function calendlyEventReferencesZoomMeetingDigits(ev: CalendlyScheduledEvent, me
   return dataId.length > 0 && dataId === meetingDigits;
 }
 
+/** America/Toronto wall time: Tuesday 18:00–19:00, Wednesday 11:30–12:30 (live overview). */
+function isInLiveOverviewTimeSlotToronto(dt: DateTime): boolean {
+  if (!dt.isValid) return false;
+  const w = dt.weekday;
+  const mod = dt.hour * 60 + dt.minute;
+  if (w === 2) return mod >= 18 * 60 && mod < 19 * 60;
+  if (w === 3) return mod >= 11 * 60 + 30 && mod < 12 * 60 + 30;
+  return false;
+}
+
 /**
- * Softer tie-break: recurring live overview slots in Toronto — Tuesday ~6pm, Wednesday ~11:30am.
- * Returns 0 when inside expected windows, else a penalty added to match score.
+ * Softer tie-break for Calendly↔Zoom pairing: prefer events inside live overview Toronto windows.
  */
 function liveOverviewSlotPenaltyMinutes(evDt: DateTime): number {
-  const w = evDt.weekday;
-  const mod = evDt.hour * 60 + evDt.minute;
-  if (w === 2 && mod >= 17 * 60 + 15 && mod <= 19 * 60 + 30) return 0;
-  if (w === 3 && mod >= 11 * 60 + 0 && mod <= 12 * 60 + 30) return 0;
-  return 45;
+  return isInLiveOverviewTimeSlotToronto(evDt) ? 0 : 45;
+}
+
+function envFlagEnabled(name: string): boolean {
+  const v = (Deno.env.get(name)?.trim() || '').toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+function zoomTopicContainsMeetingDigits(m: Record<string, unknown>, digits: string): boolean {
+  if (!digits) return true;
+  const topic = String(m.topic || '');
+  return topic.includes(digits);
+}
+
+function zoomRowInStrictSlot(m: Record<string, unknown>): boolean {
+  const ms = parseZoomStartToUtcMs(m);
+  if (!Number.isFinite(ms)) return false;
+  const dt = DateTime.fromMillis(ms as number, { zone: 'America/Toronto' });
+  return isInLiveOverviewTimeSlotToronto(dt);
+}
+
+function calendlyEventInStrictSlot(ev: CalendlyScheduledEvent): boolean {
+  const st = ev.start_time;
+  if (!st) return false;
+  const dt = DateTime.fromISO(st, { zone: 'America/Toronto' });
+  return isInLiveOverviewTimeSlotToronto(dt);
 }
 
 /** Zoom sometimes uses labels; Luxon needs IANA (e.g. America/Toronto). */
@@ -645,6 +684,8 @@ Deno.serve(async (req) => {
     const calendlyEventFilterRaw = Deno.env.get('CALENDLY_EVENT_NAME_FILTER')?.trim() ?? '';
     const calendlyNamePatterns = parseSubstringFilter(calendlyEventFilterRaw);
     const zoomMeetingIdDigits = zoomLiveSessionMeetingIdDigits();
+    const topicRequiresMeetingId = envFlagEnabled('ZOOM_LIVE_SESSION_TOPIC_REQUIRES_MEETING_ID');
+    const strictTimeSlots = envFlagEnabled('ZOOM_LIVE_SESSION_STRICT_TIME_SLOTS');
 
     const zoomToken = await getZoomAccessToken();
     const zoomUserId = await zoomGetUserIdByEmail(zoomToken, zoomHostEmail);
@@ -661,12 +702,22 @@ Deno.serve(async (req) => {
       ? scheduledMeetingsRawAll
       : scheduledMeetingsRawAll.filter((m) => zoomRowMatchesPmiFilter(m, zoomMeetingIdDigits));
 
-    const pastFiltered = pastMeetingsRaw.filter((m) =>
+    let pastFiltered = pastMeetingsRaw.filter((m) =>
       matchesSubstringFilter(String(m.topic || ''), topicPatterns),
     );
-    const scheduledFiltered = scheduledMeetingsRaw.filter((m) =>
+    let scheduledFiltered = scheduledMeetingsRaw.filter((m) =>
       matchesSubstringFilter(String(m.topic || ''), topicPatterns),
     );
+    if (zoomMeetingIdDigits && topicRequiresMeetingId) {
+      pastFiltered = pastFiltered.filter((m) => zoomTopicContainsMeetingDigits(m, zoomMeetingIdDigits));
+      scheduledFiltered = scheduledFiltered.filter((m) =>
+        zoomTopicContainsMeetingDigits(m, zoomMeetingIdDigits),
+      );
+    }
+    if (strictTimeSlots) {
+      pastFiltered = pastFiltered.filter((m) => zoomRowInStrictSlot(m));
+      scheduledFiltered = scheduledFiltered.filter((m) => zoomRowInStrictSlot(m));
+    }
     const { past: pastMeetings, upcoming: scheduledMeetings } = mergeAndRebucketZoomMeetings(
       pastFiltered,
       scheduledFiltered,
@@ -766,6 +817,9 @@ Deno.serve(async (req) => {
           calendlyEventReferencesZoomMeetingDigits(ev, zoomMeetingIdDigits) ||
           matchesSubstringFilter(String(ev.name || ''), LIVE_OVERVIEW_ZOOM_TOPIC_PATTERNS),
         );
+      }
+      if (strictTimeSlots) {
+        allCal = allCal.filter((ev) => calendlyEventInStrictSlot(ev));
       }
       calEvents = allCal;
 
@@ -976,6 +1030,8 @@ Deno.serve(async (req) => {
           : null,
         zoom_topic_filter: topicPatterns.length > 0 ? topicFilterRaw : null,
         zoom_meeting_id_filter: zoomMeetingIdDigits,
+        zoom_topic_requires_meeting_id: topicRequiresMeetingId && zoomMeetingIdDigits != null,
+        zoom_strict_time_slots_toronto: strictTimeSlots,
         calendly_event_name_filter: calendlyNamePatterns.length > 0 ? calendlyEventFilterRaw : null,
         match_tolerance_minutes: Math.round(toleranceMs / 60000),
         past_meetings: combinedPast.sort((a, b) => {
@@ -1006,6 +1062,8 @@ Deno.serve(async (req) => {
       calendly_user: responsePayload.calendly_user,
       zoom_topic_filter: responsePayload.zoom_topic_filter,
       zoom_meeting_id_filter: responsePayload.zoom_meeting_id_filter,
+      zoom_topic_requires_meeting_id: responsePayload.zoom_topic_requires_meeting_id,
+      zoom_strict_time_slots_toronto: responsePayload.zoom_strict_time_slots_toronto,
       calendly_event_name_filter: responsePayload.calendly_event_name_filter,
       match_tolerance_minutes: responsePayload.match_tolerance_minutes,
       past_meetings: responsePayload.past_meetings,

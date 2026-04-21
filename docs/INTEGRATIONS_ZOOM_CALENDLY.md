@@ -68,7 +68,9 @@ Edge Functions already receive `SUPABASE_URL` and `SUPABASE_ANON_KEY` from the p
 
 **Dashboard path:** Supabase project → **Project Settings** (gear) → **Edge Functions** → **Secrets** → **Add new secret**.
 
-Add the **required** Zoom secrets below. Optionally add Calendly and/or a **topic filter** (recommended if the host runs many personal meetings).
+**Adding a secret:** open **Secrets** → **Add new secret** → **Name** must match the table exactly (e.g. `ZOOM_LIVE_SESSION_STRICT_TIME_SLOTS`) → **Value** is usually `1` or `true` for flags (no wrapping quotes in the UI) → save. New values apply on the next request to `integrations-zoom-calendly`; redeploy is only needed after **code** changes.
+
+Add the **required** Zoom secrets below. Optionally add Calendly and/or filters (recommended if the host runs many meetings).
 
 | Name | Required? | Value |
 |------|-----------|--------|
@@ -76,6 +78,9 @@ Add the **required** Zoom secrets below. Optionally add Calendly and/or a **topi
 | `ZOOM_CLIENT_ID` | Yes | Zoom app **Client ID** |
 | `ZOOM_CLIENT_SECRET` | Yes | Zoom app **Client Secret** |
 | `ZOOM_HOST_USER_EMAIL` | Yes | Host’s Zoom login email (plain text, no quotes) |
+| `ZOOM_LIVE_SESSION_MEETING_ID` | No | Digits-only Zoom meeting id for live overview (default **6478311787**). Set `*` or `any` to disable PMI / join-URL filtering. |
+| `ZOOM_LIVE_SESSION_TOPIC_REQUIRES_MEETING_ID` | No | `1` or `true`: when PMI filter is on, Zoom **topic** must also contain that meeting id as text (embed the id in the topic if needed). |
+| `ZOOM_LIVE_SESSION_STRICT_TIME_SLOTS` | No | `1` or `true`: only rows whose start in **America/Toronto** is **Tuesday 18:00–19:00** or **Wednesday 11:30–12:30** (Zoom + Calendly used for matching). |
 | `ZOOM_LIVE_SESSION_TOPIC_FILTER` | No | Zoom **meeting topic** substring filter — see below |
 | `CALENDLY_EVENT_NAME_FILTER` | No | Calendly **event name** substring filter (e.g. `career` for “Live Online Career Session”) — independent from Zoom |
 | `INTEGRATION_MATCH_TOLERANCE_MINUTES` | No | Max start-time difference for Zoom↔Calendly pairing (default **120**; integer, max 1440) |

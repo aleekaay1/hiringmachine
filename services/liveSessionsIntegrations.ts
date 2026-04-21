@@ -167,6 +167,10 @@ export interface LiveSessionsDashboardPayload {
   zoom_topic_filter?: string | null;
   /** Digits-only PMI when filtering (e.g. Alex Paz room); null if disabled via env `*`. */
   zoom_meeting_id_filter?: string | null;
+  /** Edge: `ZOOM_LIVE_SESSION_TOPIC_REQUIRES_MEETING_ID` — topic must contain meeting id digits. */
+  zoom_topic_requires_meeting_id?: boolean;
+  /** Edge: `ZOOM_LIVE_SESSION_STRICT_TIME_SLOTS` — Tue 18:00–19:00 / Wed 11:30–12:30 America/Toronto. */
+  zoom_strict_time_slots_toronto?: boolean;
   calendly_event_name_filter?: string | null;
   past_meetings: PastMeetingRow[];
   upcoming_meetings: UpcomingMeetingRow[];
