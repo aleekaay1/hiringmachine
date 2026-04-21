@@ -165,6 +165,8 @@ export interface LiveSessionsDashboardPayload {
   zoom_user: { id: string; email: string };
   calendly_user: { name?: string; email?: string } | null;
   zoom_topic_filter?: string | null;
+  /** Digits-only PMI when filtering (e.g. Alex Paz room); null if disabled via env `*`. */
+  zoom_meeting_id_filter?: string | null;
   calendly_event_name_filter?: string | null;
   past_meetings: PastMeetingRow[];
   upcoming_meetings: UpcomingMeetingRow[];

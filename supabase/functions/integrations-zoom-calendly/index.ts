@@ -1,9 +1,15 @@
 /**
  * Aggregates Zoom meeting + participant data; optionally Calendly invitees when CALENDLY_API_TOKEN is set.
  * Zoom-only: omit CALENDLY_API_TOKEN — Calendly fields will be empty / null.
- * Optional ZOOM_LIVE_SESSION_TOPIC_FILTER: only Zoom meetings whose **topic** matches (pipe OR).
+ *
+ * Live overview (Alex Paz PMI): Zoom meeting id **6478311787** — same as `ZOOM_MEETING_URL` in hiringUrls.
+ * Recurring wall times (America/Toronto): **Tuesday 18:00–19:00**, **Wednesday 11:30–12:00**.
+ *
+ * Optional ZOOM_LIVE_SESSION_MEETING_ID: digits-only PMI to list/match (default **6478311787**). Set to `*`
+ * to disable meeting-id filtering and URL-based Calendly pairing (legacy time-only match).
+ * Optional ZOOM_LIVE_SESSION_TOPIC_FILTER: only Zoom meetings whose **topic** matches (pipe OR); AND with meeting-id filter when enabled.
  * Optional CALENDLY_EVENT_NAME_FILTER: only Calendly scheduled events whose **name** matches (pipe OR).
- *   Use e.g. "career" for "Live Online Career Session"; independent from the Zoom topic filter.
+ * Calendly↔Zoom pairing prefers events whose **location / join URL** contains that meeting id (not event name).
  * Optional INTEGRATION_MATCH_TOLERANCE_MINUTES (default 120): max |Δ| between Zoom start and Calendly start.
  * Auth: Supabase JWT (same as send-email).
  * Deploy: supabase functions deploy integrations-zoom-calendly
@@ -263,6 +269,61 @@ function matchesSubstringFilter(text: string, patterns: string[]): boolean {
   if (patterns.length === 0) return true;
   const t = text.toLowerCase();
   return patterns.some((p) => t.includes(p));
+}
+
+/** Default PMI for live career overview (must match services/hiringUrls ZOOM_MEETING_URL path). */
+const DEFAULT_LIVE_OVERVIEW_ZOOM_MEETING_ID_DIGITS = '6478311787';
+
+/**
+ * When unset, defaults to Alex Paz personal room id. Set env to `*` or `any` to disable Zoom id filter
+ * and Calendly join-url requirement (time-only matching on all events).
+ */
+function zoomLiveSessionMeetingIdDigits(): string | null {
+  const raw = Deno.env.get('ZOOM_LIVE_SESSION_MEETING_ID');
+  if (raw === undefined) return DEFAULT_LIVE_OVERVIEW_ZOOM_MEETING_ID_DIGITS;
+  const t = raw.trim();
+  if (t === '*' || t.toLowerCase() === 'any') return null;
+  const digits = t.replace(/\D/g, '');
+  return digits.length >= 9 ? digits : DEFAULT_LIVE_OVERVIEW_ZOOM_MEETING_ID_DIGITS;
+}
+
+function zoomRowMeetingIdDigits(m: Record<string, unknown>): string {
+  const id = (m as { id?: unknown }).id;
+  return String(id ?? '').replace(/\D/g, '');
+}
+
+function calendlyEventLocationBlob(ev: CalendlyScheduledEvent): string {
+  const loc = ev.location;
+  if (!loc) return '';
+  const join = typeof loc.join_url === 'string' ? loc.join_url : '';
+  const extra = typeof (loc as { location?: unknown }).location === 'string'
+    ? String((loc as { location: string }).location)
+    : '';
+  return `${join} ${extra}`.toLowerCase();
+}
+
+/** True if Calendly event location/join text references this Zoom numeric meeting id (PMI). */
+function calendlyEventReferencesZoomMeetingDigits(ev: CalendlyScheduledEvent, meetingDigits: string): boolean {
+  if (!meetingDigits) return true;
+  const blob = calendlyEventLocationBlob(ev);
+  if (blob.includes(meetingDigits)) return true;
+  const dataId = String((ev.location as { data?: { id?: string } } | undefined)?.data?.id ?? '').replace(
+    /\D/g,
+    '',
+  );
+  return dataId.length > 0 && dataId === meetingDigits;
+}
+
+/**
+ * Softer tie-break: recurring live overview slots in Toronto — Tuesday ~6pm, Wednesday ~11:30am.
+ * Returns 0 when inside expected windows, else a penalty added to match score.
+ */
+function liveOverviewSlotPenaltyMinutes(evDt: DateTime): number {
+  const w = evDt.weekday;
+  const mod = evDt.hour * 60 + evDt.minute;
+  if (w === 2 && mod >= 17 * 60 + 15 && mod <= 19 * 60 + 30) return 0;
+  if (w === 3 && mod >= 11 * 60 + 0 && mod <= 12 * 60 + 30) return 0;
+  return 45;
 }
 
 /** Zoom sometimes uses labels; Luxon needs IANA (e.g. America/Toronto). */
@@ -574,14 +635,22 @@ Deno.serve(async (req) => {
     const topicPatterns = parseSubstringFilter(topicFilterRaw);
     const calendlyEventFilterRaw = Deno.env.get('CALENDLY_EVENT_NAME_FILTER')?.trim() ?? '';
     const calendlyNamePatterns = parseSubstringFilter(calendlyEventFilterRaw);
+    const zoomMeetingIdDigits = zoomLiveSessionMeetingIdDigits();
 
     const zoomToken = await getZoomAccessToken();
     const zoomUserId = await zoomGetUserIdByEmail(zoomToken, zoomHostEmail);
 
-    const [pastMeetingsRaw, scheduledMeetingsRaw] = await Promise.all([
+    const [pastMeetingsRawAll, scheduledMeetingsRawAll] = await Promise.all([
       zoomListPastMeetings(zoomToken, zoomUserId),
       zoomListUpcomingMeetings(zoomToken, zoomUserId),
     ]);
+
+    const pastMeetingsRaw = zoomMeetingIdDigits == null
+      ? pastMeetingsRawAll
+      : pastMeetingsRawAll.filter((m) => zoomRowMeetingIdDigits(m) === zoomMeetingIdDigits);
+    const scheduledMeetingsRaw = zoomMeetingIdDigits == null
+      ? scheduledMeetingsRawAll
+      : scheduledMeetingsRawAll.filter((m) => zoomRowMeetingIdDigits(m) === zoomMeetingIdDigits);
 
     const pastFiltered = pastMeetingsRaw.filter((m) =>
       matchesSubstringFilter(String(m.topic || ''), topicPatterns),
@@ -683,6 +752,11 @@ Deno.serve(async (req) => {
           matchesSubstringFilter(String(ev.name || ''), calendlyNamePatterns),
         );
       }
+      if (zoomMeetingIdDigits) {
+        allCal = allCal.filter((ev) =>
+          calendlyEventReferencesZoomMeetingDigits(ev, zoomMeetingIdDigits),
+        );
+      }
       calEvents = allCal;
 
       for (const ev of calEvents) {
@@ -725,8 +799,10 @@ Deno.serve(async (req) => {
             ? Math.abs(evDurationMinutes - zoomDurationMinutes)
             : 0;
 
-        // Lower score wins: prioritize same weekday + wall-clock proximity, then duration, then absolute UTC.
-        const score = minuteDelta * 1000 + durationDelta * 100 + absMs / 60000;
+        const slotPen = liveOverviewSlotPenaltyMinutes(evDt) * 1000;
+
+        // Lower score wins: same weekday + wall-clock proximity, duration, UTC delta; small penalty outside Tue/Wed live windows.
+        const score = minuteDelta * 1000 + durationDelta * 100 + absMs / 60000 + slotPen;
         if (score < bestScore) {
           bestScore = score;
           best = ev;
@@ -889,6 +965,7 @@ Deno.serve(async (req) => {
             }
           : null,
         zoom_topic_filter: topicPatterns.length > 0 ? topicFilterRaw : null,
+        zoom_meeting_id_filter: zoomMeetingIdDigits,
         calendly_event_name_filter: calendlyNamePatterns.length > 0 ? calendlyEventFilterRaw : null,
         match_tolerance_minutes: Math.round(toleranceMs / 60000),
         past_meetings: combinedPast.sort((a, b) => {
@@ -918,6 +995,7 @@ Deno.serve(async (req) => {
       zoom_user: responsePayload.zoom_user,
       calendly_user: responsePayload.calendly_user,
       zoom_topic_filter: responsePayload.zoom_topic_filter,
+      zoom_meeting_id_filter: responsePayload.zoom_meeting_id_filter,
       calendly_event_name_filter: responsePayload.calendly_event_name_filter,
       match_tolerance_minutes: responsePayload.match_tolerance_minutes,
       past_meetings: responsePayload.past_meetings,
