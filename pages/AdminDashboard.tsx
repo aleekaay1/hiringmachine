@@ -1001,6 +1001,7 @@ const AdminDashboard: React.FC = () => {
         )}
 
         {workspaceTab === 'candidates' && (
+        <>
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm">
           <div className="px-5 py-4 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -2010,6 +2011,7 @@ const AdminDashboard: React.FC = () => {
             )}
           </div>
         </div>
+        </>
         )}
 
         {showEvaluationModal && selectedCandidate && (
