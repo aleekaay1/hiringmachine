@@ -607,6 +607,17 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
+  const handleDownloadCandidateReport = async (candidate: Candidate) => {
+    try {
+      const full = await getCandidateById(candidate.id);
+      downloadCandidateReportPdf(full ?? candidate);
+    } catch (err) {
+      console.error(err);
+      // Fall back to list payload if full row fetch fails.
+      downloadCandidateReportPdf(candidate);
+    }
+  };
+
   const updateAdminData = async (updater: (prev: AdminData) => AdminData) => {
     if (!selectedCandidate) return;
     const next = updater(getAdminData(selectedCandidate));
@@ -1039,7 +1050,7 @@ const AdminDashboard: React.FC = () => {
                   <button
                     type="button"
                     className="w-fit text-xs px-2.5 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-50"
-                    onClick={() => downloadCandidateReportPdf(c)}
+                    onClick={() => void handleDownloadCandidateReport(c)}
                   >
                     Download PDF
                   </button>
