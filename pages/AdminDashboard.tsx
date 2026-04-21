@@ -1059,15 +1059,7 @@ const AdminDashboard: React.FC = () => {
         <>
         {!selectedCandidate && (
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm">
-          <div className="px-5 py-4 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">Candidates</h1>
-              <p className="text-sm text-gray-500 mt-0.5">
-                {loading ? 'Loading candidates…' : `${dashboard.total} applicants · ${dashboard.activePipeline} in active pipeline`}
-              </p>
-            </div>
-          </div>
-          <div className="px-5 py-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 text-xs bg-[#f9fbff] border-t border-gray-100">
+          <div className="px-5 py-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 text-xs bg-[#f9fbff]">
             {PIPELINE_STAGES.map((s) => (
               <button
                 type="button"
