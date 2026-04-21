@@ -5,12 +5,18 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
 const DEFAULT_ADMIN = {
   notes: [] as unknown[],
-  pipelineStage: 'Check in',
+  pipelineStage: 'Checked In',
   rating: null as number | null,
   interviewScheduledAt: null as string | null,
   nextStep: '',
   tags: [] as string[],
   emailsSent: [] as Array<{ sentAt: string; subject: string; type?: string }>,
+  evaluation: null as {
+    doneAt: string;
+    evaluatorName: string;
+    comments: string;
+    evaluationEmailSentAt?: string;
+  } | null,
   resumeReviewedAt: null as string | null,
   questionnaireDisqualified: null as unknown,
 };

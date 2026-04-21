@@ -7,7 +7,10 @@
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { pipelineStageAfterLiveSessionAttended } from '../_shared/pipelineStageLiveSession.ts';
+import {
+  pipelineStageAfterLiveSessionAttended,
+  pipelineStageAfterLiveSessionInvited,
+} from '../_shared/pipelineStageLiveSession.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -15,17 +18,22 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, apikey, x-client-info',
 };
 
-const INVITE_TAG = 'Career session invited';
 const STAGE3_LOG_TYPE = 'automated_stage3_after_live_session';
 
 const DEFAULT_ADMIN = {
   notes: [] as unknown[],
-  pipelineStage: 'Check in',
+  pipelineStage: 'Checked In',
   rating: null as number | null,
   interviewScheduledAt: null as string | null,
   nextStep: '',
   tags: [] as string[],
   emailsSent: [] as Array<{ sentAt: string; subject: string; type?: string }>,
+  evaluation: null as {
+    doneAt: string;
+    evaluatorName: string;
+    comments: string;
+    evaluationEmailSentAt?: string;
+  } | null,
   resumeReviewedAt: null as string | null,
   questionnaireDisqualified: null as unknown,
 };
@@ -151,7 +159,7 @@ Deno.serve(async (req) => {
     const union = [...new Set([...invitedEmails, ...attendedEmails])];
     const byEmail = await fetchCandidatesByEmails(admin, union);
 
-    let taggedInvite = 0;
+    let invitedStageUpdated = 0;
     let skippedInviteNoRow = 0;
     let attendedUpdated = 0;
     let attendedSkippedNoRow = 0;
@@ -166,16 +174,15 @@ Deno.serve(async (req) => {
       }
       const prev = parseAdmin(row.admin_data);
       const merged = mergeAdminBase(prev);
-      const tags = Array.isArray(merged.tags) ? [...merged.tags] : [];
-      if (tags.includes(INVITE_TAG)) continue;
-      tags.push(INVITE_TAG);
-      merged.tags = tags;
+      const nextStage = pipelineStageAfterLiveSessionInvited(merged.pipelineStage);
+      if (String(nextStage) === String(merged.pipelineStage)) continue;
+      merged.pipelineStage = nextStage;
       const { error: upErr } = await admin.from('candidates').update({ admin_data: merged }).eq('id', row.id);
       if (upErr) {
         console.error('sync-live-session-pipeline invite tag', upErr);
         continue;
       }
-      taggedInvite++;
+      invitedStageUpdated++;
       byEmail.set(email, { ...row, admin_data: merged });
     }
 
@@ -187,10 +194,6 @@ Deno.serve(async (req) => {
       }
       const prev = parseAdmin(row.admin_data);
       const merged = mergeAdminBase(prev);
-      const tags = Array.isArray(merged.tags) ? [...merged.tags] : [];
-      if (!tags.includes(INVITE_TAG)) tags.push(INVITE_TAG);
-      merged.tags = tags;
-
       const beforeStage = merged.pipelineStage;
       const newStage = pipelineStageAfterLiveSessionAttended(beforeStage);
       merged.pipelineStage = newStage;
@@ -209,7 +212,10 @@ Deno.serve(async (req) => {
       byEmail.set(email, { ...row, admin_data: merged });
 
       const shouldSend =
-        !alreadyStage3 && newStage === 'Attended Live Session' && typeof anonKey === 'string' && anonKey.length > 0;
+        !alreadyStage3 &&
+        newStage === 'Leadership assessment form sent' &&
+        typeof anonKey === 'string' &&
+        anonKey.length > 0;
 
       if (shouldSend) {
         const ok = await sendStage3AssessmentEmail(supabaseUrl, anonKey, row.id, email);
@@ -221,7 +227,7 @@ Deno.serve(async (req) => {
     return new Response(
       JSON.stringify({
         ok: true,
-        tagged_invite: taggedInvite,
+        invited_stage_updated: invitedStageUpdated,
         skipped_invite_not_in_portal: skippedInviteNoRow,
         attended_rows_updated: attendedUpdated,
         skipped_attended_not_in_portal: attendedSkippedNoRow,

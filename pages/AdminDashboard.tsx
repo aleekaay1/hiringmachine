@@ -27,7 +27,6 @@ import {
   QUESTIONS,
   DEFAULT_ADMIN_DATA,
   PIPELINE_STAGES,
-  PIPELINE_TAG_CAREER_SESSION_INVITED,
   normalizePipelineStage,
   type PipelineStage,
   type AdminData,
@@ -46,9 +45,11 @@ const getAdminData = (c: Candidate): AdminData => {
 
 /** Short labels for the horizontal journey timeline (full names in title/tooltip) */
 const TIMELINE_SHORT_LABELS: Record<PipelineStage, string> = {
-  'Check in': 'Check-in',
-  'Attended Live Session': 'Live session',
-  'Leadership Assessment Received Under Review': 'Assessment',
+  'Checked In': 'Checked in',
+  'Invited to Live Career Overview Session': 'Invited',
+  'Leadership assessment form sent': 'Form sent',
+  'Leadership form submitted, awaiting evaluation': 'Submitted',
+  'Evaluation Done': 'Evaluation',
   'Interview scheduled': 'Interview',
   Hired: 'Hired',
   'Not Hired / Withdrawn': 'Not hired',
@@ -58,12 +59,14 @@ function formatEmailLogType(type: string | undefined): string {
   if (!type) return 'Custom / compose';
   const map: Record<string, string> = {
     stage2_post_checkin: 'Stage 2 – Post check-in',
-    stage3_assessment_link: 'Stage 3 – Leadership Assessment link',
-    stage5_evaluation: 'Stage 5 – Evaluation',
+    stage3_assessment_link: 'Leadership assessment form sent',
+    stage5_evaluation: 'Evaluation done',
     compose: 'Compose (manual)',
     manual: 'Compose (manual)',
     automated_post_checkin: 'Automated – Post check-in (session invite)',
-    automated_post_assessment_submit: 'Automated – Assessment thank-you',
+    automated_post_assessment_submit: 'Automated – Assessment submitted',
+    automated_stage3_after_live_session: 'Automated – Leadership assessment form sent',
+    automated_evaluation_done: 'Automated – Evaluation done',
   };
   return map[type] ?? type;
 }
@@ -104,10 +107,19 @@ const AdminDashboard: React.FC = () => {
   const [reportEmailError, setReportEmailError] = useState<string | null>(null);
   const [reportEmailSent, setReportEmailSent] = useState(false);
   const [emailLogOpen, setEmailLogOpen] = useState(false);
+  const [evaluatorName, setEvaluatorName] = useState('');
+  const [evaluationComments, setEvaluationComments] = useState('');
+  const [evaluationSaving, setEvaluationSaving] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
     if (selectedCandidate) setNextStepEdit(getAdminData(selectedCandidate).nextStep);
+  }, [selectedCandidate?.id]);
+
+  useEffect(() => {
+    const ev = selectedCandidate ? getAdminData(selectedCandidate).evaluation : null;
+    setEvaluatorName(ev?.evaluatorName || '');
+    setEvaluationComments(ev?.comments || '');
   }, [selectedCandidate?.id]);
 
   useEffect(() => {
@@ -699,11 +711,11 @@ const AdminDashboard: React.FC = () => {
         bodyHtml,
         attachments: [{ filename, contentBase64: base64, contentType: 'application/pdf' }],
       });
-      if (result.ok) {
+      if ('ok' in result && result.ok) {
         setReportEmailSent(true);
         setReportEmailError(null);
       } else {
-        setReportEmailError(result.error || 'Failed to send email');
+        setReportEmailError(('error' in result ? result.error : '') || 'Failed to send email');
         setReportEmailSent(false);
       }
     } catch (e) {
@@ -738,7 +750,7 @@ const AdminDashboard: React.FC = () => {
     const bodyText = !emailBodyIsHtml ? emailBody.trim() || undefined : undefined;
     const result = await sendEmail(session.access_token, { to, subject, bodyHtml, bodyText });
     setEmailSending(false);
-    if (result.ok) {
+    if ('ok' in result && result.ok) {
       const sentAt = new Date().toISOString();
       await updateAdminData(prev => ({
         ...prev,
@@ -749,7 +761,72 @@ const AdminDashboard: React.FC = () => {
       setEmailSubject('');
       setEmailBody('');
     } else {
-      setEmailError(result.error || 'Failed to send email');
+      setEmailError(('error' in result ? result.error : '') || 'Failed to send email');
+    }
+  };
+
+  const handleCompleteEvaluation = async () => {
+    if (!selectedCandidate || evaluationSaving) return;
+    const name = evaluatorName.trim();
+    const comments = evaluationComments.trim();
+    if (!name) {
+      alert('Please enter evaluator name.');
+      return;
+    }
+    if (!comments) {
+      alert('Please enter evaluation comments.');
+      return;
+    }
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      alert('Session expired. Please sign in again.');
+      return;
+    }
+
+    setEvaluationSaving(true);
+    try {
+      const template = EMAIL_TEMPLATES.find((t) => t.id === 'stage5_evaluation');
+      if (!template) throw new Error('Evaluation email template missing');
+      const nowIso = new Date().toISOString();
+      const { subject, bodyHtml } = mergeTemplate(
+        template.subject,
+        template.bodyHtml,
+        selectedCandidate,
+        {
+          '{{evaluatorName}}': name,
+          '{{evaluationComments}}': comments,
+          '{{evaluationAt}}': formatDateTimeCanadaEastern(nowIso),
+        },
+        { siteOrigin: getSiteOriginForEmail() }
+      );
+      const send = await sendEmail(session.access_token, {
+        to: selectedCandidate.email,
+        subject,
+        bodyHtml,
+      });
+      if (!('ok' in send && send.ok)) {
+        throw new Error(('error' in send ? send.error : '') || 'Failed to send evaluation email');
+      }
+
+      await updateAdminData((prev) => ({
+        ...prev,
+        pipelineStage: 'Evaluation Done',
+        evaluation: {
+          doneAt: nowIso,
+          evaluatorName: name,
+          comments,
+          evaluationEmailSentAt: nowIso,
+        },
+        emailsSent: [
+          ...prev.emailsSent,
+          { sentAt: nowIso, subject, type: 'automated_evaluation_done' },
+        ],
+      }));
+    } catch (err) {
+      console.error(err);
+      alert(err instanceof Error ? err.message : 'Failed to complete evaluation.');
+    } finally {
+      setEvaluationSaving(false);
     }
   };
 
@@ -948,11 +1025,6 @@ const AdminDashboard: React.FC = () => {
                       {admin.questionnaireDisqualified && (
                         <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-800 border border-amber-200">
                           Disqualified (questionnaire)
-                        </span>
-                      )}
-                      {admin.tags.includes(PIPELINE_TAG_CAREER_SESSION_INVITED) && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-indigo-50 text-indigo-800 border border-indigo-200">
-                          Career session invite
                         </span>
                       )}
                       {!!c.applicantQuestionnaire?.resumeUrls?.length && (
@@ -1289,6 +1361,42 @@ const AdminDashboard: React.FC = () => {
                         className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-[#005EB8] focus:border-[#005EB8]"
                       />
                     </div>
+                  </div>
+                  <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                      Evaluation details
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <input
+                        type="text"
+                        placeholder="Evaluator name"
+                        value={evaluatorName}
+                        onChange={(e) => setEvaluatorName(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-[#005EB8] focus:border-[#005EB8]"
+                      />
+                      <Button
+                        type="button"
+                        onClick={handleCompleteEvaluation}
+                        disabled={evaluationSaving}
+                        className="justify-center"
+                      >
+                        {evaluationSaving ? 'Completing…' : 'Mark Evaluation Done + Send Email'}
+                      </Button>
+                    </div>
+                    <textarea
+                      placeholder="Evaluation comments"
+                      value={evaluationComments}
+                      onChange={(e) => setEvaluationComments(e.target.value)}
+                      rows={3}
+                      className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-[#005EB8] focus:border-[#005EB8]"
+                    />
+                    {getAdminData(selectedCandidate).evaluation && (
+                      <p className="text-xs text-gray-600">
+                        Last completed by{' '}
+                        <span className="font-semibold">{getAdminData(selectedCandidate).evaluation?.evaluatorName}</span>
+                        {' '}on {formatDateTimeCanadaEastern(getAdminData(selectedCandidate).evaluation?.doneAt)}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1"><Tag size={12} /> Tags</label>

@@ -38,7 +38,7 @@ export function collectLiveSessionInviteAndAttendEmails(payload: LiveSessionsDas
 
 export interface SyncLiveSessionPipelineResult {
   ok: true;
-  tagged_invite: number;
+  invited_stage_updated: number;
   skipped_invite_not_in_portal: number;
   attended_rows_updated: number;
   skipped_attended_not_in_portal: number;

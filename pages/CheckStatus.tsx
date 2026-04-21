@@ -17,29 +17,45 @@ const CheckStatus: React.FC = () => {
   const getStatusInfo = (stage: PipelineStage | string | undefined) => {
     const s = normalizePipelineStage(stage);
     const statusMap: Record<PipelineStage, { label: string; color: string; bgColor: string; icon: React.ReactNode; message: string }> = {
-      'Check in': {
-        label: 'Check in',
+      'Checked In': {
+        label: 'Checked In',
         color: 'text-blue-700',
         bgColor: 'bg-blue-50 border-blue-200',
         icon: <FileText className="w-6 h-6 text-blue-600" />,
         message:
           'Thank you for checking in. We have received your information and will follow up with next steps.',
       },
-      'Attended Live Session': {
-        label: 'Attended Live Session',
+      'Invited to Live Career Overview Session': {
+        label: 'Invited to Live Career Overview Session',
         color: 'text-sky-700',
         bgColor: 'bg-sky-50 border-sky-200',
         icon: <Video className="w-6 h-6 text-sky-600" />,
         message:
-          'Thank you for attending the Live Online Career Session. We appreciate your time and interest.',
+          'You are invited to the Live Career Overview Session. Please check your email for session details.',
       },
-      'Leadership Assessment Received Under Review': {
-        label: 'Leadership Assessment — Under Review',
+      'Leadership assessment form sent': {
+        label: 'Leadership assessment form sent',
         color: 'text-amber-700',
         bgColor: 'bg-amber-50 border-amber-200',
         icon: <ClipboardList className="w-6 h-6 text-amber-600" />,
         message:
-          'We have received your Leadership Assessment. Our team is reviewing your responses and will contact you when there is an update.',
+          'Thank you for attending the session. We sent your leadership assessment form by email.',
+      },
+      'Leadership form submitted, awaiting evaluation': {
+        label: 'Leadership form submitted, awaiting evaluation',
+        color: 'text-orange-700',
+        bgColor: 'bg-orange-50 border-orange-200',
+        icon: <ClipboardList className="w-6 h-6 text-orange-600" />,
+        message:
+          'We received your leadership form. Our team is evaluating your submission.',
+      },
+      'Evaluation Done': {
+        label: 'Evaluation Done',
+        color: 'text-emerald-700',
+        bgColor: 'bg-emerald-50 border-emerald-200',
+        icon: <CheckCircle className="w-6 h-6 text-emerald-600" />,
+        message:
+          'Your evaluation is complete. Our team will contact you with callback details manually.',
       },
       'Interview scheduled': {
         label: 'Interview scheduled',

@@ -68,18 +68,22 @@ export const ASSESSMENT_ROOM_BACKGROUND_AREAS = [
 ] as const;
 
 export type PipelineStage =
-  | 'Check in'
-  | 'Attended Live Session'
-  | 'Leadership Assessment Received Under Review'
+  | 'Checked In'
+  | 'Invited to Live Career Overview Session'
+  | 'Leadership assessment form sent'
+  | 'Leadership form submitted, awaiting evaluation'
+  | 'Evaluation Done'
   | 'Interview scheduled'
   | 'Hired'
   | 'Not Hired / Withdrawn';
 
 /** Admin pipeline dropdown, filters, and stats — single source of truth */
 export const PIPELINE_STAGES: PipelineStage[] = [
-  'Check in',
-  'Attended Live Session',
-  'Leadership Assessment Received Under Review',
+  'Checked In',
+  'Invited to Live Career Overview Session',
+  'Leadership assessment form sent',
+  'Leadership form submitted, awaiting evaluation',
+  'Evaluation Done',
   'Interview scheduled',
   'Hired',
   'Not Hired / Withdrawn',
@@ -87,8 +91,12 @@ export const PIPELINE_STAGES: PipelineStage[] = [
 
 /** Map legacy DB values to current stages */
 const LEGACY_PIPELINE_STAGE: Record<string, PipelineStage> = {
-  Applied: 'Check in',
-  Screening: 'Leadership Assessment Received Under Review',
+  Applied: 'Checked In',
+  Screening: 'Leadership form submitted, awaiting evaluation',
+  'Check in': 'Checked In',
+  'Attended Live Session': 'Leadership assessment form sent',
+  'Leadership Assessment Received Under Review': 'Leadership form submitted, awaiting evaluation',
+  'Career session invited': 'Invited to Live Career Overview Session',
   'Interview Scheduled': 'Interview scheduled',
   Interviewed: 'Interview scheduled',
   Offer: 'Interview scheduled',
@@ -101,13 +109,13 @@ export function normalizePipelineStage(raw: unknown): PipelineStage {
   const s = typeof raw === 'string' ? raw : '';
   if ((PIPELINE_STAGES as readonly string[]).includes(s)) return s as PipelineStage;
   if (LEGACY_PIPELINE_STAGE[s] !== undefined) return LEGACY_PIPELINE_STAGE[s];
-  return 'Check in';
+  return 'Checked In';
 }
 
 /**
  * After check-in form submit: pipeline is always at least "Check in" (persisted on candidate.adminData).
  */
-export const PIPELINE_STAGE_AFTER_CHECK_IN: PipelineStage = 'Check in';
+export const PIPELINE_STAGE_AFTER_CHECK_IN: PipelineStage = 'Checked In';
 
 /**
  * After leadership assessment submit: move to "Leadership Assessment Received Under Review" when the
@@ -115,7 +123,7 @@ export const PIPELINE_STAGE_AFTER_CHECK_IN: PipelineStage = 'Check in';
  */
 export function pipelineStageAfterAssessmentComplete(current: unknown): PipelineStage {
   const cur = normalizePipelineStage(current);
-  const target: PipelineStage = 'Leadership Assessment Received Under Review';
+  const target: PipelineStage = 'Leadership form submitted, awaiting evaluation';
   if (cur === 'Hired' || cur === 'Not Hired / Withdrawn') return cur;
   const ti = PIPELINE_STAGES.indexOf(target);
   const ci = PIPELINE_STAGES.indexOf(cur);
@@ -123,8 +131,16 @@ export function pipelineStageAfterAssessmentComplete(current: unknown): Pipeline
   return target;
 }
 
-/** Matched Calendly invite list + portal candidate (check-in). Shown as tag on admin list. */
-export const PIPELINE_TAG_CAREER_SESSION_INVITED = 'Career session invited';
+/** Move candidate stage when Calendly invite is matched to a checked-in candidate. */
+export function pipelineStageAfterLiveSessionInvited(current: unknown): PipelineStage {
+  const cur = normalizePipelineStage(current);
+  if (cur === 'Hired' || cur === 'Not Hired / Withdrawn') return cur;
+  const target: PipelineStage = 'Invited to Live Career Overview Session';
+  const ti = PIPELINE_STAGES.indexOf(target);
+  const ci = PIPELINE_STAGES.indexOf(cur);
+  if (ci > ti) return cur;
+  return target;
+}
 
 /**
  * After Zoom + Calendly show the candidate attended the online career session.
@@ -133,11 +149,12 @@ export const PIPELINE_TAG_CAREER_SESSION_INVITED = 'Career session invited';
 export function pipelineStageAfterLiveSessionAttended(current: unknown): PipelineStage {
   const cur = normalizePipelineStage(current);
   if (cur === 'Hired' || cur === 'Not Hired / Withdrawn') return cur;
-  const attendedIdx = PIPELINE_STAGES.indexOf('Attended Live Session');
+  const target: PipelineStage = 'Leadership assessment form sent';
+  const ti = PIPELINE_STAGES.indexOf(target);
   const ci = PIPELINE_STAGES.indexOf(cur);
-  if (ci === -1) return 'Attended Live Session';
-  if (ci > attendedIdx) return cur;
-  return 'Attended Live Session';
+  if (ci === -1) return target;
+  if (ci > ti) return cur;
+  return target;
 }
 
 export interface AdminNote {
@@ -167,18 +184,27 @@ export interface AdminData {
   nextStep: string;
   tags: string[];
   emailsSent: EmailLogEntry[];
+  evaluation:
+    | {
+        doneAt: string;
+        evaluatorName: string;
+        comments: string;
+        evaluationEmailSentAt?: string;
+      }
+    | null;
   resumeReviewedAt: string | null; // ISO - when admin reviewed/approved resumes
   questionnaireDisqualified: QuestionnaireDisqualified | null;
 }
 
 export const DEFAULT_ADMIN_DATA: AdminData = {
   notes: [],
-  pipelineStage: 'Check in',
+  pipelineStage: 'Checked In',
   rating: null,
   interviewScheduledAt: null,
   nextStep: '',
   tags: [],
   emailsSent: [],
+  evaluation: null,
   resumeReviewedAt: null,
   questionnaireDisqualified: null,
 };
