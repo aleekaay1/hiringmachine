@@ -384,6 +384,9 @@ verify_jwt = false
 [functions.integrations-zoom-calendly]
 verify_jwt = false
 
+[functions.sync-live-session-pipeline]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
