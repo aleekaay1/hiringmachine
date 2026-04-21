@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, Fragment } from 'react';
-import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import IntegrationStatusLights from '../components/IntegrationStatusLights';
 import { Button } from '../components/UI';
@@ -16,10 +15,9 @@ import {
   syncLiveSessionPipeline,
 } from '../services/liveSessionPipelineSync';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
-import { RefreshCw, Video, Calendar, Users, ChevronDown, ChevronRight, ArrowLeft, Mail } from 'lucide-react';
+import { RefreshCw, Video, Calendar, Users, ChevronDown, ChevronRight, Mail } from 'lucide-react';
 
 const LiveSessionsDashboard: React.FC = () => {
-  const navigate = useNavigate();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [email, setEmail] = useState('admin@globelife-paz.com');
   const [password, setPassword] = useState('');
@@ -85,12 +83,6 @@ const LiveSessionsDashboard: React.FC = () => {
     setIsAuthenticated(true);
   };
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    setIsAuthenticated(false);
-    setData(null);
-  };
-
   const handleSyncPipeline = async () => {
     if (!data) return;
     setSyncError(null);
@@ -135,31 +127,24 @@ const LiveSessionsDashboard: React.FC = () => {
   }
 
   return (
-    <Layout hideHeader>
-      <div className="min-h-screen bg-gradient-to-b from-[#f8fbff] via-white to-[#f1f7ff] text-[#1A2942] flex flex-col">
-        <header className="border-b border-[#d5e6fa] bg-white/85 backdrop-blur sticky top-0 z-20">
-          <div className="max-w-[1600px] mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <button type="button" onClick={() => navigate('/admin')} className="inline-flex items-center gap-1.5 text-sm text-[#6d7f95] hover:text-[#005EB8] shrink-0"><ArrowLeft size={18} /> Admin</button>
-              <div className="h-6 w-px bg-[#d9e7f9] hidden sm:block" />
-              <div className="flex items-center gap-2 min-w-0">
-                <Video className="text-[#37B06D] shrink-0" size={22} />
-                <div className="min-w-0">
-                  <h1 className="text-lg sm:text-xl font-extrabold text-[#0B1B34] truncate">Online career sessions</h1>
-                  <p className="text-xs text-[#73839b] truncate">Zoom + Calendly · Eastern Time (Canada)</p>
-                </div>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap justify-end">
-              <IntegrationStatusLights />
-              <Button type="button" variant="outline" className="text-sm border-[#c8def7] text-[#1c3b66] hover:bg-[#eef5ff]" onClick={() => void load()} disabled={loading}><RefreshCw size={16} className={`mr-2 inline ${loading ? 'animate-spin' : ''}`} /> Refresh</Button>
-              <Button type="button" variant="outline" className="text-sm border-[#bde8d2] text-[#1b6f46] hover:bg-[#ecfaf2]" onClick={() => void handleSyncPipeline()} disabled={loading || syncLoading || !data}><Users size={16} className={`mr-2 inline ${syncLoading ? 'animate-pulse' : ''}`} /> Sync pipeline</Button>
-              <Button type="button" variant="outline" className="text-sm border-[#c8def7] text-[#1c3b66] hover:bg-[#eef5ff]" onClick={() => void handleLogout()}>Sign out</Button>
+    <Layout isAdmin>
+      <div className="w-full p-5 lg:p-6 space-y-5 text-[#1A2942]">
+        <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-5 py-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <Video className="text-[#37B06D] shrink-0" size={22} />
+            <div className="min-w-0">
+              <h1 className="text-lg sm:text-xl font-extrabold text-[#0B1B34] truncate">Online career sessions</h1>
+              <p className="text-xs text-[#73839b] truncate">Zoom + Calendly · Eastern Time (Canada)</p>
             </div>
           </div>
-        </header>
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <IntegrationStatusLights />
+            <Button type="button" variant="outline" className="text-sm border-[#c8def7] text-[#1c3b66] hover:bg-[#eef5ff]" onClick={() => void load()} disabled={loading}><RefreshCw size={16} className={`mr-2 inline ${loading ? 'animate-spin' : ''}`} /> Refresh</Button>
+            <Button type="button" variant="outline" className="text-sm border-[#bde8d2] text-[#1b6f46] hover:bg-[#ecfaf2]" onClick={() => void handleSyncPipeline()} disabled={loading || syncLoading || !data}><Users size={16} className={`mr-2 inline ${syncLoading ? 'animate-pulse' : ''}`} /> Sync pipeline</Button>
+          </div>
+        </div>
 
-        <div className="flex-grow max-w-[1600px] w-full mx-auto px-4 sm:px-6 py-6 space-y-8">
+        <div className="space-y-8">
           {fetchError && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{fetchError}</div>}
           {syncError && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{syncError}</div>}
           {syncSummary && <div className="rounded-2xl border border-[#bde8d2] bg-[#ecfaf2] px-4 py-3 text-sm text-[#165c3a]">{syncSummary}</div>}

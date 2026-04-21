@@ -932,6 +932,7 @@ const AdminDashboard: React.FC = () => {
   return (
     <Layout isAdmin>
       <div className="w-full p-5 lg:p-6 space-y-5">
+        {!(adminView === 'candidates' && selectedCandidate) && (
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-5 py-3 flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-[#0b1f3a]">
@@ -948,6 +949,7 @@ const AdminDashboard: React.FC = () => {
             </p>
           </div>
         </div>
+        )}
 
         {adminView === 'overview' && (
           <div className="grid grid-cols-1 xl:grid-cols-[320px_minmax(0,1fr)] gap-5">
@@ -1055,6 +1057,7 @@ const AdminDashboard: React.FC = () => {
 
         {adminView === 'candidates' && (
         <>
+        {!selectedCandidate && (
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm">
           <div className="px-5 py-4 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -1080,6 +1083,7 @@ const AdminDashboard: React.FC = () => {
             ))}
           </div>
         </div>
+        )}
 
         {error && (
           <div className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-4 py-2">
@@ -1221,7 +1225,7 @@ const AdminDashboard: React.FC = () => {
           </div>
 
           {/* Candidate Detail */}
-          <div className={`${selectedCandidate ? 'block' : 'hidden'} rounded-2xl border border-[#d6deea] bg-gradient-to-b from-[#ffffff] to-[#f6f9ff] shadow-sm h-[calc(100vh-210px)] overflow-y-auto p-6 lg:p-7`}>
+          <div className={`${selectedCandidate ? 'block' : 'hidden'} rounded-2xl border border-[#d6deea] bg-gradient-to-b from-[#ffffff] to-[#f6f9ff] shadow-sm h-[calc(100vh-130px)] overflow-y-auto p-6 lg:p-7`}>
             {selectedCandidate ? (
               <div className="space-y-8 animate-fade-in">
                 <div className="flex items-center justify-between">
@@ -1229,77 +1233,6 @@ const AdminDashboard: React.FC = () => {
                     Back to candidates
                   </button>
                 </div>
-                {/* Hiring journey — pipeline position */}
-                {(() => {
-                  const journeyStage = getAdminData(selectedCandidate).pipelineStage;
-                  const activeIdx = Math.max(0, PIPELINE_STAGES.indexOf(journeyStage));
-                  const n = PIPELINE_STAGES.length;
-                  const isWithdrawn = journeyStage === 'Not Hired / Withdrawn';
-                  return (
-                    <div className="rounded-2xl border border-gray-200 bg-gradient-to-r from-slate-50 via-white to-emerald-50/40 px-3 py-4 sm:px-5 sm:py-5 shadow-sm">
-                      <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-4">Hiring journey</p>
-                      <div className="overflow-x-auto pb-1 -mx-1">
-                        <div className="min-w-[560px] sm:min-w-0 relative px-1">
-                          <div
-                            className="pointer-events-none absolute left-3 right-3 top-[22px] h-[3px] rounded-full bg-gray-200 z-0"
-                            aria-hidden
-                          />
-                          {n > 1 && (
-                            <div
-                              className="pointer-events-none absolute left-3 top-[22px] h-[3px] rounded-full bg-[#005EB8] z-0 transition-all duration-300"
-                              style={{
-                                width: `calc((100% - 24px) * ${activeIdx / (n - 1)})`,
-                              }}
-                              aria-hidden
-                            />
-                          )}
-                          <div className="relative z-10 flex justify-between items-start gap-0">
-                            {PIPELINE_STAGES.map((stage, i) => {
-                              const done = i <= activeIdx;
-                              const active = i === activeIdx;
-                              return (
-                                <div
-                                  key={stage}
-                                  className="flex flex-col items-center flex-1 min-w-0 max-w-[100px] sm:max-w-none"
-                                  title={stage}
-                                >
-                                  <div
-                                    className={`relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 shadow-sm transition-transform ${
-                                      active
-                                        ? isWithdrawn
-                                          ? 'scale-110 border-red-500 bg-red-500 text-white'
-                                          : 'scale-110 border-[#005EB8] bg-[#005EB8] text-white'
-                                        : done
-                                          ? 'border-[#005EB8] bg-white text-[#005EB8]'
-                                          : 'border-gray-300 bg-white text-gray-400'
-                                    }`}
-                                  >
-                                    {active ? (
-                                      <User size={18} strokeWidth={2.5} aria-hidden />
-                                    ) : (
-                                      <span className="text-[11px] font-bold">{i + 1}</span>
-                                    )}
-                                  </div>
-                                  <p
-                                    className={`mt-2 text-[9px] sm:text-[10px] font-semibold text-center leading-tight px-0.5 ${
-                                      active ? (isWithdrawn ? 'text-red-700' : 'text-[#005EB8]') : 'text-gray-600'
-                                    }`}
-                                  >
-                                    {TIMELINE_SHORT_LABELS[stage]}
-                                  </p>
-                                </div>
-                              );
-                            })}
-                          </div>
-                          <p className="mt-3 text-center text-xs text-gray-600">
-                            Current stage:{' '}
-                            <span className="font-semibold text-gray-900">{journeyStage}</span>
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()}
 
                 {/* Header */}
                 <div className="flex items-start justify-between gap-4">
