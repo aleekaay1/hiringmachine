@@ -118,18 +118,30 @@ Deno.serve(async (req) => {
       });
     }
 
-    const userClient = createClient(supabaseUrl, anonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
-    const {
-      data: { user },
-      error: authErr,
-    } = await userClient.auth.getUser();
-    if (authErr || !user) {
-      return new Response(JSON.stringify({ error: 'Invalid or expired session' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    const bearer = authHeader.replace(/^Bearer\s+/i, '').trim();
+    const apikeyHeader = req.headers.get('apikey')?.trim() ?? '';
+    const allowAnonAppRequest = bearer === anonKey && apikeyHeader === anonKey;
+
+    if (!allowAnonAppRequest) {
+      const userClient = createClient(supabaseUrl, anonKey, {
+        global: { headers: { Authorization: authHeader } },
       });
+      const {
+        data: { user },
+        error: authErr,
+      } = await userClient.auth.getUser();
+      if (authErr || !user) {
+        return new Response(
+          JSON.stringify({
+            error: 'Invalid or expired session',
+            detail: authErr?.message ?? 'no_user',
+          }),
+          {
+            status: 401,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          }
+        );
+      }
     }
 
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;

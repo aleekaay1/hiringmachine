@@ -53,11 +53,12 @@ export async function syncLiveSessionPipeline(
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     return { ok: false, error: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY' };
   }
+  const token = (accessToken || '').trim() || SUPABASE_ANON_KEY;
   const res = await fetch(`${SUPABASE_URL}/functions/v1/sync-live-session-pipeline`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`,
+      Authorization: `Bearer ${token}`,
       apikey: SUPABASE_ANON_KEY,
     },
     body: JSON.stringify({
