@@ -1217,7 +1217,7 @@ const AdminDashboard: React.FC = () => {
           </div>
 
           {/* Candidate Detail */}
-          <div className={`${selectedCandidate ? 'block' : 'hidden'} rounded-2xl border border-[#d6deea] bg-gradient-to-b from-[#ffffff] to-[#f6f9ff] shadow-sm h-[calc(100vh-130px)] overflow-y-auto p-6 lg:p-7`}>
+          <div className={`${selectedCandidate ? 'block' : 'hidden'} rounded-2xl border border-[#d6deea] bg-gradient-to-b from-[#f8fafc] to-[#eef3f9] shadow-sm h-[calc(100vh-130px)] overflow-y-auto p-6 pt-8 lg:p-7 lg:pt-9`}>
             {selectedCandidate ? (
               <div className="space-y-8 animate-fade-in">
                 <div className="flex items-center justify-between">
@@ -1232,7 +1232,7 @@ const AdminDashboard: React.FC = () => {
                   const n = PIPELINE_STAGES.length;
                   const isWithdrawn = journeyStage === 'Not Hired / Withdrawn';
                   return (
-                    <div className="rounded-2xl border border-gray-200 bg-gradient-to-r from-slate-50 via-white to-emerald-50/40 px-3 py-4 sm:px-5 sm:py-5 shadow-sm">
+                    <div className="mt-2 rounded-2xl border border-gray-200 bg-gradient-to-r from-slate-100 via-slate-50 to-emerald-50/40 px-3 py-5 sm:px-5 sm:py-6 shadow-sm">
                       <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-4">Hiring journey</p>
                       <div className="overflow-x-auto pb-1 -mx-1">
                         <div className="min-w-[560px] sm:min-w-0 relative px-1">
@@ -1375,7 +1375,7 @@ const AdminDashboard: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-gray-200 bg-white p-2 flex flex-wrap gap-2">
+                <div className="rounded-xl border border-gray-200 bg-[#f3f6fb] p-2 flex flex-wrap gap-2">
                   {[
                     ['profile', 'Profile'],
                     ['status', 'Status'],
@@ -1398,7 +1398,7 @@ const AdminDashboard: React.FC = () => {
 
                 {/* At-a-glance */}
                 {detailTab === 'profile' && (
-                <div className="rounded-2xl border border-gray-200 bg-gradient-to-r from-[#005EB8]/5 to-[#37B06D]/5 p-5">
+                <div className="rounded-2xl border border-gray-200 bg-gradient-to-r from-[#e8f1ff] to-[#edf8f2] p-5">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-2">
                       {badge(
@@ -1482,7 +1482,7 @@ const AdminDashboard: React.FC = () => {
 
                 {/* HR Panel: Stage, Rating, Interview, Next step, Tags, Notes, Email */}
                 {detailTab === 'status' && (
-                <div className="border border-[#d3dded] rounded-xl p-5 space-y-5 bg-white">
+                <div className="border border-[#d3dded] rounded-xl p-5 space-y-5 bg-[#f7f9fd]">
                   <h3 className="text-lg font-bold border-b pb-2 text-[#0b1f3a]">Candidate Control Center</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
