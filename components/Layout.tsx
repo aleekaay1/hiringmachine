@@ -36,11 +36,11 @@ const Layout: React.FC<LayoutProps> = ({
     <div className="min-h-screen flex font-sans text-gray-800" style={{ backgroundColor: isAdmin ? '#eef2f7' : COLORS.background }}>
       {isAdmin && (
         <aside className="hidden lg:flex w-72 shrink-0 flex-col border-r border-[#1c3760] bg-[#0b1f3a] text-white">
-          <div className="px-5 py-5 border-b border-[#1c3760] space-y-3">
+          <div className="px-5 py-6 border-b border-[#1c3760] flex flex-col items-center text-center gap-4">
             <img
               src="/logo.png"
               alt="Paz Hiring Journey"
-              className="h-9 w-auto object-contain brightness-0 invert"
+              className="h-44 w-auto max-w-[92%] object-contain brightness-0 invert"
               onError={(e) => {
                 const target = e.target as HTMLImageElement;
                 target.style.display = 'none';

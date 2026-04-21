@@ -31,7 +31,7 @@ import {
   type PipelineStage,
   type AdminData,
 } from '../types';
-import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
+import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare, ChevronDown, ChevronUp, BarChart3, Activity, TrendingUp } from 'lucide-react';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
@@ -111,6 +111,7 @@ const AdminDashboard: React.FC = () => {
   const [evaluatorName, setEvaluatorName] = useState('');
   const [evaluationComments, setEvaluationComments] = useState('');
   const [evaluationSaving, setEvaluationSaving] = useState(false);
+  const [detailTab, setDetailTab] = useState<'profile' | 'pipeline' | 'evaluation' | 'assessment' | 'communication'>('profile');
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -827,6 +828,15 @@ const AdminDashboard: React.FC = () => {
     PIPELINE_STAGES.indexOf(getAdminData(selectedCandidate).pipelineStage) >=
       PIPELINE_STAGES.indexOf('Leadership form submitted, awaiting evaluation');
 
+  const stageDistribution = useMemo(() => {
+    const max = Math.max(1, ...PIPELINE_STAGES.map((s) => dashboard.stageCounts[s] ?? 0));
+    return PIPELINE_STAGES.map((s) => ({
+      stage: s,
+      count: dashboard.stageCounts[s] ?? 0,
+      width: `${Math.max(6, Math.round(((dashboard.stageCounts[s] ?? 0) / max) * 100))}%`,
+    }));
+  }, [dashboard.stageCounts]);
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
@@ -895,6 +905,47 @@ const AdminDashboard: React.FC = () => {
                 <div className="text-[11px] mt-0.5">{dashboard.stageCounts[s] ?? 0}</div>
               </button>
             ))}
+          </div>
+          <div className="px-5 py-4 border-t border-gray-100 grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div className="rounded-xl border border-gray-200 bg-[#fbfdff] p-3">
+              <p className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold flex items-center gap-1"><BarChart3 size={13}/> Pipeline Velocity</p>
+              <div className="mt-2 space-y-1.5">
+                {stageDistribution.slice(0, 4).map((row) => (
+                  <div key={row.stage} className="flex items-center gap-2 text-[11px]">
+                    <span className="w-24 truncate text-gray-600">{TIMELINE_SHORT_LABELS[row.stage]}</span>
+                    <div className="flex-1 h-2 rounded-full bg-gray-100 overflow-hidden">
+                      <div className="h-full bg-[#005EB8]" style={{ width: row.width }} />
+                    </div>
+                    <span className="w-6 text-right text-gray-700">{row.count}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-[#fbfdff] p-3">
+              <p className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold flex items-center gap-1"><TrendingUp size={13}/> Hiring Fit Snapshot</p>
+              <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-lg bg-green-50 border border-green-100 py-2">
+                  <p className="text-lg font-bold text-green-700">{dashboard.highFit}</p>
+                  <p className="text-[10px] text-green-700/80">High fit</p>
+                </div>
+                <div className="rounded-lg bg-amber-50 border border-amber-100 py-2">
+                  <p className="text-lg font-bold text-amber-700">{dashboard.review}</p>
+                  <p className="text-[10px] text-amber-700/80">Review</p>
+                </div>
+                <div className="rounded-lg bg-red-50 border border-red-100 py-2">
+                  <p className="text-lg font-bold text-red-700">{dashboard.notAligned}</p>
+                  <p className="text-[10px] text-red-700/80">Not aligned</p>
+                </div>
+              </div>
+            </div>
+            <div className="rounded-xl border border-gray-200 bg-[#fbfdff] p-3">
+              <p className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold flex items-center gap-1"><Activity size={13}/> Operational Queue</p>
+              <div className="mt-2 space-y-1 text-[12px]">
+                <div className="flex items-center justify-between"><span className="text-gray-600">Assessments completed</span><span className="font-semibold text-gray-900">{dashboard.assessmentComplete}</span></div>
+                <div className="flex items-center justify-between"><span className="text-gray-600">Resumes pending review</span><span className="font-semibold text-gray-900">{dashboard.resumesPendingReview}</span></div>
+                <div className="flex items-center justify-between"><span className="text-gray-600">Active pipeline</span><span className="font-semibold text-gray-900">{dashboard.activePipeline}</span></div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1204,7 +1255,31 @@ const AdminDashboard: React.FC = () => {
                   </div>
                 </div>
 
+                <div className="rounded-xl border border-gray-200 bg-white p-2 flex flex-wrap gap-2">
+                  {[
+                    ['profile', 'Profile'],
+                    ['pipeline', 'Pipeline'],
+                    ['evaluation', 'Evaluation'],
+                    ['assessment', 'Assessment'],
+                    ['communication', 'Communication'],
+                  ].map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setDetailTab(id as typeof detailTab)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
+                        detailTab === id
+                          ? 'bg-[#0b1f3a] text-white border-[#0b1f3a]'
+                          : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
                 {/* At-a-glance */}
+                {detailTab === 'profile' && (
                 <div className="rounded-2xl border border-gray-200 bg-gradient-to-r from-[#005EB8]/5 to-[#37B06D]/5 p-5">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-2">
@@ -1234,9 +1309,10 @@ const AdminDashboard: React.FC = () => {
                     </div>
                   </div>
                 </div>
+                )}
 
                 {/* Disqualified at questionnaire - reason for admin */}
-                {getAdminData(selectedCandidate).questionnaireDisqualified && (
+                {detailTab === 'profile' && getAdminData(selectedCandidate).questionnaireDisqualified && (
                   <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
                     <h3 className="text-sm font-bold text-amber-900 mb-1">Disqualified at questionnaire</h3>
                     <p className="text-sm text-amber-800 mb-1">
@@ -1250,7 +1326,7 @@ const AdminDashboard: React.FC = () => {
                 )}
 
                 {/* Resumes - prominent for admin review */}
-                {selectedCandidate.applicantQuestionnaire?.resumeUrls?.length ? (
+                {detailTab === 'profile' && (selectedCandidate.applicantQuestionnaire?.resumeUrls?.length ? (
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 space-y-3">
                     <div className="flex items-center justify-between">
                       <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
@@ -1284,9 +1360,10 @@ const AdminDashboard: React.FC = () => {
                   <div className="bg-slate-50 border border-dashed border-slate-200 rounded-xl p-4 text-center text-sm text-gray-500">
                     No resumes uploaded.
                   </div>
-                )}
+                ))}
 
                 {/* HR Panel: Stage, Rating, Interview, Next step, Tags, Notes, Email */}
+                {(detailTab === 'pipeline' || detailTab === 'evaluation' || detailTab === 'communication') && (
                 <div className="border border-[#d3dded] rounded-xl p-5 space-y-5 bg-white">
                   <h3 className="text-lg font-bold border-b pb-2 text-[#0b1f3a]">Candidate Control Center</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1494,9 +1571,10 @@ const AdminDashboard: React.FC = () => {
                     )}
                   </div>
                 </div>
+                )}
 
                 {/* Applicant Questionnaire */}
-                {selectedCandidate.applicantQuestionnaire && (
+                {detailTab === 'assessment' && selectedCandidate.applicantQuestionnaire && (
                   <div className="space-y-4">
                     <h3 className="text-lg font-bold border-b pb-2">Applicant Questionnaire</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
@@ -1558,7 +1636,7 @@ const AdminDashboard: React.FC = () => {
                 )}
 
                 {/* Assessment Data */}
-                {selectedCandidate.assessment ? (
+                {detailTab === 'assessment' && (selectedCandidate.assessment ? (
                   <div className="space-y-6">
                     <h3 className="text-lg font-bold border-b pb-2">Assessment Results</h3>
 
@@ -1841,7 +1919,7 @@ const AdminDashboard: React.FC = () => {
                   <div className="text-center py-12 bg-gray-50 rounded-lg border border-dashed border-gray-300">
                     <p className="text-gray-400">Assessment not started or completed.</p>
                   </div>
-                )}
+                ))}
               </div>
             ) : (
               <div className="h-full flex flex-col items-center justify-center text-gray-400">
