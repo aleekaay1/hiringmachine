@@ -101,12 +101,6 @@ Deno.serve(async (req) => {
 
   try {
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
@@ -118,11 +112,16 @@ Deno.serve(async (req) => {
       });
     }
 
-    const bearer = authHeader.replace(/^Bearer\s+/i, '').trim();
     const apikeyHeader = req.headers.get('apikey')?.trim() ?? '';
-    const allowAnonAppRequest = bearer === anonKey && apikeyHeader === anonKey;
+    const allowAnonAppRequest = apikeyHeader === anonKey;
 
     if (!allowAnonAppRequest) {
+      if (!authHeader?.startsWith('Bearer ')) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
       const userClient = createClient(supabaseUrl, anonKey, {
         global: { headers: { Authorization: authHeader } },
       });
