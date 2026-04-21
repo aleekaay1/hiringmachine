@@ -37,9 +37,17 @@ const Layout: React.FC<LayoutProps> = ({
     <div className="min-h-screen flex font-sans text-gray-800" style={{ backgroundColor: isAdmin ? '#f3f4f6' : COLORS.background }}>
       {isAdmin && (
         <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-gray-200 bg-[#f7f9fc]">
-          <div className="px-5 py-5 border-b border-gray-200">
-            <div className="text-sm font-semibold text-gray-900">HR & Recruiter</div>
-            <div className="text-xs text-gray-500">hire smarter</div>
+          <div className="px-5 py-5 border-b border-gray-200 space-y-3">
+            <img
+              src="/logo.png"
+              alt="Paz Hiring Journey"
+              className="h-8 w-auto object-contain"
+              onError={(e) => {
+                const target = e.target as HTMLImageElement;
+                target.style.display = 'none';
+              }}
+            />
+            <div className="text-sm font-semibold text-gray-900 leading-tight">Paz Hiring Journey Management</div>
           </div>
           <nav className="p-3 space-y-1">
             {adminMenu.map((item) => {
@@ -74,7 +82,7 @@ const Layout: React.FC<LayoutProps> = ({
         </aside>
       )}
       <div className="min-h-screen flex flex-col flex-1">
-      {!hideHeader && (
+      {!hideHeader && !isAdmin && (
         <header className="bg-white shadow-sm sticky top-0 z-50 safe-area-top">
           <div
             className={`mx-auto w-full flex items-center gap-2 ${

@@ -866,58 +866,35 @@ const AdminDashboard: React.FC = () => {
 
   return (
     <Layout isAdmin>
-      <div className="max-w-7xl mx-auto w-full p-6 space-y-6">
-        {/* Top header */}
-        <div className="rounded-3xl border border-gray-200 bg-gradient-to-r from-[#005EB8]/10 via-white to-[#37B06D]/10 p-6 shadow-sm">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+      <div className="max-w-[1500px] mx-auto w-full p-6 space-y-5">
+        <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+          <div className="px-5 py-4 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="flex items-center gap-2">
-                <div className="h-9 w-9 rounded-2xl bg-white border border-gray-200 shadow-sm flex items-center justify-center">
-                  <User className="text-[#005EB8]" size={18} />
-                </div>
-                <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight">Paz Hiring · Admin</h1>
-              </div>
-              <p className="text-sm text-gray-600 mt-1">
-                {loading ? 'Loading candidates…' : `${dashboard.total} candidates · ${dashboard.activePipeline} active in pipeline`}
+              <h1 className="text-2xl font-bold text-gray-900">Candidates</h1>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {loading ? 'Loading candidates…' : `${dashboard.total} applicants · ${dashboard.activePipeline} in active pipeline`}
               </p>
             </div>
-
             <div className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" className="text-sm" onClick={() => navigate('/qr')}>
-                QR Codes
-              </Button>
-              <Button onClick={exportCSV} variant="outline" className="text-sm">
-                <Download size={16} className="mr-2" /> Export CSV
-              </Button>
-              <Button variant="outline" className="text-sm" onClick={handleLogout}>
-                Sign Out
-              </Button>
+              <Button variant="outline" className="text-sm" onClick={() => navigate('/qr')}>QR Codes</Button>
+              <Button onClick={exportCSV} variant="outline" className="text-sm"><Download size={16} className="mr-2" />Export CSV</Button>
+              <Button variant="outline" className="text-sm" onClick={handleLogout}>Sign Out</Button>
             </div>
           </div>
-
-          {/* KPIs */}
-          <div className="mt-6 grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-            <StatCard label="Total" value={dashboard.total} hint="All time" accent="blue" />
-            <StatCard label="High fit" value={dashboard.highFit} hint="Score category" accent="green" />
-            <StatCard label="Review" value={dashboard.review} hint="Needs review" accent="amber" />
-            <StatCard label="Not aligned" value={dashboard.notAligned} hint="Low fit" accent="red" />
-            <StatCard label="Assessments" value={dashboard.assessmentComplete} hint="Completed" accent="slate" />
-            <StatCard label="Resumes" value={dashboard.resumesPendingReview} hint="Pending review" accent="blue" />
-          </div>
-
-          {/* Pipeline strip */}
-          <div className="mt-5">
-            <div className="mb-2">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">Pipeline snapshot</p>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-              {PIPELINE_STAGES.map((s) => (
-                <div key={s} className="rounded-2xl border border-gray-200 bg-white/70 px-3 py-2">
-                  <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">{s}</p>
-                  <p className="text-lg font-extrabold text-gray-900">{dashboard.stageCounts[s] ?? 0}</p>
-                </div>
-              ))}
-            </div>
+          <div className="px-5 py-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 text-xs">
+            {PIPELINE_STAGES.map((s) => (
+              <button
+                type="button"
+                key={s}
+                onClick={() => setPipelineFilter(s)}
+                className={`text-left rounded-xl border px-3 py-2 transition ${
+                  pipelineFilter === s ? 'border-[#005EB8] bg-blue-50 text-[#005EB8]' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <div className="font-semibold truncate">{TIMELINE_SHORT_LABELS[s]}</div>
+                <div className="text-[11px] mt-0.5">{dashboard.stageCounts[s] ?? 0}</div>
+              </button>
+            ))}
           </div>
         </div>
 
