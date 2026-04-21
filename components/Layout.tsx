@@ -38,15 +38,17 @@ const Layout: React.FC<LayoutProps> = ({
       {isAdmin && (
         <aside className="hidden lg:flex w-72 shrink-0 flex-col border-r border-[#1c3760] bg-[#0b1f3a] text-white">
           <div className="px-5 py-6 border-b border-[#1c3760] flex flex-col items-center text-center gap-4">
-            <img
-              src="/logo.png"
-              alt="Paz Hiring Journey"
-              className="h-44 w-auto max-w-[92%] object-contain brightness-0 invert"
-              onError={(e) => {
-                const target = e.target as HTMLImageElement;
-                target.style.display = 'none';
-              }}
-            />
+            <div className="h-44 w-44 rounded-full bg-white border border-[#d6deea] shadow-[0_10px_30px_-18px_rgba(0,0,0,0.45)] flex items-center justify-center overflow-hidden">
+              <img
+                src="/logo.png"
+                alt="Paz Hiring Journey"
+                className="h-28 w-28 object-contain"
+                onError={(e) => {
+                  const target = e.target as HTMLImageElement;
+                  target.style.display = 'none';
+                }}
+              />
+            </div>
             <div className="text-sm font-semibold leading-tight text-slate-100">Paz Hiring Journey Management</div>
           </div>
           <nav className="p-3 space-y-1.5">
