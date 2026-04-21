@@ -80,7 +80,7 @@ Add the **required** Zoom secrets below. Optionally add Calendly and/or filters 
 | `ZOOM_HOST_USER_EMAIL` | Yes | Host’s Zoom login email (plain text, no quotes) |
 | `ZOOM_LIVE_SESSION_MEETING_ID` | No | Digits-only Zoom meeting id for live overview (default **6478311787**). Set `*` or `any` to disable PMI / join-URL filtering. |
 | `ZOOM_LIVE_SESSION_TOPIC_REQUIRES_MEETING_ID` | No | `1` or `true`: when PMI filter is on, Zoom **topic** must also contain that meeting id as text (embed the id in the topic if needed). |
-| `ZOOM_LIVE_SESSION_STRICT_TIME_SLOTS` | No | `1` or `true`: only rows whose start in **America/Toronto** is **Tuesday 18:00–19:00** or **Wednesday 11:30–12:30** (Zoom + Calendly used for matching). |
+| `ZOOM_LIVE_SESSION_STRICT_TIME_SLOTS` | No | Only rows whose start in **America/Toronto** is **Tuesday 18:00–19:00** or **Wednesday 11:30–12:30**. **Default ON** when `ZOOM_LIVE_SESSION_MEETING_ID` is active (default PMI); set `0` / `false` / `off` to show all times. With meeting id `*`, default is **off** unless you set `1` / `true`. |
 | `ZOOM_LIVE_SESSION_TOPIC_FILTER` | No | Zoom **meeting topic** substring filter — see below |
 | `CALENDLY_EVENT_NAME_FILTER` | No | Calendly **event name** substring filter (e.g. `career` for “Live Online Career Session”) — independent from Zoom |
 | `INTEGRATION_MATCH_TOLERANCE_MINUTES` | No | Max start-time difference for Zoom↔Calendly pairing (default **120**; integer, max 1440) |

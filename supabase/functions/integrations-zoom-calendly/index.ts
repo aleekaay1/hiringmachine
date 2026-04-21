@@ -17,9 +17,10 @@
  * is active, also require Zoom **topic** to contain the numeric meeting id (substring), so attendance rows match
  * sessions whose title includes that id (e.g. if you embed `6478311787` in the topic).
  *
- * Optional **ZOOM_LIVE_SESSION_STRICT_TIME_SLOTS** = `1` / `true` / `yes` / `on`: only keep Zoom rows (and
- * Calendly events used for matching) whose start time in **America/Toronto** falls in:
- * **Tuesday 18:00–19:00** or **Wednesday 11:30–12:30** (live overview windows).
+ * **ZOOM_LIVE_SESSION_STRICT_TIME_SLOTS** — only Zoom rows / Calendly events whose start in **America/Toronto**
+ * is **Tuesday 18:00–19:00** or **Wednesday 11:30–12:30**. Default **ON** when the PMI / meeting-id filter is active
+ * (same id every week otherwise lists every occurrence). Set to `0` / `false` / `off` / `no` to disable.
+ * When meeting-id filter is off (`ZOOM_LIVE_SESSION_MEETING_ID=*`), default is **off** unless you set `1` / `true`.
  *
  * Auth: Supabase JWT (same as send-email).
  * Deploy: supabase functions deploy integrations-zoom-calendly
@@ -354,6 +355,14 @@ function envFlagEnabled(name: string): boolean {
   return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
 
+/** Tue 18:00–19:00 & Wed 11:30–12:30 Toronto: on by default when PMI id filter is on (same id all week). */
+function strictLiveOverviewTimeSlotsEnabled(zoomMeetingIdDigits: string | null): boolean {
+  const raw = (Deno.env.get('ZOOM_LIVE_SESSION_STRICT_TIME_SLOTS')?.trim() || '').toLowerCase();
+  if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
+  if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') return true;
+  return zoomMeetingIdDigits != null;
+}
+
 function zoomTopicContainsMeetingDigits(m: Record<string, unknown>, digits: string): boolean {
   if (!digits) return true;
   const topic = String(m.topic || '');
@@ -685,7 +694,7 @@ Deno.serve(async (req) => {
     const calendlyNamePatterns = parseSubstringFilter(calendlyEventFilterRaw);
     const zoomMeetingIdDigits = zoomLiveSessionMeetingIdDigits();
     const topicRequiresMeetingId = envFlagEnabled('ZOOM_LIVE_SESSION_TOPIC_REQUIRES_MEETING_ID');
-    const strictTimeSlots = envFlagEnabled('ZOOM_LIVE_SESSION_STRICT_TIME_SLOTS');
+    const strictTimeSlots = strictLiveOverviewTimeSlotsEnabled(zoomMeetingIdDigits);
 
     const zoomToken = await getZoomAccessToken();
     const zoomUserId = await zoomGetUserIdByEmail(zoomToken, zoomHostEmail);
