@@ -20,6 +20,7 @@ const corsHeaders = {
 };
 
 const STAGE3_LOG_TYPE = 'automated_stage3_after_live_session';
+const LEGACY_INVITE_TAG = 'Career session invited';
 
 const DEFAULT_ADMIN = {
   notes: [] as unknown[],
@@ -53,7 +54,11 @@ function parseAdmin(raw: unknown): Record<string, unknown> {
 }
 
 function mergeAdminBase(prev: Record<string, unknown>): Record<string, unknown> {
-  return { ...DEFAULT_ADMIN, ...prev };
+  const merged = { ...DEFAULT_ADMIN, ...prev };
+  if (Array.isArray(merged.tags)) {
+    merged.tags = merged.tags.filter((t) => String(t).trim().toLowerCase() !== LEGACY_INVITE_TAG.toLowerCase());
+  }
+  return merged;
 }
 
 async function fetchCandidatesByEmails(
