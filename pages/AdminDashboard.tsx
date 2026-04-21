@@ -1234,7 +1234,7 @@ const AdminDashboard: React.FC = () => {
                   return (
                     <div className="mt-2 rounded-2xl border border-gray-200 bg-gradient-to-r from-slate-100 via-slate-50 to-emerald-50/40 px-3 py-5 sm:px-5 sm:py-6 shadow-sm">
                       <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-4">Hiring journey</p>
-                      <div className="overflow-x-auto pb-1 -mx-1">
+                      <div className="overflow-x-auto overflow-y-visible pt-2 pb-1 -mx-1">
                         <div className="min-w-[560px] sm:min-w-0 relative px-1">
                           <div className="pointer-events-none absolute left-3 right-3 top-[22px] h-[3px] rounded-full bg-gray-200 z-0" aria-hidden />
                           {n > 1 && (
