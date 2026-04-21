@@ -930,7 +930,7 @@ const AdminDashboard: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Candidate List */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden lg:col-span-1 h-[calc(100vh-260px)] flex flex-col">
-            <div className="p-4 border-b border-gray-100 bg-gradient-to-r from-gray-50 to-white space-y-2">
+            <div className="p-4 border-b border-gray-100 bg-white space-y-3">
               <div className="relative">
                 <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
                 <input
@@ -950,6 +950,27 @@ const AdminDashboard: React.FC = () => {
                   <option key={s} value={s}>{s}</option>
                 ))}
               </select>
+              <div className="flex flex-wrap gap-1">
+                <button
+                  type="button"
+                  onClick={() => setPipelineFilter('')}
+                  className={`px-2.5 py-1 rounded-full text-[11px] border ${pipelineFilter === '' ? 'bg-[#005EB8] text-white border-[#005EB8]' : 'bg-white text-gray-600 border-gray-200'}`}
+                >
+                  All ({candidates.length})
+                </button>
+                {PIPELINE_STAGES.slice(0, 5).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setPipelineFilter(s)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] border ${
+                      pipelineFilter === s ? 'bg-[#005EB8] text-white border-[#005EB8]' : 'bg-white text-gray-600 border-gray-200'
+                    }`}
+                  >
+                    {TIMELINE_SHORT_LABELS[s]} ({dashboard.stageCounts[s] ?? 0})
+                  </button>
+                ))}
+              </div>
               {selectedIds.size > 0 && (
                 <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-gray-200">
                   <span className="text-xs text-gray-600">{selectedIds.size} selected</span>
@@ -978,9 +999,11 @@ const AdminDashboard: React.FC = () => {
               )}
             </div>
             <div className="overflow-y-auto flex-grow">
-              <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-100 bg-gray-50/50">
+              <div className="grid grid-cols-[28px,1.7fr,0.8fr,0.9fr] items-center gap-2 px-4 py-2 border-b border-gray-100 bg-gray-50/70 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
                 <input type="checkbox" checked={selectedIds.size === filteredCandidates.length && filteredCandidates.length > 0} onChange={selectAll} className="rounded border-gray-300 text-[#005EB8]" />
-                <span className="text-xs text-gray-500">Select all</span>
+                <span>Candidate</span>
+                <span>Applied</span>
+                <span>Stage</span>
               </div>
               {filteredCandidates.map(c => {
                 const admin = getAdminData(c);
@@ -988,7 +1011,7 @@ const AdminDashboard: React.FC = () => {
                   <div
                     key={c.id}
                     onClick={() => selectCandidate(c)}
-                    className={`p-4 border-b border-gray-100 cursor-pointer transition-all flex gap-2 ${
+                    className={`grid grid-cols-[28px,1.7fr,0.8fr,0.9fr] items-center gap-2 p-3 border-b border-gray-100 cursor-pointer transition-all ${
                       selectedCandidate?.id === c.id
                         ? 'bg-gradient-to-r from-[#005EB8]/10 to-white border-l-4 border-l-[#005EB8]'
                         : 'hover:bg-gradient-to-r hover:from-gray-50 hover:to-white'
@@ -999,47 +1022,32 @@ const AdminDashboard: React.FC = () => {
                       checked={selectedIds.has(c.id)}
                       onChange={() => toggleSelect(c.id)}
                       onClick={e => e.stopPropagation()}
-                      className="mt-1 rounded border-gray-300 text-[#005EB8]"
+                      className="rounded border-gray-300 text-[#005EB8]"
                     />
-                    <div className="flex-1 min-w-0">
-                    <div className="flex justify-between items-start mb-1">
-                      <h3 className="font-bold text-gray-800">{c.firstName} {c.lastName}</h3>
-                      <div className="flex items-center gap-1">
-                        {admin.rating != null && (
-                          <span className="flex items-center text-amber-500 text-xs">
-                            <Star size={12} fill="currentColor" /> {admin.rating}
+                    <div className="min-w-0">
+                      <h3 className="font-semibold text-sm text-gray-900 truncate">{c.firstName} {c.lastName}</h3>
+                      <p className="text-[11px] text-gray-500 truncate">{c.email}</p>
+                      <div className="flex items-center gap-1 mt-1 flex-wrap">
+                        {c.fitCategory && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold border ${getStatusColor(c.fitCategory)}`}>
+                            {c.fitCategory}
                           </span>
                         )}
-                        {c.fitCategory && (
-                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border uppercase ${getStatusColor(c.fitCategory)}`}>
-                            {c.fitCategory}
+                        {!!c.applicantQuestionnaire?.resumeUrls?.length && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold bg-blue-50 text-blue-800 border border-blue-200">
+                            Resume
                           </span>
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-1.5 mb-1 flex-wrap">
-                      <p className="text-[11px] text-[#005EB8] font-medium">{admin.pipelineStage}</p>
+                    <div className="text-[11px] text-gray-500">{formatDateCanadaEastern(c.timestamp)}</div>
+                    <div className="min-w-0">
+                      <span className="text-[11px] px-2 py-0.5 rounded-full font-semibold bg-gray-100 text-gray-700 border border-gray-200 inline-block truncate max-w-full">
+                        {admin.pipelineStage}
+                      </span>
                       {admin.questionnaireDisqualified && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-800 border border-amber-200">
-                          Disqualified (questionnaire)
-                        </span>
+                        <span className="block text-[10px] mt-1 text-amber-700">Disqualified</span>
                       )}
-                      {!!c.applicantQuestionnaire?.resumeUrls?.length && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-blue-50 text-blue-800 border border-blue-200">
-                          Resume
-                        </span>
-                      )}
-                      {(c.status === 'assessment_complete' || !!c.assessment) && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                          Assessment
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-gray-500 mb-2">{c.email}</p>
-                    <div className="flex items-center justify-between text-xs text-gray-400">
-                      <span>{formatDateCanadaEastern(c.timestamp)}</span>
-                      <span>{c.status === 'assessment_complete' ? 'Completed' : 'In Progress'}</span>
-                    </div>
                     </div>
                   </div>
                 );

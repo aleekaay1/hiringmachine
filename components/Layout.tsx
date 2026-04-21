@@ -2,6 +2,8 @@ import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { COLORS } from '../constants';
 import IntegrationStatusLights from './IntegrationStatusLights';
+import { supabase } from '../services/supabaseClient';
+import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -22,8 +24,56 @@ const Layout: React.FC<LayoutProps> = ({
 
   const isActive = (path: string) => location.pathname === path;
 
+  const adminMenu = [
+    { name: 'Overview', route: '/admin', icon: Home },
+    { name: 'Candidates', route: '/admin', icon: Users },
+    { name: 'QR Codes', route: '/qr', icon: QrCode },
+    { name: 'Live Sessions', route: '/live-sessions', icon: Video },
+    { name: 'Analytics', route: '/admin', icon: BarChart3 },
+    { name: 'Settings', route: '/admin', icon: Settings },
+  ] as const;
+
   return (
-    <div className="min-h-screen flex flex-col font-sans text-gray-800" style={{ backgroundColor: isAdmin ? '#f3f4f6' : COLORS.background }}>
+    <div className="min-h-screen flex font-sans text-gray-800" style={{ backgroundColor: isAdmin ? '#f3f4f6' : COLORS.background }}>
+      {isAdmin && (
+        <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-gray-200 bg-[#f7f9fc]">
+          <div className="px-5 py-5 border-b border-gray-200">
+            <div className="text-sm font-semibold text-gray-900">HR & Recruiter</div>
+            <div className="text-xs text-gray-500">hire smarter</div>
+          </div>
+          <nav className="p-3 space-y-1">
+            {adminMenu.map((item) => {
+              const Icon = item.icon;
+              const active = isActive(item.route);
+              return (
+                <button
+                  key={item.name}
+                  type="button"
+                  onClick={() => navigate(item.route)}
+                  className={`w-full inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm transition ${
+                    active ? 'bg-white text-[#0f172a] shadow-sm border border-gray-200' : 'text-gray-600 hover:bg-white/80'
+                  }`}
+                >
+                  <Icon size={15} />
+                  {item.name}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              onClick={async () => {
+                await supabase.auth.signOut();
+                navigate('/admin');
+              }}
+              className="w-full mt-2 inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-gray-600 hover:bg-white/80"
+            >
+              <LogOut size={15} />
+              Logout
+            </button>
+          </nav>
+        </aside>
+      )}
+      <div className="min-h-screen flex flex-col flex-1">
       {!hideHeader && (
         <header className="bg-white shadow-sm sticky top-0 z-50 safe-area-top">
           <div
@@ -116,6 +166,7 @@ const Layout: React.FC<LayoutProps> = ({
           <p>&copy; {new Date().getFullYear()} Paz Organization | Globe Life AIL Division</p>
         </footer>
       )}
+      </div>
     </div>
   );
 };
