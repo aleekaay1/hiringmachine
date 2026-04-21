@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useCallback, Fragment } from 'react';
+import React, { useState, useEffect, useCallback, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import IntegrationStatusLights from '../components/IntegrationStatusLights';
@@ -33,6 +33,15 @@ const LiveSessionsDashboard: React.FC = () => {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
 
+  const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
+    const { data: s } = await supabase.auth.getSession();
+    const token = s.session?.access_token;
+    if (token) return token;
+    const { data: refreshed, error } = await supabase.auth.refreshSession();
+    if (error) return null;
+    return refreshed.session?.access_token ?? null;
+  }, []);
+
   useEffect(() => {
     const check = async () => {
       const { data: s } = await supabase.auth.getSession();
@@ -45,8 +54,7 @@ const LiveSessionsDashboard: React.FC = () => {
     setFetchError(null);
     setSyncSummary(null);
     setSyncError(null);
-    const { data: s } = await supabase.auth.getSession();
-    const token = s.session?.access_token;
+    const token = await getFreshAccessToken();
     if (!token) {
       setFetchError('Not signed in.');
       return;
@@ -60,7 +68,7 @@ const LiveSessionsDashboard: React.FC = () => {
       return;
     }
     setData(result.data);
-  }, []);
+  }, [getFreshAccessToken]);
 
   useEffect(() => {
     if (isAuthenticated) void load();
@@ -87,8 +95,7 @@ const LiveSessionsDashboard: React.FC = () => {
     if (!data) return;
     setSyncError(null);
     setSyncSummary(null);
-    const { data: s } = await supabase.auth.getSession();
-    const token = s.session?.access_token;
+    const token = await getFreshAccessToken();
     if (!token) {
       setSyncError('Not signed in.');
       return;
