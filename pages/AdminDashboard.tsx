@@ -31,7 +31,7 @@ import {
   type PipelineStage,
   type AdminData,
 } from '../types';
-import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare, ChevronDown, ChevronUp, BarChart3, Activity, TrendingUp } from 'lucide-react';
+import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
@@ -111,7 +111,9 @@ const AdminDashboard: React.FC = () => {
   const [evaluatorName, setEvaluatorName] = useState('');
   const [evaluationComments, setEvaluationComments] = useState('');
   const [evaluationSaving, setEvaluationSaving] = useState(false);
-  const [detailTab, setDetailTab] = useState<'profile' | 'pipeline' | 'evaluation' | 'assessment' | 'communication'>('profile');
+  const [detailTab, setDetailTab] = useState<'profile' | 'status' | 'assessment' | 'communication'>('profile');
+  const [workspaceTab, setWorkspaceTab] = useState<'overview' | 'candidates' | 'analytics'>('overview');
+  const [showEvaluationModal, setShowEvaluationModal] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -804,17 +806,38 @@ const AdminDashboard: React.FC = () => {
       await updateAdminData((prev) => ({
         ...prev,
         pipelineStage: 'Evaluation Done',
-        evaluation: {
-          doneAt: nowIso,
-          evaluatorName: name,
-          comments: evaluationComments.trim(),
-          evaluationEmailSentAt: nowIso,
-        },
+        evaluation: (() => {
+          const entry = {
+            doneAt: nowIso,
+            evaluatorName: name,
+            comments: evaluationComments.trim(),
+            evaluationEmailSentAt: nowIso,
+            editedAt: nowIso,
+          };
+          const priorHistory = prev.evaluation?.history ?? [];
+          const previousEntry = prev.evaluation
+            ? [{
+                doneAt: prev.evaluation.doneAt,
+                evaluatorName: prev.evaluation.evaluatorName,
+                comments: prev.evaluation.comments,
+                evaluationEmailSentAt: prev.evaluation.evaluationEmailSentAt,
+                editedAt: nowIso,
+              }]
+            : [];
+          return {
+            doneAt: nowIso,
+            evaluatorName: name,
+            comments: evaluationComments.trim(),
+            evaluationEmailSentAt: nowIso,
+            history: [...priorHistory, ...previousEntry, entry],
+          };
+        })(),
         emailsSent: [
           ...prev.emailsSent,
           { sentAt: nowIso, subject, type: 'automated_evaluation_done' },
         ],
       }));
+      setShowEvaluationModal(false);
     } catch (err) {
       console.error(err);
       alert(err instanceof Error ? err.message : 'Failed to complete evaluation.');
@@ -877,6 +900,107 @@ const AdminDashboard: React.FC = () => {
   return (
     <Layout isAdmin>
       <div className="w-full p-5 lg:p-6 space-y-5">
+        <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-4 py-3 flex flex-wrap gap-2">
+          {[
+            ['overview', 'Overview'],
+            ['candidates', 'Candidates'],
+            ['analytics', 'Analytics'],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setWorkspaceTab(id as typeof workspaceTab)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-semibold border ${
+                workspaceTab === id
+                  ? 'bg-[#0b1f3a] text-white border-[#0b1f3a]'
+                  : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {workspaceTab === 'overview' && (
+          <div className="grid grid-cols-1 xl:grid-cols-[320px_minmax(0,1fr)] gap-5">
+            <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
+              <p className="text-sm font-semibold text-[#0b1f3a] mb-3">Calendar Widget</p>
+              <input type="date" className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm" />
+              <div className="mt-4 space-y-2 text-xs text-gray-600">
+                <p>Total candidates: <span className="font-semibold text-gray-900">{dashboard.total}</span></p>
+                <p>Active pipeline: <span className="font-semibold text-gray-900">{dashboard.activePipeline}</span></p>
+                <p>Assessments completed: <span className="font-semibold text-gray-900">{dashboard.assessmentComplete}</span></p>
+              </div>
+            </div>
+            <div className="space-y-5">
+              <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-5">
+                <p className="text-sm font-semibold text-[#0b1f3a] mb-3">Pipeline Velocity</p>
+                <div className="space-y-2">
+                  {stageDistribution.map((row) => (
+                    <div key={row.stage} className="flex items-center gap-2 text-xs">
+                      <span className="w-28 truncate text-gray-600">{TIMELINE_SHORT_LABELS[row.stage]}</span>
+                      <div className="h-2 flex-1 rounded-full bg-gray-100 overflow-hidden">
+                        <div className="h-full bg-[#005EB8]" style={{ width: row.width }} />
+                      </div>
+                      <span className="w-6 text-right text-gray-800">{row.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-5">
+                  <p className="text-sm font-semibold text-[#0b1f3a] mb-3">Hiring Fit Snapshot</p>
+                  <div className="mx-auto w-40 h-40 rounded-full" style={{ background: `conic-gradient(#22c55e 0 ${Math.max(1, Math.round((dashboard.highFit / Math.max(1, dashboard.total)) * 360))}deg, #f59e0b 0 ${Math.max(1, Math.round(((dashboard.highFit + dashboard.review) / Math.max(1, dashboard.total)) * 360))}deg, #ef4444 0 360deg)` }} />
+                </div>
+                <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-5">
+                  <p className="text-sm font-semibold text-[#0b1f3a] mb-3">Operational Queue</p>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between"><span>High fit</span><span className="font-semibold">{dashboard.highFit}</span></div>
+                    <div className="flex justify-between"><span>Review</span><span className="font-semibold">{dashboard.review}</span></div>
+                    <div className="flex justify-between"><span>Not aligned</span><span className="font-semibold">{dashboard.notAligned}</span></div>
+                    <div className="flex justify-between"><span>Resumes pending review</span><span className="font-semibold">{dashboard.resumesPendingReview}</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {workspaceTab === 'analytics' && (
+          <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-5 space-y-4">
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={exportCSV} variant="outline" className="text-sm">
+                <Download size={16} className="mr-2" />
+                Export all candidates CSV
+              </Button>
+            </div>
+            <div className="border border-gray-200 rounded-xl overflow-hidden">
+              <div className="grid grid-cols-[1.5fr,1fr,1fr] px-4 py-2 text-xs font-semibold uppercase tracking-wide text-gray-500 bg-[#f8fbff] border-b border-gray-200">
+                <span>Candidate</span>
+                <span>Current stage</span>
+                <span>Reports</span>
+              </div>
+              {candidates.map((c) => (
+                <div key={c.id} className="grid grid-cols-[1.5fr,1fr,1fr] px-4 py-3 text-sm border-b border-gray-100 items-center">
+                  <div className="min-w-0">
+                    <p className="font-semibold text-gray-900 truncate">{c.firstName} {c.lastName}</p>
+                    <p className="text-xs text-gray-500 truncate">{c.email}</p>
+                  </div>
+                  <span className="text-xs text-gray-700">{getAdminData(c).pipelineStage}</span>
+                  <button
+                    type="button"
+                    className="w-fit text-xs px-2.5 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-50"
+                    onClick={() => downloadCandidateReportPdf(c)}
+                  >
+                    Download PDF
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {workspaceTab === 'candidates' && (
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm">
           <div className="px-5 py-4 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -906,47 +1030,6 @@ const AdminDashboard: React.FC = () => {
               </button>
             ))}
           </div>
-          <div className="px-5 py-4 border-t border-gray-100 grid grid-cols-1 lg:grid-cols-3 gap-3">
-            <div className="rounded-xl border border-gray-200 bg-[#fbfdff] p-3">
-              <p className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold flex items-center gap-1"><BarChart3 size={13}/> Pipeline Velocity</p>
-              <div className="mt-2 space-y-1.5">
-                {stageDistribution.slice(0, 4).map((row) => (
-                  <div key={row.stage} className="flex items-center gap-2 text-[11px]">
-                    <span className="w-24 truncate text-gray-600">{TIMELINE_SHORT_LABELS[row.stage]}</span>
-                    <div className="flex-1 h-2 rounded-full bg-gray-100 overflow-hidden">
-                      <div className="h-full bg-[#005EB8]" style={{ width: row.width }} />
-                    </div>
-                    <span className="w-6 text-right text-gray-700">{row.count}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="rounded-xl border border-gray-200 bg-[#fbfdff] p-3">
-              <p className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold flex items-center gap-1"><TrendingUp size={13}/> Hiring Fit Snapshot</p>
-              <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-                <div className="rounded-lg bg-green-50 border border-green-100 py-2">
-                  <p className="text-lg font-bold text-green-700">{dashboard.highFit}</p>
-                  <p className="text-[10px] text-green-700/80">High fit</p>
-                </div>
-                <div className="rounded-lg bg-amber-50 border border-amber-100 py-2">
-                  <p className="text-lg font-bold text-amber-700">{dashboard.review}</p>
-                  <p className="text-[10px] text-amber-700/80">Review</p>
-                </div>
-                <div className="rounded-lg bg-red-50 border border-red-100 py-2">
-                  <p className="text-lg font-bold text-red-700">{dashboard.notAligned}</p>
-                  <p className="text-[10px] text-red-700/80">Not aligned</p>
-                </div>
-              </div>
-            </div>
-            <div className="rounded-xl border border-gray-200 bg-[#fbfdff] p-3">
-              <p className="text-[11px] uppercase tracking-wide text-gray-500 font-semibold flex items-center gap-1"><Activity size={13}/> Operational Queue</p>
-              <div className="mt-2 space-y-1 text-[12px]">
-                <div className="flex items-center justify-between"><span className="text-gray-600">Assessments completed</span><span className="font-semibold text-gray-900">{dashboard.assessmentComplete}</span></div>
-                <div className="flex items-center justify-between"><span className="text-gray-600">Resumes pending review</span><span className="font-semibold text-gray-900">{dashboard.resumesPendingReview}</span></div>
-                <div className="flex items-center justify-between"><span className="text-gray-600">Active pipeline</span><span className="font-semibold text-gray-900">{dashboard.activePipeline}</span></div>
-              </div>
-            </div>
-          </div>
         </div>
 
         {error && (
@@ -955,9 +1038,9 @@ const AdminDashboard: React.FC = () => {
           </div>
         )}
 
-        <div className="grid grid-cols-1 xl:grid-cols-[460px_minmax(0,1fr)] gap-5">
+        <div className="grid grid-cols-1 gap-5">
           {/* Candidate List */}
-          <div className="bg-white rounded-2xl shadow-sm border border-[#d6deea] overflow-hidden h-[calc(100vh-210px)] flex flex-col">
+          <div className={`${selectedCandidate ? 'hidden' : 'flex'} bg-white rounded-2xl shadow-sm border border-[#d6deea] overflow-hidden h-[calc(100vh-210px)] flex-col`}>
             <div className="p-4 border-b border-gray-100 bg-white space-y-3">
               <div className="relative">
                 <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
@@ -1027,19 +1110,21 @@ const AdminDashboard: React.FC = () => {
               )}
             </div>
             <div className="overflow-y-auto flex-grow">
-              <div className="grid grid-cols-[28px,1.7fr,0.8fr,0.9fr] items-center gap-2 px-4 py-2 border-b border-gray-100 bg-[#f8fbff] text-[11px] font-semibold text-gray-500 uppercase tracking-wide sticky top-0 z-10">
+              <div className="grid grid-cols-[34px,1.3fr,0.9fr,1.3fr,1.1fr,0.7fr,0.7fr] items-center gap-2 px-4 py-2 border-b border-gray-100 bg-[#f8fbff] text-[11px] font-semibold text-gray-500 uppercase tracking-wide sticky top-0 z-10">
                 <input type="checkbox" checked={selectedIds.size === filteredCandidates.length && filteredCandidates.length > 0} onChange={selectAll} className="rounded border-gray-300 text-[#005EB8]" />
-                <span>Candidate</span>
-                <span>Applied</span>
-                <span>Stage</span>
+                <span>Candidate Name</span>
+                <span>Phone</span>
+                <span>Email</span>
+                <span>Status / Stage</span>
+                <span>Score</span>
+                <span>Resume</span>
               </div>
               {filteredCandidates.map(c => {
                 const admin = getAdminData(c);
                 return (
                   <div
                     key={c.id}
-                    onClick={() => selectCandidate(c)}
-                    className={`grid grid-cols-[28px,1.7fr,0.8fr,0.9fr] items-center gap-2 p-3 border-b border-gray-100 cursor-pointer transition-all ${
+                    className={`grid grid-cols-[34px,1.3fr,0.9fr,1.3fr,1.1fr,0.7fr,0.7fr] items-center gap-2 p-3 border-b border-gray-100 transition-all ${
                       selectedCandidate?.id === c.id
                         ? 'bg-gradient-to-r from-[#005EB8]/10 to-white border-l-4 border-l-[#005EB8]'
                         : 'hover:bg-gradient-to-r hover:from-gray-50 hover:to-white'
@@ -1053,30 +1138,19 @@ const AdminDashboard: React.FC = () => {
                       className="rounded border-gray-300 text-[#005EB8]"
                     />
                     <div className="min-w-0">
-                      <h3 className="font-semibold text-sm text-gray-900 truncate">{c.firstName} {c.lastName}</h3>
-                      <p className="text-[11px] text-gray-500 truncate">{c.email}</p>
-                      <div className="flex items-center gap-1 mt-1 flex-wrap">
-                        {c.fitCategory && (
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold border ${getStatusColor(c.fitCategory)}`}>
-                            {c.fitCategory}
-                          </span>
-                        )}
-                        {!!c.applicantQuestionnaire?.resumeUrls?.length && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold bg-blue-50 text-blue-800 border border-blue-200">
-                            Resume
-                          </span>
-                        )}
-                      </div>
+                      <button type="button" onClick={() => selectCandidate(c)} className="font-semibold text-sm text-[#0b1f3a] hover:underline truncate text-left">
+                        {c.firstName} {c.lastName}
+                      </button>
                     </div>
-                    <div className="text-[11px] text-gray-500">{formatDateCanadaEastern(c.timestamp)}</div>
+                    <div className="text-[12px] text-gray-700 truncate">{c.phone || '-'}</div>
+                    <div className="text-[12px] text-gray-600 truncate">{c.email}</div>
                     <div className="min-w-0">
                       <span className="text-[11px] px-2 py-0.5 rounded-full font-semibold bg-gray-100 text-gray-700 border border-gray-200 inline-block truncate max-w-full">
                         {admin.pipelineStage}
                       </span>
-                      {admin.questionnaireDisqualified && (
-                        <span className="block text-[10px] mt-1 text-amber-700">Disqualified</span>
-                      )}
                     </div>
+                    <div className="text-[12px] text-gray-700">{c.score ?? '-'}</div>
+                    <div className="text-[12px] text-gray-700">{c.applicantQuestionnaire?.resumeUrls?.length ? 'Yes' : '-'}</div>
                   </div>
                 );
               })}
@@ -1084,9 +1158,14 @@ const AdminDashboard: React.FC = () => {
           </div>
 
           {/* Candidate Detail */}
-          <div className="rounded-2xl border border-[#d6deea] bg-gradient-to-b from-[#ffffff] to-[#f6f9ff] shadow-sm h-[calc(100vh-210px)] overflow-y-auto p-6 lg:p-7">
+          <div className={`${selectedCandidate ? 'block' : 'hidden'} rounded-2xl border border-[#d6deea] bg-gradient-to-b from-[#ffffff] to-[#f6f9ff] shadow-sm h-[calc(100vh-210px)] overflow-y-auto p-6 lg:p-7`}>
             {selectedCandidate ? (
               <div className="space-y-8 animate-fade-in">
+                <div className="flex items-center justify-between">
+                  <button type="button" onClick={() => setSelectedCandidate(null)} className="text-sm px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-50">
+                    Back to candidates
+                  </button>
+                </div>
                 {/* Hiring journey — pipeline position */}
                 {(() => {
                   const journeyStage = getAdminData(selectedCandidate).pipelineStage;
@@ -1258,8 +1337,7 @@ const AdminDashboard: React.FC = () => {
                 <div className="rounded-xl border border-gray-200 bg-white p-2 flex flex-wrap gap-2">
                   {[
                     ['profile', 'Profile'],
-                    ['pipeline', 'Pipeline'],
-                    ['evaluation', 'Evaluation'],
+                    ['status', 'Status'],
                     ['assessment', 'Assessment'],
                     ['communication', 'Communication'],
                   ].map(([id, label]) => (
@@ -1363,7 +1441,7 @@ const AdminDashboard: React.FC = () => {
                 ))}
 
                 {/* HR Panel: Stage, Rating, Interview, Next step, Tags, Notes, Email */}
-                {(detailTab === 'pipeline' || detailTab === 'evaluation' || detailTab === 'communication') && (
+                {detailTab === 'status' && (
                 <div className="border border-[#d3dded] rounded-xl p-5 space-y-5 bg-white">
                   <h3 className="text-lg font-bold border-b pb-2 text-[#0b1f3a]">Candidate Control Center</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1425,42 +1503,39 @@ const AdminDashboard: React.FC = () => {
                     <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">
                       Evaluation details
                     </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <input
-                        type="text"
-                        placeholder="Evaluator name"
-                        value={evaluatorName}
-                        onChange={(e) => setEvaluatorName(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-[#005EB8] focus:border-[#005EB8]"
-                      />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
                       <Button
                         type="button"
-                        onClick={handleCompleteEvaluation}
+                        onClick={() => setShowEvaluationModal(true)}
                         disabled={evaluationSaving || !canRunEvaluation}
                         className="justify-center"
                       >
-                        {evaluationSaving ? 'Completing…' : 'Mark Evaluation Done + Send Email'}
+                        {evaluationSaving ? 'Saving…' : 'Open evaluation form'}
                       </Button>
+                      {getAdminData(selectedCandidate).evaluation && (
+                        <p className="text-xs text-gray-600">
+                          Last completed by{' '}
+                          <span className="font-semibold">{getAdminData(selectedCandidate).evaluation?.evaluatorName}</span>
+                          {' '}on {formatDateTimeCanadaEastern(getAdminData(selectedCandidate).evaluation?.doneAt)}
+                        </p>
+                      )}
                     </div>
-                    <textarea
-                      placeholder="Evaluation comments"
-                      value={evaluationComments}
-                      onChange={(e) => setEvaluationComments(e.target.value)}
-                      rows={3}
-                      className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-[#005EB8] focus:border-[#005EB8]"
-                    />
                     {!canRunEvaluation && (
                       <p className="text-xs text-amber-700">
                         Evaluation will be enabled once leadership assessment is submitted by this candidate.
                       </p>
                     )}
-                    {getAdminData(selectedCandidate).evaluation && (
-                      <p className="text-xs text-gray-600">
-                        Last completed by{' '}
-                        <span className="font-semibold">{getAdminData(selectedCandidate).evaluation?.evaluatorName}</span>
-                        {' '}on {formatDateTimeCanadaEastern(getAdminData(selectedCandidate).evaluation?.doneAt)}
-                      </p>
-                    )}
+                    {getAdminData(selectedCandidate).evaluation?.history?.length ? (
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs space-y-2 max-h-40 overflow-auto">
+                        <p className="font-semibold text-gray-700">Evaluation history</p>
+                        {getAdminData(selectedCandidate).evaluation?.history?.slice().reverse().map((h, idx) => (
+                          <div key={`${h.doneAt}-${idx}`} className="border-b border-gray-200 pb-1">
+                            <p><span className="font-semibold">{h.evaluatorName}</span> · {formatDateTimeCanadaEastern(h.doneAt)}</p>
+                            <p className="text-gray-600">{h.comments || 'No comments'}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                   <div className="hidden">
                     <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1"><Tag size={12} /> Tags</label>
@@ -1571,6 +1646,12 @@ const AdminDashboard: React.FC = () => {
                     )}
                   </div>
                 </div>
+                )}
+                {detailTab === 'communication' && (
+                  <div className="border border-[#d3dded] rounded-xl p-5 bg-white">
+                    <h3 className="text-lg font-bold text-[#0b1f3a] mb-2">Communication</h3>
+                    <p className="text-sm text-gray-600">Use the Status tab for stage updates, emails, and evaluation actions.</p>
+                  </div>
                 )}
 
                 {/* Applicant Questionnaire */}
@@ -1929,6 +2010,35 @@ const AdminDashboard: React.FC = () => {
             )}
           </div>
         </div>
+        )}
+
+        {showEvaluationModal && selectedCandidate && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => !evaluationSaving && setShowEvaluationModal(false)}>
+            <div className="bg-white rounded-xl shadow-xl max-w-lg w-full p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-lg font-bold text-gray-900">Complete evaluation</h3>
+              <input
+                type="text"
+                placeholder="Evaluator name"
+                value={evaluatorName}
+                onChange={(e) => setEvaluatorName(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-[#005EB8] focus:border-[#005EB8]"
+              />
+              <textarea
+                placeholder="Evaluation comments"
+                value={evaluationComments}
+                onChange={(e) => setEvaluationComments(e.target.value)}
+                rows={4}
+                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-[#005EB8] focus:border-[#005EB8]"
+              />
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setShowEvaluationModal(false)} disabled={evaluationSaving}>Cancel</Button>
+                <Button onClick={handleCompleteEvaluation} disabled={evaluationSaving || !canRunEvaluation}>
+                  {evaluationSaving ? 'Saving…' : 'Save evaluation + send email'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Email modal: preview + send */}
         {showEmailModal && selectedCandidate && (

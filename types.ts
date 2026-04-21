@@ -205,6 +205,13 @@ export interface AdminData {
         evaluatorName: string;
         comments: string;
         evaluationEmailSentAt?: string;
+        history?: Array<{
+          doneAt: string;
+          evaluatorName: string;
+          comments: string;
+          evaluationEmailSentAt?: string;
+          editedAt?: string;
+        }>;
       }
     | null;
   resumeReviewedAt: string | null; // ISO - when admin reviewed/approved resumes
