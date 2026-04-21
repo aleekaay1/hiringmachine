@@ -7,9 +7,10 @@
  *
  * Optional ZOOM_LIVE_SESSION_MEETING_ID: digits-only PMI to list/match (default **6478311787**). Set to `*`
  * to disable meeting-id filtering and URL-based Calendly pairing (legacy time-only match).
- * Optional ZOOM_LIVE_SESSION_TOPIC_FILTER: only Zoom meetings whose **topic** matches (pipe OR); AND with meeting-id filter when enabled.
+ * Optional ZOOM_LIVE_SESSION_TOPIC_FILTER: only Zoom meetings whose **topic** matches (pipe OR); combined with PMI filter when enabled.
  * Optional CALENDLY_EVENT_NAME_FILTER: only Calendly scheduled events whose **name** matches (pipe OR).
- * Calendly↔Zoom pairing prefers events whose **location / join URL** contains that meeting id (not event name).
+ * Calendly↔Zoom pairing: scheduled events whose **location / join URL** contains that meeting id, or whose
+ * **event name** matches the Zoom PMI topic (`Alex Paz's Personal Meeting Room`) when the PMI filter is on.
  * Optional INTEGRATION_MATCH_TOLERANCE_MINUTES (default 120): max |Δ| between Zoom start and Calendly start.
  * Auth: Supabase JWT (same as send-email).
  * Deploy: supabase functions deploy integrations-zoom-calendly
@@ -273,6 +274,14 @@ function matchesSubstringFilter(text: string, patterns: string[]): boolean {
 
 /** Default PMI for live career overview (must match services/hiringUrls ZOOM_MEETING_URL path). */
 const DEFAULT_LIVE_OVERVIEW_ZOOM_MEETING_ID_DIGITS = '6478311787';
+
+/** Zoom default PMI topic label (same as Zoom UI for personal room). */
+const LIVE_OVERVIEW_ZOOM_TOPIC_PATTERNS = parseSubstringFilter("Alex Paz's Personal Meeting Room");
+
+function zoomRowMatchesPmiFilter(m: Record<string, unknown>, meetingDigits: string): boolean {
+  if (zoomRowMeetingIdDigits(m) === meetingDigits) return true;
+  return matchesSubstringFilter(String(m.topic || ''), LIVE_OVERVIEW_ZOOM_TOPIC_PATTERNS);
+}
 
 /**
  * When unset, defaults to Alex Paz personal room id. Set env to `*` or `any` to disable Zoom id filter
@@ -647,10 +656,10 @@ Deno.serve(async (req) => {
 
     const pastMeetingsRaw = zoomMeetingIdDigits == null
       ? pastMeetingsRawAll
-      : pastMeetingsRawAll.filter((m) => zoomRowMeetingIdDigits(m) === zoomMeetingIdDigits);
+      : pastMeetingsRawAll.filter((m) => zoomRowMatchesPmiFilter(m, zoomMeetingIdDigits));
     const scheduledMeetingsRaw = zoomMeetingIdDigits == null
       ? scheduledMeetingsRawAll
-      : scheduledMeetingsRawAll.filter((m) => zoomRowMeetingIdDigits(m) === zoomMeetingIdDigits);
+      : scheduledMeetingsRawAll.filter((m) => zoomRowMatchesPmiFilter(m, zoomMeetingIdDigits));
 
     const pastFiltered = pastMeetingsRaw.filter((m) =>
       matchesSubstringFilter(String(m.topic || ''), topicPatterns),
@@ -754,7 +763,8 @@ Deno.serve(async (req) => {
       }
       if (zoomMeetingIdDigits) {
         allCal = allCal.filter((ev) =>
-          calendlyEventReferencesZoomMeetingDigits(ev, zoomMeetingIdDigits),
+          calendlyEventReferencesZoomMeetingDigits(ev, zoomMeetingIdDigits) ||
+          matchesSubstringFilter(String(ev.name || ''), LIVE_OVERVIEW_ZOOM_TOPIC_PATTERNS),
         );
       }
       calEvents = allCal;
