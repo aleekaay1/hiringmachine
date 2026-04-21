@@ -38,7 +38,7 @@ const Layout: React.FC<LayoutProps> = ({
       {isAdmin && (
         <aside className="hidden lg:flex w-72 shrink-0 flex-col border-r border-[#1c3760] bg-[#0b1f3a] text-white">
           <div className="px-5 py-6 border-b border-[#1c3760] flex flex-col items-center text-center gap-4">
-            <div className="h-72 w-72 rounded-full bg-white border border-[#d6deea] shadow-[0_10px_30px_-18px_rgba(0,0,0,0.45)] flex items-center justify-center overflow-hidden">
+            <div className="h-60 w-60 rounded-full bg-white border border-[#d6deea] shadow-[0_10px_30px_-18px_rgba(0,0,0,0.45)] flex items-center justify-center overflow-hidden">
               <img
                 src="/logo.png"
                 alt="Paz Hiring Journey"
