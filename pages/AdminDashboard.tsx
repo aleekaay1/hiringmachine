@@ -1226,6 +1226,59 @@ const AdminDashboard: React.FC = () => {
                   </button>
                 </div>
 
+                {(() => {
+                  const journeyStage = getAdminData(selectedCandidate).pipelineStage;
+                  const activeIdx = Math.max(0, PIPELINE_STAGES.indexOf(journeyStage));
+                  const n = PIPELINE_STAGES.length;
+                  const isWithdrawn = journeyStage === 'Not Hired / Withdrawn';
+                  return (
+                    <div className="rounded-2xl border border-gray-200 bg-gradient-to-r from-slate-50 via-white to-emerald-50/40 px-3 py-4 sm:px-5 sm:py-5 shadow-sm">
+                      <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-4">Hiring journey</p>
+                      <div className="overflow-x-auto pb-1 -mx-1">
+                        <div className="min-w-[560px] sm:min-w-0 relative px-1">
+                          <div className="pointer-events-none absolute left-3 right-3 top-[22px] h-[3px] rounded-full bg-gray-200 z-0" aria-hidden />
+                          {n > 1 && (
+                            <div
+                              className="pointer-events-none absolute left-3 top-[22px] h-[3px] rounded-full bg-[#005EB8] z-0 transition-all duration-300"
+                              style={{ width: `calc((100% - 24px) * ${activeIdx / (n - 1)})` }}
+                              aria-hidden
+                            />
+                          )}
+                          <div className="relative z-10 flex justify-between items-start gap-0">
+                            {PIPELINE_STAGES.map((stage, i) => {
+                              const done = i <= activeIdx;
+                              const active = i === activeIdx;
+                              return (
+                                <div key={stage} className="flex flex-col items-center flex-1 min-w-0 max-w-[100px] sm:max-w-none" title={stage}>
+                                  <div
+                                    className={`relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 shadow-sm transition-transform ${
+                                      active
+                                        ? isWithdrawn
+                                          ? 'scale-110 border-red-500 bg-red-500 text-white'
+                                          : 'scale-110 border-[#005EB8] bg-[#005EB8] text-white'
+                                        : done
+                                          ? 'border-[#005EB8] bg-white text-[#005EB8]'
+                                          : 'border-gray-300 bg-white text-gray-400'
+                                    }`}
+                                  >
+                                    {active ? <User size={18} strokeWidth={2.5} aria-hidden /> : <span className="text-[11px] font-bold">{i + 1}</span>}
+                                  </div>
+                                  <p className={`mt-2 text-[9px] sm:text-[10px] font-semibold text-center leading-tight px-0.5 ${active ? (isWithdrawn ? 'text-red-700' : 'text-[#005EB8]') : 'text-gray-600'}`}>
+                                    {TIMELINE_SHORT_LABELS[stage]}
+                                  </p>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <p className="mt-3 text-center text-xs text-gray-600">
+                            Current stage: <span className="font-semibold text-gray-900">{journeyStage}</span>
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Header */}
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-center gap-4">
