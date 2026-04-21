@@ -866,8 +866,8 @@ const AdminDashboard: React.FC = () => {
 
   return (
     <Layout isAdmin>
-      <div className="max-w-[1500px] mx-auto w-full p-6 space-y-5">
-        <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+      <div className="w-full p-5 lg:p-6 space-y-5">
+        <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm">
           <div className="px-5 py-4 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
             <div>
               <h1 className="text-2xl font-bold text-gray-900">Candidates</h1>
@@ -881,7 +881,7 @@ const AdminDashboard: React.FC = () => {
               <Button variant="outline" className="text-sm" onClick={handleLogout}>Sign Out</Button>
             </div>
           </div>
-          <div className="px-5 py-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 text-xs">
+          <div className="px-5 py-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 text-xs bg-[#f9fbff] border-t border-gray-100">
             {PIPELINE_STAGES.map((s) => (
               <button
                 type="button"
@@ -904,9 +904,9 @@ const AdminDashboard: React.FC = () => {
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 xl:grid-cols-[460px_minmax(0,1fr)] gap-5">
           {/* Candidate List */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden lg:col-span-1 h-[calc(100vh-260px)] flex flex-col">
+          <div className="bg-white rounded-2xl shadow-sm border border-[#d6deea] overflow-hidden h-[calc(100vh-210px)] flex flex-col">
             <div className="p-4 border-b border-gray-100 bg-white space-y-3">
               <div className="relative">
                 <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
@@ -976,7 +976,7 @@ const AdminDashboard: React.FC = () => {
               )}
             </div>
             <div className="overflow-y-auto flex-grow">
-              <div className="grid grid-cols-[28px,1.7fr,0.8fr,0.9fr] items-center gap-2 px-4 py-2 border-b border-gray-100 bg-gray-50/70 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
+              <div className="grid grid-cols-[28px,1.7fr,0.8fr,0.9fr] items-center gap-2 px-4 py-2 border-b border-gray-100 bg-[#f8fbff] text-[11px] font-semibold text-gray-500 uppercase tracking-wide sticky top-0 z-10">
                 <input type="checkbox" checked={selectedIds.size === filteredCandidates.length && filteredCandidates.length > 0} onChange={selectAll} className="rounded border-gray-300 text-[#005EB8]" />
                 <span>Candidate</span>
                 <span>Applied</span>
@@ -1033,7 +1033,7 @@ const AdminDashboard: React.FC = () => {
           </div>
 
           {/* Candidate Detail */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 lg:col-span-2 h-[calc(100vh-260px)] overflow-y-auto p-8">
+          <div className="rounded-2xl border border-[#d6deea] bg-gradient-to-b from-[#ffffff] to-[#f6f9ff] shadow-sm h-[calc(100vh-210px)] overflow-y-auto p-6 lg:p-7">
             {selectedCandidate ? (
               <div className="space-y-8 animate-fade-in">
                 {/* Hiring journey — pipeline position */}
@@ -1287,8 +1287,8 @@ const AdminDashboard: React.FC = () => {
                 )}
 
                 {/* HR Panel: Stage, Rating, Interview, Next step, Tags, Notes, Email */}
-                <div className="border border-gray-200 rounded-xl p-5 space-y-5 bg-gray-50/50">
-                  <h3 className="text-lg font-bold border-b pb-2 text-gray-900">HR & Hiring</h3>
+                <div className="border border-[#d3dded] rounded-xl p-5 space-y-5 bg-white">
+                  <h3 className="text-lg font-bold border-b pb-2 text-[#0b1f3a]">Candidate Control Center</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-medium text-gray-500 mb-1">Pipeline stage</label>
@@ -1385,7 +1385,7 @@ const AdminDashboard: React.FC = () => {
                       </p>
                     )}
                   </div>
-                  <div>
+                  <div className="hidden">
                     <label className="block text-xs font-medium text-gray-500 mb-1 flex items-center gap-1"><Tag size={12} /> Tags</label>
                     <div className="flex flex-wrap gap-2 mb-2">
                       {getAdminData(selectedCandidate).tags.map(t => (

@@ -1,7 +1,6 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { COLORS } from '../constants';
-import IntegrationStatusLights from './IntegrationStatusLights';
 import { supabase } from '../services/supabaseClient';
 import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut } from 'lucide-react';
 
@@ -34,22 +33,22 @@ const Layout: React.FC<LayoutProps> = ({
   ] as const;
 
   return (
-    <div className="min-h-screen flex font-sans text-gray-800" style={{ backgroundColor: isAdmin ? '#f3f4f6' : COLORS.background }}>
+    <div className="min-h-screen flex font-sans text-gray-800" style={{ backgroundColor: isAdmin ? '#eef2f7' : COLORS.background }}>
       {isAdmin && (
-        <aside className="hidden lg:flex w-64 shrink-0 flex-col border-r border-gray-200 bg-[#f7f9fc]">
-          <div className="px-5 py-5 border-b border-gray-200 space-y-3">
+        <aside className="hidden lg:flex w-72 shrink-0 flex-col border-r border-[#1c3760] bg-[#0b1f3a] text-white">
+          <div className="px-5 py-5 border-b border-[#1c3760] space-y-3">
             <img
               src="/logo.png"
               alt="Paz Hiring Journey"
-              className="h-8 w-auto object-contain"
+              className="h-9 w-auto object-contain brightness-0 invert"
               onError={(e) => {
                 const target = e.target as HTMLImageElement;
                 target.style.display = 'none';
               }}
             />
-            <div className="text-sm font-semibold text-gray-900 leading-tight">Paz Hiring Journey Management</div>
+            <div className="text-sm font-semibold leading-tight text-slate-100">Paz Hiring Journey Management</div>
           </div>
-          <nav className="p-3 space-y-1">
+          <nav className="p-3 space-y-1.5">
             {adminMenu.map((item) => {
               const Icon = item.icon;
               const active = isActive(item.route);
@@ -58,8 +57,10 @@ const Layout: React.FC<LayoutProps> = ({
                   key={item.name}
                   type="button"
                   onClick={() => navigate(item.route)}
-                  className={`w-full inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm transition ${
-                    active ? 'bg-white text-[#0f172a] shadow-sm border border-gray-200' : 'text-gray-600 hover:bg-white/80'
+                  className={`w-full inline-flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition font-medium ${
+                    active
+                      ? 'bg-[#123563] text-white shadow-sm border border-[#2a528a]'
+                      : 'text-slate-300 hover:bg-[#123563]/60 hover:text-white'
                   }`}
                 >
                   <Icon size={15} />
@@ -73,7 +74,7 @@ const Layout: React.FC<LayoutProps> = ({
                 await supabase.auth.signOut();
                 navigate('/admin');
               }}
-              className="w-full mt-2 inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-gray-600 hover:bg-white/80"
+              className="w-full mt-3 inline-flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm text-slate-300 hover:bg-[#123563]/60 hover:text-white"
             >
               <LogOut size={15} />
               Logout
@@ -124,44 +125,6 @@ const Layout: React.FC<LayoutProps> = ({
                 />
               )}
             </div>
-            {isAdmin && (
-              <nav className="flex items-center gap-2 sm:gap-3 text-sm shrink-0 flex-wrap justify-end">
-                <button
-                  type="button"
-                  onClick={() => navigate('/admin')}
-                  className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center px-3 py-2 rounded-full border text-xs font-medium transition-colors touch-manipulation ${
-                    isActive('/admin')
-                      ? 'bg-[#005EB8] text-white border-[#005EB8]'
-                      : 'bg-white text-gray-600 border-gray-200 hover:bg-blue-50 active:bg-blue-50'
-                  }`}
-                >
-                  Dashboard
-                </button>
-                <button
-                  type="button"
-                  onClick={() => navigate('/live-sessions')}
-                  className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center px-3 py-2 rounded-full border text-xs font-medium transition-colors touch-manipulation ${
-                    isActive('/live-sessions')
-                      ? 'bg-[#005EB8] text-white border-[#005EB8]'
-                      : 'bg-white text-gray-600 border-gray-200 hover:bg-blue-50 active:bg-blue-50'
-                  }`}
-                >
-                  Sessions
-                </button>
-                <button
-                  type="button"
-                  onClick={() => navigate('/qr')}
-                  className={`min-h-[44px] min-w-[44px] inline-flex items-center justify-center px-3 py-2 rounded-full border text-xs font-medium transition-colors touch-manipulation ${
-                    isActive('/qr')
-                      ? 'bg-[#005EB8] text-white border-[#005EB8]'
-                      : 'bg-white text-gray-600 border-gray-200 hover:bg-blue-50 active:bg-blue-50'
-                  }`}
-                >
-                  QR Codes
-                </button>
-                <IntegrationStatusLights />
-              </nav>
-            )}
           </div>
           <div className="h-1 w-full bg-gradient-to-r from-[#005EB8] to-[#37B06D]" />
         </header>
