@@ -32,6 +32,24 @@ type CalendlyScheduledEvent = {
   location?: { type?: string; join_url?: string; data?: { id?: string } };
 };
 
+type CalendlyInviteeDetail = {
+  uri: string;
+  event_uri: string;
+  email: string;
+  name: string;
+  status: string;
+  no_show: boolean;
+  canceled: boolean;
+  timezone?: string;
+  text_reminder_number?: string | null;
+  phone_number?: string | null;
+  cancel_url?: string;
+  reschedule_url?: string;
+  created_at?: string;
+  updated_at?: string;
+  questions_and_answers?: Array<{ question: string; answer: string }>;
+};
+
 async function getZoomAccessToken(): Promise<string> {
   const accountId = Deno.env.get('ZOOM_ACCOUNT_ID')?.trim();
   const clientId = Deno.env.get('ZOOM_CLIENT_ID')?.trim();
@@ -247,23 +265,146 @@ function matchesSubstringFilter(text: string, patterns: string[]): boolean {
   return patterns.some((p) => t.includes(p));
 }
 
-/** Zoom sometimes omits Z/offset; interpret wall time in meeting.timezone (not as UTC). */
+/** Zoom sometimes uses labels; Luxon needs IANA (e.g. America/Toronto). */
+function normalizeZoomTimezone(raw: string): string {
+  const z = raw.trim();
+  if (!z) return '';
+  const lower = z.toLowerCase();
+  const map: Record<string, string> = {
+    'eastern time (us and canada)': 'America/Toronto',
+    'eastern standard time': 'America/Toronto',
+    'eastern daylight time': 'America/Toronto',
+    est: 'America/Toronto',
+    edt: 'America/Toronto',
+    et: 'America/Toronto',
+    'us/eastern': 'America/Toronto',
+    'canada/eastern': 'America/Toronto',
+  };
+  if (/^\w+\/\w+/.test(z)) return z;
+  if (map[lower]) return map[lower];
+  return z;
+}
+
+/**
+ * Best-effort UTC millis for Zoom list-meeting rows. Handles string ISO, numeric ms/seconds,
+ * naive local times with `timezone`, and falls back to Date.parse when Luxon fails (fixes
+ * mis-bucketing when timezone is missing/invalid but `start_time` is still readable).
+ */
 function parseZoomStartToUtcMs(m: Record<string, unknown>): number {
-  const raw = String(m.start_time ?? '').trim();
+  const st = m.start_time;
+  let raw = '';
+  if (typeof st === 'number' && Number.isFinite(st)) {
+    const n = st;
+    if (n > 1e12) return n;
+    if (n > 1e9) return n * 1000;
+    return NaN;
+  }
+  raw = String(st ?? '').trim();
   if (!raw) return NaN;
+
+  // Zoom occasionally returns a Unix-ms value as a decimal string; parse before ISO heuristics.
+  if (/^\d{10,16}$/.test(raw)) {
+    const v = Number(raw);
+    if (v > 1e12) return v;
+    if (v > 1e9) return v * 1000;
+  }
+
   const hasOffset =
-    /Z$/i.test(raw) || /T[^Z]*[+-]\d{2}:\d{2}$/.test(raw) || /T[^Z]*[+-]\d{4}$/.test(raw);
+    /Z$/i.test(raw) ||
+    /[+-]\d{2}:\d{2}$/.test(raw) ||
+    /[+-]\d{2}\d{2}$/.test(raw);
   if (hasOffset) {
     const t = new Date(raw).getTime();
-    return Number.isFinite(t) ? t : NaN;
+    if (Number.isFinite(t)) return t;
   }
-  const tz = String((m as { timezone?: string }).timezone ?? '').trim();
+
+  const tzRaw = String((m as { timezone?: string }).timezone ?? '').trim();
+  const tz = normalizeZoomTimezone(tzRaw);
   if (tz) {
     const dt = DateTime.fromISO(raw, { zone: tz });
     if (dt.isValid) return dt.toUTC().toMillis();
   }
+
+  // Naive ISO wall time — assume host default (matches typical career-session setup in Canada Eastern)
+  const assumed = Deno.env.get('ZOOM_ASSUMED_TIMEZONE_IF_MISSING')?.trim() || 'America/Toronto';
+  const dtAssumed = DateTime.fromISO(raw, { zone: assumed });
+  if (dtAssumed.isValid) return dtAssumed.toUTC().toMillis();
+
+  const loose = DateTime.fromISO(raw);
+  if (loose.isValid) return loose.toUTC().toMillis();
+
+  const parsed = Date.parse(raw);
+  if (Number.isFinite(parsed)) return parsed;
+
   const t = new Date(raw).getTime();
   return Number.isFinite(t) ? t : NaN;
+}
+
+function zoomMeetingKey(m: Record<string, unknown>): string {
+  return `${String(m.uuid ?? '')}|${String(m.start_time ?? '')}`;
+}
+
+/**
+ * Zoom's type=past / type=upcoming lists can disagree with real wall times (recurring instances,
+ * API quirks). Merge both lists by meeting key and split by parsed start vs now.
+ */
+function mergeAndRebucketZoomMeetings(
+  pastRaw: Array<Record<string, unknown>>,
+  upcomingRaw: Array<Record<string, unknown>>,
+  nowMs: number,
+): { past: Array<Record<string, unknown>>; upcoming: Array<Record<string, unknown>> } {
+  const keysPast = new Set(pastRaw.map((m) => zoomMeetingKey(m)));
+  const keysUp = new Set(upcomingRaw.map((m) => zoomMeetingKey(m)));
+  /** Prefer the `upcoming` API row when both lists return the same occurrence (richer fields). */
+  const byKey = new Map<string, Record<string, unknown>>();
+  for (const m of pastRaw) {
+    const k = zoomMeetingKey(m);
+    if (!byKey.has(k)) byKey.set(k, m);
+  }
+  for (const m of upcomingRaw) {
+    byKey.set(zoomMeetingKey(m), m);
+  }
+
+  const past: Array<Record<string, unknown>> = [];
+  const upcoming: Array<Record<string, unknown>> = [];
+
+  for (const m of byKey.values()) {
+    const k = zoomMeetingKey(m);
+    const startMs = parseZoomStartToUtcMs(m);
+    if (!Number.isFinite(startMs)) {
+      if (keysPast.has(k) && !keysUp.has(k)) past.push(m);
+      else if (keysUp.has(k) && !keysPast.has(k)) upcoming.push(m);
+      else upcoming.push(m);
+      continue;
+    }
+    if (startMs < nowMs) past.push(m);
+    else upcoming.push(m);
+  }
+
+  // Safety sweep: Zoom can still mis-file occurrences; never show future starts under "past"
+  const pastFinal: Array<Record<string, unknown>> = [];
+  for (const m of past) {
+    const ms = parseZoomStartToUtcMs(m);
+    if (Number.isFinite(ms) && ms >= nowMs) {
+      upcoming.push(m);
+    } else {
+      pastFinal.push(m);
+    }
+  }
+
+  const msDesc = (a: Record<string, unknown>, b: Record<string, unknown>) => {
+    const mb = parseZoomStartToUtcMs(b);
+    const ma = parseZoomStartToUtcMs(a);
+    return (Number.isFinite(mb) ? mb : 0) - (Number.isFinite(ma) ? ma : 0);
+  };
+  const msAsc = (a: Record<string, unknown>, b: Record<string, unknown>) => {
+    const ma = parseZoomStartToUtcMs(a);
+    const mb = parseZoomStartToUtcMs(b);
+    return (Number.isFinite(ma) ? ma : 0) - (Number.isFinite(mb) ? mb : 0);
+  };
+  pastFinal.sort(msDesc);
+  upcoming.sort(msAsc);
+  return { past: pastFinal, upcoming };
 }
 
 function matchToleranceMs(): number {
@@ -271,6 +412,71 @@ function matchToleranceMs(): number {
   const n = raw ? Number.parseInt(raw, 10) : NaN;
   const minutes = Number.isFinite(n) && n > 0 && n <= 24 * 60 ? n : 120;
   return minutes * 60 * 1000;
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const bytes = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const arr = Array.from(new Uint8Array(digest));
+  return arr.map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function persistLiveSessionsArchiveIfChanged(params: {
+  supabaseUrl: string;
+  serviceRole: string;
+  generatedAtIso: string;
+  payloadForHash: unknown;
+  payloadFull: unknown;
+  invitees: CalendlyInviteeDetail[];
+}): Promise<{ enabled: boolean; wroteSnapshot: boolean; snapshotHash?: string; note?: string }> {
+  const { supabaseUrl, serviceRole, generatedAtIso, payloadForHash, payloadFull, invitees } = params;
+  if (!serviceRole) return { enabled: false, wroteSnapshot: false, note: 'missing_service_role' };
+  const admin = createClient(supabaseUrl, serviceRole);
+  const payloadText = JSON.stringify(payloadForHash);
+  const nextHash = await sha256Hex(payloadText);
+
+  const { data: latest, error: latestErr } = await admin
+    .from('live_sessions_snapshots')
+    .select('snapshot_hash')
+    .order('generated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (latestErr) {
+    return { enabled: false, wroteSnapshot: false, note: `snapshot_table_missing_or_error:${latestErr.message}` };
+  }
+  if (latest?.snapshot_hash === nextHash) {
+    return { enabled: true, wroteSnapshot: false, snapshotHash: nextHash };
+  }
+
+  const { error: insErr } = await admin.from('live_sessions_snapshots').insert({
+    generated_at: generatedAtIso,
+    snapshot_hash: nextHash,
+    payload: payloadFull,
+  });
+  if (insErr) return { enabled: true, wroteSnapshot: false, snapshotHash: nextHash, note: `snapshot_insert_error:${insErr.message}` };
+
+  if (invitees.length > 0) {
+    const rows = invitees.map((i) => ({
+      snapshot_hash: nextHash,
+      invitee_uri: i.uri,
+      event_uri: i.event_uri,
+      email: i.email,
+      name: i.name,
+      status: i.status,
+      no_show: i.no_show,
+      canceled: i.canceled,
+      timezone: i.timezone ?? null,
+      text_reminder_number: i.text_reminder_number ?? null,
+      phone_number: i.phone_number ?? null,
+      cancel_url: i.cancel_url ?? null,
+      reschedule_url: i.reschedule_url ?? null,
+      created_at_source: i.created_at ?? null,
+      updated_at_source: i.updated_at ?? null,
+      questions_and_answers: i.questions_and_answers ?? [],
+    }));
+    await admin.from('live_session_invitees_archive').upsert(rows, { onConflict: 'snapshot_hash,invitee_uri' });
+  }
+  return { enabled: true, wroteSnapshot: true, snapshotHash: nextHash };
 }
 
 Deno.serve(async (req) => {
@@ -377,21 +583,23 @@ Deno.serve(async (req) => {
       zoomListUpcomingMeetings(zoomToken, zoomUserId),
     ]);
 
-    const pastMeetings = pastMeetingsRaw.filter((m) =>
+    const pastFiltered = pastMeetingsRaw.filter((m) =>
       matchesSubstringFilter(String(m.topic || ''), topicPatterns),
     );
-    const scheduledMeetings = scheduledMeetingsRaw.filter((m) =>
+    const scheduledFiltered = scheduledMeetingsRaw.filter((m) =>
       matchesSubstringFilter(String(m.topic || ''), topicPatterns),
+    );
+    const { past: pastMeetings, upcoming: scheduledMeetings } = mergeAndRebucketZoomMeetings(
+      pastFiltered,
+      scheduledFiltered,
+      Date.now(),
     );
 
     let calEvents: CalendlyScheduledEvent[] = [];
     let calUser: { resource?: { uri?: string; name?: string; email?: string } } = {};
     const toleranceMs = matchToleranceMs();
 
-    const calInviteesCache = new Map<
-      string,
-      Array<{ email: string; name: string; status: string; no_show?: boolean }>
-    >();
+    const calInviteesCache = new Map<string, CalendlyInviteeDetail[]>();
 
     async function loadInvitees(eventUri: string, token: string) {
       if (calInviteesCache.has(eventUri)) return calInviteesCache.get(eventUri)!;
@@ -401,17 +609,51 @@ Deno.serve(async (req) => {
         `/scheduled_events/${encodeURIComponent(uuid)}/invitees?count=100`,
       )) as {
         collection?: Array<{
+          uri?: string;
+          event?: string;
           email?: string;
           name?: string;
           status?: string;
           no_show?: boolean;
+          canceled?: boolean;
+          timezone?: string;
+          text_reminder_number?: string | null;
+          cancel_url?: string;
+          reschedule_url?: string;
+          created_at?: string;
+          updated_at?: string;
+          questions_and_answers?: Array<{ question?: string; answer?: string }>;
         }>;
       };
       const list = (inv.collection || []).map((r) => ({
+        uri: String(r.uri || ''),
+        event_uri: String(r.event || eventUri),
         email: normalizeEmail(r.email),
         name: (r.name || '').trim(),
         status: (r.status || '').trim(),
         no_show: !!r.no_show,
+        canceled: !!r.canceled,
+        timezone: typeof r.timezone === 'string' ? r.timezone : undefined,
+        text_reminder_number:
+          typeof r.text_reminder_number === 'string' ? r.text_reminder_number : null,
+        phone_number:
+          (r.questions_and_answers || [])
+            .map((qa) => `${qa.question || ''} ${qa.answer || ''}`.toLowerCase())
+            .some((s) => s.includes('phone'))
+            ? ((r.questions_and_answers || []).find((qa) =>
+              String(qa.question || '').toLowerCase().includes('phone')
+            )?.answer || null)
+            : null,
+        cancel_url: typeof r.cancel_url === 'string' ? r.cancel_url : undefined,
+        reschedule_url: typeof r.reschedule_url === 'string' ? r.reschedule_url : undefined,
+        created_at: typeof r.created_at === 'string' ? r.created_at : undefined,
+        updated_at: typeof r.updated_at === 'string' ? r.updated_at : undefined,
+        questions_and_answers: (r.questions_and_answers || [])
+          .map((qa) => ({
+            question: String(qa.question || '').trim(),
+            answer: String(qa.answer || '').trim(),
+          }))
+          .filter((qa) => qa.question.length > 0 || qa.answer.length > 0),
       }));
       calInviteesCache.set(eventUri, list);
       return list;
@@ -448,18 +690,45 @@ Deno.serve(async (req) => {
       }
     }
 
-    function findMatchingCalendly(zoomStartMs: number): CalendlyScheduledEvent | null {
+    function findMatchingCalendly(zoomStartMs: number, zoomDurationMinutes: number): CalendlyScheduledEvent | null {
       if (!Number.isFinite(zoomStartMs)) return null;
+      const zoomDt = DateTime.fromMillis(zoomStartMs, { zone: 'America/Toronto' });
+      const weekday = zoomDt.weekday;
+      const zoomMinuteOfDay = zoomDt.hour * 60 + zoomDt.minute;
+
       let best: CalendlyScheduledEvent | null = null;
-      let bestDelta = Infinity;
+      let bestScore = Infinity;
       for (const ev of calEvents) {
         const st = ev.start_time;
         if (!st) continue;
-        const evMs = new Date(st).getTime();
-        if (!Number.isFinite(evMs)) continue;
-        const d = Math.abs(evMs - zoomStartMs);
-        if (d < bestDelta && d <= toleranceMs) {
-          bestDelta = d;
+        const evDt = DateTime.fromISO(st, { zone: 'America/Toronto' });
+        if (!evDt.isValid) continue;
+        const evMs = evDt.toUTC().toMillis();
+        const absMs = Math.abs(evMs - zoomStartMs);
+        if (absMs > toleranceMs) continue;
+
+        // Strong guard for recurring schedules: same weekday first.
+        if (evDt.weekday !== weekday) continue;
+
+        const evMinuteOfDay = evDt.hour * 60 + evDt.minute;
+        const minuteDelta = Math.abs(evMinuteOfDay - zoomMinuteOfDay);
+        if (minuteDelta > 180) continue;
+
+        const evDurationMinutes = Math.max(
+          0,
+          Math.round(
+            DateTime.fromISO(ev.end_time || st, { zone: 'America/Toronto' }).diff(evDt, 'minutes').minutes || 0,
+          ),
+        );
+        const durationDelta =
+          zoomDurationMinutes > 0 && evDurationMinutes > 0
+            ? Math.abs(evDurationMinutes - zoomDurationMinutes)
+            : 0;
+
+        // Lower score wins: prioritize same weekday + wall-clock proximity, then duration, then absolute UTC.
+        const score = minuteDelta * 1000 + durationDelta * 100 + absMs / 60000;
+        if (score < bestScore) {
+          bestScore = score;
           best = ev;
         }
       }
@@ -480,13 +749,15 @@ Deno.serve(async (req) => {
         );
 
         const calMatch =
-          calendlyEnabled && Number.isFinite(startMs) ? findMatchingCalendly(startMs) : null;
-        let invitees: Array<{ email: string; name: string; status: string; no_show: boolean }> = [];
+          calendlyEnabled && Number.isFinite(startMs)
+            ? findMatchingCalendly(startMs, Number(m.duration || 0))
+            : null;
+        let invitees: CalendlyInviteeDetail[] = [];
         if (calendlyEnabled && calMatch?.uri && calendlyToken) {
           invitees = await loadInvitees(calMatch.uri, calendlyToken);
         }
 
-        const invitedActive = invitees.filter((i) => i.status !== 'canceled');
+        const invitedActive = invitees.filter((i) => !i.canceled && i.status !== 'canceled');
         const attendedFromCalendly = invitedActive.filter((i) => participantEmails.has(i.email));
         const notInZoom = invitedActive.filter((i) => !participantEmails.has(i.email));
         const zoomOnly = [...participantEmails].filter(
@@ -499,6 +770,7 @@ Deno.serve(async (req) => {
             uuid,
             topic,
             start_time: start,
+            start_at_ms: Number.isFinite(startMs) ? startMs : null,
             duration_minutes: duration,
             host_email: host,
             meeting_id: m.id,
@@ -524,6 +796,11 @@ Deno.serve(async (req) => {
             status: i.status,
             no_show: i.no_show,
             attended_zoom: participantEmails.has(i.email),
+            phone_number: i.phone_number ?? i.text_reminder_number ?? null,
+            timezone: i.timezone ?? null,
+            questions_and_answers: i.questions_and_answers ?? [],
+            invitee_uri: i.uri,
+            event_uri: i.event_uri,
           })),
           stats: {
             invited_count: invitedActive.length,
@@ -541,23 +818,35 @@ Deno.serve(async (req) => {
         const start = String(m.start_time || '');
         const startMs = parseZoomStartToUtcMs(m);
         const calMatch =
-          calendlyEnabled && Number.isFinite(startMs) ? findMatchingCalendly(startMs) : null;
+          calendlyEnabled && Number.isFinite(startMs)
+            ? findMatchingCalendly(startMs, Number(m.duration || 0))
+            : null;
 
         let invitees: Array<{
           email: string;
           name: string;
           status: string;
           no_show: boolean;
+          phone_number?: string | null;
+          timezone?: string | null;
+          questions_and_answers?: Array<{ question: string; answer: string }>;
+          invitee_uri?: string;
+          event_uri?: string;
         }> = [];
         if (calendlyEnabled && calMatch?.uri && calendlyToken) {
           const raw = await loadInvitees(calMatch.uri, calendlyToken);
           invitees = raw
-            .filter((i) => i.status !== 'canceled')
+            .filter((i) => !i.canceled && i.status !== 'canceled')
             .map((i) => ({
               email: i.email,
               name: i.name,
               status: i.status,
               no_show: i.no_show,
+              phone_number: i.phone_number ?? i.text_reminder_number ?? null,
+              timezone: i.timezone ?? null,
+              questions_and_answers: i.questions_and_answers ?? [],
+              invitee_uri: i.uri,
+              event_uri: i.event_uri,
             }));
         }
 
@@ -567,6 +856,7 @@ Deno.serve(async (req) => {
             uuid: String(m.uuid || ''),
             topic: String(m.topic || ''),
             start_time: start,
+            start_at_ms: Number.isFinite(startMs) ? startMs : null,
             duration_minutes: Number(m.duration || 0),
             host_email: String((m as { host_email?: string }).host_email || zoomHostEmail),
             join_url: String((m as { join_url?: string }).join_url || ''),
@@ -586,10 +876,10 @@ Deno.serve(async (req) => {
       }),
     );
 
-    return new Response(
-      JSON.stringify({
+    const generatedAt = new Date().toISOString();
+    const responsePayload = {
         ok: true,
-        generated_at: new Date().toISOString(),
+        generated_at: generatedAt,
         calendly_configured: calendlyEnabled,
         zoom_user: { id: zoomUserId, email: zoomHostEmail },
         calendly_user: calendlyEnabled
@@ -601,15 +891,54 @@ Deno.serve(async (req) => {
         zoom_topic_filter: topicPatterns.length > 0 ? topicFilterRaw : null,
         calendly_event_name_filter: calendlyNamePatterns.length > 0 ? calendlyEventFilterRaw : null,
         match_tolerance_minutes: Math.round(toleranceMs / 60000),
-        past_meetings: combinedPast.sort(
-          (a, b) =>
-            new Date(b.zoom.start_time).getTime() - new Date(a.zoom.start_time).getTime(),
-        ),
-        upcoming_meetings: upcomingRows.sort(
-          (a, b) =>
-            new Date(a.zoom.start_time).getTime() - new Date(b.zoom.start_time).getTime(),
-        ),
+        past_meetings: combinedPast.sort((a, b) => {
+          const mb = (b.zoom as { start_at_ms?: number | null }).start_at_ms;
+          const ma = (a.zoom as { start_at_ms?: number | null }).start_at_ms;
+          const nb = Number.isFinite(mb) ? (mb as number) : NaN;
+          const na = Number.isFinite(ma) ? (ma as number) : NaN;
+          if (Number.isFinite(nb) && Number.isFinite(na)) return nb - na;
+          return (
+            new Date(b.zoom.start_time).getTime() - new Date(a.zoom.start_time).getTime()
+          );
+        }),
+        upcoming_meetings: upcomingRows.sort((a, b) => {
+          const ma = (a.zoom as { start_at_ms?: number | null }).start_at_ms;
+          const mb = (b.zoom as { start_at_ms?: number | null }).start_at_ms;
+          const na = Number.isFinite(ma) ? (ma as number) : NaN;
+          const nb = Number.isFinite(mb) ? (mb as number) : NaN;
+          if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
+          return (
+            new Date(a.zoom.start_time).getTime() - new Date(b.zoom.start_time).getTime()
+          );
+        }),
         calendly_events_in_range: calEvents.length,
+      };
+
+    const snapshotInput = {
+      zoom_user: responsePayload.zoom_user,
+      calendly_user: responsePayload.calendly_user,
+      zoom_topic_filter: responsePayload.zoom_topic_filter,
+      calendly_event_name_filter: responsePayload.calendly_event_name_filter,
+      match_tolerance_minutes: responsePayload.match_tolerance_minutes,
+      past_meetings: responsePayload.past_meetings,
+      upcoming_meetings: responsePayload.upcoming_meetings,
+      calendly_events_in_range: responsePayload.calendly_events_in_range,
+    };
+    const allInvitees = [...calInviteesCache.values()].flat();
+    const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.trim() ?? '';
+    const archiveResult = await persistLiveSessionsArchiveIfChanged({
+      supabaseUrl,
+      serviceRole,
+      generatedAtIso: generatedAt,
+      payloadForHash: snapshotInput,
+      payloadFull: responsePayload,
+      invitees: allInvitees,
+    });
+
+    return new Response(
+      JSON.stringify({
+        ...responsePayload,
+        archive: archiveResult,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );

@@ -123,6 +123,23 @@ export function pipelineStageAfterAssessmentComplete(current: unknown): Pipeline
   return target;
 }
 
+/** Matched Calendly invite list + portal candidate (check-in). Shown as tag on admin list. */
+export const PIPELINE_TAG_CAREER_SESSION_INVITED = 'Career session invited';
+
+/**
+ * After Zoom + Calendly show the candidate attended the online career session.
+ * Does not override Interview, Hired, or later assessment stages.
+ */
+export function pipelineStageAfterLiveSessionAttended(current: unknown): PipelineStage {
+  const cur = normalizePipelineStage(current);
+  if (cur === 'Hired' || cur === 'Not Hired / Withdrawn') return cur;
+  const attendedIdx = PIPELINE_STAGES.indexOf('Attended Live Session');
+  const ci = PIPELINE_STAGES.indexOf(cur);
+  if (ci === -1) return 'Attended Live Session';
+  if (ci > attendedIdx) return cur;
+  return 'Attended Live Session';
+}
+
 export interface AdminNote {
   id: string;
   createdAt: string;

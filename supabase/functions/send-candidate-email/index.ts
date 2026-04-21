@@ -16,6 +16,11 @@ import {
   type AssessmentNotifyCandidateRow,
 } from '../_shared/assessmentCompleteInternalNotification.ts';
 import { appendCandidateEmailLog } from '../_shared/candidateEmailLog.ts';
+import {
+  buildStage3AssessmentLinkHtml,
+  getAssessmentLookupUrlForEdge,
+  STAGE3_ASSESSMENT_LINK_SUBJECT,
+} from '../_shared/stage3AssessmentLinkEmail.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -70,6 +75,7 @@ Deno.serve(async (req) => {
     const trigger = typeof body?.trigger === 'string' ? body.trigger.trim() : '';
     const isPostCheckin = trigger === 'post_checkin';
     const isPostAssessmentSubmit = trigger === 'post_assessment_submit';
+    const isPostLiveSessionAssessment = trigger === 'post_live_session_assessment';
 
     if (!candidateId) {
       return new Response(JSON.stringify({ error: 'Invalid request', detail: 'missing_candidate_id' }), {
@@ -83,14 +89,14 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
-    if (!isPostCheckin && !isPostAssessmentSubmit) {
+    if (!isPostCheckin && !isPostAssessmentSubmit && !isPostLiveSessionAssessment) {
       return new Response(
         JSON.stringify({
           error: 'Invalid request',
           detail: 'invalid_trigger',
           trigger: trigger || null,
           hint:
-            'Expected post_checkin or post_assessment_submit. Redeploy send-candidate-email if you see this with post_assessment_submit.',
+            'Expected post_checkin, post_assessment_submit, or post_live_session_assessment.',
         }),
         {
           status: 400,
@@ -131,6 +137,9 @@ Deno.serve(async (req) => {
     if (isPostCheckin) {
       subject = POST_CHECKIN_EMAIL_SUBJECT;
       html = applyPostCheckinMerge(candidateName, ZOOM_MEETING_URL, sig);
+    } else if (isPostLiveSessionAssessment) {
+      subject = STAGE3_ASSESSMENT_LINK_SUBJECT;
+      html = buildStage3AssessmentLinkHtml(firstName, getAssessmentLookupUrlForEdge());
     } else {
       subject = POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT;
       html = applyPostAssessmentSubmitMerge(candidateName, sig);
@@ -155,10 +164,15 @@ Deno.serve(async (req) => {
     });
 
     const sentAt = new Date().toISOString();
+    const logType = isPostCheckin
+      ? 'automated_post_checkin'
+      : isPostLiveSessionAssessment
+        ? 'automated_stage3_after_live_session'
+        : 'automated_post_assessment_submit';
     await appendCandidateEmailLog(admin, candidateId, {
       sentAt,
       subject,
-      type: isPostCheckin ? 'automated_post_checkin' : 'automated_post_assessment_submit',
+      type: logType,
     });
 
     if (isPostAssessmentSubmit) {

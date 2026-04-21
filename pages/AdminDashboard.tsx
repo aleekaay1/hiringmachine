@@ -27,6 +27,7 @@ import {
   QUESTIONS,
   DEFAULT_ADMIN_DATA,
   PIPELINE_STAGES,
+  PIPELINE_TAG_CAREER_SESSION_INVITED,
   normalizePipelineStage,
   type PipelineStage,
   type AdminData,
@@ -34,6 +35,7 @@ import {
 import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
+import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
 
 const SUGGESTED_TAGS = ['Strong fit', 'Follow up', 'Licensing needed', 'High potential', 'Second interview', 'Offer extended'];
 
@@ -948,6 +950,11 @@ const AdminDashboard: React.FC = () => {
                           Disqualified (questionnaire)
                         </span>
                       )}
+                      {admin.tags.includes(PIPELINE_TAG_CAREER_SESSION_INVITED) && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-indigo-50 text-indigo-800 border border-indigo-200">
+                          Career session invite
+                        </span>
+                      )}
                       {!!c.applicantQuestionnaire?.resumeUrls?.length && (
                         <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-blue-50 text-blue-800 border border-blue-200">
                           Resume
@@ -961,7 +968,7 @@ const AdminDashboard: React.FC = () => {
                     </div>
                     <p className="text-xs text-gray-500 mb-2">{c.email}</p>
                     <div className="flex items-center justify-between text-xs text-gray-400">
-                      <span>{new Date(c.timestamp).toLocaleDateString()}</span>
+                      <span>{formatDateCanadaEastern(c.timestamp)}</span>
                       <span>{c.status === 'assessment_complete' ? 'Completed' : 'In Progress'}</span>
                     </div>
                     </div>
@@ -1072,7 +1079,7 @@ const AdminDashboard: React.FC = () => {
                         {selectedCandidate.phone && <span className="font-medium">{selectedCandidate.phone}</span>}
                       </div>
                       <div className="text-xs text-gray-400 mt-1">
-                        ID: {selectedCandidate.id} • Submitted {new Date(selectedCandidate.timestamp).toLocaleString()}
+                        ID: {selectedCandidate.id} • Submitted {formatDateTimeCanadaEastern(selectedCandidate.timestamp)}
                       </div>
                     </div>
                   </div>
@@ -1183,7 +1190,7 @@ const AdminDashboard: React.FC = () => {
                     </p>
                     <p className="text-xs text-amber-700">
                       Question: {getAdminData(selectedCandidate).questionnaireDisqualified!.questionKey} ·{' '}
-                      {new Date(getAdminData(selectedCandidate).questionnaireDisqualified!.at).toLocaleString()}
+                      {formatDateTimeCanadaEastern(getAdminData(selectedCandidate).questionnaireDisqualified!.at)}
                     </p>
                   </div>
                 )}
@@ -1317,7 +1324,7 @@ const AdminDashboard: React.FC = () => {
                       {getAdminData(selectedCandidate).notes.map(n => (
                         <div key={n.id} className="text-sm bg-white border border-gray-100 rounded-lg p-2">
                           <p className="text-gray-800">{n.text}</p>
-                          <p className="text-[10px] text-gray-400 mt-1">{new Date(n.createdAt).toLocaleString()}{n.authorEmail ? ` · ${n.authorEmail}` : ''}</p>
+                          <p className="text-[10px] text-gray-400 mt-1">{formatDateTimeCanadaEastern(n.createdAt)}{n.authorEmail ? ` · ${n.authorEmail}` : ''}</p>
                         </div>
                       ))}
                     </div>
@@ -1379,7 +1386,7 @@ const AdminDashboard: React.FC = () => {
                                 >
                                   <p className="font-semibold text-gray-900 leading-snug">{entry.subject}</p>
                                   <p className="text-xs text-gray-500 mt-1">
-                                    {new Date(entry.sentAt).toLocaleString()}
+                                    {formatDateTimeCanadaEastern(entry.sentAt)}
                                   </p>
                                   <p className="text-xs text-gray-600 mt-0.5">
                                     Type: <span className="font-medium">{formatEmailLogType(entry.type)}</span>
@@ -1433,7 +1440,7 @@ const AdminDashboard: React.FC = () => {
                   <div className="space-y-4">
                     <h3 className="text-lg font-bold border-b pb-2">Post Live Career Overview Exit Questionnaire</h3>
                     <p className="text-xs text-gray-500">
-                      Submitted {new Date(selectedCandidate.exitQuestionnaire.submittedAt).toLocaleString()}
+                      Submitted {formatDateTimeCanadaEastern(selectedCandidate.exitQuestionnaire.submittedAt)}
                     </p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
                       <div><p className="text-gray-500">First Name</p><p className="text-gray-800 font-medium">{selectedCandidate.exitQuestionnaire.firstName}</p></div>

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { Button, Input } from '../components/UI';
 import { getCandidateByEmail } from '../services/storageService';
+import { formatDateCanadaEastern } from '../services/dateDisplay';
 import { Candidate, PipelineStage, normalizePipelineStage } from '../types';
 import { CheckCircle, XCircle, Calendar, FileText, Mail, Video, ClipboardList } from 'lucide-react';
 
@@ -174,11 +175,11 @@ const CheckStatus: React.FC = () => {
                         <div>
                           <p className="font-semibold text-blue-800 mb-1">Interview Scheduled</p>
                           <p className="text-sm text-blue-700">
-                            {new Date(candidate.adminData.interviewScheduledAt).toLocaleDateString('en-US', {
+                            {formatDateCanadaEastern(candidate.adminData.interviewScheduledAt, {
                               weekday: 'long',
                               year: 'numeric',
                               month: 'long',
-                              day: 'numeric'
+                              day: 'numeric',
                             })}
                           </p>
                         </div>
@@ -200,18 +201,18 @@ const CheckStatus: React.FC = () => {
 
                   <div className="pt-4 border-t border-gray-200">
                     <p className="text-xs text-gray-500">
-                      Application submitted: {new Date(candidate.timestamp).toLocaleDateString('en-US', {
+                      Application submitted: {formatDateCanadaEastern(candidate.timestamp, {
                         year: 'numeric',
                         month: 'long',
-                        day: 'numeric'
+                        day: 'numeric',
                       })}
                     </p>
                     {candidate.adminData?.resumeReviewedAt && (
                       <p className="text-xs text-gray-500 mt-1">
-                        Resume reviewed: {new Date(candidate.adminData.resumeReviewedAt).toLocaleDateString('en-US', {
+                        Resume reviewed: {formatDateCanadaEastern(candidate.adminData.resumeReviewedAt, {
                           year: 'numeric',
                           month: 'long',
-                          day: 'numeric'
+                          day: 'numeric',
                         })}
                       </p>
                     )}

@@ -122,7 +122,7 @@ export function buildCandidateReportPdf(candidate: Candidate): { doc: jsPDF; fil
   doc.setFontSize(10);
   doc.setTextColor(90);
   doc.text(
-    `Generated: ${new Date().toLocaleString()}  •  Candidate ID: ${candidate.id}`,
+    `Generated: ${new Date().toLocaleString('en-CA', { timeZone: 'America/Toronto', dateStyle: 'medium', timeStyle: 'short' })} (ET)  •  Candidate ID: ${candidate.id}`,
     page.margin,
     y,
   );

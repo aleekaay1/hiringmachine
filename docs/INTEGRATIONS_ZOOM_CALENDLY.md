@@ -49,6 +49,15 @@ Do **not** put Zoom secrets in `.env` or `VITE_*` — only in Supabase Edge Func
 
 The token is tied to **your Calendly user**; scheduled events and invitees are loaded for that user’s calendar.
 
+### Where meeting rows come from (past vs upcoming)
+
+The dashboard does **not** invent meetings. Each row is built from **Zoom’s REST API**:
+
+- **Past list:** `GET /users/{userId}/meetings?type=past` (scheduled meetings Zoom considers “past”).
+- **Upcoming list:** `GET /users/{userId}/meetings?type=upcoming`.
+
+Zoom sometimes returns a session in the **wrong** list (e.g. a future occurrence). The Edge Function **merges both lists**, parses each row’s `start_time` + `timezone`, and **re-buckets** by comparing the real start instant to the current time, so a future start (such as Dec 30, 2026) should appear under **Upcoming**, not **Past**. If `timezone` is missing or non-IANA, parsing falls back to **`America/Toronto`** (override with optional secret **`ZOOM_ASSUMED_TIMEZONE_IF_MISSING`**).
+
 ### Supabase (automatic — do not set manually)
 
 Edge Functions already receive `SUPABASE_URL` and `SUPABASE_ANON_KEY` from the project. You do **not** add these as custom secrets for this integration.
@@ -70,6 +79,7 @@ Add the **required** Zoom secrets below. Optionally add Calendly and/or a **topi
 | `ZOOM_LIVE_SESSION_TOPIC_FILTER` | No | Zoom **meeting topic** substring filter — see below |
 | `CALENDLY_EVENT_NAME_FILTER` | No | Calendly **event name** substring filter (e.g. `career` for “Live Online Career Session”) — independent from Zoom |
 | `INTEGRATION_MATCH_TOLERANCE_MINUTES` | No | Max start-time difference for Zoom↔Calendly pairing (default **120**; integer, max 1440) |
+| `ZOOM_ASSUMED_TIMEZONE_IF_MISSING` | No | IANA zone for naive `start_time` when Zoom omits `timezone` (default **America/Toronto**) |
 | `CALENDLY_API_TOKEN` | No | Calendly personal access token |
 
 **CLI alternative** (from repo root, after `supabase link` — see deploy section):
