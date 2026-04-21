@@ -8,6 +8,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
+  pipelineStageAfterAssessmentFormSent,
   pipelineStageAfterLiveSessionAttended,
   pipelineStageAfterLiveSessionInvited,
 } from '../_shared/pipelineStageLiveSession.ts';
@@ -162,6 +163,7 @@ Deno.serve(async (req) => {
     let invitedStageUpdated = 0;
     let skippedInviteNoRow = 0;
     let attendedUpdated = 0;
+    let assessmentStageUpdated = 0;
     let attendedSkippedNoRow = 0;
     let assessmentEmailsSent = 0;
     let assessmentEmailFailed = 0;
@@ -213,14 +215,26 @@ Deno.serve(async (req) => {
 
       const shouldSend =
         !alreadyStage3 &&
-        newStage === 'Leadership assessment form sent' &&
+        newStage === 'Live Career Overview Session Attended' &&
         typeof anonKey === 'string' &&
         anonKey.length > 0;
 
       if (shouldSend) {
         const ok = await sendStage3AssessmentEmail(supabaseUrl, anonKey, row.id, email);
-        if (ok) assessmentEmailsSent++;
-        else assessmentEmailFailed++;
+        if (ok) {
+          assessmentEmailsSent++;
+          const promote = {
+            ...merged,
+            pipelineStage: pipelineStageAfterAssessmentFormSent(merged.pipelineStage),
+          };
+          const { error: promoteErr } = await admin.from('candidates').update({ admin_data: promote }).eq('id', row.id);
+          if (!promoteErr) {
+            assessmentStageUpdated++;
+            byEmail.set(email, { ...row, admin_data: promote });
+          } else {
+            console.error('sync-live-session-pipeline assessment stage promote', promoteErr);
+          }
+        } else assessmentEmailFailed++;
       }
     }
 
@@ -230,6 +244,7 @@ Deno.serve(async (req) => {
         invited_stage_updated: invitedStageUpdated,
         skipped_invite_not_in_portal: skippedInviteNoRow,
         attended_rows_updated: attendedUpdated,
+        assessment_stage_updated: assessmentStageUpdated,
         skipped_attended_not_in_portal: attendedSkippedNoRow,
         assessment_emails_sent: assessmentEmailsSent,
         assessment_email_send_failed: assessmentEmailFailed,

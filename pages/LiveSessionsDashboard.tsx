@@ -112,6 +112,7 @@ const LiveSessionsDashboard: React.FC = () => {
     setSyncSummary([
       r.invited_stage_updated > 0 ? `${r.invited_stage_updated} moved to invited stage` : null,
       r.attended_rows_updated > 0 ? `${r.attended_rows_updated} marked attended` : null,
+      r.assessment_stage_updated > 0 ? `${r.assessment_stage_updated} moved to assessment sent` : null,
       r.assessment_emails_sent > 0 ? `${r.assessment_emails_sent} leadership emails sent` : null,
     ].filter(Boolean).join(' · ') || 'No new pipeline changes.');
   };

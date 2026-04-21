@@ -41,6 +41,7 @@ export interface SyncLiveSessionPipelineResult {
   invited_stage_updated: number;
   skipped_invite_not_in_portal: number;
   attended_rows_updated: number;
+  assessment_stage_updated: number;
   skipped_attended_not_in_portal: number;
   assessment_emails_sent: number;
   assessment_email_send_failed: number;

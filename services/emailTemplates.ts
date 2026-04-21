@@ -11,9 +11,6 @@ export const EMAIL_MERGE_FIELDS = [
   'assessmentLookupUrl',
   'candidateName',
   'zoomUrl',
-  'evaluatorName',
-  'evaluationComments',
-  'evaluationAt',
 ] as const;
 export type EmailMergeField = (typeof EMAIL_MERGE_FIELDS)[number];
 
@@ -66,15 +63,18 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
   },
   {
     id: 'stage5_evaluation',
-    name: 'Evaluation Done',
-    hint: 'Sent automatically when evaluator marks done.',
-    subject: 'Evaluation completed – next steps',
+    name: 'Stage 5 – Evaluation & callback',
+    hint: 'Manual only; no form trigger.',
+    subject: 'Your application – under review',
     bodyHtml: `
 <p>Dear {{firstName}},</p>
-<p>Your leadership assessment has been reviewed and marked complete by <strong>{{evaluatorName}}</strong> on <strong>{{evaluationAt}}</strong>.</p>
-<p><strong>Evaluation notes:</strong></p>
-<p>{{evaluationComments}}</p>
-<p>Thank you for your time and effort throughout the process. Our team will contact you with callback/interview timing manually.</p>
+<p>Thank you for your time, effort, and engagement throughout the hiring process to this point.</p>
+<p>Your profile is currently under careful review by the CEO and members of the Leadership Team. Each submission is evaluated with intention, as the focus remains on identifying individuals who demonstrate strong alignment with the standards, expectations, and long-term vision of the organization.</p>
+<p>This stage of the process is selective. Consideration is being given to factors such as professionalism, responsiveness, assessment quality, consistency, and overall leadership potential.</p>
+<p>The organization places a strong emphasis on attitude, coachability, and the ability to persevere through challenges. Technical skills can be developed through training; however, long-term success is most often achieved by individuals who demonstrate resilience, discipline, and a strong internal drive. Notably, many of the top performers within the organization began without prior experience in the insurance industry.</p>
+<p>If selected to move forward, a separate communication will be sent with an invitation to a final one-on-one interview, including full details on next steps and expectations.</p>
+<p>While this review process is ongoing, patience is appreciated. Every candidate is being given thoughtful and thorough consideration.</p>
+<p>Interest in joining the Globe Life AIL Division – Paz Organization is both recognized and respected.</p>
 <p>Best regards,</p>
 {{emailSignature}}
     `.trim(),
@@ -119,9 +119,6 @@ export function mergeTemplate(
     '{{candidateName}}': candidateName,
     '{{zoomUrl}}': ZOOM_MEETING_URL,
     '{{assessmentLookupUrl}}': DEFAULT_ASSESSMENT_LOOKUP_URL,
-    '{{evaluatorName}}': '',
-    '{{evaluationComments}}': '',
-    '{{evaluationAt}}': '',
     ...(extras || {}),
   };
   const signature = buildEmailSignatureHtml(options?.siteOrigin);

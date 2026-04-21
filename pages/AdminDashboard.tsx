@@ -47,6 +47,7 @@ const getAdminData = (c: Candidate): AdminData => {
 const TIMELINE_SHORT_LABELS: Record<PipelineStage, string> = {
   'Checked In': 'Checked in',
   'Invited to Live Career Overview Session': 'Invited',
+  'Live Career Overview Session Attended': 'Attended',
   'Leadership assessment form sent': 'Form sent',
   'Leadership form submitted, awaiting evaluation': 'Submitted',
   'Evaluation Done': 'Evaluation',
@@ -768,13 +769,8 @@ const AdminDashboard: React.FC = () => {
   const handleCompleteEvaluation = async () => {
     if (!selectedCandidate || evaluationSaving) return;
     const name = evaluatorName.trim();
-    const comments = evaluationComments.trim();
     if (!name) {
       alert('Please enter evaluator name.');
-      return;
-    }
-    if (!comments) {
-      alert('Please enter evaluation comments.');
       return;
     }
     const { data: { session } } = await supabase.auth.getSession();
@@ -792,11 +788,7 @@ const AdminDashboard: React.FC = () => {
         template.subject,
         template.bodyHtml,
         selectedCandidate,
-        {
-          '{{evaluatorName}}': name,
-          '{{evaluationComments}}': comments,
-          '{{evaluationAt}}': formatDateTimeCanadaEastern(nowIso),
-        },
+        undefined,
         { siteOrigin: getSiteOriginForEmail() }
       );
       const send = await sendEmail(session.access_token, {
@@ -814,7 +806,7 @@ const AdminDashboard: React.FC = () => {
         evaluation: {
           doneAt: nowIso,
           evaluatorName: name,
-          comments,
+          comments: evaluationComments.trim(),
           evaluationEmailSentAt: nowIso,
         },
         emailsSent: [
@@ -829,6 +821,11 @@ const AdminDashboard: React.FC = () => {
       setEvaluationSaving(false);
     }
   };
+
+  const canRunEvaluation =
+    selectedCandidate != null &&
+    PIPELINE_STAGES.indexOf(getAdminData(selectedCandidate).pipelineStage) >=
+      PIPELINE_STAGES.indexOf('Leadership form submitted, awaiting evaluation');
 
   if (!isAuthenticated) {
     return (
@@ -1377,7 +1374,7 @@ const AdminDashboard: React.FC = () => {
                       <Button
                         type="button"
                         onClick={handleCompleteEvaluation}
-                        disabled={evaluationSaving}
+                        disabled={evaluationSaving || !canRunEvaluation}
                         className="justify-center"
                       >
                         {evaluationSaving ? 'Completing…' : 'Mark Evaluation Done + Send Email'}
@@ -1390,6 +1387,11 @@ const AdminDashboard: React.FC = () => {
                       rows={3}
                       className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-[#005EB8] focus:border-[#005EB8]"
                     />
+                    {!canRunEvaluation && (
+                      <p className="text-xs text-amber-700">
+                        Evaluation will be enabled once leadership assessment is submitted by this candidate.
+                      </p>
+                    )}
                     {getAdminData(selectedCandidate).evaluation && (
                       <p className="text-xs text-gray-600">
                         Last completed by{' '}

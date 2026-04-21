@@ -3,6 +3,7 @@
 const ORDER = [
   'Checked In',
   'Invited to Live Career Overview Session',
+  'Live Career Overview Session Attended',
   'Leadership assessment form sent',
   'Leadership form submitted, awaiting evaluation',
   'Evaluation Done',
@@ -15,6 +16,7 @@ const LEGACY: Record<string, (typeof ORDER)[number]> = {
   Applied: 'Checked In',
   Screening: 'Leadership form submitted, awaiting evaluation',
   'Check in': 'Checked In',
+  'Checked in': 'Checked In',
   'Attended Live Session': 'Leadership assessment form sent',
   'Leadership Assessment Received Under Review': 'Leadership form submitted, awaiting evaluation',
   'Career session invited': 'Invited to Live Career Overview Session',
@@ -46,9 +48,19 @@ export function pipelineStageAfterLiveSessionInvited(current: unknown): (typeof 
 export function pipelineStageAfterLiveSessionAttended(current: unknown): (typeof ORDER)[number] {
   const cur = normalize(current);
   if (cur === 'Hired' || cur === 'Not Hired / Withdrawn') return cur;
-  const attendedIdx = ORDER.indexOf('Leadership assessment form sent');
+  const attendedIdx = ORDER.indexOf('Live Career Overview Session Attended');
+  const ci = ORDER.indexOf(cur);
+  if (ci === -1) return 'Live Career Overview Session Attended';
+  if (ci > attendedIdx) return cur;
+  return 'Live Career Overview Session Attended';
+}
+
+export function pipelineStageAfterAssessmentFormSent(current: unknown): (typeof ORDER)[number] {
+  const cur = normalize(current);
+  if (cur === 'Hired' || cur === 'Not Hired / Withdrawn') return cur;
+  const targetIdx = ORDER.indexOf('Leadership assessment form sent');
   const ci = ORDER.indexOf(cur);
   if (ci === -1) return 'Leadership assessment form sent';
-  if (ci > attendedIdx) return cur;
+  if (ci > targetIdx) return cur;
   return 'Leadership assessment form sent';
 }

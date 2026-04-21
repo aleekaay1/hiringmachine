@@ -33,6 +33,14 @@ const CheckStatus: React.FC = () => {
         message:
           'You are invited to the Live Career Overview Session. Please check your email for session details.',
       },
+      'Live Career Overview Session Attended': {
+        label: 'Live Career Overview Session Attended',
+        color: 'text-cyan-700',
+        bgColor: 'bg-cyan-50 border-cyan-200',
+        icon: <Video className="w-6 h-6 text-cyan-600" />,
+        message:
+          'Attendance was confirmed for your live overview session.',
+      },
       'Leadership assessment form sent': {
         label: 'Leadership assessment form sent',
         color: 'text-amber-700',

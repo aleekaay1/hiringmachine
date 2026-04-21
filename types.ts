@@ -70,6 +70,7 @@ export const ASSESSMENT_ROOM_BACKGROUND_AREAS = [
 export type PipelineStage =
   | 'Checked In'
   | 'Invited to Live Career Overview Session'
+  | 'Live Career Overview Session Attended'
   | 'Leadership assessment form sent'
   | 'Leadership form submitted, awaiting evaluation'
   | 'Evaluation Done'
@@ -81,6 +82,7 @@ export type PipelineStage =
 export const PIPELINE_STAGES: PipelineStage[] = [
   'Checked In',
   'Invited to Live Career Overview Session',
+  'Live Career Overview Session Attended',
   'Leadership assessment form sent',
   'Leadership form submitted, awaiting evaluation',
   'Evaluation Done',
@@ -94,6 +96,7 @@ const LEGACY_PIPELINE_STAGE: Record<string, PipelineStage> = {
   Applied: 'Checked In',
   Screening: 'Leadership form submitted, awaiting evaluation',
   'Check in': 'Checked In',
+  'Checked in': 'Checked In',
   'Attended Live Session': 'Leadership assessment form sent',
   'Leadership Assessment Received Under Review': 'Leadership form submitted, awaiting evaluation',
   'Career session invited': 'Invited to Live Career Overview Session',
@@ -147,6 +150,18 @@ export function pipelineStageAfterLiveSessionInvited(current: unknown): Pipeline
  * Does not override Interview, Hired, or later assessment stages.
  */
 export function pipelineStageAfterLiveSessionAttended(current: unknown): PipelineStage {
+  const cur = normalizePipelineStage(current);
+  if (cur === 'Hired' || cur === 'Not Hired / Withdrawn') return cur;
+  const target: PipelineStage = 'Live Career Overview Session Attended';
+  const ti = PIPELINE_STAGES.indexOf(target);
+  const ci = PIPELINE_STAGES.indexOf(cur);
+  if (ci === -1) return target;
+  if (ci > ti) return cur;
+  return target;
+}
+
+/** After stage3 leadership assessment email is sent automatically */
+export function pipelineStageAfterAssessmentFormSent(current: unknown): PipelineStage {
   const cur = normalizePipelineStage(current);
   if (cur === 'Hired' || cur === 'Not Hired / Withdrawn') return cur;
   const target: PipelineStage = 'Leadership assessment form sent';
