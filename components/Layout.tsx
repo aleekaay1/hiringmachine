@@ -21,15 +21,16 @@ const Layout: React.FC<LayoutProps> = ({
   const navigate = useNavigate();
   const location = useLocation();
 
-  const isActive = (path: string) => location.pathname === path;
+  const current = `${location.pathname}${location.search}`;
+  const isActive = (path: string) => current === path;
 
   const adminMenu = [
-    { name: 'Overview', route: '/admin', icon: Home },
-    { name: 'Candidates', route: '/admin', icon: Users },
+    { name: 'Overview', route: '/admin?view=overview', icon: Home },
+    { name: 'Candidates', route: '/admin?view=candidates', icon: Users },
     { name: 'QR Codes', route: '/qr', icon: QrCode },
     { name: 'Live Sessions', route: '/live-sessions', icon: Video },
-    { name: 'Analytics', route: '/admin', icon: BarChart3 },
-    { name: 'Settings', route: '/admin', icon: Settings },
+    { name: 'Analytics', route: '/admin?view=analytics', icon: BarChart3 },
+    { name: 'Settings', route: '/admin?view=settings', icon: Settings },
   ] as const;
 
   return (

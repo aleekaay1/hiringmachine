@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import {
   getCandidates,
@@ -111,10 +111,17 @@ const AdminDashboard: React.FC = () => {
   const [evaluatorName, setEvaluatorName] = useState('');
   const [evaluationComments, setEvaluationComments] = useState('');
   const [evaluationSaving, setEvaluationSaving] = useState(false);
-  const [detailTab, setDetailTab] = useState<'profile' | 'status' | 'assessment' | 'communication'>('profile');
-  const [workspaceTab, setWorkspaceTab] = useState<'overview' | 'candidates' | 'analytics'>('overview');
+  const [detailTab, setDetailTab] = useState<'profile' | 'status' | 'assessment'>('profile');
   const [showEvaluationModal, setShowEvaluationModal] = useState(false);
+  const [liveNow, setLiveNow] = useState(new Date());
   const navigate = useNavigate();
+  const location = useLocation();
+
+  const adminView = useMemo<'overview' | 'candidates' | 'analytics' | 'settings'>(() => {
+    const q = new URLSearchParams(location.search).get('view');
+    if (q === 'overview' || q === 'candidates' || q === 'analytics' || q === 'settings') return q;
+    return 'overview';
+  }, [location.search]);
 
   useEffect(() => {
     if (selectedCandidate) setNextStepEdit(getAdminData(selectedCandidate).nextStep);
@@ -134,6 +141,11 @@ const AdminDashboard: React.FC = () => {
   useEffect(() => {
     setEmailLogOpen(false);
   }, [selectedCandidate?.id]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setLiveNow(new Date()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => {
@@ -860,6 +872,26 @@ const AdminDashboard: React.FC = () => {
     }));
   }, [dashboard.stageCounts]);
 
+  const monthGrid = useMemo(() => {
+    const now = liveNow;
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    const start = new Date(first);
+    start.setDate(first.getDate() - first.getDay());
+    return Array.from({ length: 42 }, (_, i) => {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      return {
+        key: d.toISOString(),
+        date: d.getDate(),
+        isCurrentMonth: d.getMonth() === now.getMonth(),
+        isToday:
+          d.getFullYear() === now.getFullYear() &&
+          d.getMonth() === now.getMonth() &&
+          d.getDate() === now.getDate(),
+      };
+    });
+  }, [liveNow]);
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
@@ -900,36 +932,47 @@ const AdminDashboard: React.FC = () => {
   return (
     <Layout isAdmin>
       <div className="w-full p-5 lg:p-6 space-y-5">
-        <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-4 py-3 flex flex-wrap gap-2">
-          {[
-            ['overview', 'Overview'],
-            ['candidates', 'Candidates'],
-            ['analytics', 'Analytics'],
-          ].map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setWorkspaceTab(id as typeof workspaceTab)}
-              className={`px-3 py-1.5 rounded-lg text-sm font-semibold border ${
-                workspaceTab === id
-                  ? 'bg-[#0b1f3a] text-white border-[#0b1f3a]'
-                  : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+        <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-5 py-3 flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-bold text-[#0b1f3a]">
+              {adminView === 'overview' ? 'Overview' : adminView === 'candidates' ? 'Candidates' : adminView === 'analytics' ? 'Analytics' : 'Settings'}
+            </h1>
+            <p className="text-xs text-gray-500">
+              {dashboard.total} applicants · {dashboard.activePipeline} active
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-xs text-gray-500">Live date & time</p>
+            <p className="text-sm font-semibold text-gray-900">
+              {liveNow.toLocaleString('en-CA', { timeZone: 'America/Toronto', dateStyle: 'medium', timeStyle: 'medium' })}
+            </p>
+          </div>
         </div>
 
-        {workspaceTab === 'overview' && (
+        {adminView === 'overview' && (
           <div className="grid grid-cols-1 xl:grid-cols-[320px_minmax(0,1fr)] gap-5">
             <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-              <p className="text-sm font-semibold text-[#0b1f3a] mb-3">Calendar Widget</p>
-              <input type="date" className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm" />
-              <div className="mt-4 space-y-2 text-xs text-gray-600">
-                <p>Total candidates: <span className="font-semibold text-gray-900">{dashboard.total}</span></p>
-                <p>Active pipeline: <span className="font-semibold text-gray-900">{dashboard.activePipeline}</span></p>
-                <p>Assessments completed: <span className="font-semibold text-gray-900">{dashboard.assessmentComplete}</span></p>
+              <p className="text-sm font-semibold text-[#0b1f3a] mb-3">
+                {liveNow.toLocaleString('en-CA', { month: 'long', year: 'numeric', timeZone: 'America/Toronto' })}
+              </p>
+              <div className="grid grid-cols-7 gap-1 text-[11px] text-center text-gray-500 mb-2">
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => <div key={d}>{d}</div>)}
+              </div>
+              <div className="grid grid-cols-7 gap-1">
+                {monthGrid.map((d) => (
+                  <div
+                    key={d.key}
+                    className={`h-9 rounded-md border text-xs flex items-center justify-center ${
+                      d.isToday
+                        ? 'bg-[#0b1f3a] text-white border-[#0b1f3a]'
+                        : d.isCurrentMonth
+                          ? 'bg-white border-gray-200 text-gray-700'
+                          : 'bg-gray-50 border-gray-100 text-gray-400'
+                    }`}
+                  >
+                    {d.date}
+                  </div>
+                ))}
               </div>
             </div>
             <div className="space-y-5">
@@ -949,8 +992,12 @@ const AdminDashboard: React.FC = () => {
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-5">
-                  <p className="text-sm font-semibold text-[#0b1f3a] mb-3">Hiring Fit Snapshot</p>
-                  <div className="mx-auto w-40 h-40 rounded-full" style={{ background: `conic-gradient(#22c55e 0 ${Math.max(1, Math.round((dashboard.highFit / Math.max(1, dashboard.total)) * 360))}deg, #f59e0b 0 ${Math.max(1, Math.round(((dashboard.highFit + dashboard.review) / Math.max(1, dashboard.total)) * 360))}deg, #ef4444 0 360deg)` }} />
+                  <p className="text-sm font-semibold text-[#0b1f3a] mb-3">Candidate Status Breakdown</p>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex items-center justify-between rounded-lg bg-green-50 border border-green-100 px-3 py-2"><span>High fit</span><span className="font-semibold text-green-700">{dashboard.highFit}</span></div>
+                    <div className="flex items-center justify-between rounded-lg bg-amber-50 border border-amber-100 px-3 py-2"><span>Review</span><span className="font-semibold text-amber-700">{dashboard.review}</span></div>
+                    <div className="flex items-center justify-between rounded-lg bg-red-50 border border-red-100 px-3 py-2"><span>Not aligned</span><span className="font-semibold text-red-700">{dashboard.notAligned}</span></div>
+                  </div>
                 </div>
                 <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-5">
                   <p className="text-sm font-semibold text-[#0b1f3a] mb-3">Operational Queue</p>
@@ -966,7 +1013,7 @@ const AdminDashboard: React.FC = () => {
           </div>
         )}
 
-        {workspaceTab === 'analytics' && (
+        {adminView === 'analytics' && (
           <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-5 space-y-4">
             <div className="flex flex-wrap gap-2">
               <Button onClick={exportCSV} variant="outline" className="text-sm">
@@ -1000,7 +1047,13 @@ const AdminDashboard: React.FC = () => {
           </div>
         )}
 
-        {workspaceTab === 'candidates' && (
+        {adminView === 'settings' && (
+          <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-6 text-sm text-gray-600">
+            Settings page placeholder. Add admin settings widgets here.
+          </div>
+        )}
+
+        {adminView === 'candidates' && (
         <>
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm">
           <div className="px-5 py-4 border-b border-gray-200 flex flex-wrap items-center justify-between gap-3">
@@ -1111,12 +1164,13 @@ const AdminDashboard: React.FC = () => {
               )}
             </div>
             <div className="overflow-y-auto flex-grow">
-              <div className="grid grid-cols-[34px,1.3fr,0.9fr,1.3fr,1.1fr,0.7fr,0.7fr] items-center gap-2 px-4 py-2 border-b border-gray-100 bg-[#f8fbff] text-[11px] font-semibold text-gray-500 uppercase tracking-wide sticky top-0 z-10">
+              <div className="grid grid-cols-[34px,1.25fr,0.85fr,1.2fr,0.95fr,0.85fr,0.65fr,0.75fr] items-center gap-2 px-4 py-2 border-b border-gray-100 bg-[#f8fbff] text-[11px] font-semibold text-gray-500 uppercase tracking-wide sticky top-0 z-10">
                 <input type="checkbox" checked={selectedIds.size === filteredCandidates.length && filteredCandidates.length > 0} onChange={selectAll} className="rounded border-gray-300 text-[#005EB8]" />
                 <span>Candidate Name</span>
                 <span>Phone</span>
                 <span>Email</span>
                 <span>Status / Stage</span>
+                <span>Date & Time</span>
                 <span>Score</span>
                 <span>Resume</span>
               </div>
@@ -1125,7 +1179,7 @@ const AdminDashboard: React.FC = () => {
                 return (
                   <div
                     key={c.id}
-                    className={`grid grid-cols-[34px,1.3fr,0.9fr,1.3fr,1.1fr,0.7fr,0.7fr] items-center gap-2 p-3 border-b border-gray-100 transition-all ${
+                    className={`grid grid-cols-[34px,1.25fr,0.85fr,1.2fr,0.95fr,0.85fr,0.65fr,0.75fr] items-center gap-2 p-3 border-b border-gray-100 transition-all ${
                       selectedCandidate?.id === c.id
                         ? 'bg-gradient-to-r from-[#005EB8]/10 to-white border-l-4 border-l-[#005EB8]'
                         : 'hover:bg-gradient-to-r hover:from-gray-50 hover:to-white'
@@ -1150,8 +1204,21 @@ const AdminDashboard: React.FC = () => {
                         {admin.pipelineStage}
                       </span>
                     </div>
+                    <div className="text-[11px] text-gray-700 truncate">{formatDateTimeCanadaEastern(c.timestamp)}</div>
                     <div className="text-[12px] text-gray-700">{c.score ?? '-'}</div>
-                    <div className="text-[12px] text-gray-700">{c.applicantQuestionnaire?.resumeUrls?.length ? 'Yes' : '-'}</div>
+                    <div className="text-[12px] text-gray-700">
+                      {c.applicantQuestionnaire?.resumeUrls?.[0] ? (
+                        <a
+                          href={c.applicantQuestionnaire.resumeUrls[0]}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[#005EB8] font-semibold hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          Open
+                        </a>
+                      ) : '-'}
+                    </div>
                   </div>
                 );
               })}
@@ -1340,7 +1407,6 @@ const AdminDashboard: React.FC = () => {
                     ['profile', 'Profile'],
                     ['status', 'Status'],
                     ['assessment', 'Assessment'],
-                    ['communication', 'Communication'],
                   ].map(([id, label]) => (
                     <button
                       key={id}
@@ -1648,13 +1714,6 @@ const AdminDashboard: React.FC = () => {
                   </div>
                 </div>
                 )}
-                {detailTab === 'communication' && (
-                  <div className="border border-[#d3dded] rounded-xl p-5 bg-white">
-                    <h3 className="text-lg font-bold text-[#0b1f3a] mb-2">Communication</h3>
-                    <p className="text-sm text-gray-600">Use the Status tab for stage updates, emails, and evaluation actions.</p>
-                  </div>
-                )}
-
                 {/* Applicant Questionnaire */}
                 {detailTab === 'assessment' && selectedCandidate.applicantQuestionnaire && (
                   <div className="space-y-4">
