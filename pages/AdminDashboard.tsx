@@ -1063,11 +1063,6 @@ const AdminDashboard: React.FC = () => {
                 {loading ? 'Loading candidates…' : `${dashboard.total} applicants · ${dashboard.activePipeline} in active pipeline`}
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" className="text-sm" onClick={() => navigate('/qr')}>QR Codes</Button>
-              <Button onClick={exportCSV} variant="outline" className="text-sm"><Download size={16} className="mr-2" />Export CSV</Button>
-              <Button variant="outline" className="text-sm" onClick={handleLogout}>Sign Out</Button>
-            </div>
           </div>
           <div className="px-5 py-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 text-xs bg-[#f9fbff] border-t border-gray-100">
             {PIPELINE_STAGES.map((s) => (
