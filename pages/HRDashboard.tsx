@@ -217,6 +217,13 @@ const QueueTable = ({ rows, mode }: { rows: Array<Record<string, unknown>>; mode
   );
 };
 
+function formatCell(value: unknown): string {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'object') return JSON.stringify(value);
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  return String(value);
+}
+
 const SimpleTable = ({ rows, columns }: { rows: Array<Record<string, unknown>>; columns: string[] }) => (
   <div className="overflow-auto">
     <table className="min-w-full text-xs">
@@ -228,11 +235,11 @@ const SimpleTable = ({ rows, columns }: { rows: Array<Record<string, unknown>>; 
       <tbody>
         {rows.length === 0 ? (
           <tr>
-            <td colSpan={columns.length} className="px-3 py-6 text-center text-[#7b8aa0]">No rows</td>
+            <td colSpan={columns.length} className="px-3 py-6 text-center text-[#7b8aa0]">No rows — run a rollup first to populate data.</td>
           </tr>
         ) : rows.map((row, i) => (
           <tr key={`${i}-${String(row.candidate_id ?? i)}`} className="border-t border-[#edf2fb]">
-            {columns.map((c) => <td key={c} className="px-3 py-2">{String(row[c] ?? '—')}</td>)}
+            {columns.map((c) => <td key={c} className="px-3 py-2 max-w-xs truncate">{formatCell(row[c])}</td>)}
           </tr>
         ))}
       </tbody>

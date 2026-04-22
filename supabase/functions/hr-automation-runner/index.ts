@@ -21,7 +21,7 @@ Deno.serve(async (req) => {
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
-    const admin = createClient(supabaseUrl, serviceRole);
+    const hrAdmin  = createClient(supabaseUrl, serviceRole, { db: { schema: 'hr_analytics' } });
 
     const { data: authData, error: authErr } = await supabase.auth.getUser();
     if (authErr || !authData.user) {
@@ -33,8 +33,8 @@ Deno.serve(async (req) => {
     const allowWrites = (Deno.env.get('HR_AUTOMATION_ENABLED')?.trim() || '').toLowerCase() === 'true';
     const writesEnabled = !dryRun && allowWrites;
 
-    const { data: candidates, error: candErr } = await admin
-      .from('hr_analytics.v_hr_latest_readiness')
+    const { data: candidates, error: candErr } = await hrAdmin
+      .from('v_hr_latest_readiness')
       .select('candidate_id,score,band')
       .order('score', { ascending: false })
       .limit(300);
@@ -72,11 +72,11 @@ Deno.serve(async (req) => {
         source: 'automation_beta',
         metadata: { recommendation: r },
       }));
-      const { data: inserted } = await admin.from('hr_analytics.hr_tasks').insert(taskRows).select('id');
+      const { data: inserted } = await hrAdmin.from('hr_tasks').insert(taskRows).select('id');
       createdTasks = inserted?.length || 0;
       if (inserted && inserted.length > 0) {
-        await admin.from('hr_analytics.hr_task_events').insert(
-          inserted.map((t) => ({
+        await hrAdmin.from('hr_task_events').insert(
+          inserted.map((t: Record<string, unknown>) => ({
             task_id: t.id,
             event_type: 'created',
             actor_email: authData.user?.email || null,

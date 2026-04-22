@@ -91,7 +91,8 @@ Deno.serve(async (req) => {
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
-    const admin = createClient(supabaseUrl, serviceRole);
+    const admin   = createClient(supabaseUrl, serviceRole);
+    const hrAdmin = createClient(supabaseUrl, serviceRole, { db: { schema: 'hr_analytics' } });
 
     const { data: userData, error: userErr } = await supabase.auth.getUser();
     if (userErr || !userData.user) {
@@ -107,7 +108,7 @@ Deno.serve(async (req) => {
     if (candErr) throw candErr;
     const candidates = (candidatesRaw || []) as CandidateRow[];
 
-    const { data: slaRaw } = await admin.from('hr_analytics.hr_stage_sla').select('stage,sla_minutes,enabled');
+    const { data: slaRaw } = await hrAdmin.from('hr_stage_sla').select('stage,sla_minutes,enabled');
     const slaByStage = new Map<string, number>();
     for (const row of slaRaw || []) {
       if (row.enabled === false) continue;
@@ -252,36 +253,36 @@ Deno.serve(async (req) => {
 
     if (!dryRun) {
       if (signalRows.length > 0) {
-        await admin.from('hr_analytics.hr_candidate_signals').upsert(signalRows, { onConflict: 'candidate_id' });
+        await hrAdmin.from('hr_candidate_signals').upsert(signalRows, { onConflict: 'candidate_id' });
       }
       if (scoreRows.length > 0) {
-        await admin.from('hr_analytics.hr_readiness_scores').insert(scoreRows);
+        await hrAdmin.from('hr_readiness_scores').insert(scoreRows);
       }
       if (riskRows.length > 0) {
-        await admin.from('hr_analytics.hr_risk_flags').update({ status: 'resolved', resolved_at: new Date().toISOString() }).eq('status', 'active');
-        await admin.from('hr_analytics.hr_risk_flags').insert(riskRows);
+        await hrAdmin.from('hr_risk_flags').update({ status: 'resolved', resolved_at: new Date().toISOString() }).eq('status', 'active');
+        await hrAdmin.from('hr_risk_flags').insert(riskRows);
       }
       if (stageEvents.length > 0) {
-        await admin.from('hr_analytics.hr_stage_events').insert(stageEvents);
+        await hrAdmin.from('hr_stage_events').insert(stageEvents);
       }
 
       if (taskRows.length > 0) {
-        const { data: existingOpen } = await admin
-          .from('hr_analytics.hr_tasks')
+        const { data: existingOpen } = await hrAdmin
+          .from('hr_tasks')
           .select('candidate_id,task_type,status')
           .in('status', ['open', 'in_progress']);
-        const openSet = new Set((existingOpen || []).map((r) => `${r.candidate_id}|${r.task_type}`));
+        const openSet = new Set((existingOpen || []).map((r: Record<string, unknown>) => `${r.candidate_id}|${r.task_type}`));
         const deduped = taskRows.filter((t) => !openSet.has(`${t.candidate_id}|${t.task_type}`));
         if (deduped.length > 0) {
-          const { data: inserted } = await admin.from('hr_analytics.hr_tasks').insert(deduped).select('id');
+          const { data: inserted } = await hrAdmin.from('hr_tasks').insert(deduped).select('id');
           if (inserted && inserted.length > 0) {
-            const events = inserted.map((r) => ({
+            const events = inserted.map((r: Record<string, unknown>) => ({
               task_id: r.id,
               event_type: 'created',
               actor_email: userData.user?.email || null,
               payload: { source: 'hr-rollup-jobs' },
             }));
-            await admin.from('hr_analytics.hr_task_events').insert(events);
+            await hrAdmin.from('hr_task_events').insert(events);
           }
           result.tasks_created = deduped.length;
         } else {
@@ -291,9 +292,8 @@ Deno.serve(async (req) => {
         result.tasks_created = 0;
       }
 
-      await admin.rpc('refresh_materialized_view_hr_funnel_daily').catch(async () => {
-        await admin.from('hr_analytics.hr_funnel_daily').select('day').limit(1);
-      });
+      // Refresh materialized view via raw SQL through the service-role client
+      await admin.rpc('refresh_materialized_view_hr_funnel_daily').catch(() => { /* view refresh optional */ });
     }
 
     return new Response(JSON.stringify(result), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
