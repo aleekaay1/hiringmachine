@@ -3,7 +3,7 @@ import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import { fetchHrDashboard, hrDashboardAction, runHrAutomation, runHrRollup, type HrDashboardPayload } from '../services/hrDashboardService';
-import { AlertTriangle, BarChart3, CheckCircle2, Clock3, RefreshCw, Sparkles, Users } from 'lucide-react';
+import { AlertTriangle, BarChart3, CheckCircle2, Clock3, RefreshCw, Sparkles, Users, X } from 'lucide-react';
 
 type QueueRow = Record<string, unknown>;
 
@@ -17,6 +17,7 @@ const HRDashboard: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
   const [data, setData] = useState<HrDashboardPayload | null>(null);
+  const [selectedCandidate, setSelectedCandidate] = useState<QueueRow | null>(null);
 
   const getAccessToken = useCallback(async () => {
     const { data: s } = await supabase.auth.getSession();
@@ -139,6 +140,18 @@ const HRDashboard: React.FC = () => {
     { label: 'Active Risks', value: Number(summary.active_risks ?? 0), icon: <AlertTriangle size={15} /> },
   ]), [summary]);
 
+  const selectedCandidateTasks = useMemo(() => {
+    if (!selectedCandidate) return [];
+    const cid = String(selectedCandidate.candidate_id || '');
+    return (data?.open_tasks ?? []).filter((r) => String(r.candidate_id || '') === cid);
+  }, [data?.open_tasks, selectedCandidate]);
+
+  const selectedCandidateRisks = useMemo(() => {
+    if (!selectedCandidate) return [];
+    const cid = String(selectedCandidate.candidate_id || '');
+    return (data?.active_risks ?? []).filter((r) => String(r.candidate_id || '') === cid);
+  }, [data?.active_risks, selectedCandidate]);
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-[#f7fbff] to-[#eef6ff] flex items-center justify-center p-4">
@@ -218,7 +231,15 @@ const HRDashboard: React.FC = () => {
                 <tbody>
                   {queue.slice(0, 100).map((row, i) => (
                     <tr key={`${row.candidate_id as string}-${i}`} className="border-t border-[#edf2fb]">
-                      <td className="px-3 py-2">{formatCell(row.candidate_name)}</td>
+                      <td className="px-3 py-2">
+                        <button
+                          type="button"
+                          className="font-semibold text-[#0B1B34] hover:underline"
+                          onClick={() => setSelectedCandidate(row)}
+                        >
+                          {formatCell(row.candidate_name)}
+                        </button>
+                      </td>
                       <td className="px-3 py-2">{formatCell(row.pipeline_stage)}</td>
                       <td className="px-3 py-2">{formatCell(row.readiness_band)}</td>
                       <td className="px-3 py-2">{formatCell(row.readiness_score)}</td>
@@ -279,10 +300,101 @@ const HRDashboard: React.FC = () => {
             />
           </section>
         </div>
+
+        {selectedCandidate && (
+          <div className="fixed inset-0 z-50 bg-black/30 flex justify-end">
+            <div className="h-full w-full max-w-xl bg-white shadow-2xl border-l border-[#d6deea] overflow-y-auto p-5 space-y-5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-[#7a8ba1]">Candidate Profile</p>
+                  <h3 className="text-lg font-extrabold text-[#0B1B34]">{formatCell(selectedCandidate.candidate_name)}</h3>
+                  <p className="text-xs text-[#6f7b8d]">{formatCell(selectedCandidate.email)}</p>
+                </div>
+                <button type="button" className="p-2 rounded-lg hover:bg-[#f3f6fb]" onClick={() => setSelectedCandidate(null)}>
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <MiniField label="Stage" value={selectedCandidate.pipeline_stage} />
+                <MiniField label="Readiness" value={`${formatCell(selectedCandidate.readiness_band)} (${formatCell(selectedCandidate.readiness_score)})`} />
+                <MiniField label="Risks" value={selectedCandidate.active_risk_count} />
+                <MiniField label="Priority" value={selectedCandidate.priority} />
+              </div>
+
+              <div className="rounded-xl border border-[#dce8f8] p-3">
+                <p className="text-xs font-bold uppercase tracking-wide text-[#5f748f] mb-1">Recommended next step</p>
+                <p className="text-sm text-[#1A2942]">{formatCell(selectedCandidate.recommended_action)}</p>
+              </div>
+
+              <div className="rounded-xl border border-[#dce8f8] p-3 space-y-2">
+                <p className="text-xs font-bold uppercase tracking-wide text-[#5f748f]">Quick actions</p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg border border-[#cfe3f9] px-2.5 py-1 text-[11px] font-semibold text-[#005EB8] hover:bg-[#edf6ff]"
+                    onClick={() => void executeAction('set_candidate_stage', { candidate_id: selectedCandidate.candidate_id, stage: 'Interview scheduled' }, 'Candidate moved to Interview scheduled.')}
+                  >
+                    Move to interview
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-[#cfe3f9] px-2.5 py-1 text-[11px] font-semibold text-[#005EB8] hover:bg-[#edf6ff]"
+                    onClick={() => void executeAction('set_candidate_stage', { candidate_id: selectedCandidate.candidate_id, stage: 'Evaluation Done' }, 'Candidate moved to Evaluation Done.')}
+                  >
+                    Mark evaluation done
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-[#f2d8d8] px-2.5 py-1 text-[11px] font-semibold text-[#b42318] hover:bg-[#fff1f1]"
+                    onClick={() => void executeAction('create_task', { candidate_id: selectedCandidate.candidate_id, task_type: 'call_now', priority: 'high', title: 'Immediate follow-up call' }, 'Follow-up task created.')}
+                  >
+                    Add call task
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-[#dce8f8] p-3">
+                <p className="text-xs font-bold uppercase tracking-wide text-[#5f748f] mb-2">Open tasks for this candidate</p>
+                <SimpleTable
+                  rows={selectedCandidateTasks}
+                  columns={['task_type', 'priority', 'status', 'due_at']}
+                  onResolve={(row) => {
+                    const taskId = Number(row.id);
+                    if (!Number.isFinite(taskId)) return;
+                    void executeAction('resolve_task', { task_id: taskId }, 'Task marked done.');
+                  }}
+                  resolveLabel="Done"
+                />
+              </div>
+
+              <div className="rounded-xl border border-[#dce8f8] p-3">
+                <p className="text-xs font-bold uppercase tracking-wide text-[#5f748f] mb-2">Active risks for this candidate</p>
+                <SimpleTable
+                  rows={selectedCandidateRisks}
+                  columns={['risk_type', 'confidence', 'reason', 'detected_at']}
+                  onResolve={(row) => {
+                    const riskId = Number(row.id);
+                    if (!Number.isFinite(riskId)) return;
+                    void executeAction('resolve_risk', { risk_id: riskId }, 'Risk marked resolved.');
+                  }}
+                  resolveLabel="Resolve"
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </Layout>
   );
 };
+
+const MiniField = ({ label, value }: { label: string; value: unknown }) => (
+  <div className="rounded-lg border border-[#e2ecf9] bg-[#f8fbff] px-3 py-2">
+    <p className="text-[10px] uppercase tracking-wide text-[#7a8ba1]">{label}</p>
+    <p className="text-sm font-semibold text-[#0B1B34]">{formatCell(value)}</p>
+  </div>
+);
 
 function formatCell(value: unknown): string {
   if (value === null || value === undefined) return '—';
