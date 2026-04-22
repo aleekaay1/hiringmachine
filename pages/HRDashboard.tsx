@@ -16,6 +16,7 @@ const PIPELINE_FLOW = [
   'Interview scheduled',
   'Hired',
 ] as const;
+const STAGE_ORDER: string[] = [...PIPELINE_FLOW, 'Not Hired / Withdrawn'];
 
 const HRDashboard: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -171,6 +172,17 @@ const HRDashboard: React.FC = () => {
     return PIPELINE_FLOW[idx + 1];
   }, [selectedStage]);
 
+  const queueByStage = useMemo(() => {
+    const map = new Map<string, QueueRow[]>();
+    for (const stage of STAGE_ORDER) map.set(stage, []);
+    for (const row of queue) {
+      const stage = String(row.pipeline_stage || 'Checked In');
+      if (!map.has(stage)) map.set(stage, []);
+      map.get(stage)!.push(row);
+    }
+    return map;
+  }, [queue]);
+
   useEffect(() => {
     if (!selectedCandidate) {
       setInterviewAt('');
@@ -255,74 +267,68 @@ const HRDashboard: React.FC = () => {
         </div>
 
         <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <h3 className="font-bold text-[#0B1B34] mb-3">Priority Candidate Actions</h3>
+          <h3 className="font-bold text-[#0B1B34] mb-1">Candidates by Stage</h3>
+          <p className="text-xs text-[#6f7b8d] mb-3">Each stage section shows candidates and the same logical next-stage action for that stage.</p>
           {queue.length === 0 ? (
             <div className="text-sm text-[#7b8aa0]">No action queue available yet. Click Rebuild Data.</div>
           ) : (
-            <div className="overflow-auto">
-              <table className="min-w-full text-xs">
-                <thead className="bg-[#f6f9ff]">
-                  <tr>
-                    {['candidate_name', 'pipeline_stage', 'readiness_band', 'readiness_score', 'active_risk_count', 'recommended_action', 'priority', 'actions'].map((c) => (
-                      <th key={c} className="text-left font-semibold text-[#5f748f] px-3 py-2 whitespace-nowrap">{c}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {queue.slice(0, 100).map((row, i) => (
-                    <tr key={`${row.candidate_id as string}-${i}`} className="border-t border-[#edf2fb]">
-                      <td className="px-3 py-2">
-                        <button
-                          type="button"
-                          className="font-semibold text-[#0B1B34] hover:underline"
-                          onClick={() => setSelectedCandidate(row)}
-                        >
-                          {formatCell(row.candidate_name)}
-                        </button>
-                      </td>
-                      <td className="px-3 py-2">{formatCell(row.pipeline_stage)}</td>
-                      <td className="px-3 py-2">{formatCell(row.readiness_band)}</td>
-                      <td className="px-3 py-2">{formatCell(row.readiness_score)}</td>
-                      <td className="px-3 py-2">{formatCell(row.active_risk_count)}</td>
-                      <td className="px-3 py-2 max-w-xs">{formatCell(row.recommended_action)}</td>
-                      <td className="px-3 py-2">{formatCell(row.priority)}</td>
-                      <td className="px-3 py-2 whitespace-nowrap">
-                        <div className="flex gap-2">
-                          {(() => {
-                            const stage = String(row.pipeline_stage || '');
-                            const idx = PIPELINE_FLOW.indexOf(stage as (typeof PIPELINE_FLOW)[number]);
-                            const next = idx >= 0 && idx < PIPELINE_FLOW.length - 1 ? PIPELINE_FLOW[idx + 1] : null;
-                            if (!next) return null;
-                            return (
-                              <button
-                                type="button"
-                                className="rounded-lg border border-[#cfe3f9] px-2 py-1 text-[11px] font-semibold text-[#005EB8] hover:bg-[#edf6ff]"
-                                onClick={() => void executeAction('set_candidate_stage', { candidate_id: row.candidate_id, stage: next }, `Moved candidate to ${next}.`)}
-                              >
-                                Move to {next}
-                              </button>
-                            );
-                          })()}
-                          <button
-                            type="button"
-                            className="rounded-lg border border-[#cfe3f9] px-2 py-1 text-[11px] font-semibold text-[#005EB8] hover:bg-[#edf6ff]"
-                            onClick={() => void executeAction('set_candidate_stage', { candidate_id: row.candidate_id, stage: 'Interview scheduled' }, 'Candidate moved to Interview scheduled.')}
-                          >
-                            Move to interview
-                          </button>
-                          <button
-                            type="button"
-                            className="rounded-lg border border-[#f2d8d8] px-2 py-1 text-[11px] font-semibold text-[#b42318] hover:bg-[#fff1f1]"
-                            onClick={() => void executeAction('create_task', { candidate_id: row.candidate_id, task_type: 'call_now', priority: 'high', title: 'Immediate follow-up call' }, 'Follow-up task created.')}
-                          >
-                            Create follow-up
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="space-y-4">
+              {STAGE_ORDER.map((stage) => {
+                const rows = queueByStage.get(stage) || [];
+                const idx = PIPELINE_FLOW.indexOf(stage as (typeof PIPELINE_FLOW)[number]);
+                const next = idx >= 0 && idx < PIPELINE_FLOW.length - 1 ? PIPELINE_FLOW[idx + 1] : null;
+                return (
+                  <div key={stage} className="rounded-xl border border-[#e1eaf8] p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-sm font-bold text-[#0B1B34]">{stage}</h4>
+                      <span className="text-[11px] text-[#6f7b8d]">{rows.length} candidate(s)</span>
+                    </div>
+                    {rows.length === 0 ? (
+                      <p className="text-xs text-[#9aa8bb]">No candidates in this stage.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {rows.map((row, i) => (
+                          <div key={`${row.candidate_id as string}-${i}`} className="rounded-lg border border-[#edf2fb] p-2.5 bg-[#fbfdff]">
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div>
+                                <button
+                                  type="button"
+                                  className="font-semibold text-[#0B1B34] hover:underline text-sm"
+                                  onClick={() => setSelectedCandidate(row)}
+                                >
+                                  {formatCell(row.candidate_name)}
+                                </button>
+                                <p className="text-[11px] text-[#6f7b8d]">
+                                  Readiness: {formatCell(row.readiness_band)} ({formatCell(row.readiness_score)}) · Risks: {formatCell(row.active_risk_count)}
+                                </p>
+                                <p className="text-[11px] text-[#4d5f78] mt-0.5">{formatCell(row.recommended_action)}</p>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {next && (
+                                  <button
+                                    type="button"
+                                    className="rounded-lg border border-[#cfe3f9] px-2 py-1 text-[11px] font-semibold text-[#005EB8] hover:bg-[#edf6ff]"
+                                    onClick={() => void executeAction('set_candidate_stage', { candidate_id: row.candidate_id, stage: next }, `Moved candidate to ${next}.`)}
+                                  >
+                                    Move to {next}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className="rounded-lg border border-[#f2d8d8] px-2 py-1 text-[11px] font-semibold text-[#b42318] hover:bg-[#fff1f1]"
+                                  onClick={() => void executeAction('create_task', { candidate_id: row.candidate_id, task_type: 'call_now', priority: 'high', title: 'Immediate follow-up call', details: 'Manual follow-up from stage board' }, 'Follow-up task created: recruiter should call this candidate.')}
+                                >
+                                  Create call follow-up
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </section>

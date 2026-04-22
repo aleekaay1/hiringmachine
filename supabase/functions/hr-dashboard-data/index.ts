@@ -194,6 +194,7 @@ Deno.serve(async (req) => {
       cohortsRaw,
       stageSlaRaw,
       liveSnapRaw,
+      metricsCacheRaw,
     ] = await Promise.all([
       admin.from('candidates')
         .select('id,first_name,last_name,email,timestamp,status,score,fit_category,assessment,admin_data')
@@ -207,6 +208,7 @@ Deno.serve(async (req) => {
       hrAdmin.from('hr_broadcast_cohorts').select('*').order('cohort_date', { ascending: false }).limit(120),
       hrAdmin.from('hr_stage_sla').select('*').eq('enabled', true),
       admin.from('live_sessions_snapshots').select('generated_at,payload').order('generated_at', { ascending: false }).limit(1).maybeSingle(),
+      hrAdmin.from('hr_metrics_cache').select('metric_key,payload,updated_at').in('metric_key', ['live_metrics', 'webinar_metrics']),
     ]);
 
     if (candidatesRaw.error) throw new Error(`candidates: ${candidatesRaw.error.message}`);
@@ -234,6 +236,9 @@ Deno.serve(async (req) => {
     const joinedCandidates = candidates.map((c) => {
       const signal = signalsById.get(c.id) as Record<string, unknown> | undefined;
       const latestScore = scoresById.get(c.id) as Record<string, unknown> | undefined;
+      const fallbackScore = Number.isFinite(Number(c.score)) ? Number(c.score) : 0;
+      const resolvedScore = Number.isFinite(Number(latestScore?.score)) ? Number(latestScore?.score) : Math.max(0, Math.min(100, fallbackScore));
+      const resolvedBand = String(latestScore?.band || (resolvedScore >= 80 ? 'Hot' : resolvedScore >= 55 ? 'Warm' : 'Monitor'));
       const stage = String(c.admin_data?.pipelineStage || signal?.pipeline_stage || 'Checked In');
       const stageAt = String(signal?.latest_stage_change_at || c.timestamp || '');
       const elapsed = minutesSince(stageAt);
@@ -246,8 +251,8 @@ Deno.serve(async (req) => {
         email: c.email,
         pipeline_stage: stage,
         status: c.status,
-        readiness_score: Number(latestScore?.score ?? 0),
-        readiness_band: String(latestScore?.band ?? 'Monitor'),
+        readiness_score: resolvedScore,
+        readiness_band: resolvedBand,
         active_risk_count: riskCountById.get(c.id) || 0,
         overdue_minutes: overdue,
         is_overdue: overdue > 0,
@@ -283,7 +288,7 @@ Deno.serve(async (req) => {
     const livePast = Array.isArray(livePayload.past_meetings) ? livePayload.past_meetings as Array<Record<string, unknown>> : [];
     const liveInvited = livePast.reduce((s, r) => s + Number((r.stats as Record<string, unknown> | undefined)?.invited_count || 0), 0);
     const liveAttended = livePast.reduce((s, r) => s + Number((r.stats as Record<string, unknown> | undefined)?.attended_matched_count || 0), 0);
-    const liveMetrics = {
+    let liveMetrics = {
       sessions_count: livePast.length,
       invited_total: liveInvited,
       attended_total: liveAttended,
@@ -296,13 +301,30 @@ Deno.serve(async (req) => {
       const d = Date.parse(String(r.cohort_date || ''));
       return Number.isFinite(d) && (now - d) <= 30 * 86400_000;
     });
-    const webinarMetrics = {
+    let webinarMetrics = {
       cohorts_30d: webinar30.length,
       invited_30d: webinar30.reduce((s, r) => s + Number(r.invited_count || 0), 0),
       watched_30d: webinar30.reduce((s, r) => s + Number(r.watched_count || 0), 0),
       watched_live_30d: webinar30.reduce((s, r) => s + Number(r.watched_live_count || 0), 0),
       watched_replay_30d: webinar30.reduce((s, r) => s + Number(r.watched_replay_count || 0), 0),
     };
+
+    const metricsCache = new Map(
+      (metricsCacheRaw.data || []).map((r: Record<string, unknown>) => [String(r.metric_key), r]),
+    );
+    const cachedLive = (metricsCache.get('live_metrics')?.payload || null) as Record<string, unknown> | null;
+    const cachedWebinar = (metricsCache.get('webinar_metrics')?.payload || null) as Record<string, unknown> | null;
+    if (liveMetrics.sessions_count === 0 && cachedLive) {
+      liveMetrics = { ...cachedLive, source: 'cache' } as typeof liveMetrics;
+    }
+    if (webinarMetrics.cohorts_30d === 0 && cachedWebinar) {
+      webinarMetrics = { ...cachedWebinar, source: 'cache' } as typeof webinarMetrics;
+    }
+
+    await hrAdmin.from('hr_metrics_cache').upsert([
+      { metric_key: 'live_metrics', payload: liveMetrics, updated_at: new Date().toISOString() },
+      { metric_key: 'webinar_metrics', payload: webinarMetrics, updated_at: new Date().toISOString() },
+    ], { onConflict: 'metric_key' }).catch(() => { /* cache table may not exist until migration runs */ });
 
     const actionQueue = joinedCandidates
       .map((c) => {
