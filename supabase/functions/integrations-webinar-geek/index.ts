@@ -96,7 +96,7 @@ Deno.serve(async (req) => {
       const watchedLive = parseBool(url.searchParams.get('watched_live'));
       const watchedReplay = parseBool(url.searchParams.get('watched_replay'));
 
-      const [account, webinars, broadcasts, subscriptions, messages, questions] = await Promise.all([
+      const [account, webinars, broadcasts, subscriptions] = await Promise.all([
         wgGet('/account'),
         wgGet('/webinars'),
         wgGet('/broadcasts', webinarId ? { webinar_id: webinarId } : undefined),
@@ -108,8 +108,6 @@ Deno.serve(async (req) => {
           watched_replay: watchedReplay,
           nested_resources: 'broadcast,episode,webinar',
         }),
-        wgGet('/messages'),
-        wgGet('/questions', { per_page: Math.min(Math.max(perPage, 1), 100) }),
       ]);
 
       const selectedWebinar = webinarId ? await wgGet(`/webinars/${webinarId}`) : null;
@@ -129,8 +127,6 @@ Deno.serve(async (req) => {
         webinars: webinars.json,
         broadcasts: broadcasts.json,
         subscriptions: subscriptions.json,
-        questions: questions.json,
-        messages: messages.json,
         selected_webinar: selectedWebinar?.json || null,
         selected_broadcast: selectedBroadcast?.json || null,
         health: {
@@ -138,8 +134,6 @@ Deno.serve(async (req) => {
           webinars_ok: webinars.ok,
           broadcasts_ok: broadcasts.ok,
           subscriptions_ok: subscriptions.ok,
-          questions_ok: questions.ok,
-          messages_ok: messages.ok,
         },
       };
       return new Response(JSON.stringify(response), {
