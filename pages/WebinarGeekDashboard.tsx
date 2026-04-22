@@ -54,57 +54,69 @@ const WebinarGeekDashboard: React.FC = () => {
     return refreshed.session?.access_token ?? null;
   }, []);
 
+  const withAuthRetry = useCallback(
+    async <T,>(run: (token: string) => Promise<T | null>): Promise<T | null> => {
+      const firstToken = await getFreshAccessToken();
+      if (!firstToken) return null;
+      const first = await run(firstToken);
+      if (first !== null) return first;
+      const { data: refreshed } = await supabase.auth.refreshSession();
+      const retryToken = refreshed.session?.access_token;
+      if (!retryToken) return null;
+      return run(retryToken);
+    },
+    [getFreshAccessToken]
+  );
+
   const loadDashboard = useCallback(async () => {
     setError(null);
-    const token = await getFreshAccessToken();
-    if (!token) {
-      setError('Not signed in. Please sign in again.');
-      setIsAuthenticated(false);
-      return;
-    }
     setLoading(true);
-    const result = await fetchWebinarGeekDashboard(token, {
-      webinarId: webinarId.trim() || undefined,
-      broadcastId: broadcastId.trim() || undefined,
-      watchedWebinar:
-        watchedFilter === 'all' ? undefined : watchedFilter === 'watched',
-      perPage: 100,
+    const result = await withAuthRetry(async (token) => {
+      const r = await fetchWebinarGeekDashboard(token, {
+        webinarId: webinarId.trim() || undefined,
+        broadcastId: broadcastId.trim() || undefined,
+        watchedWebinar:
+          watchedFilter === 'all' ? undefined : watchedFilter === 'watched',
+        perPage: 100,
+      });
+      if (!r.ok && r.error.toLowerCase().includes('unauthorized')) return null;
+      return r;
     });
     setLoading(false);
+    if (!result) {
+      setError('Session unauthorized for WebinarGeek API. Please sign out and sign in again.');
+      setData(null);
+      return;
+    }
     if (!result.ok) {
       setError(result.error);
       setData(null);
-      if (result.error.toLowerCase().includes('unauthorized')) {
-        setIsAuthenticated(false);
-        await supabase.auth.signOut();
-      }
       return;
     }
     setData(result.data);
-  }, [broadcastId, getFreshAccessToken, webinarId, watchedFilter]);
+  }, [broadcastId, webinarId, watchedFilter, withAuthRetry]);
 
   const loadHealth = useCallback(async () => {
     setError(null);
-    const token = await getFreshAccessToken();
-    if (!token) {
-      setError('Not signed in. Please sign in again.');
-      setIsAuthenticated(false);
+    setHealthLoading(true);
+    const result = await withAuthRetry(async (token) => {
+      const r = await fetchWebinarGeekHealth(token);
+      if (!r.ok && r.error.toLowerCase().includes('unauthorized')) return null;
+      return r;
+    });
+    setHealthLoading(false);
+    if (!result) {
+      setError('Session unauthorized for WebinarGeek health check. Please sign out and sign in again.');
+      setHealth(null);
       return;
     }
-    setHealthLoading(true);
-    const result = await fetchWebinarGeekHealth(token);
-    setHealthLoading(false);
     if (!result.ok) {
       setError(result.error);
       setHealth(null);
-      if (result.error.toLowerCase().includes('unauthorized')) {
-        setIsAuthenticated(false);
-        await supabase.auth.signOut();
-      }
       return;
     }
     setHealth(result.data);
-  }, [getFreshAccessToken]);
+  }, [withAuthRetry]);
 
   useEffect(() => {
     const check = async () => {
