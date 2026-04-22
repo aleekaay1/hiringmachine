@@ -459,7 +459,7 @@ Deno.serve(async (req) => {
     for (const m of zoomPastRaw) { const k = zoomMeetingKey(m); if (!byKey.has(k)) byKey.set(k, m); }
     for (const m of zoomUpRaw)  { byKey.set(zoomMeetingKey(m), m); }
 
-    const pastMeetings:     ZoomRawMeeting[] = [];
+    const pastMeetingCandidates: ZoomRawMeeting[] = [];
     const upcomingMeetings: ZoomRawMeeting[] = [];
 
     for (const m of byKey.values()) {
@@ -467,22 +467,25 @@ Deno.serve(async (req) => {
       const topic = String(m.topic ?? '');
       const dt    = Number.isFinite(ms) ? DateTime.fromMillis(ms, { zone: TZ }) : null;
 
-      // Accept if: (a) falls in a known time slot, OR (b) topic matches a known PMI keyword
-      const slot = inferSlot(dt, topic, slotToleranceMin);
-      if (!slot) continue;
-
       // Only within lookback / lookahead window
       if (!Number.isFinite(ms)) continue;
       if (ms < nowMs - lookbackDays * 86400_000) continue;
       if (ms > nowMs + lookaheadDays * 86400_000) continue;
       if (ms < nowMs) {
         if (dt?.isValid && minPastDate.isValid && dt < minPastDate) continue;
-        pastMeetings.push(m);
+        // For past meetings, keep broader candidates (slot matches OR known PMI topic on Tue/Wed).
+        // We'll choose the best occurrence for each date after Calendly events are loaded.
+        const slot = inferSlot(dt, topic, slotToleranceMin);
+        const isPmiTueWed = !!dt?.isValid && isKnownPmiTopic(topic) && (dt.weekday === 2 || dt.weekday === 3);
+        if (slot || isPmiTueWed) pastMeetingCandidates.push(m);
       }
-      else upcomingMeetings.push(m);
+      else {
+        // Upcoming meetings remain strict to expected slot behavior.
+        const slot = inferSlot(dt, topic, slotToleranceMin);
+        if (slot) upcomingMeetings.push(m);
+      }
     }
 
-    pastMeetings.sort((a, b) => parseZoomStartMs(b) - parseZoomStartMs(a));
     upcomingMeetings.sort((a, b) => parseZoomStartMs(a) - parseZoomStartMs(b));
 
     // Calendly — fetch events in same window
@@ -521,8 +524,61 @@ Deno.serve(async (req) => {
       }));
     }
 
+    // Choose one best past meeting occurrence per Toronto date:
+    // prefer the one closest to Calendly event time on that date; else closest to slot start.
+    const candidatesByDate = new Map<string, ZoomRawMeeting[]>();
+    for (const m of pastMeetingCandidates) {
+      const ms = parseZoomStartMs(m);
+      if (!Number.isFinite(ms)) continue;
+      const dt = DateTime.fromMillis(ms, { zone: TZ });
+      if (!dt.isValid) continue;
+      const dateKey = isoDate(dt);
+      const list = candidatesByDate.get(dateKey) ?? [];
+      list.push(m);
+      candidatesByDate.set(dateKey, list);
+    }
+
+    const selectedPastMeetings: ZoomRawMeeting[] = [];
+    for (const [dateKey, list] of candidatesByDate.entries()) {
+      if (list.length === 1) {
+        selectedPastMeetings.push(list[0]);
+        continue;
+      }
+      const calEv = calEventsByDate.get(dateKey) ?? null;
+      const calStart = calEv?.start_time ? DateTime.fromISO(calEv.start_time, { zone: TZ }) : null;
+      const targetMinutes = (() => {
+        if (calStart?.isValid) return calStart.hour * 60 + calStart.minute;
+        const dt0 = DateTime.fromISO(`${dateKey}T00:00:00`, { zone: TZ });
+        if (!dt0.isValid) return null;
+        const slot = slotForDt(dt0.set({ hour: 18, minute: 0 }), slotToleranceMin) || (dt0.weekday === 2 ? SLOTS[0] : dt0.weekday === 3 ? SLOTS[1] : null);
+        return slot ? slot.startH * 60 + slot.startM : null;
+      })();
+
+      if (targetMinutes == null) {
+        list.sort((a, b) => parseZoomStartMs(b) - parseZoomStartMs(a));
+        selectedPastMeetings.push(list[0]);
+        continue;
+      }
+
+      let best = list[0];
+      let bestDist = Number.POSITIVE_INFINITY;
+      for (const m of list) {
+        const ms = parseZoomStartMs(m);
+        const dt = Number.isFinite(ms) ? DateTime.fromMillis(ms, { zone: TZ }) : null;
+        if (!dt?.isValid) continue;
+        const minutes = dt.hour * 60 + dt.minute;
+        const dist = Math.abs(minutes - targetMinutes);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = m;
+        }
+      }
+      selectedPastMeetings.push(best);
+    }
+    selectedPastMeetings.sort((a, b) => parseZoomStartMs(b) - parseZoomStartMs(a));
+
     // ─── Build past session rows ────────────────────────────────────────────
-    const combinedPast = await Promise.all(pastMeetings.map(async (m) => {
+    const combinedPast = await Promise.all(selectedPastMeetings.map(async (m) => {
       const uuid     = String(m.uuid     ?? '');
       const topic    = String(m.topic    ?? '');
       const start    = String(m.start_time ?? '');
