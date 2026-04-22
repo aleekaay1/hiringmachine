@@ -5,8 +5,8 @@
  * Live overview (Alex Paz PMI): Zoom meeting id **6478311787** — same as `ZOOM_MEETING_URL` in hiringUrls.
  * Recurring wall times (America/Toronto): **Tuesday 18:00–19:00**, **Wednesday 11:30–12:00**.
  *
- * Optional ZOOM_LIVE_SESSION_MEETING_ID: digits-only PMI to list/match (default **6478311787**). Set to `*`
- * to disable meeting-id filtering and URL-based Calendly pairing (legacy time-only match).
+ * Optional ZOOM_LIVE_SESSION_MEETING_ID: digits-only PMI to list/match.
+ * When unset, meeting-id filtering is disabled.
  * Optional ZOOM_LIVE_SESSION_TOPIC_FILTER: only Zoom meetings whose **topic** matches (pipe OR); combined with PMI filter when enabled.
  * Optional CALENDLY_EVENT_NAME_FILTER: only Calendly scheduled events whose **name** matches (pipe OR).
  * Calendly↔Zoom pairing: scheduled events whose **location / join URL** contains that meeting id, or whose
@@ -18,9 +18,7 @@
  * sessions whose title includes that id (e.g. if you embed `6478311787` in the topic).
  *
  * **ZOOM_LIVE_SESSION_STRICT_TIME_SLOTS** — only Zoom rows / Calendly events whose start in **America/Toronto**
- * is **Tuesday 18:00–19:00** or **Wednesday 11:30–12:30**. Default **ON** when the PMI / meeting-id filter is active
- * (same id every week otherwise lists every occurrence). Set to `0` / `false` / `off` / `no` to disable.
- * When meeting-id filter is off (`ZOOM_LIVE_SESSION_MEETING_ID=*`), default is **off** unless you set `1` / `true`.
+ * is **Tuesday 18:00–19:00** or **Wednesday 11:30–12:30**. Default **OFF** unless explicitly set to `1` / `true`.
  *
  * Auth: Supabase JWT (same as send-email).
  * Deploy: supabase functions deploy integrations-zoom-calendly
@@ -282,9 +280,6 @@ function matchesSubstringFilter(text: string, patterns: string[]): boolean {
   return patterns.some((p) => t.includes(p));
 }
 
-/** Default PMI for live career overview (must match services/hiringUrls ZOOM_MEETING_URL path). */
-const DEFAULT_LIVE_OVERVIEW_ZOOM_MEETING_ID_DIGITS = '6478311787';
-
 /** Zoom default PMI topic label (same as Zoom UI for personal room). */
 const LIVE_OVERVIEW_ZOOM_TOPIC_PATTERNS = parseSubstringFilter("Alex Paz's Personal Meeting Room");
 
@@ -293,17 +288,14 @@ function zoomRowMatchesPmiFilter(m: Record<string, unknown>, meetingDigits: stri
   return matchesSubstringFilter(String(m.topic || ''), LIVE_OVERVIEW_ZOOM_TOPIC_PATTERNS);
 }
 
-/**
- * When unset, defaults to Alex Paz personal room id. Set env to `*` or `any` to disable Zoom id filter
- * and Calendly join-url requirement (time-only matching on all events).
- */
+/** Set env to `*` / `any` to disable; when unset, filtering is disabled by default. */
 function zoomLiveSessionMeetingIdDigits(): string | null {
   const raw = Deno.env.get('ZOOM_LIVE_SESSION_MEETING_ID');
-  if (raw === undefined) return DEFAULT_LIVE_OVERVIEW_ZOOM_MEETING_ID_DIGITS;
+  if (raw === undefined) return null;
   const t = raw.trim();
   if (t === '*' || t.toLowerCase() === 'any') return null;
   const digits = t.replace(/\D/g, '');
-  return digits.length >= 9 ? digits : DEFAULT_LIVE_OVERVIEW_ZOOM_MEETING_ID_DIGITS;
+  return digits.length >= 9 ? digits : null;
 }
 
 function zoomRowMeetingIdDigits(m: Record<string, unknown>): string {
@@ -355,12 +347,10 @@ function envFlagEnabled(name: string): boolean {
   return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
 
-/** Tue 18:00–19:00 & Wed 11:30–12:30 Toronto: on by default when PMI id filter is on (same id all week). */
-function strictLiveOverviewTimeSlotsEnabled(zoomMeetingIdDigits: string | null): boolean {
+/** Tue 18:00–19:00 & Wed 11:30–12:30 Toronto: OFF by default unless explicitly enabled. */
+function strictLiveOverviewTimeSlotsEnabled(): boolean {
   const raw = (Deno.env.get('ZOOM_LIVE_SESSION_STRICT_TIME_SLOTS')?.trim() || '').toLowerCase();
-  if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
-  if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') return true;
-  return zoomMeetingIdDigits != null;
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
 }
 
 function zoomTopicContainsMeetingDigits(m: Record<string, unknown>, digits: string): boolean {
@@ -694,7 +684,7 @@ Deno.serve(async (req) => {
     const calendlyNamePatterns = parseSubstringFilter(calendlyEventFilterRaw);
     const zoomMeetingIdDigits = zoomLiveSessionMeetingIdDigits();
     const topicRequiresMeetingId = envFlagEnabled('ZOOM_LIVE_SESSION_TOPIC_REQUIRES_MEETING_ID');
-    const strictTimeSlots = strictLiveOverviewTimeSlotsEnabled(zoomMeetingIdDigits);
+    const strictTimeSlots = strictLiveOverviewTimeSlotsEnabled();
 
     const zoomToken = await getZoomAccessToken();
     const zoomUserId = await zoomGetUserIdByEmail(zoomToken, zoomHostEmail);
