@@ -32,6 +32,7 @@ type InviteeWithAttendance = {
   email: string;
   name: string;
   attended_zoom?: boolean;
+  match_method?: 'email' | 'name' | null;
   join_time?: string | null;
   leave_time?: string | null;
   no_show?: boolean;
@@ -428,6 +429,9 @@ function AttendanceGroup({ icon, label, tone, people }: {
                 <span>Joined</span> {new Date(p.join_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 {p.leave_time && <> <span className="text-green-500">→</span> {new Date(p.leave_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</>}
               </div>
+            )}
+            {p.attended_zoom && p.match_method === 'name' && (
+              <span className="text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded-full px-2 py-0.5">matched by name</span>
             )}
             {!p.attended_zoom && <NoShowBadge />}
             {p.attended_zoom && <CheckCircle2 size={14} className="text-green-500 shrink-0 mt-0.5" />}

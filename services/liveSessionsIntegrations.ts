@@ -26,6 +26,8 @@ export interface PastMeetingInvitee {
   status: string;
   no_show?: boolean;
   attended_zoom: boolean;
+  /** How this invitee was matched to a Zoom participant: 'email' | 'name' | null */
+  match_method?: 'email' | 'name' | null;
   /** UTC ISO string — when they joined Zoom (present when attended_zoom = true) */
   join_time?: string | null;
   /** UTC ISO string — when they left Zoom */

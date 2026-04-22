@@ -46,8 +46,17 @@ const SLOTS: SlotDef[] = [
   { weekday: 3, startH: 11, startM: 30, endH: 12, endM: 30, label: 'Wednesday 11:30 AM ET' },
 ];
 
+/** Keywords in the Zoom meeting topic that identify it as a live overview session PMI room. */
+const PMI_TOPIC_KEYWORDS = ['personal meeting room', 'alex paz', 'career overview', 'career session', 'live overview'];
+
+/** Returns true when the meeting topic matches a known PMI/personal-room keyword (case-insensitive). */
+function isKnownPmiTopic(topic: string): boolean {
+  const t = topic.toLowerCase();
+  return PMI_TOPIC_KEYWORDS.some((k) => t.includes(k));
+}
+
 /** Returns slot definition if dt falls inside it (with tolerance), else null. */
-function slotForDt(dt: DateTime, toleranceMin = 20): SlotDef | null {
+function slotForDt(dt: DateTime, toleranceMin = 45): SlotDef | null {
   if (!dt.isValid) return null;
   for (const s of SLOTS) {
     if (dt.weekday !== s.weekday) continue;
@@ -57,6 +66,49 @@ function slotForDt(dt: DateTime, toleranceMin = 20): SlotDef | null {
     if (dtMod >= startMod - toleranceMin && dtMod <= endMod + toleranceMin) return s;
   }
   return null;
+}
+
+/**
+ * Best slot label for a meeting. If it doesn't match a slot but has a PMI topic,
+ * infer label from the weekday (Tue → Tuesday, Wed → Wednesday).
+ */
+function inferSlot(dt: DateTime | null, topic: string, toleranceMin: number): SlotDef | null {
+  if (!dt?.isValid) return null;
+  const bySlot = slotForDt(dt, toleranceMin);
+  if (bySlot) return bySlot;
+  // PMI topic fallback: accept on any Tuesday or Wednesday
+  if (isKnownPmiTopic(topic)) {
+    if (dt.weekday === 2) return SLOTS[0]; // Tuesday
+    if (dt.weekday === 3) return SLOTS[1]; // Wednesday
+  }
+  return null;
+}
+
+// ─── Name-based attendance matching ────────────────────────────────────────
+/** Normalise a display name for fuzzy matching: lowercase, collapse whitespace, strip punctuation. */
+function normName(s: string): string {
+  return (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * True if two names are "the same person":
+ *   - Exact match after normalisation, OR
+ *   - Both non-empty first tokens match AND last token (if present) also matches.
+ * Very conservative — avoids false-positives across common first names.
+ */
+function samePersonByName(calName: string, zoomName: string): boolean {
+  const a = normName(calName);
+  const b = normName(zoomName);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  // Split into parts and require ≥ 2 tokens to match (first + last)
+  const ap = a.split(' ');
+  const bp = b.split(' ');
+  if (ap.length < 2 || bp.length < 2) return false;
+  // Check both orderings in case name parts are swapped
+  const allB = new Set(bp);
+  const shared = ap.filter((p) => p.length > 1 && allB.has(p));
+  return shared.length >= 2;
 }
 
 /** ISO date string YYYY-MM-DD in America/Toronto. */
@@ -345,11 +397,16 @@ Deno.serve(async (req) => {
     const upcomingMeetings: ZoomRawMeeting[] = [];
 
     for (const m of byKey.values()) {
-      const ms = parseZoomStartMs(m);
-      const dt = Number.isFinite(ms) ? DateTime.fromMillis(ms, { zone: TZ }) : null;
-      // Only keep meetings that fall inside a live session slot
-      if (!dt || !slotForDt(dt, slotToleranceMin)) continue;
+      const ms    = parseZoomStartMs(m);
+      const topic = String(m.topic ?? '');
+      const dt    = Number.isFinite(ms) ? DateTime.fromMillis(ms, { zone: TZ }) : null;
+
+      // Accept if: (a) falls in a known time slot, OR (b) topic matches a known PMI keyword
+      const slot = inferSlot(dt, topic, slotToleranceMin);
+      if (!slot) continue;
+
       // Only within lookback / lookahead window
+      if (!Number.isFinite(ms)) continue;
       if (ms < nowMs - lookbackDays * 86400_000) continue;
       if (ms > nowMs + lookaheadDays * 86400_000) continue;
       if (ms < nowMs) pastMeetings.push(m);
@@ -374,13 +431,16 @@ Deno.serve(async (req) => {
       const to   = new Date(nowMs + lookaheadDays * 86400_000);
       const allCalEvents = await calendlyListEvents(calendlyToken, calUserUri, from, to);
 
-      // Only keep Calendly events that fall in a live session slot
+      // Only keep Calendly events that fall in a live session slot OR on a Tuesday/Wednesday
+      // (PMI sessions may have a Calendly event registered under a different event type name)
       for (const ev of allCalEvents) {
         if (!ev.start_time) continue;
         const dt = DateTime.fromISO(ev.start_time, { zone: TZ });
-        if (!slotForDt(dt, slotToleranceMin)) continue;
+        // Accept if in slot, OR if on Tuesday/Wednesday (PMI fallback — same-day match will handle specificity)
+        const inSlot = slotForDt(dt, slotToleranceMin) !== null;
+        const isTueOrWed = dt.weekday === 2 || dt.weekday === 3;
+        if (!inSlot && !isTueOrWed) continue;
         const date = isoDate(dt);
-        // If two events on the same date (rare), prefer the one with a later update / first seen
         if (!calEventsByDate.has(date)) calEventsByDate.set(date, ev);
       }
 
@@ -401,22 +461,79 @@ Deno.serve(async (req) => {
       const duration = Number(m.duration ?? 0);
       const host     = String((m as { host_email?: string }).host_email || zoomHostEmail);
       const startDt  = Number.isFinite(startMs) ? DateTime.fromMillis(startMs, { zone: TZ }) : null;
-      const slot     = startDt ? slotForDt(startDt, slotToleranceMin) : null;
+      const slot     = inferSlot(startDt, topic, slotToleranceMin);
       const dateKey  = startDt ? isoDate(startDt) : '';
 
       // Zoom participants (who actually joined)
       const participants = uuid ? await zoomParticipants(zoomToken, uuid) : [];
-      const participantEmails = new Set(participants.map((p) => (p.user_email ?? '').trim().toLowerCase()).filter(Boolean));
+
+      // Build fast lookup structures
+      // Email map: normalized email → participant row
+      const participantByEmail = new Map<string, ZoomParticipant>();
+      for (const p of participants) {
+        const e = (p.user_email ?? '').trim().toLowerCase();
+        if (e) participantByEmail.set(e, p);
+      }
+      // All participant display names (for name-based fallback)
+      const participantNames = participants
+        .filter((p) => p.name)
+        .map((p) => ({ norm: normName(p.name ?? ''), raw: p }));
 
       // Match Calendly event for this exact date
       const calEv = calEventsByDate.get(dateKey) ?? null;
       const rawInvitees = (calEv?.uri ? (calInviteesCache.get(calEv.uri) ?? []) : [])
         .filter((i) => !i.canceled && i.status !== 'canceled');
 
-      // Cross-reference
-      const attended    = rawInvitees.filter((i) => participantEmails.has(i.email));
-      const noShow      = rawInvitees.filter((i) => !participantEmails.has(i.email));
-      const walkinEmails = [...participantEmails].filter((e) => !rawInvitees.some((i) => i.email === e));
+      /**
+       * Find the best Zoom participant match for a Calendly invitee.
+       * Priority: (1) exact email, (2) name-based.
+       */
+      function findParticipant(invitee: CalInvitee): ZoomParticipant | null {
+        // 1. Email match
+        if (invitee.email && participantByEmail.has(invitee.email)) {
+          return participantByEmail.get(invitee.email)!;
+        }
+        // 2. Name-based fallback (catches guests who joined without signing in)
+        if (invitee.name) {
+          for (const { norm, raw } of participantNames) {
+            if (samePersonByName(invitee.name, raw.name ?? '') || normName(invitee.name) === norm) {
+              return raw;
+            }
+          }
+        }
+        return null;
+      }
+
+      // Cross-reference each Calendly invitee
+      const inviteesWithAttendance = rawInvitees.map((i) => {
+        const match = findParticipant(i);
+        return {
+          email:         i.email,
+          name:          i.name,
+          status:        i.status,
+          no_show:       i.no_show,
+          attended_zoom: match !== null,
+          match_method:  match ? (participantByEmail.has(i.email) ? 'email' : 'name') : null,
+          join_time:     match?.join_time ?? null,
+          leave_time:    match?.leave_time ?? null,
+          phone_number:  i.phone_number ?? null,
+          timezone:      i.timezone ?? null,
+          invitee_uri:   i.uri,
+          event_uri:     i.event_uri,
+        };
+      });
+
+      const attended = inviteesWithAttendance.filter((i) => i.attended_zoom);
+      const noShow   = inviteesWithAttendance.filter((i) => !i.attended_zoom);
+
+      // Walk-ins: participants not matched to any Calendly invitee (by email or name)
+      const matchedParticipantEmails = new Set(attended.map((i) => i.email).filter(Boolean));
+      const walkinParticipants = participants.filter((p) => {
+        const pe = (p.user_email ?? '').trim().toLowerCase();
+        if (pe && matchedParticipantEmails.has(pe)) return false;
+        // Also check by name to avoid duplicating matched-by-name participants
+        return !attended.some((i) => samePersonByName(i.name, p.name ?? ''));
+      });
 
       return {
         source: 'past' as const,
@@ -429,23 +546,11 @@ Deno.serve(async (req) => {
           join_time:  p.join_time,
           leave_time: p.leave_time,
         })),
-        invitees: rawInvitees.map((i) => ({
-          email:         i.email,
-          name:          i.name,
-          status:        i.status,
-          no_show:       i.no_show,
-          attended_zoom: participantEmails.has(i.email),
-          join_time:     participants.find((p) => (p.user_email ?? '').trim().toLowerCase() === i.email)?.join_time ?? null,
-          leave_time:    participants.find((p) => (p.user_email ?? '').trim().toLowerCase() === i.email)?.leave_time ?? null,
-          phone_number:  i.phone_number ?? null,
-          timezone:      i.timezone ?? null,
-          invitee_uri:   i.uri,
-          event_uri:     i.event_uri,
-        })),
-        walkin_emails: walkinEmails,
+        invitees: inviteesWithAttendance,
+        walkin_emails: walkinParticipants.map((p) => (p.user_email ?? '').trim().toLowerCase() || (p.name ?? '')),
         stats: {
-          invited_count:          rawInvitees.length,
-          attended_matched_count: attended.length,
+          invited_count:           rawInvitees.length,
+          attended_matched_count:  attended.length,
           no_show_or_absent_count: noShow.length,
           zoom_participant_count:  participants.length,
           attendance_rate_pct:     rawInvitees.length > 0 ? Math.round((attended.length / rawInvitees.length) * 100) : null,
@@ -456,8 +561,9 @@ Deno.serve(async (req) => {
     // ─── Build upcoming rows ────────────────────────────────────────────────
     const combinedUpcoming = await Promise.all(upcomingMeetings.map(async (m) => {
       const startMs  = parseZoomStartMs(m);
+      const topic    = String(m.topic ?? '');
       const startDt  = Number.isFinite(startMs) ? DateTime.fromMillis(startMs, { zone: TZ }) : null;
-      const slot     = startDt ? slotForDt(startDt, slotToleranceMin) : null;
+      const slot     = inferSlot(startDt, topic, slotToleranceMin);
       const dateKey  = startDt ? isoDate(startDt) : '';
       const calEv    = calEventsByDate.get(dateKey) ?? null;
       const invitees = (calEv?.uri ? (calInviteesCache.get(calEv.uri) ?? []) : [])
