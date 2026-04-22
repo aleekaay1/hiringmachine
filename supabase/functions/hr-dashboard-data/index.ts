@@ -89,6 +89,8 @@ Deno.serve(async (req) => {
         priority?: string;
         title?: string;
         details?: string;
+        interview_at?: string;
+        interview_comment?: string;
       };
 
       if (body.action === 'resolve_task') {
@@ -161,6 +163,21 @@ Deno.serve(async (req) => {
           actor_email: actorEmail,
           payload: { source: 'hr-dashboard', action: 'create_task' },
         });
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
+      if (body.action === 'set_candidate_interview') {
+        if (!body.candidate_id || !body.interview_at) return new Response(JSON.stringify({ error: 'Missing candidate_id or interview_at' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        const { data: row, error: rowErr } = await admin.from('candidates').select('admin_data').eq('id', body.candidate_id).single();
+        if (rowErr) throw rowErr;
+        const nextAdmin = {
+          ...((row?.admin_data && typeof row.admin_data === 'object') ? row.admin_data as Record<string, unknown> : {}),
+          pipelineStage: 'Interview scheduled',
+          interviewScheduledAt: String(body.interview_at),
+          nextStep: String(body.interview_comment || ''),
+        };
+        const { error: upErr } = await admin.from('candidates').update({ admin_data: nextAdmin }).eq('id', body.candidate_id);
+        if (upErr) throw upErr;
         return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
 

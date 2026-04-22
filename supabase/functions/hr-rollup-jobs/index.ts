@@ -24,6 +24,17 @@ type CandidateRow = {
   } | null;
 };
 
+function toNumberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toTextArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((v) => String(v ?? '').trim()).filter(Boolean);
+}
+
 function normEmail(s: string | null | undefined): string {
   return String(s || '').trim().toLowerCase();
 }
@@ -128,13 +139,14 @@ Deno.serve(async (req) => {
       const invitedLiveSession = live.invited.has(email);
       const attendedLiveSession = live.attended.has(email);
       const hasAssessment = c.status === 'assessment_complete';
-      const tags = Array.isArray(c.admin_data?.tags) ? c.admin_data?.tags || [] : [];
+      const tags = toTextArray(c.admin_data?.tags);
+      const rating = toNumberOrNull(c.admin_data?.rating);
 
       const readiness = computeReadiness({
         score: c.score,
         fitCategory: c.fit_category,
         stage,
-        rating: c.admin_data?.rating ?? null,
+        rating,
         tagsCount: tags.length,
         invitedLiveSession,
         attendedLiveSession,
@@ -169,7 +181,7 @@ Deno.serve(async (req) => {
         latest_stage_change_at: stageChangedAt,
         assessment_submitted_at: hasAssessment ? toIsoMaybe(c.timestamp) : null,
         interview_scheduled_at: toIsoMaybe(c.admin_data?.interviewScheduledAt),
-        rating: c.admin_data?.rating ?? null,
+        rating,
         tags,
         next_step: c.admin_data?.nextStep || null,
         updated_at: new Date().toISOString(),
@@ -253,17 +265,25 @@ Deno.serve(async (req) => {
 
     if (!dryRun) {
       if (signalRows.length > 0) {
-        await hrAdmin.from('hr_candidate_signals').upsert(signalRows, { onConflict: 'candidate_id' });
+        const { error } = await hrAdmin.from('hr_candidate_signals').upsert(signalRows, { onConflict: 'candidate_id' });
+        if (error) throw new Error(`hr_candidate_signals upsert failed: ${error.message}`);
       }
       if (scoreRows.length > 0) {
-        await hrAdmin.from('hr_readiness_scores').insert(scoreRows);
+        const { error } = await hrAdmin.from('hr_readiness_scores').insert(scoreRows);
+        if (error) throw new Error(`hr_readiness_scores insert failed: ${error.message}`);
       }
       if (riskRows.length > 0) {
-        await hrAdmin.from('hr_risk_flags').update({ status: 'resolved', resolved_at: new Date().toISOString() }).eq('status', 'active');
-        await hrAdmin.from('hr_risk_flags').insert(riskRows);
+        const { error: resolveErr } = await hrAdmin
+          .from('hr_risk_flags')
+          .update({ status: 'resolved', resolved_at: new Date().toISOString() })
+          .eq('status', 'active');
+        if (resolveErr) throw new Error(`hr_risk_flags resolve failed: ${resolveErr.message}`);
+        const { error: riskInsErr } = await hrAdmin.from('hr_risk_flags').insert(riskRows);
+        if (riskInsErr) throw new Error(`hr_risk_flags insert failed: ${riskInsErr.message}`);
       }
       if (stageEvents.length > 0) {
-        await hrAdmin.from('hr_stage_events').insert(stageEvents);
+        const { error } = await hrAdmin.from('hr_stage_events').insert(stageEvents);
+        if (error) throw new Error(`hr_stage_events insert failed: ${error.message}`);
       }
 
       if (taskRows.length > 0) {
@@ -274,7 +294,8 @@ Deno.serve(async (req) => {
         const openSet = new Set((existingOpen || []).map((r: Record<string, unknown>) => `${r.candidate_id}|${r.task_type}`));
         const deduped = taskRows.filter((t) => !openSet.has(`${t.candidate_id}|${t.task_type}`));
         if (deduped.length > 0) {
-          const { data: inserted } = await hrAdmin.from('hr_tasks').insert(deduped).select('id');
+          const { data: inserted, error: taskErr } = await hrAdmin.from('hr_tasks').insert(deduped).select('id');
+          if (taskErr) throw new Error(`hr_tasks insert failed: ${taskErr.message}`);
           if (inserted && inserted.length > 0) {
             const events = inserted.map((r: Record<string, unknown>) => ({
               task_id: r.id,
@@ -282,7 +303,8 @@ Deno.serve(async (req) => {
               actor_email: userData.user?.email || null,
               payload: { source: 'hr-rollup-jobs' },
             }));
-            await hrAdmin.from('hr_task_events').insert(events);
+            const { error: evtErr } = await hrAdmin.from('hr_task_events').insert(events);
+            if (evtErr) throw new Error(`hr_task_events insert failed: ${evtErr.message}`);
           }
           result.tasks_created = deduped.length;
         } else {

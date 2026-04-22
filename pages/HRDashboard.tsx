@@ -6,6 +6,16 @@ import { fetchHrDashboard, hrDashboardAction, runHrAutomation, runHrRollup, type
 import { AlertTriangle, BarChart3, CheckCircle2, Clock3, RefreshCw, Sparkles, Users, X } from 'lucide-react';
 
 type QueueRow = Record<string, unknown>;
+const PIPELINE_FLOW = [
+  'Checked In',
+  'Invited to Live Career Overview Session',
+  'Live Career Overview Session Attended',
+  'Leadership assessment form sent',
+  'Leadership form submitted, awaiting evaluation',
+  'Evaluation Done',
+  'Interview scheduled',
+  'Hired',
+] as const;
 
 const HRDashboard: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -18,6 +28,8 @@ const HRDashboard: React.FC = () => {
   const [banner, setBanner] = useState<string | null>(null);
   const [data, setData] = useState<HrDashboardPayload | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<QueueRow | null>(null);
+  const [interviewAt, setInterviewAt] = useState('');
+  const [interviewComment, setInterviewComment] = useState('');
 
   const getAccessToken = useCallback(async () => {
     const { data: s } = await supabase.auth.getSession();
@@ -111,7 +123,7 @@ const HRDashboard: React.FC = () => {
     await load();
   };
 
-  const executeAction = async (action: 'resolve_task' | 'resolve_risk' | 'set_candidate_stage' | 'create_task', payload: Record<string, unknown>, successMsg: string) => {
+  const executeAction = async (action: 'resolve_task' | 'resolve_risk' | 'set_candidate_stage' | 'create_task' | 'set_candidate_interview', payload: Record<string, unknown>, successMsg: string) => {
     const token = await getAccessToken();
     if (!token) return;
     setRunning(true);
@@ -151,6 +163,34 @@ const HRDashboard: React.FC = () => {
     const cid = String(selectedCandidate.candidate_id || '');
     return (data?.active_risks ?? []).filter((r) => String(r.candidate_id || '') === cid);
   }, [data?.active_risks, selectedCandidate]);
+
+  const selectedStage = String(selectedCandidate?.pipeline_stage || '');
+  const nextStage = useMemo(() => {
+    const idx = PIPELINE_FLOW.indexOf(selectedStage as (typeof PIPELINE_FLOW)[number]);
+    if (idx === -1 || idx >= PIPELINE_FLOW.length - 1) return null;
+    return PIPELINE_FLOW[idx + 1];
+  }, [selectedStage]);
+
+  useEffect(() => {
+    if (!selectedCandidate) {
+      setInterviewAt('');
+      setInterviewComment('');
+      return;
+    }
+    const existing = String(selectedCandidate.interview_scheduled_at || '');
+    if (existing) {
+      const d = new Date(existing);
+      if (!Number.isNaN(d.getTime())) {
+        const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+        setInterviewAt(local);
+      } else {
+        setInterviewAt('');
+      }
+    } else {
+      setInterviewAt('');
+    }
+    setInterviewComment(String(selectedCandidate.next_step || ''));
+  }, [selectedCandidate]);
 
   if (!isAuthenticated) {
     return (
@@ -248,6 +288,21 @@ const HRDashboard: React.FC = () => {
                       <td className="px-3 py-2">{formatCell(row.priority)}</td>
                       <td className="px-3 py-2 whitespace-nowrap">
                         <div className="flex gap-2">
+                          {(() => {
+                            const stage = String(row.pipeline_stage || '');
+                            const idx = PIPELINE_FLOW.indexOf(stage as (typeof PIPELINE_FLOW)[number]);
+                            const next = idx >= 0 && idx < PIPELINE_FLOW.length - 1 ? PIPELINE_FLOW[idx + 1] : null;
+                            if (!next) return null;
+                            return (
+                              <button
+                                type="button"
+                                className="rounded-lg border border-[#cfe3f9] px-2 py-1 text-[11px] font-semibold text-[#005EB8] hover:bg-[#edf6ff]"
+                                onClick={() => void executeAction('set_candidate_stage', { candidate_id: row.candidate_id, stage: next }, `Moved candidate to ${next}.`)}
+                              >
+                                Move to {next}
+                              </button>
+                            );
+                          })()}
                           <button
                             type="button"
                             className="rounded-lg border border-[#cfe3f9] px-2 py-1 text-[11px] font-semibold text-[#005EB8] hover:bg-[#edf6ff]"
@@ -330,20 +385,15 @@ const HRDashboard: React.FC = () => {
               <div className="rounded-xl border border-[#dce8f8] p-3 space-y-2">
                 <p className="text-xs font-bold uppercase tracking-wide text-[#5f748f]">Quick actions</p>
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="rounded-lg border border-[#cfe3f9] px-2.5 py-1 text-[11px] font-semibold text-[#005EB8] hover:bg-[#edf6ff]"
-                    onClick={() => void executeAction('set_candidate_stage', { candidate_id: selectedCandidate.candidate_id, stage: 'Interview scheduled' }, 'Candidate moved to Interview scheduled.')}
-                  >
-                    Move to interview
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-lg border border-[#cfe3f9] px-2.5 py-1 text-[11px] font-semibold text-[#005EB8] hover:bg-[#edf6ff]"
-                    onClick={() => void executeAction('set_candidate_stage', { candidate_id: selectedCandidate.candidate_id, stage: 'Evaluation Done' }, 'Candidate moved to Evaluation Done.')}
-                  >
-                    Mark evaluation done
-                  </button>
+                  {nextStage && (
+                    <button
+                      type="button"
+                      className="rounded-lg border border-[#cfe3f9] px-2.5 py-1 text-[11px] font-semibold text-[#005EB8] hover:bg-[#edf6ff]"
+                      onClick={() => void executeAction('set_candidate_stage', { candidate_id: selectedCandidate.candidate_id, stage: nextStage }, `Candidate moved to ${nextStage}.`)}
+                    >
+                      Move to {nextStage}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="rounded-lg border border-[#f2d8d8] px-2.5 py-1 text-[11px] font-semibold text-[#b42318] hover:bg-[#fff1f1]"
@@ -353,6 +403,41 @@ const HRDashboard: React.FC = () => {
                   </button>
                 </div>
               </div>
+
+              {(selectedStage === 'Leadership form submitted, awaiting evaluation' || selectedStage === 'Evaluation Done') && (
+                <div className="rounded-xl border border-[#dce8f8] p-3 space-y-2">
+                  <p className="text-xs font-bold uppercase tracking-wide text-[#5f748f]">Interview setup</p>
+                  <input
+                    type="datetime-local"
+                    value={interviewAt}
+                    onChange={(e) => setInterviewAt(e.target.value)}
+                    className="w-full rounded-lg border border-[#d6deea] px-3 py-2 text-sm"
+                  />
+                  <textarea
+                    value={interviewComment}
+                    onChange={(e) => setInterviewComment(e.target.value)}
+                    className="w-full rounded-lg border border-[#d6deea] px-3 py-2 text-sm"
+                    rows={3}
+                    placeholder="Interview notes / instructions for recruiter"
+                  />
+                  <button
+                    type="button"
+                    disabled={!interviewAt}
+                    className="rounded-lg border border-[#cfe3f9] px-2.5 py-1 text-[11px] font-semibold text-[#005EB8] hover:bg-[#edf6ff] disabled:opacity-50"
+                    onClick={() => void executeAction(
+                      'set_candidate_interview',
+                      {
+                        candidate_id: selectedCandidate.candidate_id,
+                        interview_at: new Date(interviewAt).toISOString(),
+                        interview_comment: interviewComment,
+                      },
+                      'Interview scheduled and notes saved.',
+                    )}
+                  >
+                    Move to interview & save schedule
+                  </button>
+                </div>
+              )}
 
               <div className="rounded-xl border border-[#dce8f8] p-3">
                 <p className="text-xs font-bold uppercase tracking-wide text-[#5f748f] mb-2">Open tasks for this candidate</p>

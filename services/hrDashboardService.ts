@@ -77,7 +77,7 @@ export async function runHrAutomation(
 
 export async function hrDashboardAction(
   accessToken: string,
-  action: 'resolve_task' | 'resolve_risk' | 'set_candidate_stage' | 'set_candidate_next_step' | 'create_task',
+  action: 'resolve_task' | 'resolve_risk' | 'set_candidate_stage' | 'set_candidate_next_step' | 'create_task' | 'set_candidate_interview',
   payload: {
     task_id?: number;
     risk_id?: number;
@@ -88,6 +88,8 @@ export async function hrDashboardAction(
     priority?: string;
     title?: string;
     details?: string;
+    interview_at?: string;
+    interview_comment?: string;
   },
 ): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> {
   return callFn('hr-dashboard-data', accessToken, {
