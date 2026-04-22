@@ -2,7 +2,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, apikey, x-client-info',
 };
 
@@ -41,13 +41,9 @@ async function wgGet(path: string, params?: Record<string, string | number | boo
   return wgRequest(`${path}${suffix}`, { method: 'GET' });
 }
 
-async function wgPost(path: string, body: Record<string, unknown>) {
-  return wgRequest(path, { method: 'POST', body: JSON.stringify(body) });
-}
-
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
-  if (req.method !== 'GET' && req.method !== 'POST') {
+  if (req.method !== 'GET') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
       status: 405,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -100,7 +96,7 @@ Deno.serve(async (req) => {
       const watchedLive = parseBool(url.searchParams.get('watched_live'));
       const watchedReplay = parseBool(url.searchParams.get('watched_replay'));
 
-      const [account, webinars, broadcasts, subscriptions, messages, questions, payments] = await Promise.all([
+      const [account, webinars, broadcasts, subscriptions, messages, questions] = await Promise.all([
         wgGet('/account'),
         wgGet('/webinars'),
         wgGet('/broadcasts', webinarId ? { webinar_id: webinarId } : undefined),
@@ -114,7 +110,6 @@ Deno.serve(async (req) => {
         }),
         wgGet('/messages'),
         wgGet('/questions', { per_page: Math.min(Math.max(perPage, 1), 100) }),
-        wgGet('/subscription_payments', { per_page: Math.min(Math.max(perPage, 1), 100) }),
       ]);
 
       const selectedWebinar = webinarId ? await wgGet(`/webinars/${webinarId}`) : null;
@@ -136,7 +131,6 @@ Deno.serve(async (req) => {
         subscriptions: subscriptions.json,
         questions: questions.json,
         messages: messages.json,
-        payments: payments.json,
         selected_webinar: selectedWebinar?.json || null,
         selected_broadcast: selectedBroadcast?.json || null,
         health: {
@@ -146,89 +140,10 @@ Deno.serve(async (req) => {
           subscriptions_ok: subscriptions.ok,
           questions_ok: questions.ok,
           messages_ok: messages.ok,
-          payments_ok: payments.ok,
         },
       };
       return new Response(JSON.stringify(response), {
         status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    if (req.method === 'POST') {
-      const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-      const action = String(body.action || '').trim();
-
-      if (!action) {
-        return new Response(JSON.stringify({ error: 'Missing action' }), {
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      if (action === 'create_broadcast') {
-        const episodeId = Number(body.episode_id);
-        const dateIso = String(body.date || '').trim();
-        if (!Number.isFinite(episodeId) || episodeId <= 0 || !dateIso) {
-          return new Response(JSON.stringify({ error: 'episode_id and date are required' }), {
-            status: 400,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
-        }
-        const created = await wgPost('/episodes/broadcasts', { episode_id: episodeId, date: dateIso });
-        return new Response(JSON.stringify({
-          ok: created.ok,
-          status: created.status,
-          action,
-          result: created.json,
-        }), {
-          status: created.ok ? 200 : 502,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      if (action === 'unsubscribe_subscription') {
-        const subscriptionId = Number(body.subscription_id);
-        if (!Number.isFinite(subscriptionId) || subscriptionId <= 0) {
-          return new Response(JSON.stringify({ error: 'subscription_id is required' }), {
-            status: 400,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
-        }
-        const unsubscribed = await wgPost('/subscriptions/unsubscribe', { id: subscriptionId });
-        return new Response(JSON.stringify({
-          ok: unsubscribed.ok,
-          status: unsubscribed.status,
-          action,
-          result: unsubscribed.json,
-        }), {
-          status: unsubscribed.ok ? 200 : 502,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      if (action === 'create_subscription') {
-        const payload = body.payload as Record<string, unknown> | undefined;
-        if (!payload || typeof payload !== 'object') {
-          return new Response(JSON.stringify({ error: 'payload object is required for create_subscription' }), {
-            status: 400,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
-        }
-        const created = await wgPost('/broadcasts/subscriptions', payload);
-        return new Response(JSON.stringify({
-          ok: created.ok,
-          status: created.status,
-          action,
-          result: created.json,
-        }), {
-          status: created.ok ? 200 : 502,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
-      return new Response(JSON.stringify({ error: `Unsupported action: ${action}` }), {
-        status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }

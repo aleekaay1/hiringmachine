@@ -55,17 +55,14 @@ Optional filters:
 - `watched_live`
 - `watched_replay`
 
-## 4) Management controls included
+## 4) Dashboard mode
 
-Supported actions:
+The current implementation is read-only dashboard mode (no write controls).
 
-- `create_broadcast` → `POST /episodes/broadcasts`
-- `unsubscribe_subscription` → `POST /subscriptions/unsubscribe`
-- `create_subscription` → `POST /broadcasts/subscriptions`
-
-These are sent through the Edge Function so your API token stays server-side.
+- Uses `mode=dashboard`
+- Returns webinars, broadcasts, subscriptions (invitees + attendance signals), questions, and messages
 
 ## 5) Security note
 
-Do **not** place WebinarGeek API keys in frontend env vars.  
+Do **not** place WebinarGeek API keys in frontend env vars.
 Only store keys in Supabase Edge Function secrets.

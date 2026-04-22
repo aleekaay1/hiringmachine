@@ -5,9 +5,8 @@ import { supabase } from '../services/supabaseClient';
 import {
   fetchWebinarGeekDashboard,
   fetchWebinarGeekHealth,
-  webinarGeekAction,
 } from '../services/webinarGeekIntegrations';
-import { Database, RefreshCw, ShieldCheck, PlusCircle, UserMinus } from 'lucide-react';
+import { Database, RefreshCw, ShieldCheck } from 'lucide-react';
 
 type AnyRow = Record<string, unknown>;
 
@@ -15,7 +14,7 @@ function asArray(value: unknown): AnyRow[] {
   if (Array.isArray(value)) return value as AnyRow[];
   if (value && typeof value === 'object') {
     const obj = value as Record<string, unknown>;
-    const firstArrayKey = ['webinars', 'broadcasts', 'subscriptions', 'questions', 'messages', 'payments']
+    const firstArrayKey = ['webinars', 'broadcasts', 'subscriptions', 'questions', 'messages']
       .find((k) => Array.isArray(obj[k]));
     if (firstArrayKey) return obj[firstArrayKey] as AnyRow[];
   }
@@ -37,24 +36,19 @@ const WebinarGeekDashboard: React.FC = () => {
   const [webinarId, setWebinarId] = useState('');
   const [broadcastId, setBroadcastId] = useState('');
   const [watchedFilter, setWatchedFilter] = useState<'all' | 'watched' | 'unwatched'>('all');
-  const [actionMsg, setActionMsg] = useState<string | null>(null);
-  const [actionLoading, setActionLoading] = useState(false);
-
-  const [newEpisodeId, setNewEpisodeId] = useState('');
-  const [newBroadcastDate, setNewBroadcastDate] = useState('');
-  const [unsubscribeId, setUnsubscribeId] = useState('');
 
   const webinars = useMemo(() => asArray(data?.webinars), [data]);
   const broadcasts = useMemo(() => asArray(data?.broadcasts), [data]);
   const subscriptions = useMemo(() => asArray(data?.subscriptions), [data]);
   const questions = useMemo(() => asArray(data?.questions), [data]);
   const messages = useMemo(() => asArray(data?.messages), [data]);
-  const payments = useMemo(() => asArray(data?.payments), [data]);
 
   const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
     const { data: s } = await supabase.auth.getSession();
-    const token = s.session?.access_token;
-    if (token) return token;
+    const session = s.session;
+    if (!session) return null;
+    const expiresAtMs = (session.expires_at || 0) * 1000;
+    if (expiresAtMs > Date.now() + 60_000 && session.access_token) return session.access_token;
     const { data: refreshed, error: refreshErr } = await supabase.auth.refreshSession();
     if (refreshErr) return null;
     return refreshed.session?.access_token ?? null;
@@ -62,10 +56,10 @@ const WebinarGeekDashboard: React.FC = () => {
 
   const loadDashboard = useCallback(async () => {
     setError(null);
-    setActionMsg(null);
     const token = await getFreshAccessToken();
     if (!token) {
-      setError('Not signed in.');
+      setError('Not signed in. Please sign in again.');
+      setIsAuthenticated(false);
       return;
     }
     setLoading(true);
@@ -80,6 +74,10 @@ const WebinarGeekDashboard: React.FC = () => {
     if (!result.ok) {
       setError(result.error);
       setData(null);
+      if (result.error.toLowerCase().includes('unauthorized')) {
+        setIsAuthenticated(false);
+        await supabase.auth.signOut();
+      }
       return;
     }
     setData(result.data);
@@ -89,7 +87,8 @@ const WebinarGeekDashboard: React.FC = () => {
     setError(null);
     const token = await getFreshAccessToken();
     if (!token) {
-      setError('Not signed in.');
+      setError('Not signed in. Please sign in again.');
+      setIsAuthenticated(false);
       return;
     }
     setHealthLoading(true);
@@ -98,6 +97,10 @@ const WebinarGeekDashboard: React.FC = () => {
     if (!result.ok) {
       setError(result.error);
       setHealth(null);
+      if (result.error.toLowerCase().includes('unauthorized')) {
+        setIsAuthenticated(false);
+        await supabase.auth.signOut();
+      }
       return;
     }
     setHealth(result.data);
@@ -129,25 +132,6 @@ const WebinarGeekDashboard: React.FC = () => {
     setIsAuthenticated(true);
   };
 
-  const runAction = async (payload: Record<string, unknown>) => {
-    setError(null);
-    setActionMsg(null);
-    const token = await getFreshAccessToken();
-    if (!token) {
-      setError('Not signed in.');
-      return;
-    }
-    setActionLoading(true);
-    const result = await webinarGeekAction(token, payload);
-    setActionLoading(false);
-    if (!result.ok) {
-      setError(result.error);
-      return;
-    }
-    setActionMsg(`${String(result.data.action)} completed (status ${result.data.status}).`);
-    await loadDashboard();
-  };
-
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-[#f7fbff] to-[#eef6ff] flex items-center justify-center p-4">
@@ -174,7 +158,7 @@ const WebinarGeekDashboard: React.FC = () => {
               <Database className="text-[#005EB8] shrink-0" size={22} />
               <div className="min-w-0">
                 <h1 className="text-lg sm:text-xl font-extrabold text-[#0B1B34] truncate">WebinarGeek</h1>
-                <p className="text-xs text-[#73839b] truncate">Webinars, broadcasts, invitees, attendance, questions, messages, payments</p>
+                <p className="text-xs text-[#73839b] truncate">Webinars, broadcasts, invitees, attendance, questions, messages</p>
               </div>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
@@ -207,54 +191,20 @@ const WebinarGeekDashboard: React.FC = () => {
         </div>
 
         {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
-        {actionMsg && <div className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">{actionMsg}</div>}
 
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <Stat label="Webinars" value={String(webinars.length)} />
           <Stat label="Broadcasts" value={String(broadcasts.length)} />
           <Stat label="Subscriptions" value={String(subscriptions.length)} />
           <Stat label="Questions" value={String(questions.length)} />
           <Stat label="Messages" value={String(messages.length)} />
-          <Stat label="Payments" value={String(payments.length)} />
         </div>
-
-        <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4 space-y-3">
-          <h2 className="font-bold text-[#0B1B34]">Webinar controls</h2>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            <div className="rounded-xl border border-[#e4edf9] p-3 space-y-2">
-              <p className="text-sm font-semibold">Create broadcast (episode)</p>
-              <input value={newEpisodeId} onChange={(e) => setNewEpisodeId(e.target.value)} placeholder="episode_id" className="w-full px-3 py-2 rounded-xl border border-[#cfe3f9]" />
-              <input value={newBroadcastDate} onChange={(e) => setNewBroadcastDate(e.target.value)} placeholder="date ISO, ex: 2026-06-30T14:00:00+02:00" className="w-full px-3 py-2 rounded-xl border border-[#cfe3f9]" />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void runAction({ action: 'create_broadcast', episode_id: Number(newEpisodeId), date: newBroadcastDate })}
-                disabled={actionLoading}
-              >
-                <PlusCircle size={16} className="mr-2 inline" /> Create broadcast
-              </Button>
-            </div>
-            <div className="rounded-xl border border-[#e4edf9] p-3 space-y-2">
-              <p className="text-sm font-semibold">Unsubscribe invitee</p>
-              <input value={unsubscribeId} onChange={(e) => setUnsubscribeId(e.target.value)} placeholder="subscription_id" className="w-full px-3 py-2 rounded-xl border border-[#cfe3f9]" />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void runAction({ action: 'unsubscribe_subscription', subscription_id: Number(unsubscribeId) })}
-                disabled={actionLoading}
-              >
-                <UserMinus size={16} className="mr-2 inline" /> Unsubscribe
-              </Button>
-            </div>
-          </div>
-        </section>
 
         <DataTable title="Webinars" rows={webinars} columns={['id', 'title', 'url', 'status', 'type', 'subscriptions_count', 'created_at']} />
         <DataTable title="Broadcasts" rows={broadcasts} columns={['id', 'date', 'has_ended', 'cancelled', 'duration', 'viewers_count', 'replay_viewers_count', 'webinar']} />
-        <DataTable title="Subscriptions / Invitees / Attendance" rows={subscriptions} columns={['id', 'firstname', 'surname', 'email', 'watched', 'watched_live', 'watched_replay', 'watch_duration', 'registration_source', 'created_at']} />
+        <DataTable title="Subscriptions / Invitees / Attendance" rows={subscriptions} columns={['id', 'firstname', 'surname', 'email', 'watched', 'watched_live', 'watched_replay', 'watched_true_set_at', 'watch_start', 'watch_end', 'watch_duration', 'watch_duration_live', 'watch_duration_replay', 'registration_source', 'registration_ip', 'unsubscribed', 'broadcast', 'episode', 'webinar', 'created_at']} />
         <DataTable title="Questions" rows={questions} columns={['id', 'type', 'question', 'subscription_id', 'created_at']} />
         <DataTable title="Messages" rows={messages} columns={['id', 'type', 'subject', 'status', 'created_at']} />
-        <DataTable title="Payments" rows={payments} columns={['id', 'amount', 'currency', 'status', 'payment_method', 'created_at']} />
       </div>
     </Layout>
   );

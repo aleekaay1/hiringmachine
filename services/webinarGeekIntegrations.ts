@@ -10,13 +10,6 @@ export interface WebinarGeekDashboardFilters {
   perPage?: number;
 }
 
-export interface WebinarGeekActionResult {
-  ok: boolean;
-  status: number;
-  action: string;
-  result: Record<string, unknown>;
-}
-
 function buildFunctionUrl(path: string): string | null {
   if (!SUPABASE_URL) return null;
   return `${SUPABASE_URL}/functions/v1/integrations-webinar-geek${path}`;
@@ -44,6 +37,9 @@ async function callWebinarGeek(
   });
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
+    if (res.status === 401) {
+      return { ok: false, error: 'Unauthorized (session expired). Please sign in again.' };
+    }
     const err = (json.error as string) || res.statusText || 'Request failed';
     return { ok: false, error: err };
   }
@@ -66,16 +62,4 @@ export async function fetchWebinarGeekDashboard(
   if (typeof filters.watchedReplay === 'boolean') params.set('watched_replay', String(filters.watchedReplay));
   if (typeof filters.perPage === 'number') params.set('per_page', String(filters.perPage));
   return callWebinarGeek(accessToken, `?${params.toString()}`);
-}
-
-export async function webinarGeekAction(
-  accessToken: string,
-  actionPayload: Record<string, unknown>
-): Promise<{ ok: true; data: WebinarGeekActionResult } | { ok: false; error: string }> {
-  const res = await callWebinarGeek(accessToken, '', {
-    method: 'POST',
-    body: JSON.stringify(actionPayload),
-  });
-  if (!res.ok) return res;
-  return { ok: true, data: res.data as unknown as WebinarGeekActionResult };
 }
