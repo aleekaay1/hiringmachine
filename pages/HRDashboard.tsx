@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
-import { fetchHrDashboard, runHrAutomation, runHrRollup, type HrDashboardPayload } from '../services/hrDashboardService';
+import { fetchHrDashboard, hrDashboardAction, runHrAutomation, runHrRollup, type HrDashboardPayload } from '../services/hrDashboardService';
 import { AlertTriangle, BarChart3, Clock3, RefreshCw, Sparkles, Target, Users } from 'lucide-react';
 
 const HRDashboard: React.FC = () => {
@@ -87,7 +87,7 @@ const HRDashboard: React.FC = () => {
       setError(res.error);
       return;
     }
-    setBanner(dryRun ? 'Rollup dry-run completed.' : 'Rollup write run completed.');
+    setBanner(dryRun ? 'Preview completed (no changes saved).' : 'Candidate analytics refreshed and saved.');
     await load();
   };
 
@@ -106,7 +106,35 @@ const HRDashboard: React.FC = () => {
       setError(res.error);
       return;
     }
-    setBanner(dryRun ? 'Automation dry-run completed.' : 'Automation write run completed.');
+    setBanner(dryRun ? 'Preview completed (no changes saved).' : 'Recommended actions refreshed and saved.');
+    await load();
+  };
+
+  const handleResolveTask = async (taskId: number) => {
+    const token = await getAccessToken();
+    if (!token) return;
+    setRunning(true);
+    const res = await hrDashboardAction(token, 'resolve_task', { task_id: taskId });
+    setRunning(false);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    setBanner('Task marked as done.');
+    await load();
+  };
+
+  const handleResolveRisk = async (riskId: number) => {
+    const token = await getAccessToken();
+    if (!token) return;
+    setRunning(true);
+    const res = await hrDashboardAction(token, 'resolve_risk', { risk_id: riskId });
+    setRunning(false);
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+    setBanner('Risk marked as resolved.');
     await load();
   };
 
@@ -140,13 +168,22 @@ const HRDashboard: React.FC = () => {
               <RefreshCw size={16} className={`mr-2 inline ${loading ? 'animate-spin' : ''}`} /> Refresh
             </Button>
             <Button type="button" variant="outline" disabled={running} onClick={() => void handleRollup(true)}>
-              <BarChart3 size={16} className="mr-2 inline" /> Rollup dry-run
+              <BarChart3 size={16} className="mr-2 inline" /> Preview Numbers
             </Button>
             <Button type="button" variant="outline" disabled={running} onClick={() => void handleAutomation(true)}>
-              <Sparkles size={16} className="mr-2 inline" /> Automation dry-run
+              <Sparkles size={16} className="mr-2 inline" /> Preview Actions
+            </Button>
+            <Button type="button" disabled={running} onClick={() => void handleRollup(false)}>
+              <BarChart3 size={16} className="mr-2 inline" /> Recalculate & Save
+            </Button>
+            <Button type="button" variant="outline" disabled={running} onClick={() => void handleAutomation(false)}>
+              <Sparkles size={16} className="mr-2 inline" /> Save Recommended Actions
             </Button>
           </div>
         </div>
+        <p className="text-xs text-[#73839b] px-1">
+          Preview checks results only. Recalculate & Save writes updated scores, risks, and queues so the dashboard is fully populated.
+        </p>
 
         {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
         {banner && <div className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">{banner}</div>}
@@ -160,28 +197,40 @@ const HRDashboard: React.FC = () => {
         </div>
 
         <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <h3 className="font-bold text-[#0B1B34] mb-3">Overdue / Stuck Queue</h3>
+          <h3 className="font-bold text-[#0B1B34] mb-3">Needs Attention Now</h3>
           <QueueTable rows={data?.candidates ?? []} mode="overdue" />
         </section>
 
         <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <h3 className="font-bold text-[#0B1B34] mb-3">Top Conversion Candidates</h3>
+          <h3 className="font-bold text-[#0B1B34] mb-3">Strong Candidates to Prioritize</h3>
           <QueueTable rows={data?.candidates ?? []} mode="top" />
         </section>
 
         <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <h3 className="font-bold text-[#0B1B34] mb-3">Open Tasks</h3>
+          <h3 className="font-bold text-[#0B1B34] mb-3">Recruiter Action List</h3>
           <SimpleTable
             rows={data?.open_tasks ?? []}
-            columns={['candidate_id', 'task_type', 'priority', 'status', 'owner_email', 'due_at']}
+            columns={['candidate_name', 'candidate_date', 'task_type', 'priority', 'status', 'owner_email', 'due_at']}
+            onResolve={(row) => {
+              const taskId = Number(row.id);
+              if (!Number.isFinite(taskId)) return;
+              void handleResolveTask(taskId);
+            }}
+            resolveLabel="Mark done"
           />
         </section>
 
         <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <h3 className="font-bold text-[#0B1B34] mb-3">Active Risks</h3>
+          <h3 className="font-bold text-[#0B1B34] mb-3">Follow-up Risks</h3>
           <SimpleTable
             rows={data?.active_risks ?? []}
-            columns={['candidate_id', 'risk_type', 'confidence', 'reason', 'detected_at']}
+            columns={['candidate_name', 'candidate_date', 'risk_type', 'confidence', 'reason', 'detected_at']}
+            onResolve={(row) => {
+              const riskId = Number(row.id);
+              if (!Number.isFinite(riskId)) return;
+              void handleResolveRisk(riskId);
+            }}
+            resolveLabel="Resolve"
           />
         </section>
       </div>
@@ -210,8 +259,8 @@ const QueueTable = ({ rows, mode }: { rows: Array<Record<string, unknown>>; mode
       rows={filtered}
       columns={
         mode === 'overdue'
-          ? ['candidate_id', 'pipeline_stage', 'readiness_band', 'readiness_score', 'overdue_minutes']
-          : ['candidate_id', 'pipeline_stage', 'readiness_band', 'readiness_score', 'active_risk_count']
+          ? ['candidate_name', 'candidate_date', 'pipeline_stage', 'readiness_band', 'readiness_score', 'overdue_minutes']
+          : ['candidate_name', 'candidate_date', 'pipeline_stage', 'readiness_band', 'readiness_score', 'active_risk_count']
       }
     />
   );
@@ -221,25 +270,52 @@ function formatCell(value: unknown): string {
   if (value === null || value === undefined) return '—';
   if (typeof value === 'object') return JSON.stringify(value);
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
-  return String(value);
+  const text = String(value);
+  if (text.includes('T') && (text.endsWith('Z') || text.includes('+'))) {
+    const d = new Date(text);
+    if (!Number.isNaN(d.getTime())) return d.toLocaleString();
+  }
+  return text;
 }
 
-const SimpleTable = ({ rows, columns }: { rows: Array<Record<string, unknown>>; columns: string[] }) => (
+const SimpleTable = ({
+  rows,
+  columns,
+  onResolve,
+  resolveLabel,
+}: {
+  rows: Array<Record<string, unknown>>;
+  columns: string[];
+  onResolve?: (row: Record<string, unknown>) => void;
+  resolveLabel?: string;
+}) => (
   <div className="overflow-auto">
     <table className="min-w-full text-xs">
       <thead className="bg-[#f6f9ff]">
         <tr>
           {columns.map((c) => <th key={c} className="text-left font-semibold text-[#5f748f] px-3 py-2 whitespace-nowrap">{c}</th>)}
+          {onResolve && <th className="text-left font-semibold text-[#5f748f] px-3 py-2 whitespace-nowrap">action</th>}
         </tr>
       </thead>
       <tbody>
         {rows.length === 0 ? (
           <tr>
-            <td colSpan={columns.length} className="px-3 py-6 text-center text-[#7b8aa0]">No rows — run a rollup first to populate data.</td>
+            <td colSpan={columns.length + (onResolve ? 1 : 0)} className="px-3 py-6 text-center text-[#7b8aa0]">No rows yet. Click Recalculate & Save to populate data.</td>
           </tr>
         ) : rows.map((row, i) => (
           <tr key={`${i}-${String(row.candidate_id ?? i)}`} className="border-t border-[#edf2fb]">
             {columns.map((c) => <td key={c} className="px-3 py-2 max-w-xs truncate">{formatCell(row[c])}</td>)}
+            {onResolve && (
+              <td className="px-3 py-2">
+                <button
+                  type="button"
+                  onClick={() => onResolve(row)}
+                  className="rounded-lg border border-[#cfe3f9] px-2 py-1 text-[11px] font-semibold text-[#005EB8] hover:bg-[#edf6ff]"
+                >
+                  {resolveLabel || 'Resolve'}
+                </button>
+              </td>
+            )}
           </tr>
         ))}
       </tbody>

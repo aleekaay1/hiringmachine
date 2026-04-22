@@ -102,13 +102,24 @@ function samePersonByName(calName: string, zoomName: string): boolean {
   if (!a || !b) return false;
   if (a === b) return true;
   // Split into parts and require ≥ 2 tokens to match (first + last)
-  const ap = a.split(' ');
-  const bp = b.split(' ');
+  const ap = a.split(' ').filter(Boolean);
+  const bp = b.split(' ').filter(Boolean);
   if (ap.length < 2 || bp.length < 2) return false;
   // Check both orderings in case name parts are swapped
   const allB = new Set(bp);
   const shared = ap.filter((p) => p.length > 1 && allB.has(p));
-  return shared.length >= 2;
+  if (shared.length >= 2) return true;
+
+  // Fallback for abbreviated last names: "john d" vs "john doe"
+  const aFirst = ap[0];
+  const bFirst = bp[0];
+  if (!aFirst || !bFirst || aFirst !== bFirst) return false;
+  const aLast = ap[ap.length - 1];
+  const bLast = bp[bp.length - 1];
+  if (!aLast || !bLast) return false;
+  if (aLast.length >= 2 && bLast.startsWith(aLast)) return true;
+  if (bLast.length >= 2 && aLast.startsWith(bLast)) return true;
+  return false;
 }
 
 /** ISO date string YYYY-MM-DD in America/Toronto. */
@@ -169,14 +180,61 @@ async function zoomListMeetings(token: string, userId: string, type: 'past' | 'u
 
 type ZoomParticipant = { name?: string; user_email?: string; join_time?: string; leave_time?: string };
 
+function participantName(row: Record<string, unknown>): string {
+  const name = String(row.name ?? '').trim();
+  if (name) return name;
+  const userName = String(row.user_name ?? '').trim();
+  if (userName) return userName;
+  return '';
+}
+
+function participantEmail(row: Record<string, unknown>): string {
+  return String(row.user_email ?? row.email ?? '').trim().toLowerCase();
+}
+
+async function zoomParticipantsFromPath(token: string, path: string): Promise<ZoomParticipant[]> {
+  const all: ZoomParticipant[] = [];
+  let nextPageToken = '';
+  let safety = 0;
+  do {
+    safety++;
+    const withToken = `${path}${path.includes('?') ? '&' : '?'}page_size=300${nextPageToken ? `&next_page_token=${encodeURIComponent(nextPageToken)}` : ''}`;
+    const res = await fetch(`${ZOOM_API}${withToken}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      throw new Error(`Zoom GET ${withToken}: ${res.status} ${await res.text()}`);
+    }
+    const body = (await res.json()) as {
+      participants?: Array<Record<string, unknown>>;
+      next_page_token?: string;
+    };
+    for (const p of body.participants ?? []) {
+      all.push({
+        name: participantName(p),
+        user_email: participantEmail(p),
+        join_time: typeof p.join_time === 'string' ? p.join_time : undefined,
+        leave_time: typeof p.leave_time === 'string' ? p.leave_time : undefined,
+      });
+    }
+    nextPageToken = String(body.next_page_token ?? '').trim();
+  } while (nextPageToken && safety < 20);
+  return all;
+}
+
 async function zoomParticipants(token: string, uuid: string): Promise<ZoomParticipant[]> {
   const encoded = encodeURIComponent(encodeURIComponent(uuid));
-  const res = await fetch(`${ZOOM_API}/report/meetings/${encoded}/participants?page_size=300`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) { console.warn(`Zoom participants ${uuid}: ${res.status}`); return []; }
-  const j = (await res.json()) as { participants?: ZoomParticipant[] };
-  return j.participants ?? [];
+  try {
+    // Preferred endpoint for reporting accounts.
+    return await zoomParticipantsFromPath(token, `/report/meetings/${encoded}/participants`);
+  } catch (e) {
+    console.warn(`Zoom report participants failed for ${uuid}; trying past_meetings fallback.`, e instanceof Error ? e.message : String(e));
+    try {
+      // Fallback endpoint for non-report contexts.
+      return await zoomParticipantsFromPath(token, `/past_meetings/${encoded}/participants`);
+    } catch (fallbackErr) {
+      console.warn(`Zoom participants unavailable for ${uuid}:`, fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr));
+      return [];
+    }
+  }
 }
 
 // ─── Zoom time parsing ─────────────────────────────────────────────────────
@@ -377,6 +435,8 @@ Deno.serve(async (req) => {
     const slotToleranceMin = Math.max(5, Math.min(45, Number(Deno.env.get('INTEGRATION_SLOT_TOLERANCE_MINUTES') ?? '20')));
     const lookbackDays   = Math.max(14, Math.min(365, Number(Deno.env.get('ZOOM_LOOKBACK_DAYS')  ?? '90')));
     const lookaheadDays  = Math.max(7,  Math.min(180, Number(Deno.env.get('ZOOM_LOOKAHEAD_DAYS') ?? '60')));
+    const minPastDateRaw = (Deno.env.get('LIVE_SESSIONS_MIN_PAST_DATE') ?? '2026-04-20').trim();
+    const minPastDate = DateTime.fromISO(minPastDateRaw, { zone: TZ }).startOf('day');
 
     // Zoom — fetch all meetings
     const zoomToken = await getZoomToken();
@@ -409,7 +469,10 @@ Deno.serve(async (req) => {
       if (!Number.isFinite(ms)) continue;
       if (ms < nowMs - lookbackDays * 86400_000) continue;
       if (ms > nowMs + lookaheadDays * 86400_000) continue;
-      if (ms < nowMs) pastMeetings.push(m);
+      if (ms < nowMs) {
+        if (dt?.isValid && minPastDate.isValid && dt < minPastDate) continue;
+        pastMeetings.push(m);
+      }
       else upcomingMeetings.push(m);
     }
 
@@ -525,6 +588,9 @@ Deno.serve(async (req) => {
 
       const attended = inviteesWithAttendance.filter((i) => i.attended_zoom);
       const noShow   = inviteesWithAttendance.filter((i) => !i.attended_zoom);
+      const attendedByEmail = attended.filter((i) => i.match_method === 'email').length;
+      const attendedByName = attended.filter((i) => i.match_method === 'name').length;
+      const participantsWithEmail = participants.filter((p) => (p.user_email ?? '').trim().length > 0).length;
 
       // Walk-ins: participants not matched to any Calendly invitee (by email or name)
       const matchedParticipantEmails = new Set(attended.map((i) => i.email).filter(Boolean));
@@ -554,6 +620,13 @@ Deno.serve(async (req) => {
           no_show_or_absent_count: noShow.length,
           zoom_participant_count:  participants.length,
           attendance_rate_pct:     rawInvitees.length > 0 ? Math.round((attended.length / rawInvitees.length) * 100) : null,
+        },
+        debug_matching: {
+          participants_with_email: participantsWithEmail,
+          participants_without_email: Math.max(0, participants.length - participantsWithEmail),
+          matched_by_email: attendedByEmail,
+          matched_by_name: attendedByName,
+          calendly_invitees_considered: rawInvitees.length,
         },
       };
     }));

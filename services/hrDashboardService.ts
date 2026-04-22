@@ -71,3 +71,14 @@ export async function runHrAutomation(
   });
 }
 
+export async function hrDashboardAction(
+  accessToken: string,
+  action: 'resolve_task' | 'resolve_risk',
+  payload: { task_id?: number; risk_id?: number },
+): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> {
+  return callFn('hr-dashboard-data', accessToken, {
+    method: 'POST',
+    body: JSON.stringify({ action, ...payload }),
+  });
+}
+

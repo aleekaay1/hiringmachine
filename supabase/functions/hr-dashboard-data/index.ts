@@ -2,7 +2,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, apikey, x-client-info',
 };
 
@@ -27,7 +27,7 @@ function minutesSince(iso: string | null): number | null {
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
-  if (req.method !== 'GET') {
+  if (req.method !== 'GET' && req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
@@ -49,6 +49,48 @@ Deno.serve(async (req) => {
     const { data: authData, error: authErr } = await supabase.auth.getUser();
     if (authErr || !authData.user) {
       return new Response(JSON.stringify({ error: 'Invalid or expired session' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    if (req.method === 'POST') {
+      const body = (await req.json().catch(() => ({}))) as {
+        action?: string;
+        task_id?: number;
+        risk_id?: number;
+      };
+      const actorEmail = authData.user.email || null;
+
+      if (body.action === 'resolve_task') {
+        if (!body.task_id) {
+          return new Response(JSON.stringify({ error: 'Missing task_id' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+        const now = new Date().toISOString();
+        const { error: taskErr } = await hrAdmin
+          .from('hr_tasks')
+          .update({ status: 'done', updated_at: now })
+          .eq('id', body.task_id);
+        if (taskErr) throw taskErr;
+        await hrAdmin.from('hr_task_events').insert({
+          task_id: body.task_id,
+          event_type: 'completed',
+          actor_email: actorEmail,
+          payload: { source: 'hr-dashboard', action: 'resolve_task' },
+        });
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
+      if (body.action === 'resolve_risk') {
+        if (!body.risk_id) {
+          return new Response(JSON.stringify({ error: 'Missing risk_id' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+        const { error: riskErr } = await hrAdmin
+          .from('hr_risk_flags')
+          .update({ status: 'resolved', resolved_at: new Date().toISOString() })
+          .eq('id', body.risk_id);
+        if (riskErr) throw riskErr;
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
+      return new Response(JSON.stringify({ error: 'Unsupported action' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     const [
@@ -78,6 +120,16 @@ Deno.serve(async (req) => {
     if (candidatesRaw.error) throw new Error(`candidates: ${candidatesRaw.error.message}`);
 
     const candidates = (candidatesRaw.data || []) as CandidateListRow[];
+    const candidateMetaById = new Map(
+      candidates.map((c) => [
+        c.id,
+        {
+          candidate_name: `${c.first_name || ''} ${c.last_name || ''}`.trim(),
+          candidate_date: c.timestamp || null,
+          email: c.email || null,
+        },
+      ]),
+    );
 
     const signalsById = new Map(
       (signalsRaw.data || []).map((r: Record<string, unknown>) => [String(r.candidate_id), r]),
@@ -105,7 +157,8 @@ Deno.serve(async (req) => {
       const overdue    = elapsed != null && sla != null ? Math.max(0, elapsed - sla) : 0;
       return {
         candidate_id:   c.id,
-        full_name:      `${c.first_name || ''} ${c.last_name || ''}`.trim(),
+        candidate_name: `${c.first_name || ''} ${c.last_name || ''}`.trim(),
+        candidate_date: c.timestamp || null,
         email:          c.email,
         pipeline_stage: stage,
         status:         c.status,
@@ -115,6 +168,26 @@ Deno.serve(async (req) => {
         overdue_minutes: overdue,
         is_overdue:     overdue > 0,
         next_step:      c.admin_data?.nextStep || (signal?.next_step as string | null) || null,
+      };
+    });
+
+    const openTasks = (openTasksRaw.data || []).map((row: Record<string, unknown>) => {
+      const candidateId = String(row.candidate_id || '');
+      const meta = candidateMetaById.get(candidateId);
+      return {
+        ...row,
+        candidate_name: meta?.candidate_name || candidateId,
+        candidate_date: meta?.candidate_date || null,
+      };
+    });
+
+    const activeRisks = (activeRisksRaw.data || []).map((row: Record<string, unknown>) => {
+      const candidateId = String(row.candidate_id || '');
+      const meta = candidateMetaById.get(candidateId);
+      return {
+        ...row,
+        candidate_name: meta?.candidate_name || candidateId,
+        candidate_date: meta?.candidate_date || null,
       };
     });
 
@@ -132,8 +205,8 @@ Deno.serve(async (req) => {
         generated_at: new Date().toISOString(),
         summary,
         candidates: joinedCandidates,
-        open_tasks:  openTasksRaw.data  || [],
-        active_risks: activeRisksRaw.data || [],
+        open_tasks: openTasks,
+        active_risks: activeRisks,
         funnel_daily: funnelRaw.data    || [],
         cohorts:      cohortsRaw.data   || [],
       }),

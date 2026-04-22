@@ -607,6 +607,30 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
+  const handleBulkDeleteSelected = async () => {
+    if (selectedIds.size === 0) return;
+    const confirmed = window.confirm(
+      `Delete ${selectedIds.size} selected candidate(s)? This cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    try {
+      setDeleting(true);
+      const ids = Array.from(selectedIds);
+      for (const id of ids) {
+        await deleteCandidate(id);
+      }
+      setCandidates(prev => prev.filter(c => !selectedIds.has(c.id)));
+      setSelectedCandidate(prev => (prev && selectedIds.has(prev.id) ? null : prev));
+      setSelectedIds(new Set());
+    } catch (err) {
+      console.error(err);
+      alert('Unable to delete all selected candidates. Please try again.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleDownloadCandidateReport = async (candidate: Candidate) => {
     try {
       const full = await getCandidateById(candidate.id);
@@ -1158,6 +1182,14 @@ const AdminDashboard: React.FC = () => {
                     className="text-xs px-2 py-1 bg-[#005EB8] text-white rounded hover:opacity-90 disabled:opacity-50"
                   >
                     Apply
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleBulkDeleteSelected}
+                    disabled={deleting}
+                    className="text-xs px-2 py-1 bg-red-600 text-white rounded hover:opacity-90 disabled:opacity-50"
+                  >
+                    {deleting ? 'Deleting...' : 'Delete Selected'}
                   </button>
                   <button type="button" onClick={() => setSelectedIds(new Set())} className="text-xs text-gray-500 hover:underline">
                     Clear
