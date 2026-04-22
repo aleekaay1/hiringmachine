@@ -14,6 +14,7 @@ import AssessmentRoomForm from './pages/AssessmentRoomForm';
 import CheckStatus from './pages/CheckStatus';
 import LiveSessionsDashboard from './pages/LiveSessionsDashboard';
 import WebinarGeekDashboard from './pages/WebinarGeekDashboard';
+import HRDashboard from './pages/HRDashboard';
 
 const App: React.FC = () => {
   return (
@@ -32,6 +33,7 @@ const App: React.FC = () => {
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/live-sessions" element={<LiveSessionsDashboard />} />
         <Route path="/webinar-geek" element={<WebinarGeekDashboard />} />
+        <Route path="/hr-dashboard" element={<HRDashboard />} />
         <Route path="/qr" element={<QrCodes />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -390,6 +390,15 @@ verify_jwt = false
 [functions.integrations-webinar-geek]
 verify_jwt = false
 
+[functions.hr-dashboard-data]
+verify_jwt = false
+
+[functions.hr-rollup-jobs]
+verify_jwt = false
+
+[functions.hr-automation-runner]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
