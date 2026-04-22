@@ -76,10 +76,16 @@ function inferSlot(dt: DateTime | null, topic: string, toleranceMin: number): Sl
   if (!dt?.isValid) return null;
   const bySlot = slotForDt(dt, toleranceMin);
   if (bySlot) return bySlot;
-  // PMI topic fallback: accept on any Tuesday or Wednesday
+  // PMI topic fallback: accept on Tue/Wed only when reasonably close to slot start.
+  // This avoids picking unrelated PMI occurrences on the same day.
   if (isKnownPmiTopic(topic)) {
-    if (dt.weekday === 2) return SLOTS[0]; // Tuesday
-    if (dt.weekday === 3) return SLOTS[1]; // Wednesday
+    const slot = dt.weekday === 2 ? SLOTS[0] : dt.weekday === 3 ? SLOTS[1] : null;
+    if (!slot) return null;
+    const slotStart = slot.startH * 60 + slot.startM;
+    const dtMin = dt.hour * 60 + dt.minute;
+    const distance = Math.abs(dtMin - slotStart);
+    const maxPmiFallbackDistance = Number(Deno.env.get('PMI_FALLBACK_MAX_MINUTES_FROM_SLOT') ?? '180');
+    if (distance <= Math.max(30, Math.min(480, maxPmiFallbackDistance))) return slot;
   }
   return null;
 }
