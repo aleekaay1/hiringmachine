@@ -35,7 +35,7 @@ function toIsoDate(value: unknown): string | null {
 
 function isClosedStage(stage: string): boolean {
   const s = stage.toLowerCase();
-  return s === 'hired' || s.includes('not hired') || s.includes('withdrawn');
+  return s === 'final decision' || s.includes('not hired') || s.includes('withdrawn') || s === 'hired';
 }
 
 function defaultActionForStage(stage: string, readinessBand: string, riskCount: number): { action: string; priority: 'low' | 'medium' | 'high' | 'critical' } {
@@ -211,7 +211,26 @@ Deno.serve(async (req) => {
       hrAdmin.from('hr_metrics_cache').select('metric_key,payload,updated_at').in('metric_key', ['live_metrics', 'webinar_metrics']),
     ]);
 
-    if (candidatesRaw.error) throw new Error(`candidates: ${candidatesRaw.error.message}`);
+    if (candidatesRaw.error) {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          generated_at: new Date().toISOString(),
+          error: `candidates: ${candidatesRaw.error.message}`,
+          summary: {},
+          stage_breakdown: [],
+          action_queue: [],
+          live_metrics: {},
+          webinar_metrics: {},
+          candidates: [],
+          open_tasks: [],
+          active_risks: [],
+          funnel_daily: [],
+          cohorts: [],
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
 
     const candidates = (candidatesRaw.data || []) as CandidateListRow[];
     const candidateMetaById = new Map(
@@ -221,15 +240,24 @@ Deno.serve(async (req) => {
       }]),
     );
 
-    const signalsById = new Map((signalsRaw.data || []).map((r: Record<string, unknown>) => [String(r.candidate_id), r]));
-    const scoresById = new Map((latestScoresRaw.data || []).map((r: Record<string, unknown>) => [String(r.candidate_id), r]));
+    const signalsData = signalsRaw.error ? [] : (signalsRaw.data || []);
+    const latestScoresData = latestScoresRaw.error ? [] : (latestScoresRaw.data || []);
+    const activeRisksData = activeRisksRaw.error ? [] : (activeRisksRaw.data || []);
+    const openTasksData = openTasksRaw.error ? [] : (openTasksRaw.data || []);
+    const funnelData = funnelRaw.error ? [] : (funnelRaw.data || []);
+    const cohortsData = cohortsRaw.error ? [] : (cohortsRaw.data || []);
+    const stageSlaData = stageSlaRaw.error ? [] : (stageSlaRaw.data || []);
+    const metricsCacheData = metricsCacheRaw.error ? [] : (metricsCacheRaw.data || []);
+
+    const signalsById = new Map(signalsData.map((r: Record<string, unknown>) => [String(r.candidate_id), r]));
+    const scoresById = new Map(latestScoresData.map((r: Record<string, unknown>) => [String(r.candidate_id), r]));
     const riskCountById = new Map<string, number>();
-    for (const r of activeRisksRaw.data || []) {
+    for (const r of activeRisksData) {
       const id = String((r as Record<string, unknown>).candidate_id);
       riskCountById.set(id, (riskCountById.get(id) || 0) + 1);
     }
     const slaByStage = new Map<string, number>();
-    for (const s of stageSlaRaw.data || []) {
+    for (const s of stageSlaData) {
       slaByStage.set(String((s as Record<string, unknown>).stage), Number((s as Record<string, unknown>).sla_minutes));
     }
 
@@ -270,7 +298,7 @@ Deno.serve(async (req) => {
     }).length;
     const assessmentCompleted = joinedCandidates.filter((c) => Boolean(c.assessment_completed)).length;
     const interviewScheduled = joinedCandidates.filter((c) => Boolean(c.interview_scheduled_at) || String(c.pipeline_stage) === 'Interview scheduled').length;
-    const hiredCount = joinedCandidates.filter((c) => String(c.pipeline_stage) === 'Hired').length;
+    const hiredCount = joinedCandidates.filter((c) => String(c.pipeline_stage) === 'Final decision').length;
     const readinessCovered = joinedCandidates.filter((c) => Number(c.readiness_score || 0) > 0).length;
     const avgReadiness = joinedCandidates.length > 0
       ? Math.round(joinedCandidates.reduce((s, c) => s + Number(c.readiness_score || 0), 0) / joinedCandidates.length)
@@ -295,8 +323,20 @@ Deno.serve(async (req) => {
       attendance_rate_pct: liveInvited > 0 ? Math.round((liveAttended / liveInvited) * 100) : 0,
       latest_generated_at: liveSnapRaw.data?.generated_at || null,
     };
+    if (liveMetrics.sessions_count === 0) {
+      const signalRows = signalsData as Array<Record<string, unknown>>;
+      const invitedFromSignals = signalRows.reduce((s, r) => s + (r.invited_live_session === true ? 1 : 0), 0);
+      const attendedFromSignals = signalRows.reduce((s, r) => s + (r.attended_live_session === true ? 1 : 0), 0);
+      liveMetrics = {
+        sessions_count: invitedFromSignals > 0 ? 1 : 0,
+        invited_total: invitedFromSignals,
+        attended_total: attendedFromSignals,
+        attendance_rate_pct: invitedFromSignals > 0 ? Math.round((attendedFromSignals / invitedFromSignals) * 100) : 0,
+        latest_generated_at: new Date().toISOString(),
+      };
+    }
 
-    const cohortRows = (cohortsRaw.data || []) as Array<Record<string, unknown>>;
+    const cohortRows = cohortsData as Array<Record<string, unknown>>;
     const webinar30 = cohortRows.filter((r) => {
       const d = Date.parse(String(r.cohort_date || ''));
       return Number.isFinite(d) && (now - d) <= 30 * 86400_000;
@@ -308,9 +348,23 @@ Deno.serve(async (req) => {
       watched_live_30d: webinar30.reduce((s, r) => s + Number(r.watched_live_count || 0), 0),
       watched_replay_30d: webinar30.reduce((s, r) => s + Number(r.watched_replay_count || 0), 0),
     };
+    if (webinarMetrics.cohorts_30d === 0) {
+      const signalRows = signalsData as Array<Record<string, unknown>>;
+      const invited = signalRows.reduce((s, r) => s + Number(r.webinar_invited_count || 0), 0);
+      const watched = signalRows.reduce((s, r) => s + Number(r.webinar_watched_count || 0), 0);
+      const watchedLive = signalRows.reduce((s, r) => s + Number(r.webinar_watched_live_count || 0), 0);
+      const watchedReplay = signalRows.reduce((s, r) => s + Number(r.webinar_watched_replay_count || 0), 0);
+      webinarMetrics = {
+        cohorts_30d: invited > 0 ? 1 : 0,
+        invited_30d: invited,
+        watched_30d: watched,
+        watched_live_30d: watchedLive,
+        watched_replay_30d: watchedReplay,
+      };
+    }
 
     const metricsCache = new Map(
-      (metricsCacheRaw.data || []).map((r: Record<string, unknown>) => [String(r.metric_key), r]),
+      metricsCacheData.map((r: Record<string, unknown>) => [String(r.metric_key), r]),
     );
     const cachedLive = (metricsCache.get('live_metrics')?.payload || null) as Record<string, unknown> | null;
     const cachedWebinar = (metricsCache.get('webinar_metrics')?.payload || null) as Record<string, unknown> | null;
@@ -321,10 +375,14 @@ Deno.serve(async (req) => {
       webinarMetrics = { ...cachedWebinar, source: 'cache' } as typeof webinarMetrics;
     }
 
-    await hrAdmin.from('hr_metrics_cache').upsert([
-      { metric_key: 'live_metrics', payload: liveMetrics, updated_at: new Date().toISOString() },
-      { metric_key: 'webinar_metrics', payload: webinarMetrics, updated_at: new Date().toISOString() },
-    ], { onConflict: 'metric_key' }).catch(() => { /* cache table may not exist until migration runs */ });
+    try {
+      await hrAdmin.from('hr_metrics_cache').upsert([
+        { metric_key: 'live_metrics', payload: liveMetrics, updated_at: new Date().toISOString() },
+        { metric_key: 'webinar_metrics', payload: webinarMetrics, updated_at: new Date().toISOString() },
+      ], { onConflict: 'metric_key' });
+    } catch {
+      // cache table may not exist until migration runs
+    }
 
     const actionQueue = joinedCandidates
       .map((c) => {
@@ -340,12 +398,12 @@ Deno.serve(async (req) => {
       })
       .slice(0, 120);
 
-    const openTasks = (openTasksRaw.data || []).map((row: Record<string, unknown>) => {
+    const openTasks = openTasksData.map((row: Record<string, unknown>) => {
       const candidateId = String(row.candidate_id || '');
       const meta = candidateMetaById.get(candidateId);
       return { ...row, candidate_name: meta?.candidate_name || candidateId, candidate_date: meta?.candidate_date || null };
     });
-    const activeRisks = (activeRisksRaw.data || []).map((row: Record<string, unknown>) => {
+    const activeRisks = activeRisksData.map((row: Record<string, unknown>) => {
       const candidateId = String(row.candidate_id || '');
       const meta = candidateMetaById.get(candidateId);
       return { ...row, candidate_name: meta?.candidate_name || candidateId, candidate_date: meta?.candidate_date || null };
@@ -359,8 +417,8 @@ Deno.serve(async (req) => {
       warm_candidates: joinedCandidates.filter((c) => c.readiness_band === 'Warm').length,
       monitor_candidates: joinedCandidates.filter((c) => c.readiness_band === 'Monitor').length,
       overdue_candidates: joinedCandidates.filter((c) => c.is_overdue).length,
-      open_tasks: (openTasksRaw.data || []).length,
-      active_risks: (activeRisksRaw.data || []).length,
+      open_tasks: openTasksData.length,
+      active_risks: activeRisksData.length,
       assessment_completed: assessmentCompleted,
       interview_scheduled: interviewScheduled,
       hired_count: hiredCount,
@@ -380,8 +438,8 @@ Deno.serve(async (req) => {
         candidates: joinedCandidates,
         open_tasks: openTasks,
         active_risks: activeRisks,
-        funnel_daily: funnelRaw.data || [],
-        cohorts: cohortsRaw.data || [],
+        funnel_daily: funnelData,
+        cohorts: cohortsData,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );

@@ -14,9 +14,9 @@ const PIPELINE_FLOW = [
   'Leadership form submitted, awaiting evaluation',
   'Evaluation Done',
   'Interview scheduled',
-  'Hired',
+  'Final decision',
 ] as const;
-const STAGE_ORDER: string[] = [...PIPELINE_FLOW, 'Not Hired / Withdrawn'];
+const STAGE_ORDER: string[] = [...PIPELINE_FLOW];
 
 const HRDashboard: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -31,6 +31,8 @@ const HRDashboard: React.FC = () => {
   const [selectedCandidate, setSelectedCandidate] = useState<QueueRow | null>(null);
   const [interviewAt, setInterviewAt] = useState('');
   const [interviewComment, setInterviewComment] = useState('');
+  const [draggingCandidateId, setDraggingCandidateId] = useState<string | null>(null);
+  const [dragOverStage, setDragOverStage] = useState<string | null>(null);
 
   const getAccessToken = useCallback(async () => {
     const { data: s } = await supabase.auth.getSession();
@@ -137,6 +139,11 @@ const HRDashboard: React.FC = () => {
     setBanner(successMsg);
     await load();
   };
+
+  const moveCandidateToStage = useCallback(async (candidateId: string, stage: string) => {
+    if (!candidateId || !stage) return;
+    await executeAction('set_candidate_stage', { candidate_id: candidateId, stage }, `Moved candidate to ${stage}.`);
+  }, [executeAction]);
 
   const summary = data?.summary ?? {};
   const stageBreakdown = (data?.stage_breakdown ?? []) as Array<Record<string, unknown>>;
@@ -268,17 +275,41 @@ const HRDashboard: React.FC = () => {
 
         <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
           <h3 className="font-bold text-[#0B1B34] mb-1">Candidates by Stage</h3>
-          <p className="text-xs text-[#6f7b8d] mb-3">Each stage section shows candidates and the same logical next-stage action for that stage.</p>
+          <p className="text-xs text-[#6f7b8d] mb-3">
+            Drag candidates between stage columns to update status instantly, or use quick actions inside each card.
+          </p>
           {queue.length === 0 ? (
             <div className="text-sm text-[#7b8aa0]">No action queue available yet. Click Rebuild Data.</div>
           ) : (
-            <div className="space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-4 gap-3">
               {STAGE_ORDER.map((stage) => {
                 const rows = queueByStage.get(stage) || [];
                 const idx = PIPELINE_FLOW.indexOf(stage as (typeof PIPELINE_FLOW)[number]);
                 const next = idx >= 0 && idx < PIPELINE_FLOW.length - 1 ? PIPELINE_FLOW[idx + 1] : null;
                 return (
-                  <div key={stage} className="rounded-xl border border-[#e1eaf8] p-3">
+                  <div
+                    key={stage}
+                    className={`rounded-xl border p-3 min-h-[180px] transition ${
+                      dragOverStage === stage
+                        ? 'border-[#005EB8] bg-[#eef6ff]'
+                        : 'border-[#e1eaf8] bg-white'
+                    }`}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setDragOverStage(stage);
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverStage === stage) setDragOverStage(null);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setDragOverStage(null);
+                      const candidateId = e.dataTransfer.getData('text/candidate-id');
+                      const sourceStage = e.dataTransfer.getData('text/source-stage');
+                      if (!candidateId || sourceStage === stage) return;
+                      void moveCandidateToStage(candidateId, stage);
+                    }}
+                  >
                     <div className="flex items-center justify-between mb-2">
                       <h4 className="text-sm font-bold text-[#0B1B34]">{stage}</h4>
                       <span className="text-[11px] text-[#6f7b8d]">{rows.length} candidate(s)</span>
@@ -288,7 +319,26 @@ const HRDashboard: React.FC = () => {
                     ) : (
                       <div className="space-y-2">
                         {rows.map((row, i) => (
-                          <div key={`${row.candidate_id as string}-${i}`} className="rounded-lg border border-[#edf2fb] p-2.5 bg-[#fbfdff]">
+                          <div
+                            key={`${row.candidate_id as string}-${i}`}
+                            draggable
+                            onDragStart={(e) => {
+                              const candidateId = String(row.candidate_id || '');
+                              setDraggingCandidateId(candidateId);
+                              e.dataTransfer.setData('text/candidate-id', candidateId);
+                              e.dataTransfer.setData('text/source-stage', stage);
+                              e.dataTransfer.effectAllowed = 'move';
+                            }}
+                            onDragEnd={() => {
+                              setDraggingCandidateId(null);
+                              setDragOverStage(null);
+                            }}
+                            className={`rounded-lg border p-2.5 bg-[#fbfdff] cursor-grab active:cursor-grabbing ${
+                              draggingCandidateId === String(row.candidate_id || '')
+                                ? 'border-[#005EB8] ring-2 ring-[#bfdbff]'
+                                : 'border-[#edf2fb]'
+                            }`}
+                          >
                             <div className="flex flex-wrap items-start justify-between gap-2">
                               <div>
                                 <button

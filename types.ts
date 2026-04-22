@@ -75,8 +75,7 @@ export type PipelineStage =
   | 'Leadership form submitted, awaiting evaluation'
   | 'Evaluation Done'
   | 'Interview scheduled'
-  | 'Hired'
-  | 'Not Hired / Withdrawn';
+  | 'Final decision';
 
 /** Admin pipeline dropdown, filters, and stats — single source of truth */
 export const PIPELINE_STAGES: PipelineStage[] = [
@@ -87,8 +86,7 @@ export const PIPELINE_STAGES: PipelineStage[] = [
   'Leadership form submitted, awaiting evaluation',
   'Evaluation Done',
   'Interview scheduled',
-  'Hired',
-  'Not Hired / Withdrawn',
+  'Final decision',
 ];
 
 /** Map legacy DB values to current stages */
@@ -103,9 +101,10 @@ const LEGACY_PIPELINE_STAGE: Record<string, PipelineStage> = {
   'Interview Scheduled': 'Interview scheduled',
   Interviewed: 'Interview scheduled',
   Offer: 'Interview scheduled',
-  Hired: 'Hired',
-  Rejected: 'Not Hired / Withdrawn',
-  Withdrawn: 'Not Hired / Withdrawn',
+  Hired: 'Final decision',
+  Rejected: 'Final decision',
+  Withdrawn: 'Final decision',
+  'Not Hired / Withdrawn': 'Final decision',
 };
 
 export function normalizePipelineStage(raw: unknown): PipelineStage {
@@ -122,12 +121,12 @@ export const PIPELINE_STAGE_AFTER_CHECK_IN: PipelineStage = 'Checked In';
 
 /**
  * After leadership assessment submit: move to "Leadership Assessment Received Under Review" when the
- * candidate is still at or before that step. Does not downgrade or override Interview / Hired / Not hired.
+ * candidate is still at or before that step. Does not downgrade or override later closed stages.
  */
 export function pipelineStageAfterAssessmentComplete(current: unknown): PipelineStage {
   const cur = normalizePipelineStage(current);
   const target: PipelineStage = 'Leadership form submitted, awaiting evaluation';
-  if (cur === 'Hired' || cur === 'Not Hired / Withdrawn') return cur;
+  if (cur === 'Final decision') return cur;
   const ti = PIPELINE_STAGES.indexOf(target);
   const ci = PIPELINE_STAGES.indexOf(cur);
   if (ci > ti) return cur;
@@ -137,7 +136,7 @@ export function pipelineStageAfterAssessmentComplete(current: unknown): Pipeline
 /** Move candidate stage when Calendly invite is matched to a checked-in candidate. */
 export function pipelineStageAfterLiveSessionInvited(current: unknown): PipelineStage {
   const cur = normalizePipelineStage(current);
-  if (cur === 'Hired' || cur === 'Not Hired / Withdrawn') return cur;
+  if (cur === 'Final decision') return cur;
   const target: PipelineStage = 'Invited to Live Career Overview Session';
   const ti = PIPELINE_STAGES.indexOf(target);
   const ci = PIPELINE_STAGES.indexOf(cur);
@@ -147,11 +146,11 @@ export function pipelineStageAfterLiveSessionInvited(current: unknown): Pipeline
 
 /**
  * After Zoom + Calendly show the candidate attended the online career session.
- * Does not override Interview, Hired, or later assessment stages.
+ * Does not override Interview or later assessment stages.
  */
 export function pipelineStageAfterLiveSessionAttended(current: unknown): PipelineStage {
   const cur = normalizePipelineStage(current);
-  if (cur === 'Hired' || cur === 'Not Hired / Withdrawn') return cur;
+  if (cur === 'Final decision') return cur;
   const target: PipelineStage = 'Live Career Overview Session Attended';
   const ti = PIPELINE_STAGES.indexOf(target);
   const ci = PIPELINE_STAGES.indexOf(cur);
@@ -163,7 +162,7 @@ export function pipelineStageAfterLiveSessionAttended(current: unknown): Pipelin
 /** After stage3 leadership assessment email is sent automatically */
 export function pipelineStageAfterAssessmentFormSent(current: unknown): PipelineStage {
   const cur = normalizePipelineStage(current);
-  if (cur === 'Hired' || cur === 'Not Hired / Withdrawn') return cur;
+  if (cur === 'Final decision') return cur;
   const target: PipelineStage = 'Leadership assessment form sent';
   const ti = PIPELINE_STAGES.indexOf(target);
   const ci = PIPELINE_STAGES.indexOf(cur);
@@ -216,6 +215,18 @@ export interface AdminData {
     | null;
   resumeReviewedAt: string | null; // ISO - when admin reviewed/approved resumes
   questionnaireDisqualified: QuestionnaireDisqualified | null;
+  finalDecision?: 'Hired' | 'Not Hired';
+  webinarGeek?: {
+    synced_at?: string;
+    total_subscriptions?: number;
+    watched_count?: number;
+    watched_live_count?: number;
+    watched_replay_count?: number;
+    total_watch_duration?: number;
+    registration_ips?: string[];
+    registration_sources?: string[];
+    records?: Array<Record<string, unknown>>;
+  };
 }
 
 export const DEFAULT_ADMIN_DATA: AdminData = {

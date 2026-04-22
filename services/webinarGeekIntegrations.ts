@@ -10,6 +10,12 @@ export interface WebinarGeekDashboardFilters {
   perPage?: number;
 }
 
+export interface WebinarGeekSyncPayload {
+  webinarId?: string;
+  broadcastId?: string;
+  perPage?: number;
+}
+
 function buildFunctionUrl(path: string): string | null {
   if (!SUPABASE_URL) return null;
   return `${SUPABASE_URL}/functions/v1/integrations-webinar-geek${path}`;
@@ -62,4 +68,19 @@ export async function fetchWebinarGeekDashboard(
   if (typeof filters.watchedReplay === 'boolean') params.set('watched_replay', String(filters.watchedReplay));
   if (typeof filters.perPage === 'number') params.set('per_page', String(filters.perPage));
   return callWebinarGeek(accessToken, `?${params.toString()}`);
+}
+
+export async function syncWebinarGeekCandidates(
+  accessToken: string,
+  payload: WebinarGeekSyncPayload
+) {
+  const params = new URLSearchParams({ mode: 'sync' });
+  return callWebinarGeek(accessToken, `?${params.toString()}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      webinar_id: payload.webinarId || undefined,
+      broadcast_id: payload.broadcastId || undefined,
+      per_page: payload.perPage ?? 250,
+    }),
+  });
 }

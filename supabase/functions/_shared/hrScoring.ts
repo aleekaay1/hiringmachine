@@ -33,7 +33,7 @@ function stageProgress(stage: string): number {
     'Leadership form submitted, awaiting evaluation',
     'Evaluation Done',
     'Interview scheduled',
-    'Hired',
+    'Final decision',
   ];
   const idx = ordered.indexOf(stage);
   return idx < 0 ? 0 : idx;

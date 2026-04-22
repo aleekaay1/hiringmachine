@@ -21,6 +21,7 @@ type CandidateRow = {
     tags?: string[];
     interviewScheduledAt?: string | null;
     nextStep?: string;
+    emailsSent?: Array<{ sentAt?: string; subject?: string; type?: string }>;
   } | null;
 };
 
@@ -57,12 +58,20 @@ function minutesSince(iso: string | null): number | null {
 async function deriveLiveSignals(admin: ReturnType<typeof createClient>) {
   const invited = new Set<string>();
   const attended = new Set<string>();
-  const { data } = await admin
-    .from('live_sessions_snapshots')
-    .select('payload')
-    .order('generated_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  let data: Record<string, unknown> | null = null;
+  try {
+    const res = await admin
+      .from('live_sessions_snapshots')
+      .select('payload')
+      .order('generated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (res.error) return { invited, attended };
+    data = (res.data || null) as Record<string, unknown> | null;
+  } catch {
+    // Keep rollup resilient even when integration snapshot table is missing/empty/error.
+    return { invited, attended };
+  }
 
   const payload = (data?.payload || {}) as Record<string, unknown>;
   const upcoming = Array.isArray(payload.upcoming_meetings) ? payload.upcoming_meetings as Array<Record<string, unknown>> : [];
@@ -85,6 +94,14 @@ async function deriveLiveSignals(admin: ReturnType<typeof createClient>) {
     }
   }
   return { invited, attended };
+}
+
+function hasStage2InviteEmail(adminData: CandidateRow['admin_data']): boolean {
+  const emailsSent = Array.isArray(adminData?.emailsSent) ? adminData.emailsSent : [];
+  return emailsSent.some((entry) => {
+    const type = String(entry?.type || '').toLowerCase();
+    return type === 'stage2_post_checkin' || type === 'automated_post_checkin';
+  });
 }
 
 Deno.serve(async (req) => {
@@ -132,15 +149,20 @@ Deno.serve(async (req) => {
     const riskRows: Array<Record<string, unknown>> = [];
     const stageEvents: Array<Record<string, unknown>> = [];
     const taskRows: Array<Record<string, unknown>> = [];
+    const candidateStageUpdates: Array<{ id: string; admin_data: Record<string, unknown> }> = [];
 
     for (const c of candidates) {
-      const stage = String(c.admin_data?.pipelineStage || 'Checked In');
+      const currentStage = String(c.admin_data?.pipelineStage || 'Checked In');
       const email = normEmail(c.email);
-      const invitedLiveSession = live.invited.has(email);
+      const invitedFromEmailLog = hasStage2InviteEmail(c.admin_data);
+      const invitedLiveSession = live.invited.has(email) || invitedFromEmailLog;
       const attendedLiveSession = live.attended.has(email);
       const hasAssessment = c.status === 'assessment_complete';
       const tags = toTextArray(c.admin_data?.tags);
       const rating = toNumberOrNull(c.admin_data?.rating);
+      const stage = (currentStage === 'Checked In' && invitedLiveSession)
+        ? 'Invited to Live Career Overview Session'
+        : currentStage;
 
       const readiness = computeReadiness({
         score: c.score,
@@ -237,7 +259,7 @@ Deno.serve(async (req) => {
           source: 'sla_queue',
           metadata: { stage, overdue_minutes: overdueMinutes },
         });
-      } else if (readiness.band === 'Hot' && stage !== 'Interview scheduled' && stage !== 'Hired') {
+      } else if (readiness.band === 'Hot' && stage !== 'Interview scheduled' && stage !== 'Final decision') {
         taskRows.push({
           candidate_id: c.id,
           task_type: 'schedule_interview',
@@ -249,6 +271,14 @@ Deno.serve(async (req) => {
           source: 'readiness_queue',
           metadata: { readiness_score: readiness.score },
         });
+      }
+
+      if (!dryRun && currentStage === 'Checked In' && stage === 'Invited to Live Career Overview Session') {
+        const nextAdmin = {
+          ...((c.admin_data && typeof c.admin_data === 'object') ? c.admin_data as Record<string, unknown> : {}),
+          pipelineStage: 'Invited to Live Career Overview Session',
+        };
+        candidateStageUpdates.push({ id: c.id, admin_data: nextAdmin });
       }
     }
 
@@ -264,26 +294,34 @@ Deno.serve(async (req) => {
     };
 
     if (!dryRun) {
+      const warnings: string[] = [];
       if (signalRows.length > 0) {
         const { error } = await hrAdmin.from('hr_candidate_signals').upsert(signalRows, { onConflict: 'candidate_id' });
-        if (error) throw new Error(`hr_candidate_signals upsert failed: ${error.message}`);
+        if (error) warnings.push(`hr_candidate_signals upsert failed: ${error.message}`);
       }
       if (scoreRows.length > 0) {
         const { error } = await hrAdmin.from('hr_readiness_scores').insert(scoreRows);
-        if (error) throw new Error(`hr_readiness_scores insert failed: ${error.message}`);
+        if (error) warnings.push(`hr_readiness_scores insert failed: ${error.message}`);
       }
       if (riskRows.length > 0) {
         const { error: resolveErr } = await hrAdmin
           .from('hr_risk_flags')
           .update({ status: 'resolved', resolved_at: new Date().toISOString() })
           .eq('status', 'active');
-        if (resolveErr) throw new Error(`hr_risk_flags resolve failed: ${resolveErr.message}`);
+        if (resolveErr) warnings.push(`hr_risk_flags resolve failed: ${resolveErr.message}`);
         const { error: riskInsErr } = await hrAdmin.from('hr_risk_flags').insert(riskRows);
-        if (riskInsErr) throw new Error(`hr_risk_flags insert failed: ${riskInsErr.message}`);
+        if (riskInsErr) warnings.push(`hr_risk_flags insert failed: ${riskInsErr.message}`);
       }
       if (stageEvents.length > 0) {
         const { error } = await hrAdmin.from('hr_stage_events').insert(stageEvents);
-        if (error) throw new Error(`hr_stage_events insert failed: ${error.message}`);
+        if (error) warnings.push(`hr_stage_events insert failed: ${error.message}`);
+      }
+
+      if (candidateStageUpdates.length > 0) {
+        for (const row of candidateStageUpdates) {
+          const { error } = await admin.from('candidates').update({ admin_data: row.admin_data }).eq('id', row.id);
+          if (error) warnings.push(`candidate stage update failed for ${row.id}: ${error.message}`);
+        }
       }
 
       if (taskRows.length > 0) {
@@ -295,7 +333,7 @@ Deno.serve(async (req) => {
         const deduped = taskRows.filter((t) => !openSet.has(`${t.candidate_id}|${t.task_type}`));
         if (deduped.length > 0) {
           const { data: inserted, error: taskErr } = await hrAdmin.from('hr_tasks').insert(deduped).select('id');
-          if (taskErr) throw new Error(`hr_tasks insert failed: ${taskErr.message}`);
+          if (taskErr) warnings.push(`hr_tasks insert failed: ${taskErr.message}`);
           if (inserted && inserted.length > 0) {
             const events = inserted.map((r: Record<string, unknown>) => ({
               task_id: r.id,
@@ -304,7 +342,7 @@ Deno.serve(async (req) => {
               payload: { source: 'hr-rollup-jobs' },
             }));
             const { error: evtErr } = await hrAdmin.from('hr_task_events').insert(events);
-            if (evtErr) throw new Error(`hr_task_events insert failed: ${evtErr.message}`);
+            if (evtErr) warnings.push(`hr_task_events insert failed: ${evtErr.message}`);
           }
           result.tasks_created = deduped.length;
         } else {
@@ -316,6 +354,8 @@ Deno.serve(async (req) => {
 
       // Refresh materialized view via raw SQL through the service-role client
       await admin.rpc('refresh_materialized_view_hr_funnel_daily').catch(() => { /* view refresh optional */ });
+      result.candidates_moved_to_invited = candidateStageUpdates.length;
+      if (warnings.length > 0) result.warnings = warnings;
     }
 
     return new Response(JSON.stringify(result), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

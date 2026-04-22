@@ -5,6 +5,7 @@ import { supabase } from '../services/supabaseClient';
 import {
   fetchWebinarGeekDashboard,
   fetchWebinarGeekHealth,
+  syncWebinarGeekCandidates,
 } from '../services/webinarGeekIntegrations';
 import {
   CalendarClock,
@@ -14,6 +15,7 @@ import {
   Eye,
   Mail,
   RefreshCw,
+  Search,
   ShieldCheck,
   UserX,
   Video,
@@ -78,23 +80,36 @@ const WebinarGeekDashboard: React.FC = () => {
   const [webinarId, setWebinarId] = useState('');
   const [broadcastId, setBroadcastId] = useState('');
   const [watchedFilter, setWatchedFilter] = useState<'all' | 'watched' | 'unwatched'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [syncLoading, setSyncLoading] = useState(false);
+  const [syncResult, setSyncResult] = useState<Record<string, unknown> | null>(null);
 
   const webinars = useMemo(() => normalizeWebinars(data), [data]);
   const broadcasts = useMemo(() => normalizeBroadcasts(data), [data]);
   const subscriptions = useMemo(() => normalizeSubscriptions(data), [data]);
+  const filteredSubscriptions = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return subscriptions;
+    return subscriptions.filter((row) => {
+      const name = `${String(row.firstname || '').trim()} ${String(row.surname || '').trim()}`.toLowerCase();
+      const emailText = String(row.email || '').toLowerCase();
+      const ipText = String(row.registration_ip || '').toLowerCase();
+      return name.includes(q) || emailText.includes(q) || ipText.includes(q);
+    });
+  }, [subscriptions, searchQuery]);
 
   const metrics = useMemo(() => {
-    const invited = subscriptions.length;
-    const watched = subscriptions.filter((s) => s.watched === true).length;
-    const watchedLive = subscriptions.filter((s) => s.watched_live === true).length;
-    const watchedReplay = subscriptions.filter((s) => s.watched_replay === true).length;
-    const unsubscribed = subscriptions.filter((s) => s.unsubscribed === true).length;
+    const invited = filteredSubscriptions.length;
+    const watched = filteredSubscriptions.filter((s) => s.watched === true).length;
+    const watchedLive = filteredSubscriptions.filter((s) => s.watched_live === true).length;
+    const watchedReplay = filteredSubscriptions.filter((s) => s.watched_replay === true).length;
+    const unsubscribed = filteredSubscriptions.filter((s) => s.unsubscribed === true).length;
     return { invited, watched, watchedLive, watchedReplay, unsubscribed };
-  }, [subscriptions]);
+  }, [filteredSubscriptions]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, { broadcast: AnyRow | null; webinar: AnyRow | null; rows: AnyRow[] }>();
-    for (const row of subscriptions) {
+    for (const row of filteredSubscriptions) {
       const b = (row.broadcast && typeof row.broadcast === 'object') ? (row.broadcast as AnyRow) : null;
       const w = (row.webinar && typeof row.webinar === 'object') ? (row.webinar as AnyRow) : null;
       const key = b?.id ? `b-${String(b.id)}` : `no-b-${String(row.id ?? Math.random())}`;
@@ -102,7 +117,7 @@ const WebinarGeekDashboard: React.FC = () => {
       map.get(key)!.rows.push(row);
     }
     return [...map.values()].sort((a, b) => Number(b.broadcast?.date ?? 0) - Number(a.broadcast?.date ?? 0));
-  }, [subscriptions]);
+  }, [filteredSubscriptions]);
 
   const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
     const { data: s } = await supabase.auth.getSession();
@@ -204,6 +219,31 @@ const WebinarGeekDashboard: React.FC = () => {
     setIsAuthenticated(true);
   };
 
+  const runSync = useCallback(async () => {
+    setError(null);
+    setSyncLoading(true);
+    const result = await withAuthRetry(async (token) => {
+      const r = await syncWebinarGeekCandidates(token, {
+        webinarId: webinarId.trim() || undefined,
+        broadcastId: broadcastId.trim() || undefined,
+        perPage: 250,
+      });
+      if (!r.ok && r.error.toLowerCase().includes('unauthorized')) return null;
+      return r;
+    });
+    setSyncLoading(false);
+    if (!result) {
+      setError('Session unauthorized for WebinarGeek sync. Please sign out and sign in again.');
+      return;
+    }
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setSyncResult(result.data);
+    await loadDashboard();
+  }, [broadcastId, loadDashboard, webinarId, withAuthRetry]);
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-[#f7fbff] to-[#eef6ff] flex items-center justify-center p-4">
@@ -237,6 +277,10 @@ const WebinarGeekDashboard: React.FC = () => {
               <Button type="button" variant="outline" onClick={() => void loadHealth()} disabled={healthLoading}>
                 <ShieldCheck size={16} className={`mr-2 inline ${healthLoading ? 'animate-pulse' : ''}`} /> Health
               </Button>
+              <Button type="button" onClick={() => void runSync()} disabled={syncLoading}>
+                <Database size={16} className={`mr-2 inline ${syncLoading ? 'animate-pulse' : ''}`} />
+                {syncLoading ? 'Syncing...' : 'Sync to candidates'}
+              </Button>
               <Button type="button" variant="outline" onClick={() => void loadDashboard()} disabled={loading}>
                 <RefreshCw size={16} className={`mr-2 inline ${loading ? 'animate-spin' : ''}`} /> Refresh
               </Button>
@@ -250,7 +294,7 @@ const WebinarGeekDashboard: React.FC = () => {
         </div>
 
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
             <input value={webinarId} onChange={(e) => setWebinarId(e.target.value)} placeholder="Filter webinar_id" className="px-3 py-2 rounded-xl border border-[#cfe3f9]" />
             <input value={broadcastId} onChange={(e) => setBroadcastId(e.target.value)} placeholder="Filter broadcast_id" className="px-3 py-2 rounded-xl border border-[#cfe3f9]" />
             <select value={watchedFilter} onChange={(e) => setWatchedFilter(e.target.value as 'all' | 'watched' | 'unwatched')} className="px-3 py-2 rounded-xl border border-[#cfe3f9]">
@@ -258,9 +302,26 @@ const WebinarGeekDashboard: React.FC = () => {
               <option value="watched">Watched only</option>
               <option value="unwatched">Did not watch</option>
             </select>
+            <label className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7488a6]" />
+              <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search candidates/invitees/email/IP"
+                className="w-full pl-9 pr-3 py-2 rounded-xl border border-[#cfe3f9]"
+              />
+            </label>
             <Button type="button" onClick={() => void loadDashboard()} disabled={loading}>Apply filters</Button>
           </div>
         </div>
+
+        {syncResult && (
+          <div className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 grid grid-cols-1 md:grid-cols-3 gap-2">
+            <p><span className="font-semibold">Synced:</span> {String(syncResult.total_subscriptions ?? 0)} subscriptions</p>
+            <p><span className="font-semibold">Matched:</span> {String(syncResult.matched_subscriptions ?? 0)} ({String(syncResult.matched_candidates ?? 0)} candidates)</p>
+            <p><span className="font-semibold">Unmatched:</span> {String(syncResult.unmatched_subscriptions ?? 0)}</p>
+          </div>
+        )}
 
         {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 

@@ -16,6 +16,8 @@ const CheckStatus: React.FC = () => {
 
   const getStatusInfo = (stage: PipelineStage | string | undefined) => {
     const s = normalizePipelineStage(stage);
+    const raw = String(stage || '').toLowerCase();
+    const finalDecisionLabel = raw === 'hired' ? 'Hired' : 'Not Hired';
     const statusMap: Record<PipelineStage, { label: string; color: string; bgColor: string; icon: React.ReactNode; message: string }> = {
       'Checked In': {
         label: 'Checked In',
@@ -73,21 +75,16 @@ const CheckStatus: React.FC = () => {
         message:
           'An interview has been scheduled. Please check your email for date, time, and preparation details.',
       },
-      Hired: {
-        label: 'Hired',
-        color: 'text-green-700',
-        bgColor: 'bg-green-50 border-green-200',
-        icon: <CheckCircle className="w-6 h-6 text-green-600" />,
-        message:
-          'Congratulations! You have been hired. Welcome to the team — please check your email for onboarding information.',
-      },
-      'Not Hired / Withdrawn': {
-        label: 'Not Hired / Withdrawn',
-        color: 'text-gray-700',
-        bgColor: 'bg-gray-50 border-gray-200',
-        icon: <XCircle className="w-6 h-6 text-gray-600" />,
-        message:
-          'This application is closed. Thank you for your interest in the opportunity. If you have questions, reply to our team by email.',
+      'Final decision': {
+        label: `Final decision (${finalDecisionLabel})`,
+        color: finalDecisionLabel === 'Hired' ? 'text-green-700' : 'text-gray-700',
+        bgColor: finalDecisionLabel === 'Hired' ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200',
+        icon: finalDecisionLabel === 'Hired'
+          ? <CheckCircle className="w-6 h-6 text-green-600" />
+          : <XCircle className="w-6 h-6 text-gray-600" />,
+        message: finalDecisionLabel === 'Hired'
+          ? 'Congratulations! You have been hired. Welcome to the team — please check your email for onboarding information.'
+          : 'This application is closed. Thank you for your interest in the opportunity. If you have questions, reply to our team by email.',
       },
     };
     return statusMap[s];

@@ -52,8 +52,7 @@ const TIMELINE_SHORT_LABELS: Record<PipelineStage, string> = {
   'Leadership form submitted, awaiting evaluation': 'Submitted',
   'Evaluation Done': 'Evaluation',
   'Interview scheduled': 'Interview',
-  Hired: 'Hired',
-  'Not Hired / Withdrawn': 'Not hired',
+  'Final decision': 'Final',
 };
 
 function formatEmailLogType(type: string | undefined): string {
@@ -328,8 +327,7 @@ const AdminDashboard: React.FC = () => {
 
     const activePipeline =
       total -
-      (stageCounts['Hired'] || 0) -
-      (stageCounts['Not Hired / Withdrawn'] || 0);
+      (stageCounts['Final decision'] || 0);
 
     return {
       total,
@@ -674,6 +672,14 @@ const AdminDashboard: React.FC = () => {
 
   const handlePipelineStageChange = (stage: PipelineStage) => {
     updateAdminData(prev => ({ ...prev, pipelineStage: stage }));
+  };
+
+  const handleFinalDecisionChange = (decision: 'Hired' | 'Not Hired') => {
+    updateAdminData(prev => ({
+      ...prev,
+      pipelineStage: 'Final decision',
+      finalDecision: decision,
+    }));
   };
 
   const handleRatingChange = (rating: number) => {
@@ -1270,10 +1276,21 @@ const AdminDashboard: React.FC = () => {
                 </div>
 
                 {(() => {
-                  const journeyStage = getAdminData(selectedCandidate).pipelineStage;
-                  const activeIdx = Math.max(0, PIPELINE_STAGES.indexOf(journeyStage));
-                  const n = PIPELINE_STAGES.length;
-                  const isWithdrawn = journeyStage === 'Not Hired / Withdrawn';
+                  const admin = getAdminData(selectedCandidate);
+                  const journeyStage = admin.pipelineStage;
+                  const journeyStages: PipelineStage[] = [
+                    'Checked In',
+                    'Invited to Live Career Overview Session',
+                    'Live Career Overview Session Attended',
+                    'Leadership assessment form sent',
+                    'Leadership form submitted, awaiting evaluation',
+                    'Evaluation Done',
+                    'Interview scheduled',
+                    'Final decision',
+                  ];
+                  const activeIdx = Math.max(0, journeyStages.indexOf(journeyStage));
+                  const n = journeyStages.length;
+                  const isFinal = journeyStage === 'Final decision';
                   return (
                     <div className="mt-2 rounded-2xl border border-gray-200 bg-gradient-to-r from-slate-100 via-slate-50 to-emerald-50/40 px-3 py-5 sm:px-5 sm:py-6 shadow-sm">
                       <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-4">Hiring journey</p>
@@ -1288,15 +1305,16 @@ const AdminDashboard: React.FC = () => {
                             />
                           )}
                           <div className="relative z-10 flex justify-between items-start gap-0">
-                            {PIPELINE_STAGES.map((stage, i) => {
+                            {journeyStages.map((stage, i) => {
                               const done = i <= activeIdx;
                               const active = i === activeIdx;
+                              const isFinalNode = stage === 'Final decision';
                               return (
                                 <div key={stage} className="flex flex-col items-center flex-1 min-w-0 max-w-[100px] sm:max-w-none" title={stage}>
                                   <div
                                     className={`relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 shadow-sm transition-transform ${
                                       active
-                                        ? isWithdrawn
+                                        ? isFinal
                                           ? 'scale-110 border-red-500 bg-red-500 text-white'
                                           : 'scale-110 border-[#005EB8] bg-[#005EB8] text-white'
                                         : done
@@ -1306,15 +1324,45 @@ const AdminDashboard: React.FC = () => {
                                   >
                                     {active ? <User size={18} strokeWidth={2.5} aria-hidden /> : <span className="text-[11px] font-bold">{i + 1}</span>}
                                   </div>
-                                  <p className={`mt-2 text-[9px] sm:text-[10px] font-semibold text-center leading-tight px-0.5 ${active ? (isWithdrawn ? 'text-red-700' : 'text-[#005EB8]') : 'text-gray-600'}`}>
+                                  <p className={`mt-2 text-[9px] sm:text-[10px] font-semibold text-center leading-tight px-0.5 ${active ? (isFinal ? 'text-red-700' : 'text-[#005EB8]') : 'text-gray-600'}`}>
                                     {TIMELINE_SHORT_LABELS[stage]}
                                   </p>
+                                  {isFinalNode && (
+                                    <div className="mt-1.5 flex flex-col gap-1 w-full max-w-[86px]">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleFinalDecisionChange('Hired')}
+                                        className={`text-[9px] px-1.5 py-1 rounded-md border font-semibold transition ${
+                                          admin.finalDecision === 'Hired'
+                                            ? 'border-green-500 bg-green-500 text-white'
+                                            : 'border-green-200 bg-green-50 text-green-700 hover:bg-green-100'
+                                        }`}
+                                      >
+                                        Hired
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleFinalDecisionChange('Not Hired')}
+                                        className={`text-[9px] px-1.5 py-1 rounded-md border font-semibold transition ${
+                                          admin.finalDecision === 'Not Hired'
+                                            ? 'border-red-500 bg-red-500 text-white'
+                                            : 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
+                                        }`}
+                                      >
+                                        Not hired
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
                               );
                             })}
                           </div>
                           <p className="mt-3 text-center text-xs text-gray-600">
-                            Current stage: <span className="font-semibold text-gray-900">{journeyStage}</span>
+                            Current stage:{' '}
+                            <span className="font-semibold text-gray-900">
+                              {journeyStage}
+                              {isFinal && admin.finalDecision ? ` (${admin.finalDecision})` : ''}
+                            </span>
                           </p>
                         </div>
                       </div>
@@ -1727,6 +1775,39 @@ const AdminDashboard: React.FC = () => {
                         )}
                       </div>
                     )}
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide">WebinarGeek sync data</p>
+                    {(() => {
+                      const wg = (getAdminData(selectedCandidate).webinarGeek || {}) as Record<string, unknown>;
+                      const records = Array.isArray(wg.records) ? wg.records as Array<Record<string, unknown>> : [];
+                      if (Object.keys(wg).length === 0) {
+                        return <p className="text-sm text-gray-600">No WebinarGeek data synced yet for this candidate.</p>;
+                      }
+                      return (
+                        <div className="rounded-xl border border-gray-200 bg-white p-4 space-y-2 text-sm">
+                          <p className="text-gray-700">
+                            Last sync: <span className="font-medium">{wg.synced_at ? formatDateTimeCanadaEastern(String(wg.synced_at)) : '—'}</span>
+                          </p>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                            <div className="rounded-lg border border-gray-200 p-2">Subs: <span className="font-semibold">{String(wg.total_subscriptions ?? 0)}</span></div>
+                            <div className="rounded-lg border border-gray-200 p-2">Watched: <span className="font-semibold">{String(wg.watched_count ?? 0)}</span></div>
+                            <div className="rounded-lg border border-gray-200 p-2">Live: <span className="font-semibold">{String(wg.watched_live_count ?? 0)}</span></div>
+                            <div className="rounded-lg border border-gray-200 p-2">Replay: <span className="font-semibold">{String(wg.watched_replay_count ?? 0)}</span></div>
+                          </div>
+                          <p className="text-xs text-gray-600">
+                            Total watch duration: <span className="font-medium">{String(wg.total_watch_duration ?? 0)} sec</span>
+                          </p>
+                          <p className="text-xs text-gray-600">
+                            Registration IPs: <span className="font-medium">{Array.isArray(wg.registration_ips) ? wg.registration_ips.join(', ') || '—' : '—'}</span>
+                          </p>
+                          <p className="text-xs text-gray-600">
+                            Sources: <span className="font-medium">{Array.isArray(wg.registration_sources) ? wg.registration_sources.join(', ') || '—' : '—'}</span>
+                          </p>
+                          <p className="text-xs text-gray-500">Detailed records synced: {records.length}</p>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
                 )}

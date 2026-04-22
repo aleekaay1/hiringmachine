@@ -37,7 +37,7 @@ function stageIndex(stageRaw: unknown): number {
     'Leadership form submitted, awaiting evaluation',
     'Evaluation Done',
     'Interview scheduled',
-    'Hired',
+    'Final decision',
   ];
   return Math.max(0, ordered.indexOf(s));
 }
