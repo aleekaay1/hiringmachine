@@ -3,7 +3,9 @@ import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import { fetchHrDashboard, hrDashboardAction, runHrAutomation, runHrRollup, type HrDashboardPayload } from '../services/hrDashboardService';
-import { AlertTriangle, BarChart3, Clock3, RefreshCw, Sparkles, Target, Users } from 'lucide-react';
+import { AlertTriangle, BarChart3, CheckCircle2, Clock3, RefreshCw, Sparkles, Users } from 'lucide-react';
+
+type QueueRow = Record<string, unknown>;
 
 const HRDashboard: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -40,6 +42,20 @@ const HRDashboard: React.FC = () => {
     setData(res.data);
   }, [getAccessToken]);
 
+  const runPopulateIfNeeded = useCallback(async () => {
+    const total = Number(data?.summary?.total_candidates ?? 0);
+    const covered = Number(data?.summary?.readiness_coverage ?? 0);
+    if (total === 0 || covered > 0) return;
+    const token = await getAccessToken();
+    if (!token) return;
+    setRunning(true);
+    const rollupRes = await runHrRollup(token, false);
+    if (rollupRes.ok) await runHrAutomation(token, false);
+    setRunning(false);
+    await load();
+    setBanner('Dashboard data was empty, so analytics were recalculated automatically.');
+  }, [data?.summary, getAccessToken, load]);
+
   useEffect(() => {
     void (async () => {
       const { data: s } = await supabase.auth.getSession();
@@ -48,18 +64,16 @@ const HRDashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (isAuthenticated) void load();
+    if (!isAuthenticated) return;
+    void (async () => {
+      await load();
+    })();
   }, [isAuthenticated, load]);
 
-  const stats = useMemo(() => {
-    return {
-      total: Number(data?.summary?.total_candidates ?? 0),
-      hot: Number(data?.summary?.hot_candidates ?? 0),
-      overdue: Number(data?.summary?.overdue_candidates ?? 0),
-      openTasks: Number(data?.summary?.open_tasks ?? 0),
-      activeRisks: Number(data?.summary?.active_risks ?? 0),
-    };
-  }, [data]);
+  useEffect(() => {
+    if (!isAuthenticated || !data) return;
+    void runPopulateIfNeeded();
+  }, [isAuthenticated, data, runPopulateIfNeeded]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,7 +86,7 @@ const HRDashboard: React.FC = () => {
     setIsAuthenticated(true);
   };
 
-  const handleRollup = async (dryRun: boolean) => {
+  const runPipeline = async () => {
     setError(null);
     setBanner(null);
     const token = await getAccessToken();
@@ -81,69 +95,56 @@ const HRDashboard: React.FC = () => {
       return;
     }
     setRunning(true);
-    const res = await runHrRollup(token, dryRun);
+    const rollupRes = await runHrRollup(token, false);
+    const automationRes = rollupRes.ok ? await runHrAutomation(token, false) : rollupRes;
     setRunning(false);
-    if (!res.ok) {
-      setError(res.error);
+    if (!rollupRes.ok) {
+      setError(rollupRes.error);
       return;
     }
-    setBanner(dryRun ? 'Preview completed (no changes saved).' : 'Candidate analytics refreshed and saved.');
+    if (!automationRes.ok) {
+      setError(automationRes.error);
+      return;
+    }
+    setBanner('Data refreshed: readiness, risk flags, and recommendations updated.');
     await load();
   };
 
-  const handleAutomation = async (dryRun: boolean) => {
-    setError(null);
-    setBanner(null);
-    const token = await getAccessToken();
-    if (!token) {
-      setError('Not signed in.');
-      return;
-    }
-    setRunning(true);
-    const res = await runHrAutomation(token, dryRun);
-    setRunning(false);
-    if (!res.ok) {
-      setError(res.error);
-      return;
-    }
-    setBanner(dryRun ? 'Preview completed (no changes saved).' : 'Recommended actions refreshed and saved.');
-    await load();
-  };
-
-  const handleResolveTask = async (taskId: number) => {
+  const executeAction = async (action: 'resolve_task' | 'resolve_risk' | 'set_candidate_stage' | 'create_task', payload: Record<string, unknown>, successMsg: string) => {
     const token = await getAccessToken();
     if (!token) return;
     setRunning(true);
-    const res = await hrDashboardAction(token, 'resolve_task', { task_id: taskId });
+    const res = await hrDashboardAction(token, action, payload);
     setRunning(false);
     if (!res.ok) {
       setError(res.error);
       return;
     }
-    setBanner('Task marked as done.');
+    setBanner(successMsg);
     await load();
   };
 
-  const handleResolveRisk = async (riskId: number) => {
-    const token = await getAccessToken();
-    if (!token) return;
-    setRunning(true);
-    const res = await hrDashboardAction(token, 'resolve_risk', { risk_id: riskId });
-    setRunning(false);
-    if (!res.ok) {
-      setError(res.error);
-      return;
-    }
-    setBanner('Risk marked as resolved.');
-    await load();
-  };
+  const summary = data?.summary ?? {};
+  const stageBreakdown = (data?.stage_breakdown ?? []) as Array<Record<string, unknown>>;
+  const queue = (data?.action_queue ?? []) as QueueRow[];
+  const liveMetrics = data?.live_metrics ?? {};
+  const webinarMetrics = data?.webinar_metrics ?? {};
+
+  const executiveCards = useMemo(() => ([
+    { label: 'Total Candidates', value: Number(summary.total_candidates ?? 0), icon: <Users size={15} /> },
+    { label: 'In Pipeline', value: Number(summary.in_pipeline ?? 0), icon: <BarChart3 size={15} /> },
+    { label: 'New (7 Days)', value: Number(summary.new_last_7d ?? 0), icon: <Clock3 size={15} /> },
+    { label: 'Assessment Complete', value: Number(summary.assessment_completed ?? 0), icon: <CheckCircle2 size={15} /> },
+    { label: 'Open Tasks', value: Number(summary.open_tasks ?? 0), icon: <Clock3 size={15} /> },
+    { label: 'Active Risks', value: Number(summary.active_risks ?? 0), icon: <AlertTriangle size={15} /> },
+  ]), [summary]);
 
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-[#f7fbff] to-[#eef6ff] flex items-center justify-center p-4">
         <div className="bg-white border border-[#d9e9fb] p-8 rounded-[28px] shadow-[0_18px_50px_-24px_rgba(0,94,184,0.35)] w-full max-w-sm">
-          <h2 className="text-xl font-bold text-[#0B1B34] mb-1 text-center">HR Dashboard</h2>
-          <p className="text-sm text-[#6f7b8d] text-center mb-6">Hidden beta · admin access only</p>
+          <h2 className="text-xl font-bold text-[#0B1B34] mb-1 text-center">HR Command Center</h2>
+          <p className="text-sm text-[#6f7b8d] text-center mb-6">Admin access only</p>
           <form onSubmit={handleLogin} className="space-y-4">
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-4 py-2.5 rounded-2xl border border-[#cfe3f9] text-[#0B1B34]" />
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-4 py-2.5 rounded-2xl border border-[#cfe3f9] text-[#0B1B34]" />
@@ -160,109 +161,126 @@ const HRDashboard: React.FC = () => {
       <div className="w-full p-5 lg:p-6 space-y-5 text-[#1A2942]">
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-5 py-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-lg sm:text-xl font-extrabold text-[#0B1B34]">HR Dashboard</h1>
-            <p className="text-xs text-[#73839b]">Hidden beta dashboard for operations, risk and conversion control.</p>
+            <h1 className="text-lg sm:text-xl font-extrabold text-[#0B1B34]">HR Executive Command Center</h1>
+            <p className="text-xs text-[#73839b]">Pipeline health, live/webinar analytics, and candidate actions in one place.</p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <Button type="button" variant="outline" disabled={loading} onClick={() => void load()}>
               <RefreshCw size={16} className={`mr-2 inline ${loading ? 'animate-spin' : ''}`} /> Refresh
             </Button>
-            <Button type="button" variant="outline" disabled={running} onClick={() => void handleRollup(true)}>
-              <BarChart3 size={16} className="mr-2 inline" /> Preview Numbers
-            </Button>
-            <Button type="button" variant="outline" disabled={running} onClick={() => void handleAutomation(true)}>
-              <Sparkles size={16} className="mr-2 inline" /> Preview Actions
-            </Button>
-            <Button type="button" disabled={running} onClick={() => void handleRollup(false)}>
-              <BarChart3 size={16} className="mr-2 inline" /> Recalculate & Save
-            </Button>
-            <Button type="button" variant="outline" disabled={running} onClick={() => void handleAutomation(false)}>
-              <Sparkles size={16} className="mr-2 inline" /> Save Recommended Actions
+            <Button type="button" disabled={running} onClick={() => void runPipeline()}>
+              <Sparkles size={16} className="mr-2 inline" /> Rebuild Data
             </Button>
           </div>
         </div>
-        <p className="text-xs text-[#73839b] px-1">
-          Preview checks results only. Recalculate & Save writes updated scores, risks, and queues so the dashboard is fully populated.
-        </p>
 
         {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
         {banner && <div className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">{banner}</div>}
 
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-          <Stat icon={<Users size={15} />} label="Candidates" value={stats.total} />
-          <Stat icon={<Target size={15} />} label="Hot" value={stats.hot} />
-          <Stat icon={<Clock3 size={15} />} label="Overdue" value={stats.overdue} />
-          <Stat icon={<BarChart3 size={15} />} label="Open Tasks" value={stats.openTasks} />
-          <Stat icon={<AlertTriangle size={15} />} label="Active Risks" value={stats.activeRisks} />
+        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+          {executiveCards.map((card) => (
+            <div key={card.label} className="rounded-[18px] border border-[#d6e6f9] bg-white p-4 shadow-sm">
+              <p className="text-xs uppercase tracking-wide text-[#7a8ba1] inline-flex items-center gap-1">{card.icon}{card.label}</p>
+              <p className="text-xl font-bold mt-1 text-[#0B1B34]">{card.value}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4 xl:col-span-1">
+            <h3 className="font-bold text-[#0B1B34] mb-3">Pipeline Breakdown</h3>
+            <SimpleTable rows={stageBreakdown} columns={['stage', 'count']} />
+          </section>
+          <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4 xl:col-span-1">
+            <h3 className="font-bold text-[#0B1B34] mb-3">Live Session Analytics</h3>
+            <SimpleTable rows={[liveMetrics]} columns={['sessions_count', 'invited_total', 'attended_total', 'attendance_rate_pct', 'latest_generated_at']} />
+          </section>
+          <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4 xl:col-span-1">
+            <h3 className="font-bold text-[#0B1B34] mb-3">Webinar Analytics (30d)</h3>
+            <SimpleTable rows={[webinarMetrics]} columns={['cohorts_30d', 'invited_30d', 'watched_30d', 'watched_live_30d', 'watched_replay_30d']} />
+          </section>
         </div>
 
         <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <h3 className="font-bold text-[#0B1B34] mb-3">Needs Attention Now</h3>
-          <QueueTable rows={data?.candidates ?? []} mode="overdue" />
+          <h3 className="font-bold text-[#0B1B34] mb-3">Priority Candidate Actions</h3>
+          {queue.length === 0 ? (
+            <div className="text-sm text-[#7b8aa0]">No action queue available yet. Click Rebuild Data.</div>
+          ) : (
+            <div className="overflow-auto">
+              <table className="min-w-full text-xs">
+                <thead className="bg-[#f6f9ff]">
+                  <tr>
+                    {['candidate_name', 'pipeline_stage', 'readiness_band', 'readiness_score', 'active_risk_count', 'recommended_action', 'priority', 'actions'].map((c) => (
+                      <th key={c} className="text-left font-semibold text-[#5f748f] px-3 py-2 whitespace-nowrap">{c}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {queue.slice(0, 100).map((row, i) => (
+                    <tr key={`${row.candidate_id as string}-${i}`} className="border-t border-[#edf2fb]">
+                      <td className="px-3 py-2">{formatCell(row.candidate_name)}</td>
+                      <td className="px-3 py-2">{formatCell(row.pipeline_stage)}</td>
+                      <td className="px-3 py-2">{formatCell(row.readiness_band)}</td>
+                      <td className="px-3 py-2">{formatCell(row.readiness_score)}</td>
+                      <td className="px-3 py-2">{formatCell(row.active_risk_count)}</td>
+                      <td className="px-3 py-2 max-w-xs">{formatCell(row.recommended_action)}</td>
+                      <td className="px-3 py-2">{formatCell(row.priority)}</td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            className="rounded-lg border border-[#cfe3f9] px-2 py-1 text-[11px] font-semibold text-[#005EB8] hover:bg-[#edf6ff]"
+                            onClick={() => void executeAction('set_candidate_stage', { candidate_id: row.candidate_id, stage: 'Interview scheduled' }, 'Candidate moved to Interview scheduled.')}
+                          >
+                            Move to interview
+                          </button>
+                          <button
+                            type="button"
+                            className="rounded-lg border border-[#f2d8d8] px-2 py-1 text-[11px] font-semibold text-[#b42318] hover:bg-[#fff1f1]"
+                            onClick={() => void executeAction('create_task', { candidate_id: row.candidate_id, task_type: 'call_now', priority: 'high', title: 'Immediate follow-up call' }, 'Follow-up task created.')}
+                          >
+                            Create follow-up
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
 
-        <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <h3 className="font-bold text-[#0B1B34] mb-3">Strong Candidates to Prioritize</h3>
-          <QueueTable rows={data?.candidates ?? []} mode="top" />
-        </section>
-
-        <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <h3 className="font-bold text-[#0B1B34] mb-3">Recruiter Action List</h3>
-          <SimpleTable
-            rows={data?.open_tasks ?? []}
-            columns={['candidate_name', 'candidate_date', 'task_type', 'priority', 'status', 'owner_email', 'due_at']}
-            onResolve={(row) => {
-              const taskId = Number(row.id);
-              if (!Number.isFinite(taskId)) return;
-              void handleResolveTask(taskId);
-            }}
-            resolveLabel="Mark done"
-          />
-        </section>
-
-        <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <h3 className="font-bold text-[#0B1B34] mb-3">Follow-up Risks</h3>
-          <SimpleTable
-            rows={data?.active_risks ?? []}
-            columns={['candidate_name', 'candidate_date', 'risk_type', 'confidence', 'reason', 'detected_at']}
-            onResolve={(row) => {
-              const riskId = Number(row.id);
-              if (!Number.isFinite(riskId)) return;
-              void handleResolveRisk(riskId);
-            }}
-            resolveLabel="Resolve"
-          />
-        </section>
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
+            <h3 className="font-bold text-[#0B1B34] mb-3">Open Tasks</h3>
+            <SimpleTable
+              rows={data?.open_tasks ?? []}
+              columns={['candidate_name', 'task_type', 'priority', 'status', 'owner_email', 'due_at']}
+              onResolve={(row) => {
+                const taskId = Number(row.id);
+                if (!Number.isFinite(taskId)) return;
+                void executeAction('resolve_task', { task_id: taskId }, 'Task marked done.');
+              }}
+              resolveLabel="Done"
+            />
+          </section>
+          <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
+            <h3 className="font-bold text-[#0B1B34] mb-3">Active Risks</h3>
+            <SimpleTable
+              rows={data?.active_risks ?? []}
+              columns={['candidate_name', 'risk_type', 'confidence', 'reason', 'detected_at']}
+              onResolve={(row) => {
+                const riskId = Number(row.id);
+                if (!Number.isFinite(riskId)) return;
+                void executeAction('resolve_risk', { risk_id: riskId }, 'Risk marked resolved.');
+              }}
+              resolveLabel="Resolve"
+            />
+          </section>
+        </div>
       </div>
     </Layout>
-  );
-};
-
-const Stat = ({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) => (
-  <div className="rounded-[22px] border border-[#d6e6f9] bg-white p-4 shadow-sm">
-    <p className="text-xs uppercase tracking-wide text-[#7a8ba1] inline-flex items-center gap-1">{icon}{label}</p>
-    <p className="text-xl font-bold mt-1 text-[#0B1B34]">{value}</p>
-  </div>
-);
-
-const QueueTable = ({ rows, mode }: { rows: Array<Record<string, unknown>>; mode: 'overdue' | 'top' }) => {
-  const filtered = (rows || [])
-    .filter((r) => (mode === 'overdue' ? Boolean(r.is_overdue) : true))
-    .sort((a, b) => {
-      if (mode === 'overdue') return Number(b.overdue_minutes ?? 0) - Number(a.overdue_minutes ?? 0);
-      return Number(b.readiness_score ?? 0) - Number(a.readiness_score ?? 0);
-    })
-    .slice(0, 12);
-
-  return (
-    <SimpleTable
-      rows={filtered}
-      columns={
-        mode === 'overdue'
-          ? ['candidate_name', 'candidate_date', 'pipeline_stage', 'readiness_band', 'readiness_score', 'overdue_minutes']
-          : ['candidate_name', 'candidate_date', 'pipeline_stage', 'readiness_band', 'readiness_score', 'active_risk_count']
-      }
-    />
   );
 };
 
@@ -300,10 +318,10 @@ const SimpleTable = ({
       <tbody>
         {rows.length === 0 ? (
           <tr>
-            <td colSpan={columns.length + (onResolve ? 1 : 0)} className="px-3 py-6 text-center text-[#7b8aa0]">No rows yet. Click Recalculate & Save to populate data.</td>
+            <td colSpan={columns.length + (onResolve ? 1 : 0)} className="px-3 py-6 text-center text-[#7b8aa0]">No rows available.</td>
           </tr>
         ) : rows.map((row, i) => (
-          <tr key={`${i}-${String(row.candidate_id ?? i)}`} className="border-t border-[#edf2fb]">
+          <tr key={`${i}-${String(row.id ?? row.candidate_id ?? i)}`} className="border-t border-[#edf2fb]">
             {columns.map((c) => <td key={c} className="px-3 py-2 max-w-xs truncate">{formatCell(row[c])}</td>)}
             {onResolve && (
               <td className="px-3 py-2">

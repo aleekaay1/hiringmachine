@@ -4,6 +4,10 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | und
 export interface HrDashboardPayload {
   generated_at: string;
   summary: Record<string, unknown>;
+  stage_breakdown?: Array<Record<string, unknown>>;
+  action_queue?: Array<Record<string, unknown>>;
+  live_metrics?: Record<string, unknown>;
+  webinar_metrics?: Record<string, unknown>;
   candidates: Array<Record<string, unknown>>;
   open_tasks: Array<Record<string, unknown>>;
   active_risks: Array<Record<string, unknown>>;
@@ -73,8 +77,18 @@ export async function runHrAutomation(
 
 export async function hrDashboardAction(
   accessToken: string,
-  action: 'resolve_task' | 'resolve_risk',
-  payload: { task_id?: number; risk_id?: number },
+  action: 'resolve_task' | 'resolve_risk' | 'set_candidate_stage' | 'set_candidate_next_step' | 'create_task',
+  payload: {
+    task_id?: number;
+    risk_id?: number;
+    candidate_id?: string;
+    stage?: string;
+    next_step?: string;
+    task_type?: string;
+    priority?: string;
+    title?: string;
+    details?: string;
+  },
 ): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> {
   return callFn('hr-dashboard-data', accessToken, {
     method: 'POST',
