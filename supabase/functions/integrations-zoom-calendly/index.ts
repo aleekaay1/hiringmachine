@@ -591,6 +591,15 @@ Deno.serve(async (req) => {
       const attendedByEmail = attended.filter((i) => i.match_method === 'email').length;
       const attendedByName = attended.filter((i) => i.match_method === 'name').length;
       const participantsWithEmail = participants.filter((p) => (p.user_email ?? '').trim().length > 0).length;
+      const participantSamples = participants.slice(0, 20).map((p) => ({
+        name: p.name ?? '',
+        email: (p.user_email ?? '').trim().toLowerCase(),
+        join_time: p.join_time ?? null,
+      }));
+      const unmatchedInviteeSamples = noShow.slice(0, 20).map((i) => ({
+        name: i.name,
+        email: i.email,
+      }));
 
       // Walk-ins: participants not matched to any Calendly invitee (by email or name)
       const matchedParticipantEmails = new Set(attended.map((i) => i.email).filter(Boolean));
@@ -627,6 +636,8 @@ Deno.serve(async (req) => {
           matched_by_email: attendedByEmail,
           matched_by_name: attendedByName,
           calendly_invitees_considered: rawInvitees.length,
+          participant_samples: participantSamples,
+          unmatched_invitee_samples: unmatchedInviteeSamples,
         },
       };
     }));
