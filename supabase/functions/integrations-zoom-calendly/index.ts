@@ -45,6 +45,11 @@ const SLOTS: SlotDef[] = [
   { weekday: 2, startH: 18, startM: 0,  endH: 19, endM: 0,  label: 'Tuesday 6 PM ET'     },
   { weekday: 3, startH: 11, startM: 30, endH: 12, endM: 30, label: 'Wednesday 11:30 AM ET' },
 ];
+const LIVE_TOPIC_KEYWORD = 'live career overview session';
+const TARGET_MEETINGS = [
+  { id: '87882529100', weekday: 2, slot: SLOTS[0] },
+  { id: '85950683062', weekday: 3, slot: SLOTS[1] },
+] as const;
 
 /** Keywords in the Zoom meeting topic that identify it as a live overview session PMI room. */
 const PMI_TOPIC_KEYWORDS = ['personal meeting room', 'alex paz', 'career overview', 'career session', 'live overview'];
@@ -88,6 +93,21 @@ function inferSlot(dt: DateTime | null, topic: string, toleranceMin: number): Sl
     if (distance <= Math.max(30, Math.min(480, maxPmiFallbackDistance))) return slot;
   }
   return null;
+}
+
+function meetingIdOf(m: ZoomRawMeeting): string {
+  return String((m as { id?: string | number }).id ?? '').replace(/\D/g, '');
+}
+
+function isTargetLiveMeeting(m: ZoomRawMeeting, dt: DateTime | null): SlotDef | null {
+  if (!dt?.isValid) return null;
+  const id = meetingIdOf(m);
+  const topic = String(m.topic ?? '').toLowerCase();
+  const target = TARGET_MEETINGS.find((t) => t.id === id);
+  if (!target) return null;
+  if (dt.weekday !== target.weekday) return null;
+  if (!topic.includes(LIVE_TOPIC_KEYWORD)) return null;
+  return target.slot;
 }
 
 // ─── Name-based attendance matching ────────────────────────────────────────
@@ -464,7 +484,6 @@ Deno.serve(async (req) => {
 
     for (const m of byKey.values()) {
       const ms    = parseZoomStartMs(m);
-      const topic = String(m.topic ?? '');
       const dt    = Number.isFinite(ms) ? DateTime.fromMillis(ms, { zone: TZ }) : null;
 
       // Only within lookback / lookahead window
@@ -473,15 +492,13 @@ Deno.serve(async (req) => {
       if (ms > nowMs + lookaheadDays * 86400_000) continue;
       if (ms < nowMs) {
         if (dt?.isValid && minPastDate.isValid && dt < minPastDate) continue;
-        // For past meetings, keep broader candidates (slot matches OR known PMI topic on Tue/Wed).
-        // We'll choose the best occurrence for each date after Calendly events are loaded.
-        const slot = inferSlot(dt, topic, slotToleranceMin);
-        const isPmiTueWed = !!dt?.isValid && isKnownPmiTopic(topic) && (dt.weekday === 2 || dt.weekday === 3);
-        if (slot || isPmiTueWed) pastMeetingCandidates.push(m);
+        // Past: keep only configured recurring live meetings.
+        const slot = isTargetLiveMeeting(m, dt);
+        if (slot) pastMeetingCandidates.push(m);
       }
       else {
-        // Upcoming meetings remain strict to expected slot behavior.
-        const slot = inferSlot(dt, topic, slotToleranceMin);
+        // Upcoming: keep only configured recurring live meetings.
+        const slot = isTargetLiveMeeting(m, dt);
         if (slot) upcomingMeetings.push(m);
       }
     }
@@ -503,15 +520,14 @@ Deno.serve(async (req) => {
       const to   = new Date(nowMs + lookaheadDays * 86400_000);
       const allCalEvents = await calendlyListEvents(calendlyToken, calUserUri, from, to);
 
-      // Only keep Calendly events that fall in a live session slot OR on a Tuesday/Wednesday
-      // (PMI sessions may have a Calendly event registered under a different event type name)
+      // Only keep likely live-overview Calendly events on Tue/Wed.
       for (const ev of allCalEvents) {
         if (!ev.start_time) continue;
         const dt = DateTime.fromISO(ev.start_time, { zone: TZ });
-        // Accept if in slot, OR if on Tuesday/Wednesday (PMI fallback — same-day match will handle specificity)
-        const inSlot = slotForDt(dt, slotToleranceMin) !== null;
+        const name = String(ev.name ?? '').toLowerCase();
+        const isLiveName = name.includes('live career overview session') || name.includes('live online career session');
         const isTueOrWed = dt.weekday === 2 || dt.weekday === 3;
-        if (!inSlot && !isTueOrWed) continue;
+        if (!isLiveName || !isTueOrWed) continue;
         const date = isoDate(dt);
         if (!calEventsByDate.has(date)) calEventsByDate.set(date, ev);
       }
@@ -586,7 +602,7 @@ Deno.serve(async (req) => {
       const duration = Number(m.duration ?? 0);
       const host     = String((m as { host_email?: string }).host_email || zoomHostEmail);
       const startDt  = Number.isFinite(startMs) ? DateTime.fromMillis(startMs, { zone: TZ }) : null;
-      const slot     = inferSlot(startDt, topic, slotToleranceMin);
+      const slot     = isTargetLiveMeeting(m, startDt);
       const dateKey  = startDt ? isoDate(startDt) : '';
 
       // Zoom participants (who actually joined)
@@ -709,7 +725,7 @@ Deno.serve(async (req) => {
       const startMs  = parseZoomStartMs(m);
       const topic    = String(m.topic ?? '');
       const startDt  = Number.isFinite(startMs) ? DateTime.fromMillis(startMs, { zone: TZ }) : null;
-      const slot     = inferSlot(startDt, topic, slotToleranceMin);
+      const slot     = isTargetLiveMeeting(m, startDt);
       const dateKey  = startDt ? isoDate(startDt) : '';
       const calEv    = calEventsByDate.get(dateKey) ?? null;
       const invitees = (calEv?.uri ? (calInviteesCache.get(calEv.uri) ?? []) : [])
