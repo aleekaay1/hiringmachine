@@ -2,7 +2,7 @@ import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { COLORS } from '../constants';
 import { supabase } from '../services/supabaseClient';
-import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut } from 'lucide-react';
+import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut, MonitorPlay } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -29,6 +29,7 @@ const Layout: React.FC<LayoutProps> = ({
     { name: 'Candidates', route: '/admin?view=candidates', icon: Users },
     { name: 'QR Codes', route: '/qr', icon: QrCode },
     { name: 'Live Sessions', route: '/live-sessions', icon: Video },
+    { name: 'Webinar Geek', route: '/webinar-geek', icon: MonitorPlay },
     { name: 'Analytics', route: '/admin?view=analytics', icon: BarChart3 },
     { name: 'Settings', route: '/admin?view=settings', icon: Settings },
   ] as const;
