@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
@@ -9,8 +9,10 @@ import {
 } from '../services/webinarGeekIntegrations';
 import {
   CalendarClock,
+  BarChart3,
   CheckCircle2,
   Clock3,
+  Download,
   Database,
   Eye,
   Mail,
@@ -23,6 +25,8 @@ import {
 
 type AnyRow = Record<string, unknown>;
 type DashboardData = Record<string, unknown>;
+const FULL_WATCH_SECONDS = 45 * 60;
+const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
 
 function unixToLabel(value: unknown): string {
   const n = Number(value);
@@ -42,6 +46,21 @@ function durationLabel(value: unknown): string {
   if (h > 0) return `${h}h ${m}m`;
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
+}
+
+function toCsvValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const raw = String(value);
+  const escaped = raw.replace(/"/g, '""');
+  return `"${escaped}"`;
+}
+
+function getInviterName(row: AnyRow): string {
+  const direct = String(row.inviter_name || row.invited_by || '').trim();
+  if (direct) return direct;
+  const source = String(row.registration_source || '').trim();
+  if (source && source !== 'registration_page') return source;
+  return 'Registration page';
 }
 
 function normalizeSubscriptions(data: DashboardData | null): AnyRow[] {
@@ -83,6 +102,7 @@ const WebinarGeekDashboard: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncResult, setSyncResult] = useState<Record<string, unknown> | null>(null);
+  const hasInitializedRef = useRef(false);
 
   const webinars = useMemo(() => normalizeWebinars(data), [data]);
   const broadcasts = useMemo(() => normalizeBroadcasts(data), [data]);
@@ -105,6 +125,44 @@ const WebinarGeekDashboard: React.FC = () => {
     const watchedReplay = filteredSubscriptions.filter((s) => s.watched_replay === true).length;
     const unsubscribed = filteredSubscriptions.filter((s) => s.unsubscribed === true).length;
     return { invited, watched, watchedLive, watchedReplay, unsubscribed };
+  }, [filteredSubscriptions]);
+
+  const watchStats = useMemo(() => {
+    const totalRegistrations = filteredSubscriptions.length;
+    const watchedCount = filteredSubscriptions.filter((s) => s.watched === true).length;
+    const watchedRatioPct = totalRegistrations > 0 ? Math.round((watchedCount / totalRegistrations) * 100) : 0;
+    const fullWatched = filteredSubscriptions.filter((s) => Number(s.watch_duration || 0) >= FULL_WATCH_SECONDS).length;
+    const halfWatched = filteredSubscriptions.filter((s) => {
+      const d = Number(s.watch_duration || 0);
+      return d >= HALF_WATCH_SECONDS && d < FULL_WATCH_SECONDS;
+    }).length;
+    const underHalfWatched = filteredSubscriptions.filter((s) => {
+      const d = Number(s.watch_duration || 0);
+      return d > 0 && d < HALF_WATCH_SECONDS;
+    }).length;
+    return {
+      totalRegistrations,
+      watchedCount,
+      watchedRatioPct,
+      fullWatched,
+      halfWatched,
+      underHalfWatched,
+    };
+  }, [filteredSubscriptions]);
+
+  const dailyWatchRows = useMemo(() => {
+    const map = new Map<string, { date: string; registrations: number; watched: number; notWatched: number }>();
+    for (const row of filteredSubscriptions) {
+      const ts = Number(row.created_at || row.watched_true_set_at || 0);
+      const d = Number.isFinite(ts) && ts > 0 ? new Date((ts > 1e12 ? ts : ts * 1000)) : null;
+      const key = d && !Number.isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : 'Unknown date';
+      if (!map.has(key)) map.set(key, { date: key, registrations: 0, watched: 0, notWatched: 0 });
+      const entry = map.get(key)!;
+      entry.registrations += 1;
+      if (row.watched === true) entry.watched += 1;
+      else entry.notWatched += 1;
+    }
+    return [...map.values()].sort((a, b) => (a.date < b.date ? 1 : -1));
   }, [filteredSubscriptions]);
 
   const grouped = useMemo(() => {
@@ -202,11 +260,11 @@ const WebinarGeekDashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (isAuthenticated) {
-      void loadHealth();
-      void loadDashboard();
-    }
-  }, [isAuthenticated, loadDashboard, loadHealth]);
+    if (!isAuthenticated || hasInitializedRef.current) return;
+    hasInitializedRef.current = true;
+    // Load once on page open; further fetches only via explicit buttons.
+    void loadDashboard();
+  }, [isAuthenticated, loadDashboard]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -244,6 +302,71 @@ const WebinarGeekDashboard: React.FC = () => {
     await loadDashboard();
   }, [broadcastId, loadDashboard, webinarId, withAuthRetry]);
 
+  const handleCsvExport = useCallback(() => {
+    const headers = [
+      'subscription_id',
+      'first_name',
+      'last_name',
+      'email',
+      'registration_date',
+      'watched',
+      'watched_live',
+      'watched_replay',
+      'watch_duration_seconds',
+      'watch_duration_label',
+      'watch_bucket',
+      'watch_start',
+      'watch_end',
+      'registration_source',
+      'inviter_name',
+      'registration_ip',
+      'broadcast_id',
+      'broadcast_title',
+      'webinar_id',
+      'webinar_title',
+    ];
+    const rows = filteredSubscriptions.map((row) => {
+      const watchDuration = Number(row.watch_duration || 0);
+      const watchBucket = watchDuration >= FULL_WATCH_SECONDS
+        ? 'full'
+        : watchDuration >= HALF_WATCH_SECONDS
+          ? 'half'
+          : watchDuration > 0
+            ? 'under_half'
+            : 'no_watch';
+      return [
+        row.id ?? '',
+        row.firstname ?? '',
+        row.surname ?? '',
+        row.email ?? '',
+        unixToLabel(row.created_at),
+        row.watched === true ? 'yes' : 'no',
+        row.watched_live === true ? 'yes' : 'no',
+        row.watched_replay === true ? 'yes' : 'no',
+        watchDuration,
+        durationLabel(watchDuration),
+        watchBucket,
+        unixToLabel(row.watch_start),
+        unixToLabel(row.watch_end),
+        row.registration_source ?? '',
+        getInviterName(row),
+        row.registration_ip ?? '',
+        (row.broadcast as AnyRow | undefined)?.id ?? '',
+        (row.broadcast as AnyRow | undefined)?.title ?? '',
+        (row.webinar as AnyRow | undefined)?.id ?? '',
+        (row.webinar as AnyRow | undefined)?.title ?? '',
+      ];
+    });
+    const csv = [headers.map(toCsvValue).join(','), ...rows.map((r) => r.map(toCsvValue).join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `webinar-analytics-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [filteredSubscriptions]);
+
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-[#f7fbff] to-[#eef6ff] flex items-center justify-center p-4">
@@ -280,6 +403,9 @@ const WebinarGeekDashboard: React.FC = () => {
               <Button type="button" onClick={() => void runSync()} disabled={syncLoading}>
                 <Database size={16} className={`mr-2 inline ${syncLoading ? 'animate-pulse' : ''}`} />
                 {syncLoading ? 'Syncing...' : 'Sync to candidates'}
+              </Button>
+              <Button type="button" variant="outline" onClick={handleCsvExport} disabled={filteredSubscriptions.length === 0}>
+                <Download size={16} className="mr-2 inline" /> Export CSV
               </Button>
               <Button type="button" variant="outline" onClick={() => void loadDashboard()} disabled={loading}>
                 <RefreshCw size={16} className={`mr-2 inline ${loading ? 'animate-spin' : ''}`} /> Refresh
@@ -326,12 +452,56 @@ const WebinarGeekDashboard: React.FC = () => {
         {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
 
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <Metric icon={<Mail size={15} />} label="Invitees" value={metrics.invited} />
+          <Metric icon={<Mail size={15} />} label="Registrations" value={watchStats.totalRegistrations} />
           <Metric icon={<Eye size={15} />} label="Watched" value={metrics.watched} />
           <Metric icon={<Video size={15} />} label="Live watched" value={metrics.watchedLive} />
           <Metric icon={<Clock3 size={15} />} label="Replay watched" value={metrics.watchedReplay} />
           <Metric icon={<UserX size={15} />} label="Unsubscribed" value={metrics.unsubscribed} />
         </div>
+
+        <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
+          <h3 className="font-bold text-[#0B1B34] mb-3 inline-flex items-center gap-2"><BarChart3 size={16} /> Watch analytics</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div className="rounded-xl border border-[#e6eef9] p-3">
+              <p className="text-[#5f748f] mb-2">Show ratio</p>
+              <p className="text-2xl font-extrabold text-[#0B1B34]">{watchStats.watchedRatioPct}%</p>
+              <p className="text-xs text-[#6f7f96]">{watchStats.watchedCount} watched / {watchStats.totalRegistrations} registrations</p>
+            </div>
+            <div className="rounded-xl border border-[#e6eef9] p-3 space-y-2">
+              <StatBar label="Full watched (>=45m)" value={watchStats.fullWatched} max={Math.max(1, watchStats.totalRegistrations)} color="bg-green-500" />
+              <StatBar label="Half watched (23.5m-45m)" value={watchStats.halfWatched} max={Math.max(1, watchStats.totalRegistrations)} color="bg-blue-500" />
+              <StatBar label="Under half watched" value={watchStats.underHalfWatched} max={Math.max(1, watchStats.totalRegistrations)} color="bg-amber-500" />
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
+          <h3 className="font-bold text-[#0B1B34] mb-3">Daily watched vs not watched</h3>
+          <div className="overflow-auto">
+            <table className="min-w-full text-xs">
+              <thead className="bg-[#f6f9ff]">
+                <tr>
+                  <th className="text-left px-3 py-2 font-semibold text-[#5f748f]">Date</th>
+                  <th className="text-left px-3 py-2 font-semibold text-[#5f748f]">Registrations</th>
+                  <th className="text-left px-3 py-2 font-semibold text-[#5f748f]">Watched</th>
+                  <th className="text-left px-3 py-2 font-semibold text-[#5f748f]">Did not watch</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dailyWatchRows.length === 0 ? (
+                  <tr><td colSpan={4} className="px-3 py-4 text-center text-[#7b8aa0]">No daily records</td></tr>
+                ) : dailyWatchRows.map((r) => (
+                  <tr key={r.date} className="border-t border-[#edf2fb]">
+                    <td className="px-3 py-2">{r.date}</td>
+                    <td className="px-3 py-2">{r.registrations}</td>
+                    <td className="px-3 py-2">{r.watched}</td>
+                    <td className="px-3 py-2">{r.notWatched}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
 
         {grouped.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-[#d3e2f5] bg-white p-10 text-center text-[#7a8ca3]">
@@ -388,6 +558,7 @@ const WebinarGeekDashboard: React.FC = () => {
 
                         <div className="text-xs text-[#5f748f] space-y-1">
                           <p><span className="font-semibold text-[#334a69]">Source:</span> {String(row.registration_source || '—')}</p>
+                          <p><span className="font-semibold text-[#334a69]">Invited by:</span> {getInviterName(row)}</p>
                           <p><span className="font-semibold text-[#334a69]">IP:</span> {String(row.registration_ip || '—')}</p>
                           <p><span className="font-semibold text-[#334a69]">Created:</span> {unixToLabel(row.created_at)}</p>
                           <p><span className="font-semibold text-[#334a69]">Watch link:</span> {row.watch_link ? <a className="text-[#005EB8] underline" href={String(row.watch_link)} target="_blank" rel="noopener noreferrer">Open</a> : '—'}</p>
@@ -424,6 +595,31 @@ const Metric = ({ icon, label, value }: { icon: React.ReactNode; label: string; 
     <p className="text-sm font-semibold mt-1 truncate text-[#0B1B34]">{String(value)}</p>
   </div>
 );
+
+const StatBar = ({
+  label,
+  value,
+  max,
+  color,
+}: {
+  label: string;
+  value: number;
+  max: number;
+  color: string;
+}) => {
+  const pct = max > 0 ? Math.round((value / max) * 100) : 0;
+  return (
+    <div>
+      <div className="flex items-center justify-between text-xs text-[#5f748f] mb-1">
+        <span>{label}</span>
+        <span className="font-semibold">{value} ({pct}%)</span>
+      </div>
+      <div className="h-2 rounded-full bg-[#edf2fb] overflow-hidden">
+        <div className={`h-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+};
 
 const Badge = ({ children, tone, icon }: { children: React.ReactNode; tone: 'green' | 'blue' | 'amber' | 'red' | 'gray'; icon?: React.ReactNode }) => {
   const cls =
