@@ -120,6 +120,8 @@ const WebinarGeekDashboard: React.FC = () => {
 
   const [webinarId, setWebinarId] = useState('');
   const [broadcastId, setBroadcastId] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
   const [watchedFilter, setWatchedFilter] = useState<'all' | 'watched' | 'unwatched'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [watchBucketFilter, setWatchBucketFilter] = useState<'all' | 'full' | 'half' | 'under_half' | 'no_watch'>('all');
@@ -134,6 +136,16 @@ const WebinarGeekDashboard: React.FC = () => {
   const filteredSubscriptions = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return subscriptions.filter((row) => {
+      const ts = Number(row.created_at || row.watched_true_set_at || (row.broadcast as AnyRow | undefined)?.date || 0);
+      const rowDate = Number.isFinite(ts) && ts > 0 ? new Date((ts > 1e12 ? ts : ts * 1000)) : null;
+      if (dateFrom) {
+        const from = new Date(`${dateFrom}T00:00:00`);
+        if (rowDate && rowDate < from) return false;
+      }
+      if (dateTo) {
+        const to = new Date(`${dateTo}T23:59:59`);
+        if (rowDate && rowDate > to) return false;
+      }
       const watchDuration = Number(row.watch_duration || 0);
       const watchBucket = watchDuration >= FULL_WATCH_SECONDS
         ? 'full'
@@ -151,7 +163,7 @@ const WebinarGeekDashboard: React.FC = () => {
       const ipText = String(row.registration_ip || '').toLowerCase();
       return name.includes(q) || emailText.includes(q) || ipText.includes(q);
     });
-  }, [subscriptions, searchQuery, watchBucketFilter, watchStatusFilter]);
+  }, [subscriptions, searchQuery, watchBucketFilter, watchStatusFilter, dateFrom, dateTo]);
 
   const metrics = useMemo(() => {
     const invited = filteredSubscriptions.length;
@@ -455,9 +467,11 @@ const WebinarGeekDashboard: React.FC = () => {
         </div>
 
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-7 gap-3">
             <input value={webinarId} onChange={(e) => setWebinarId(e.target.value)} placeholder="Filter webinar_id" className="px-3 py-2 rounded-xl border border-[#cfe3f9]" />
             <input value={broadcastId} onChange={(e) => setBroadcastId(e.target.value)} placeholder="Filter broadcast_id" className="px-3 py-2 rounded-xl border border-[#cfe3f9]" />
+            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="px-3 py-2 rounded-xl border border-[#cfe3f9]" />
+            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="px-3 py-2 rounded-xl border border-[#cfe3f9]" />
             <select value={watchedFilter} onChange={(e) => setWatchedFilter(e.target.value as 'all' | 'watched' | 'unwatched')} className="px-3 py-2 rounded-xl border border-[#cfe3f9]">
               <option value="all">All invitees</option>
               <option value="watched">Watched only</option>
