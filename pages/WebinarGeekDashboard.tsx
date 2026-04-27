@@ -56,8 +56,30 @@ function toCsvValue(value: unknown): string {
 }
 
 function getInviterName(row: AnyRow): string {
-  const direct = String(row.inviter_name || row.invited_by || '').trim();
+  const direct = String(
+    row.inviter_name ||
+    row.invited_by ||
+    row.invited_by_name ||
+    row.registration_page_name ||
+    row.referrer_name ||
+    row.affiliate_name ||
+    ''
+  ).trim();
   if (direct) return direct;
+  const nestedPage = (row.registration_page && typeof row.registration_page === 'object')
+    ? row.registration_page as AnyRow
+    : null;
+  const nestedOwner = (row.owner && typeof row.owner === 'object')
+    ? row.owner as AnyRow
+    : null;
+  const nestedInviter = String(
+    nestedPage?.name ||
+    nestedPage?.title ||
+    nestedOwner?.name ||
+    nestedOwner?.full_name ||
+    ''
+  ).trim();
+  if (nestedInviter) return nestedInviter;
   const source = String(row.registration_source || '').trim();
   if (source && source !== 'registration_page') return source;
   return 'Registration page';
@@ -100,6 +122,8 @@ const WebinarGeekDashboard: React.FC = () => {
   const [broadcastId, setBroadcastId] = useState('');
   const [watchedFilter, setWatchedFilter] = useState<'all' | 'watched' | 'unwatched'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [watchBucketFilter, setWatchBucketFilter] = useState<'all' | 'full' | 'half' | 'under_half' | 'no_watch'>('all');
+  const [watchStatusFilter, setWatchStatusFilter] = useState<'all' | 'watched' | 'not_watched'>('all');
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncResult, setSyncResult] = useState<Record<string, unknown> | null>(null);
   const hasInitializedRef = useRef(false);
@@ -109,14 +133,25 @@ const WebinarGeekDashboard: React.FC = () => {
   const subscriptions = useMemo(() => normalizeSubscriptions(data), [data]);
   const filteredSubscriptions = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return subscriptions;
     return subscriptions.filter((row) => {
+      const watchDuration = Number(row.watch_duration || 0);
+      const watchBucket = watchDuration >= FULL_WATCH_SECONDS
+        ? 'full'
+        : watchDuration >= HALF_WATCH_SECONDS
+          ? 'half'
+          : watchDuration > 0
+            ? 'under_half'
+            : 'no_watch';
+      if (watchBucketFilter !== 'all' && watchBucket !== watchBucketFilter) return false;
+      if (watchStatusFilter === 'watched' && row.watched !== true) return false;
+      if (watchStatusFilter === 'not_watched' && row.watched === true) return false;
+      if (!q) return true;
       const name = `${String(row.firstname || '').trim()} ${String(row.surname || '').trim()}`.toLowerCase();
       const emailText = String(row.email || '').toLowerCase();
       const ipText = String(row.registration_ip || '').toLowerCase();
       return name.includes(q) || emailText.includes(q) || ipText.includes(q);
     });
-  }, [subscriptions, searchQuery]);
+  }, [subscriptions, searchQuery, watchBucketFilter, watchStatusFilter]);
 
   const metrics = useMemo(() => {
     const invited = filteredSubscriptions.length;
@@ -439,6 +474,16 @@ const WebinarGeekDashboard: React.FC = () => {
             </label>
             <Button type="button" onClick={() => void loadDashboard()} disabled={loading}>Apply filters</Button>
           </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <FilterChip active={watchStatusFilter === 'all'} onClick={() => setWatchStatusFilter('all')}>All</FilterChip>
+            <FilterChip active={watchStatusFilter === 'watched'} onClick={() => setWatchStatusFilter('watched')}>Watched</FilterChip>
+            <FilterChip active={watchStatusFilter === 'not_watched'} onClick={() => setWatchStatusFilter('not_watched')}>Not watched</FilterChip>
+            <div className="w-px h-6 bg-[#dbe6f7] mx-1" />
+            <FilterChip active={watchBucketFilter === 'all'} onClick={() => setWatchBucketFilter('all')}>All durations</FilterChip>
+            <FilterChip active={watchBucketFilter === 'full'} onClick={() => setWatchBucketFilter('full')}>Full watched</FilterChip>
+            <FilterChip active={watchBucketFilter === 'half'} onClick={() => setWatchBucketFilter('half')}>Half watched</FilterChip>
+            <FilterChip active={watchBucketFilter === 'under_half'} onClick={() => setWatchBucketFilter('under_half')}>Under half</FilterChip>
+          </div>
         </div>
 
         {syncResult && (
@@ -468,9 +513,30 @@ const WebinarGeekDashboard: React.FC = () => {
               <p className="text-xs text-[#6f7f96]">{watchStats.watchedCount} watched / {watchStats.totalRegistrations} registrations</p>
             </div>
             <div className="rounded-xl border border-[#e6eef9] p-3 space-y-2">
-              <StatBar label="Full watched (>=45m)" value={watchStats.fullWatched} max={Math.max(1, watchStats.totalRegistrations)} color="bg-green-500" />
-              <StatBar label="Half watched (23.5m-45m)" value={watchStats.halfWatched} max={Math.max(1, watchStats.totalRegistrations)} color="bg-blue-500" />
-              <StatBar label="Under half watched" value={watchStats.underHalfWatched} max={Math.max(1, watchStats.totalRegistrations)} color="bg-amber-500" />
+              <StatBar
+                label="Full watched (>=45m)"
+                value={watchStats.fullWatched}
+                max={Math.max(1, watchStats.totalRegistrations)}
+                color="bg-green-500"
+                active={watchBucketFilter === 'full'}
+                onClick={() => setWatchBucketFilter(watchBucketFilter === 'full' ? 'all' : 'full')}
+              />
+              <StatBar
+                label="Half watched (23.5m-45m)"
+                value={watchStats.halfWatched}
+                max={Math.max(1, watchStats.totalRegistrations)}
+                color="bg-blue-500"
+                active={watchBucketFilter === 'half'}
+                onClick={() => setWatchBucketFilter(watchBucketFilter === 'half' ? 'all' : 'half')}
+              />
+              <StatBar
+                label="Under half watched"
+                value={watchStats.underHalfWatched}
+                max={Math.max(1, watchStats.totalRegistrations)}
+                color="bg-amber-500"
+                active={watchBucketFilter === 'under_half'}
+                onClick={() => setWatchBucketFilter(watchBucketFilter === 'under_half' ? 'all' : 'under_half')}
+              />
             </div>
           </div>
         </section>
@@ -601,15 +667,19 @@ const StatBar = ({
   value,
   max,
   color,
+  active,
+  onClick,
 }: {
   label: string;
   value: number;
   max: number;
   color: string;
+  active?: boolean;
+  onClick?: () => void;
 }) => {
   const pct = max > 0 ? Math.round((value / max) * 100) : 0;
   return (
-    <div>
+    <button type="button" onClick={onClick} className={`w-full text-left rounded-lg p-1 transition ${active ? 'bg-[#eef6ff]' : 'hover:bg-[#f7fbff]'}`}>
       <div className="flex items-center justify-between text-xs text-[#5f748f] mb-1">
         <span>{label}</span>
         <span className="font-semibold">{value} ({pct}%)</span>
@@ -617,9 +687,23 @@ const StatBar = ({
       <div className="h-2 rounded-full bg-[#edf2fb] overflow-hidden">
         <div className={`h-full ${color}`} style={{ width: `${pct}%` }} />
       </div>
-    </div>
+    </button>
   );
 };
+
+const FilterChip = ({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`px-3 py-1.5 rounded-full border text-xs font-semibold transition ${
+      active
+        ? 'bg-[#005EB8] text-white border-[#005EB8]'
+        : 'bg-white text-[#4f6787] border-[#cfe3f9] hover:bg-[#f3f8ff]'
+    }`}
+  >
+    {children}
+  </button>
+);
 
 const Badge = ({ children, tone, icon }: { children: React.ReactNode; tone: 'green' | 'blue' | 'amber' | 'red' | 'gray'; icon?: React.ReactNode }) => {
   const cls =
