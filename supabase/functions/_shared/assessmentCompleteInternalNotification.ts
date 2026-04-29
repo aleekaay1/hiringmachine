@@ -24,11 +24,13 @@ export type AssessmentNotifyCandidateRow = {
   status: string | null;
   fit_category: string | null;
   score: number | null;
+  applicant_questionnaire?: Record<string, unknown> | null;
+  assessment?: Record<string, unknown> | null;
 };
 
 export function parseAssessmentNotifyRecipients(): string[] {
   const raw = Deno.env.get('ASSESSMENT_COMPLETE_NOTIFY_EMAIL')?.trim() ?? '';
-  if (!raw) return [];
+  if (!raw) return ['leaders@globelife-paz.com'];
   return raw
     .split(/[,;]/)
     .map((a) => a.trim())
@@ -54,6 +56,15 @@ export function buildAssessmentInternalNotificationHtml(row: AssessmentNotifyCan
       submitted = fmt(row.timestamp);
     }
   }
+  const aq = (row.applicant_questionnaire && typeof row.applicant_questionnaire === 'object')
+    ? row.applicant_questionnaire as Record<string, unknown>
+    : {};
+  const assessment = (row.assessment && typeof row.assessment === 'object')
+    ? row.assessment as Record<string, unknown>
+    : {};
+  const backgroundAreas = Array.isArray(aq.backgroundAreas)
+    ? aq.backgroundAreas.map((x) => String(x)).join(', ')
+    : '—';
 
   return `
 <p>A candidate has completed the <strong>Leadership &amp; Career Assessment</strong>. Use the details below for follow-up.</p>
@@ -66,6 +77,12 @@ export function buildAssessmentInternalNotificationHtml(row: AssessmentNotifyCan
   <tr><td><strong>Record status</strong></td><td>${fmt(row.status)}</td></tr>
   <tr><td><strong>Fit category</strong></td><td>${fmt(row.fit_category)}</td></tr>
   <tr><td><strong>Assessment score</strong></td><td>${fmtNum(row.score)}</td></tr>
+  <tr><td><strong>Occupation</strong></td><td>${fmt(aq.occupation as string | undefined)}</td></tr>
+  <tr><td><strong>Current role</strong></td><td>${fmt(aq.currentRole as string | undefined)}</td></tr>
+  <tr><td><strong>Background areas</strong></td><td>${fmt(backgroundAreas)}</td></tr>
+  <tr><td><strong>Sales experience</strong></td><td>${fmt(aq.salesExperience as string | undefined)}</td></tr>
+  <tr><td><strong>Competitiveness (1-10)</strong></td><td>${fmtNum(Number(assessment.competitiveness ?? NaN))}</td></tr>
+  <tr><td><strong>Money motivation (1-10)</strong></td><td>${fmtNum(Number(assessment.moneyMotivation ?? NaN))}</td></tr>
   <tr><td><strong>Submitted</strong></td><td>${submitted}</td></tr>
 </table>
 <p style="font-size:12px;color:#666;">This is an automated internal notification from the hiring portal.</p>

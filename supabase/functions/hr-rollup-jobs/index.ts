@@ -353,7 +353,11 @@ Deno.serve(async (req) => {
       }
 
       // Refresh materialized view via raw SQL through the service-role client
-      await admin.rpc('refresh_materialized_view_hr_funnel_daily').catch(() => { /* view refresh optional */ });
+      try {
+        await admin.rpc('refresh_materialized_view_hr_funnel_daily');
+      } catch {
+        // view refresh optional
+      }
       result.candidates_moved_to_invited = candidateStageUpdates.length;
       if (warnings.length > 0) result.warnings = warnings;
     }

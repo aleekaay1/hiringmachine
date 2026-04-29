@@ -26,7 +26,7 @@ const Landing: React.FC = () => {
           <div className="pt-2 sm:pt-4 space-y-4 max-w-2xl mx-auto w-full sm:max-w-3xl lg:max-w-4xl">
             <Button
               fullWidth
-              onClick={() => navigate('/interview')}
+              onClick={() => navigate('/checkin')}
               className="text-base sm:text-lg py-4 min-h-[48px] shadow-xl touch-manipulation"
             >
               Start Applicant Questionnaire <ArrowRight className="ml-2 shrink-0" size={20} />

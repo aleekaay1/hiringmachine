@@ -2,6 +2,7 @@ import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { COLORS } from '../constants';
 import { supabase } from '../services/supabaseClient';
+import { canAccessSection, getCurrentUserProfile, type AppRole } from '../services/accessControl';
 import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut, MonitorPlay } from 'lucide-react';
 
 interface LayoutProps {
@@ -20,19 +21,33 @@ const Layout: React.FC<LayoutProps> = ({
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const [role, setRole] = React.useState<AppRole | null>(null);
 
   const current = `${location.pathname}${location.search}`;
   const isActive = (path: string) => current === path;
 
   const adminMenu = [
-    { name: 'Overview', route: '/admin?view=overview', icon: Home },
-    { name: 'Candidates', route: '/admin?view=candidates', icon: Users },
-    { name: 'QR Codes', route: '/qr', icon: QrCode },
-    { name: 'Live Sessions', route: '/live-sessions', icon: Video },
-    { name: 'Webinar Geek', route: '/webinar-geek', icon: MonitorPlay },
-    { name: 'Analytics', route: '/admin?view=analytics', icon: BarChart3 },
-    { name: 'Settings', route: '/admin?view=settings', icon: Settings },
+    { name: 'Overview', route: '/admin?view=overview', icon: Home, section: 'overview' as const },
+    { name: 'Candidates', route: '/admin?view=candidates', icon: Users, section: 'candidates' as const },
+    { name: 'QR Codes', route: '/qr', icon: QrCode, section: 'qr' as const },
+    { name: 'Live Sessions', route: '/live-sessions', icon: Video, section: 'live-sessions' as const },
+    { name: 'Webinar Geek', route: '/webinar-geek', icon: MonitorPlay, section: 'webinar-geek' as const },
+    { name: 'Analytics', route: '/admin?view=analytics', icon: BarChart3, section: 'analytics' as const },
+    { name: 'Settings', route: '/admin?view=settings', icon: Settings, section: 'settings' as const },
   ] as const;
+
+  React.useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    void getCurrentUserProfile().then((profile) => {
+      if (!cancelled) setRole(profile?.role ?? null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
+
+  const visibleAdminMenu = adminMenu.filter((item) => canAccessSection(role, item.section));
 
   return (
     <div className="min-h-screen flex font-sans text-gray-800" style={{ backgroundColor: isAdmin ? '#eef2f7' : COLORS.background }}>
@@ -53,7 +68,7 @@ const Layout: React.FC<LayoutProps> = ({
             <div className="text-sm font-semibold leading-tight text-slate-100">Paz Hiring Journey Management</div>
           </div>
           <nav className="p-3 space-y-1.5">
-            {adminMenu.map((item) => {
+            {visibleAdminMenu.map((item) => {
               const Icon = item.icon;
               const active = isActive(item.route);
               return (

@@ -34,6 +34,7 @@ import {
 import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
+import { canAccessSection, getCurrentUserProfile, type AppRole } from '../services/accessControl';
 import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
 
 const SUGGESTED_TAGS = ['Strong fit', 'Follow up', 'Licensing needed', 'High potential', 'Second interview', 'Offer extended'];
@@ -42,6 +43,37 @@ const getAdminData = (c: Candidate): AdminData => {
   const merged = { ...DEFAULT_ADMIN_DATA, ...c.adminData };
   return { ...merged, pipelineStage: normalizePipelineStage(merged.pipelineStage) };
 };
+
+function latestCandidateActivity(candidate: Candidate): { text: string; at?: string; by?: string; priority: 'normal' | 'urgent' } {
+  const admin = getAdminData(candidate);
+  const latestNote = [...admin.notes].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+  if (latestNote) {
+    return {
+      text: latestNote.text,
+      at: latestNote.createdAt,
+      by: latestNote.authorEmail,
+      priority: 'normal',
+    };
+  }
+
+  const submittedAt = admin.emailsSent
+    .filter((e) => e.type === 'automated_post_assessment_submit')
+    .sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime())[0]?.sentAt;
+  if (submittedAt && admin.pipelineStage === 'Leadership form submitted, awaiting evaluation') {
+    const ageMs = Date.now() - new Date(submittedAt).getTime();
+    const urgent = ageMs > 24 * 60 * 60 * 1000;
+    return {
+      text: urgent
+        ? 'Leadership form submitted - pending review >24h'
+        : 'Leadership form submitted - pending review',
+      at: submittedAt,
+      by: undefined,
+      priority: urgent ? 'urgent' : 'normal',
+    };
+  }
+
+  return { text: 'No recent update', priority: 'normal' };
+}
 
 /** Short labels for the horizontal journey timeline (full names in title/tooltip) */
 const TIMELINE_SHORT_LABELS: Record<PipelineStage, string> = {
@@ -113,6 +145,7 @@ const AdminDashboard: React.FC = () => {
   const [detailTab, setDetailTab] = useState<'profile' | 'status' | 'assessment'>('profile');
   const [showEvaluationModal, setShowEvaluationModal] = useState(false);
   const [liveNow, setLiveNow] = useState(new Date());
+  const [role, setRole] = useState<AppRole | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -121,6 +154,12 @@ const AdminDashboard: React.FC = () => {
     if (q === 'overview' || q === 'candidates' || q === 'analytics' || q === 'settings') return q;
     return 'overview';
   }, [location.search]);
+
+  const effectiveAdminView = useMemo<'overview' | 'candidates' | 'analytics' | 'settings'>(() => {
+    if (canAccessSection(role, adminView)) return adminView;
+    if (canAccessSection(role, 'candidates')) return 'candidates';
+    return 'overview';
+  }, [adminView, role]);
 
   useEffect(() => {
     if (selectedCandidate) setNextStepEdit(getAdminData(selectedCandidate).nextStep);
@@ -203,12 +242,44 @@ const AdminDashboard: React.FC = () => {
     return list;
   }, [candidates, searchQuery, pipelineFilter]);
 
+  const leadershipPendingQueue = useMemo(() => {
+    const now = Date.now();
+    return candidates
+      .map((c) => {
+        const admin = getAdminData(c);
+        if (admin.pipelineStage !== 'Leadership form submitted, awaiting evaluation') return null;
+        const submittedAt = admin.emailsSent
+          .filter((e) => e.type === 'automated_post_assessment_submit')
+          .sort((a, b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime())[0]?.sentAt;
+        if (!submittedAt) return null;
+        const lastTouchAt = [
+          ...admin.notes.map((n) => n.createdAt),
+          admin.evaluation?.doneAt,
+          admin.interviewScheduledAt,
+          admin.resumeReviewedAt,
+        ]
+          .filter(Boolean)
+          .map((v) => new Date(String(v)).getTime())
+          .filter((v) => Number.isFinite(v))
+          .sort((a, b) => b - a)[0];
+        const submittedMs = new Date(submittedAt).getTime();
+        const untouched = !lastTouchAt || lastTouchAt <= submittedMs;
+        if (!untouched) return null;
+        const ageHours = Math.floor((now - submittedMs) / (1000 * 60 * 60));
+        return { candidate: c, submittedAt, ageHours, urgent: ageHours >= 24 };
+      })
+      .filter((x): x is { candidate: Candidate; submittedAt: string; ageHours: number; urgent: boolean } => Boolean(x))
+      .sort((a, b) => Number(b.urgent) - Number(a.urgent) || b.ageHours - a.ageHours);
+  }, [candidates]);
+
   useEffect(() => {
     // Check if an admin session already exists
     const checkSession = async () => {
       const { data } = await supabase.auth.getSession();
       if (data.session) {
         setIsAuthenticated(true);
+        const profile = await getCurrentUserProfile();
+        setRole(profile?.role ?? null);
       }
     };
     checkSession();
@@ -256,6 +327,8 @@ const AdminDashboard: React.FC = () => {
         return;
       }
       setIsAuthenticated(true);
+      const profile = await getCurrentUserProfile();
+      setRole(profile?.role ?? null);
     } catch (err) {
       console.error(err);
       setAuthError('Unable to log in. Please try again.');
@@ -265,6 +338,7 @@ const AdminDashboard: React.FC = () => {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setIsAuthenticated(false);
+    setRole(null);
     setCandidates([]);
     setSelectedCandidate(null);
   };
@@ -660,11 +734,17 @@ const AdminDashboard: React.FC = () => {
   const handleAddNote = async () => {
     if (!newNote.trim() || !selectedCandidate) return;
     const { data: { user } } = await supabase.auth.getUser();
+    const actorLabel = String(
+      user?.user_metadata?.full_name ||
+      user?.user_metadata?.name ||
+      user?.email ||
+      ''
+    ).trim() || undefined;
     await updateAdminData(prev => ({
       ...prev,
       notes: [
         ...prev.notes,
-        { id: crypto.randomUUID(), createdAt: new Date().toISOString(), text: newNote.trim(), authorEmail: user?.email ?? undefined },
+        { id: crypto.randomUUID(), createdAt: new Date().toISOString(), text: newNote.trim(), authorEmail: actorLabel },
       ],
     }));
     setNewNote('');
@@ -973,11 +1053,11 @@ const AdminDashboard: React.FC = () => {
   return (
     <Layout isAdmin>
       <div className="w-full p-5 lg:p-6 space-y-5">
-        {!(adminView === 'candidates' && selectedCandidate) && (
+        {!(effectiveAdminView === 'candidates' && selectedCandidate) && (
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-5 py-3 flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-[#0b1f3a]">
-              {adminView === 'overview' ? 'Overview' : adminView === 'candidates' ? 'Candidates' : adminView === 'analytics' ? 'Analytics' : 'Settings'}
+              {effectiveAdminView === 'overview' ? 'Overview' : effectiveAdminView === 'candidates' ? 'Candidates' : effectiveAdminView === 'analytics' ? 'Analytics' : 'Settings'}
             </h1>
             <p className="text-xs text-gray-500">
               {dashboard.total} applicants · {dashboard.activePipeline} active
@@ -992,7 +1072,7 @@ const AdminDashboard: React.FC = () => {
         </div>
         )}
 
-        {adminView === 'overview' && (
+        {effectiveAdminView === 'overview' && (
           <div className="grid grid-cols-1 xl:grid-cols-[320px_minmax(0,1fr)] gap-5">
             <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
               <p className="text-sm font-semibold text-[#0b1f3a] mb-3">
@@ -1056,7 +1136,7 @@ const AdminDashboard: React.FC = () => {
           </div>
         )}
 
-        {adminView === 'analytics' && (
+        {effectiveAdminView === 'analytics' && (
           <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-5 space-y-4">
             <div className="flex flex-wrap gap-2">
               <Button onClick={exportCSV} variant="outline" className="text-sm">
@@ -1090,14 +1170,46 @@ const AdminDashboard: React.FC = () => {
           </div>
         )}
 
-        {adminView === 'settings' && (
+        {effectiveAdminView === 'settings' && (
           <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-6 text-sm text-gray-600">
             Settings page placeholder. Add admin settings widgets here.
           </div>
         )}
 
-        {adminView === 'candidates' && (
+        {effectiveAdminView === 'candidates' && (
         <>
+        {!selectedCandidate && leadershipPendingQueue.length > 0 && (
+          <div className="rounded-2xl border border-amber-300 bg-amber-50 shadow-sm p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-amber-900">Leadership assessments pending action</p>
+                <p className="text-xs text-amber-800 mt-1">
+                  Prioritized list of submissions not touched yet. Items older than 24h are marked urgent.
+                </p>
+              </div>
+              <span className="text-xs font-semibold px-2 py-1 rounded-full bg-amber-200 text-amber-900">
+                {leadershipPendingQueue.length} pending
+              </span>
+            </div>
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+              {leadershipPendingQueue.slice(0, 8).map((row) => (
+                <button
+                  key={row.candidate.id}
+                  type="button"
+                  onClick={() => selectCandidate(row.candidate)}
+                  className={`text-left rounded-lg border px-3 py-2 ${
+                    row.urgent ? 'border-red-300 bg-red-50' : 'border-amber-200 bg-white'
+                  }`}
+                >
+                  <p className="text-sm font-semibold text-gray-900">{row.candidate.firstName} {row.candidate.lastName}</p>
+                  <p className="text-xs text-gray-600 mt-1">
+                    Submitted {formatDateTimeCanadaEastern(row.submittedAt)} ({row.ageHours}h ago)
+                  </p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {!selectedCandidate && (
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm">
           <div className="px-5 py-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 text-xs bg-[#f9fbff]">
@@ -1204,22 +1316,24 @@ const AdminDashboard: React.FC = () => {
               )}
             </div>
             <div className="overflow-y-auto flex-grow">
-              <div className="grid grid-cols-[34px,1.25fr,0.85fr,1.2fr,0.95fr,0.85fr,0.65fr,0.75fr] items-center gap-2 px-4 py-2 border-b border-gray-100 bg-[#f8fbff] text-[11px] font-semibold text-gray-500 uppercase tracking-wide sticky top-0 z-10">
+              <div className="grid grid-cols-[34px,1.1fr,0.8fr,1.15fr,0.9fr,1.15fr,0.8fr,0.6fr,0.7fr] items-center gap-2 px-4 py-2 border-b border-gray-100 bg-[#f8fbff] text-[11px] font-semibold text-gray-500 uppercase tracking-wide sticky top-0 z-10">
                 <input type="checkbox" checked={selectedIds.size === filteredCandidates.length && filteredCandidates.length > 0} onChange={selectAll} className="rounded border-gray-300 text-[#005EB8]" />
                 <span>Candidate Name</span>
                 <span>Phone</span>
                 <span>Email</span>
                 <span>Status / Stage</span>
+                <span>Current Status</span>
                 <span>Date & Time</span>
                 <span>Score</span>
                 <span>Resume</span>
               </div>
               {filteredCandidates.map(c => {
                 const admin = getAdminData(c);
+                const activity = latestCandidateActivity(c);
                 return (
                   <div
                     key={c.id}
-                    className={`grid grid-cols-[34px,1.25fr,0.85fr,1.2fr,0.95fr,0.85fr,0.65fr,0.75fr] items-center gap-2 p-3 border-b border-gray-100 transition-all ${
+                    className={`grid grid-cols-[34px,1.1fr,0.8fr,1.15fr,0.9fr,1.15fr,0.8fr,0.6fr,0.7fr] items-center gap-2 p-3 border-b border-gray-100 transition-all ${
                       selectedCandidate?.id === c.id
                         ? 'bg-gradient-to-r from-[#005EB8]/10 to-white border-l-4 border-l-[#005EB8]'
                         : 'hover:bg-gradient-to-r hover:from-gray-50 hover:to-white'
@@ -1243,6 +1357,14 @@ const AdminDashboard: React.FC = () => {
                       <span className="text-[11px] px-2 py-0.5 rounded-full font-semibold bg-gray-100 text-gray-700 border border-gray-200 inline-block truncate max-w-full">
                         {admin.pipelineStage}
                       </span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className={`text-[11px] truncate ${activity.priority === 'urgent' ? 'text-red-700 font-semibold' : 'text-gray-700'}`}>{activity.text}</p>
+                      {(activity.at || activity.by) && (
+                        <p className="text-[10px] text-gray-500 truncate">
+                          {activity.by ? `${activity.by} · ` : ''}{activity.at ? formatDateTimeCanadaEastern(activity.at) : ''}
+                        </p>
+                      )}
                     </div>
                     <div className="text-[11px] text-gray-700 truncate">{formatDateTimeCanadaEastern(c.timestamp)}</div>
                     <div className="text-[12px] text-gray-700">{c.score ?? '-'}</div>

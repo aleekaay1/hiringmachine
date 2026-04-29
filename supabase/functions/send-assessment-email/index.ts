@@ -4,13 +4,14 @@
 
 import nodemailer from 'npm:nodemailer@6.9.10';
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { jsPDF } from 'npm:jspdf@2.5.1';
 import {
   applyPostAssessmentSubmitMerge,
   POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT,
 } from '../_shared/postAssessmentSubmitEmailTemplate.ts';
 import { buildEmailSignatureHtml } from '../_shared/emailSignatureHtml.ts';
 import {
-  sendAssessmentInternalNotificationIfConfigured,
+  buildAssessmentInternalNotificationHtml,
   type AssessmentNotifyCandidateRow,
 } from '../_shared/assessmentCompleteInternalNotification.ts';
 import { appendCandidateEmailLog } from '../_shared/candidateEmailLog.ts';
@@ -37,6 +38,108 @@ function getTransport() {
     auth: { user, pass },
     ...(port === 587 && !secure ? { requireTLS: true } : {}),
   });
+}
+
+async function downloadPublicFileAsAttachment(url: string): Promise<{ filename: string; content: string; encoding: 'base64'; contentType?: string } | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const contentType = res.headers.get('content-type') || 'application/octet-stream';
+    const ab = await res.arrayBuffer();
+    const bytes = new Uint8Array(ab);
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    const base64 = btoa(binary);
+    const parts = url.split('/');
+    const filename = (parts[parts.length - 1] || 'resume').split('?')[0] || 'resume';
+    return { filename, content: base64, encoding: 'base64', contentType };
+  } catch {
+    return null;
+  }
+}
+
+function safeText(v: unknown): string {
+  const s = String(v ?? '').trim();
+  return s || 'N/A';
+}
+
+function toYesNoMaybe(v: unknown): string {
+  if (v === 'yes') return 'Yes';
+  if (v === 'no') return 'No';
+  if (v === 'maybe') return 'Maybe';
+  return safeText(v);
+}
+
+function getAssessmentSummaryLines(assessmentRaw: Record<string, unknown> | null | undefined, score: unknown, fitCategory: unknown): string[] {
+  const assessment = (assessmentRaw && typeof assessmentRaw === 'object') ? assessmentRaw : {};
+  const competitiveness = Number(assessment.competitiveness ?? NaN);
+  const moneyMotivation = Number(assessment.moneyMotivation ?? NaN);
+  const compBand = Number.isFinite(competitiveness) ? (competitiveness >= 7 ? 'high' : competitiveness >= 4 ? 'moderate' : 'low') : 'unknown';
+  const moneyBand = Number.isFinite(moneyMotivation) ? (moneyMotivation >= 7 ? 'high' : moneyMotivation >= 4 ? 'moderate' : 'low') : 'unknown';
+  return [
+    `Assessment score: ${safeText(score)} (${safeText(fitCategory)}).`,
+    `Competitiveness: ${Number.isFinite(competitiveness) ? competitiveness : 'N/A'} (${compBand}).`,
+    `Money motivation: ${Number.isFinite(moneyMotivation) ? moneyMotivation : 'N/A'} (${moneyBand}).`,
+    'Candidate completed leadership assessment successfully.',
+  ];
+}
+
+function buildCandidateProfilePdfBase64(row: Record<string, unknown>): { base64: string; filename: string } {
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const margin = 42;
+  const maxWidth = doc.internal.pageSize.getWidth() - margin * 2;
+  let y = margin;
+  const addLine = (text: string, size = 11, bold = false) => {
+    doc.setFont('helvetica', bold ? 'bold' : 'normal');
+    doc.setFontSize(size);
+    const lines = doc.splitTextToSize(text, maxWidth);
+    if (y + lines.length * (size + 3) > doc.internal.pageSize.getHeight() - margin) {
+      doc.addPage();
+      y = margin;
+    }
+    doc.text(lines, margin, y);
+    y += lines.length * (size + 3) + 6;
+  };
+
+  const aq = (row.applicant_questionnaire && typeof row.applicant_questionnaire === 'object')
+    ? row.applicant_questionnaire as Record<string, unknown>
+    : {};
+  const assessment = (row.assessment && typeof row.assessment === 'object')
+    ? row.assessment as Record<string, unknown>
+    : {};
+  const summary = getAssessmentSummaryLines(assessment, row.score, row.fit_category);
+
+  addLine('Candidate Report', 18, true);
+  addLine(`Generated: ${new Date().toLocaleString('en-CA', { timeZone: 'America/Toronto' })}`, 10);
+  addLine('');
+  addLine('1) Candidate information', 13, true);
+  addLine(`Name: ${safeText(row.first_name)} ${safeText(row.last_name)}`);
+  addLine(`Email: ${safeText(row.email)}`);
+  addLine(`Phone: ${safeText(row.phone)}`);
+  addLine(`City: ${safeText(row.city)}`);
+  addLine(`Status: ${safeText(row.status)}`);
+  addLine('');
+  addLine('2) Applicant questionnaire', 13, true);
+  addLine(`Occupation: ${safeText(aq.occupation)}`);
+  addLine(`Current role: ${safeText(aq.currentRole)}`);
+  addLine(`Background areas: ${Array.isArray(aq.backgroundAreas) ? aq.backgroundAreas.map((x) => String(x)).join(', ') : 'N/A'}`);
+  addLine(`Sales experience: ${safeText(aq.salesExperience)}`);
+  addLine(`What stood out: ${safeText(aq.whatStoodOut)}`);
+  addLine(`Why good fit: ${safeText(aq.whyGoodFit)}`);
+  addLine(`Position interest: ${safeText(aq.positionInterest)}`);
+  addLine(`Contact permission: ${toYesNoMaybe(aq.contactPermission)}`);
+  addLine(`Background check willing: ${toYesNoMaybe(aq.backgroundCheckWilling)}`);
+  addLine('');
+  addLine('3) Assessment summary', 13, true);
+  summary.forEach((s) => addLine(`- ${s}`));
+
+  const dataUri = doc.output('datauristring');
+  const base64 = dataUri.includes(',') ? dataUri.split(',')[1]! : dataUri;
+  const nameSafe = `${safeText(row.first_name)}_${safeText(row.last_name)}`.replace(/[^a-z0-9_-]+/gi, '_');
+  return { base64, filename: `${nameSafe}_candidate_profile.pdf` };
 }
 
 Deno.serve(async (req) => {
@@ -82,7 +185,7 @@ Deno.serve(async (req) => {
     const admin = createClient(supabaseUrl, serviceRole);
     const { data: row, error: qErr } = await admin
       .from('candidates')
-      .select('id, email, first_name, last_name, phone, city, timestamp, status, fit_category, score')
+      .select('id, email, first_name, last_name, phone, city, timestamp, status, fit_category, score, applicant_questionnaire, assessment')
       .eq('id', candidateId)
       .maybeSingle();
 
@@ -134,7 +237,51 @@ Deno.serve(async (req) => {
 
     const notifyRow = row as AssessmentNotifyCandidateRow;
     try {
-      await sendAssessmentInternalNotificationIfConfigured(transport, from, notifyRow);
+      const aq = (notifyRow.applicant_questionnaire && typeof notifyRow.applicant_questionnaire === 'object')
+        ? notifyRow.applicant_questionnaire as Record<string, unknown>
+        : {};
+      const resumeUrls = Array.isArray(aq.resumeUrls)
+        ? aq.resumeUrls.map((x) => String(x || '').trim()).filter(Boolean)
+        : [];
+      const attachments: Array<{ filename: string; content: string; encoding: 'base64'; contentType?: string }> = [];
+      for (const resumeUrl of resumeUrls.slice(0, 3)) {
+        const att = await downloadPublicFileAsAttachment(resumeUrl);
+        if (att) attachments.push(att);
+      }
+      const summaryHtml = `
+<p><strong>Assessment summary</strong></p>
+<ul>
+  <li>Score: ${notifyRow.score ?? '—'}</li>
+  <li>Fit category: ${notifyRow.fit_category ?? '—'}</li>
+  <li>Status: ${notifyRow.status ?? '—'}</li>
+</ul>
+${resumeUrls.length > 0 ? `<p><strong>Resume links</strong>: ${resumeUrls.map((u) => `<a href="${u}">${u}</a>`).join('<br/>')}</p>` : '<p><strong>Resume links</strong>: —</p>'}
+      `.trim();
+      const internalHtml = `${buildAssessmentInternalNotificationHtml(notifyRow)}<br/>${summaryHtml}<br/>${buildEmailSignatureHtml()}`;
+      const internalRecipients = (Deno.env.get('ASSESSMENT_COMPLETE_NOTIFY_EMAIL')?.trim() || 'leaders@globelife-paz.com');
+      const profilePdf = buildCandidateProfilePdfBase64(row as Record<string, unknown>);
+      await new Promise<void>((resolve, reject) => {
+        transport.sendMail(
+          {
+            from,
+            to: internalRecipients,
+            subject: `Leadership Assessment submitted — ${candidateName}`,
+            text: internalHtml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
+            html: internalHtml,
+            attachments: [
+              {
+                filename: profilePdf.filename,
+                content: profilePdf.base64,
+                encoding: 'base64',
+                contentType: 'application/pdf',
+              },
+              ...attachments,
+            ],
+          },
+          (err: Error | null) => (err ? reject(err) : resolve())
+        );
+      });
+      // Internal notification already sent above with summary + resume attachments.
     } catch (notifyErr) {
       console.error('send-assessment-email: internal notification failed:', notifyErr);
     }

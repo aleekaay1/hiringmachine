@@ -21,7 +21,8 @@ const App: React.FC = () => {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Landing />} />
-        <Route path="/interview" element={<InterviewForm />} />
+        <Route path="/checkin" element={<InterviewForm />} />
+        <Route path="/interview" element={<Navigate to="/checkin" replace />} />
         <Route path="/check-status" element={<CheckStatus />} />
         <Route path="/confirmation/:id" element={<PostInterview />} />
         <Route path="/assessment-intro/:id" element={<AssessmentIntro />} />

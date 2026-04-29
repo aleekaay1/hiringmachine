@@ -56,10 +56,17 @@ function toCsvValue(value: unknown): string {
 }
 
 function getInviterName(row: AnyRow): string {
+  const enrichments = (row.enrichments && typeof row.enrichments === 'object') ? row.enrichments as AnyRow : null;
   const direct = String(
     row.inviter_name ||
     row.invited_by ||
     row.invited_by_name ||
+    row.utm_source ||
+    row.utm_term ||
+    row.utm_content ||
+    enrichments?.utm_source ||
+    enrichments?.utm_term ||
+    enrichments?.utm_content ||
     row.registration_page_name ||
     row.referrer_name ||
     row.affiliate_name ||
@@ -82,7 +89,10 @@ function getInviterName(row: AnyRow): string {
   if (nestedInviter) return nestedInviter;
   const source = String(row.registration_source || '').trim();
   if (source && source !== 'registration_page') return source;
-  return 'Registration page';
+  const utmLike = Object.entries(row)
+    .find(([k, v]) => /^utm_/i.test(k) && typeof v === 'string' && String(v).trim())?.[1];
+  if (typeof utmLike === 'string' && utmLike.trim()) return utmLike.trim();
+  return 'Registration page / unknown inviter';
 }
 
 function normalizeSubscriptions(data: DashboardData | null): AnyRow[] {

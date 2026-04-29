@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
@@ -33,6 +33,7 @@ const HRDashboard: React.FC = () => {
   const [interviewComment, setInterviewComment] = useState('');
   const [draggingCandidateId, setDraggingCandidateId] = useState<string | null>(null);
   const [dragOverStage, setDragOverStage] = useState<string | null>(null);
+  const hasLoadedOnceRef = useRef(false);
 
   const getAccessToken = useCallback(async () => {
     const { data: s } = await supabase.auth.getSession();
@@ -58,20 +59,6 @@ const HRDashboard: React.FC = () => {
     setData(res.data);
   }, [getAccessToken]);
 
-  const runPopulateIfNeeded = useCallback(async () => {
-    const total = Number(data?.summary?.total_candidates ?? 0);
-    const covered = Number(data?.summary?.readiness_coverage ?? 0);
-    if (total === 0 || covered > 0) return;
-    const token = await getAccessToken();
-    if (!token) return;
-    setRunning(true);
-    const rollupRes = await runHrRollup(token, false);
-    if (rollupRes.ok) await runHrAutomation(token, false);
-    setRunning(false);
-    await load();
-    setBanner('Dashboard data was empty, so analytics were recalculated automatically.');
-  }, [data?.summary, getAccessToken, load]);
-
   useEffect(() => {
     void (async () => {
       const { data: s } = await supabase.auth.getSession();
@@ -80,16 +67,12 @@ const HRDashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || hasLoadedOnceRef.current) return;
+    hasLoadedOnceRef.current = true;
     void (async () => {
       await load();
     })();
   }, [isAuthenticated, load]);
-
-  useEffect(() => {
-    if (!isAuthenticated || !data) return;
-    void runPopulateIfNeeded();
-  }, [isAuthenticated, data, runPopulateIfNeeded]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
