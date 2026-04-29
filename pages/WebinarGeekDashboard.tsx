@@ -57,6 +57,7 @@ function toCsvValue(value: unknown): string {
 
 function getInviterName(row: AnyRow): string {
   const enrichments = (row.enrichments && typeof row.enrichments === 'object') ? row.enrichments as AnyRow : null;
+  const extraFields = (row.extra_fields && typeof row.extra_fields === 'object') ? row.extra_fields as AnyRow : null;
   const direct = String(
     row.inviter_name ||
     row.invited_by ||
@@ -67,6 +68,7 @@ function getInviterName(row: AnyRow): string {
     enrichments?.utm_source ||
     enrichments?.utm_term ||
     enrichments?.utm_content ||
+    row.custom_field ||
     row.registration_page_name ||
     row.referrer_name ||
     row.affiliate_name ||
@@ -89,10 +91,38 @@ function getInviterName(row: AnyRow): string {
   if (nestedInviter) return nestedInviter;
   const source = String(row.registration_source || '').trim();
   if (source && source !== 'registration_page') return source;
+  if (extraFields) {
+    const kv = Object.entries(extraFields)
+      .find(([, v]) => typeof v === 'string' && String(v).trim() && String(v).trim().toLowerCase() !== 'registration_page');
+    if (kv) return String(kv[1]).trim();
+  }
   const utmLike = Object.entries(row)
     .find(([k, v]) => /^utm_/i.test(k) && typeof v === 'string' && String(v).trim())?.[1];
   if (typeof utmLike === 'string' && utmLike.trim()) return utmLike.trim();
-  return 'Registration page / unknown inviter';
+  return 'Unknown inviter (no attribution in API)';
+}
+
+function getAttributionDebug(row: AnyRow): string {
+  const parts: string[] = [];
+  const src = String(row.registration_source || '').trim();
+  if (src) parts.push(`source=${src}`);
+  const custom = String(row.custom_field || '').trim();
+  if (custom) parts.push(`custom=${custom}`);
+  const utmSource = String(row.utm_source || '').trim();
+  if (utmSource) parts.push(`utm_source=${utmSource}`);
+  const utmTerm = String(row.utm_term || '').trim();
+  if (utmTerm) parts.push(`utm_term=${utmTerm}`);
+  const utmContent = String(row.utm_content || '').trim();
+  if (utmContent) parts.push(`utm_content=${utmContent}`);
+  const inviterSignal = String(row.inviter_signal || '').trim();
+  if (inviterSignal) parts.push(`signal=${inviterSignal}`);
+  const extraFields = row.extra_fields && typeof row.extra_fields === 'object'
+    ? row.extra_fields as AnyRow
+    : null;
+  if (extraFields && Object.keys(extraFields).length > 0) {
+    parts.push(`extra_fields=${JSON.stringify(extraFields)}`);
+  }
+  return parts.length > 0 ? parts.join(' | ') : 'No attribution fields present in WebinarGeek payload';
 }
 
 function normalizeSubscriptions(data: DashboardData | null): AnyRow[] {
@@ -652,6 +682,10 @@ const WebinarGeekDashboard: React.FC = () => {
                           <p><span className="font-semibold text-[#334a69]">IP:</span> {String(row.registration_ip || '—')}</p>
                           <p><span className="font-semibold text-[#334a69]">Created:</span> {unixToLabel(row.created_at)}</p>
                           <p><span className="font-semibold text-[#334a69]">Watch link:</span> {row.watch_link ? <a className="text-[#005EB8] underline" href={String(row.watch_link)} target="_blank" rel="noopener noreferrer">Open</a> : '—'}</p>
+                          <p className="pt-1 border-t border-[#edf2fb] mt-2">
+                            <span className="font-semibold text-[#334a69]">Attribution debug:</span>{' '}
+                            <span className="text-[#445a78] break-words">{getAttributionDebug(row)}</span>
+                          </p>
                         </div>
                       </article>
                     );

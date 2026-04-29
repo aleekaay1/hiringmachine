@@ -8,6 +8,37 @@ const corsHeaders = {
 
 const WEBINARGEEK_BASE = (Deno.env.get('WEBINARGEEK_API_BASE_URL')?.trim() || 'https://app.webinargeek.com/api/v2').replace(/\/$/, '');
 
+function deriveInviterSignal(row: Record<string, unknown>): string | null {
+  const extraFields = row.extra_fields && typeof row.extra_fields === 'object'
+    ? row.extra_fields as Record<string, unknown>
+    : null;
+  const candidates = [
+    row.inviter_name,
+    row.invited_by,
+    row.invited_by_name,
+    row.utm_source,
+    row.utm_term,
+    row.utm_content,
+    row.custom_field,
+    row.registration_page_name,
+    row.referrer_name,
+    row.affiliate_name,
+  ];
+  for (const v of candidates) {
+    const s = String(v || '').trim();
+    if (s && s.toLowerCase() !== 'registration_page') return s;
+  }
+  const source = String(row.registration_source || '').trim();
+  if (source && source.toLowerCase() !== 'registration_page') return source;
+  if (extraFields) {
+    for (const v of Object.values(extraFields)) {
+      const s = String(v || '').trim();
+      if (s && s.toLowerCase() !== 'registration_page') return s;
+    }
+  }
+  return null;
+}
+
 function parseBool(value: string | null): boolean | undefined {
   if (value == null) return undefined;
   if (value === '1' || value.toLowerCase() === 'true') return true;
@@ -237,6 +268,7 @@ Deno.serve(async (req) => {
         const totalWatchDuration = rows.reduce((s, r) => s + Number(r.watch_duration || 0), 0);
         const ips = Array.from(new Set(rows.map((r) => String(r.registration_ip || '').trim()).filter(Boolean)));
         const sources = Array.from(new Set(rows.map((r) => String(r.registration_source || '').trim()).filter(Boolean)));
+        const inviterSignals = Array.from(new Set(rows.map((r) => deriveInviterSignal(r)).filter((v): v is string => Boolean(v))));
 
         const webinarGeekData = {
           synced_at: nowIso,
@@ -256,6 +288,7 @@ Deno.serve(async (req) => {
             .sort((a, b) => b - a)[0] ?? null,
           registration_ips: ips,
           registration_sources: sources,
+          inviter_signals: inviterSignals,
           records: rows.map((r) => ({
             subscription_id: r.id || null,
             email: r.email || null,
@@ -271,6 +304,9 @@ Deno.serve(async (req) => {
             watch_start: r.watch_start || null,
             watch_end: r.watch_end || null,
             registration_source: r.registration_source || null,
+            custom_field: r.custom_field || null,
+            extra_fields: r.extra_fields || null,
+            inviter_signal: deriveInviterSignal(r),
             registration_ip: r.registration_ip || null,
             unsubscribed: r.unsubscribed === true,
             broadcast: r.broadcast || null,
