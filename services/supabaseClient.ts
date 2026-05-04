@@ -9,5 +9,21 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+/**
+ * Auth-js expects `lock` with signature (name, acquireTimeout, fn) => Promise<R>.
+ * A previous custom lock used the wrong shape (treating arg2 as a callback), which broke
+ * client init and made every page look logged out. This implementation simply runs `fn()`
+ * without the Navigator LockManager (avoids multi-tab lock timeouts; fine for typical CRM use).
+ */
+const authInlineLock = async <R>(_name: string, _acquireTimeout: number, fn: () => Promise<R>): Promise<R> =>
+  fn();
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    lock: authInlineLock,
+  },
+});
 
