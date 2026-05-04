@@ -18,6 +18,23 @@ import { supabase } from './supabaseClient';
 const TABLE_NAME = 'candidates';
 const RESUMES_BUCKET = 'candidate-resumes';
 
+/** Toronto “season”: list candidates from April 15 of the current season year onward (ongoing into the future). */
+const ADMIN_LIST_CANDIDATE_LIMIT = 100;
+
+function adminListSinceDateYmdToronto(): string {
+  const p = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Toronto',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+  }).formatToParts(new Date());
+  const y = Number(p.find((x) => x.type === 'year')?.value ?? '1970');
+  const m = Number(p.find((x) => x.type === 'month')?.value ?? '1');
+  const d = Number(p.find((x) => x.type === 'day')?.value ?? '1');
+  const seasonYear = m > 4 || (m === 4 && d >= 15) ? y : y - 1;
+  return `${seasonYear}-04-15`;
+}
+
 /** Shown when a new application would duplicate an existing CRM record. */
 export const DUPLICATE_APPLICATION_MESSAGE =
   'You have already applied. Please contact HR for information.';
@@ -147,10 +164,13 @@ const ADMIN_LIST_COLUMNS =
   'id, first_name, last_name, email, phone, city, timestamp, status, score, fit_category, admin_data, applicant_questionnaire, post_interview, exit_questionnaire';
 
 export const getCandidatesForAdminList = async (): Promise<Candidate[]> => {
+  const sinceYmd = adminListSinceDateYmdToronto();
   const { data, error } = await supabase
     .from(TABLE_NAME)
     .select(ADMIN_LIST_COLUMNS)
-    .order('timestamp', { ascending: false });
+    .gte('timestamp', sinceYmd)
+    .order('timestamp', { ascending: false })
+    .limit(ADMIN_LIST_CANDIDATE_LIMIT);
 
   if (error) {
     console.error('Error fetching candidates (admin list) from Supabase', error);

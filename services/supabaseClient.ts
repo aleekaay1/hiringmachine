@@ -9,12 +9,5 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    // Avoid Navigator LockManager contention (multi-tab / rapid auth) that can time out and break getUser/getSession.
-    lock: async (_name, acquire) => {
-      await acquire();
-    },
-  },
-});
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
