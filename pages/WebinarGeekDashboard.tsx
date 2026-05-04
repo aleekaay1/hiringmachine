@@ -186,6 +186,17 @@ function watchRowToneClass(seconds: number): string {
   return 'bg-rose-50 hover:bg-rose-100/90';
 }
 
+/** Table filter: matches legend rows (full / half+ / little·none). */
+type WatchToneFilter = 'full' | 'half' | 'low';
+
+function rowMatchesWatchToneFilter(row: AnyRow, filter: WatchToneFilter): boolean {
+  const sec = Number(row.watch_duration || 0);
+  const b = watchBucket(sec);
+  if (filter === 'full') return b === 'full';
+  if (filter === 'half') return b === 'half';
+  return b === 'under_half' || b === 'no_watch';
+}
+
 function normalizeSubscriptions(data: DashboardData | null): AnyRow[] {
   const payload = data?.subscriptions as Record<string, unknown> | undefined;
   const rows = payload?.subscriptions;
@@ -216,6 +227,8 @@ const WebinarGeekDashboard: React.FC = () => {
   const [monthAnchorYmd, setMonthAnchorYmd] = useState(torontoMonthStartToday);
   /** When set, table shows only that Toronto calendar day; null = whole month window. */
   const [selectedDayYmd, setSelectedDayYmd] = useState<string | null>(null);
+  /** Click legend to filter table; click same legend again to clear (null). */
+  const [watchToneFilter, setWatchToneFilter] = useState<WatchToneFilter | null>(null);
   const [selectedRow, setSelectedRow] = useState<AnyRow | null>(null);
   const monthWindow = useMemo(() => monthBoundsFromFirstYmd(monthAnchorYmd), [monthAnchorYmd]);
 
@@ -238,13 +251,18 @@ const WebinarGeekDashboard: React.FC = () => {
     return rowsInViewMonth.filter((row) => {
       const key = fmtDateKey(row);
       if (selectedDayYmd && key !== selectedDayYmd) return false;
+      if (watchToneFilter && !rowMatchesWatchToneFilter(row, watchToneFilter)) return false;
       if (!q) return true;
       const name = `${String(row.firstname ?? '').trim()} ${String(row.surname ?? '').trim()}`.toLowerCase();
       const emailText = String(row.email ?? '').toLowerCase();
       const inviter = getInviterName(row).toLowerCase();
       return name.includes(q) || emailText.includes(q) || inviter.includes(q);
     });
-  }, [rowsInViewMonth, selectedDayYmd, searchQuery]);
+  }, [rowsInViewMonth, selectedDayYmd, searchQuery, watchToneFilter]);
+
+  const toggleWatchToneFilter = useCallback((tone: WatchToneFilter) => {
+    setWatchToneFilter((prev) => (prev === tone ? null : tone));
+  }, []);
 
   const monthOverview = useMemo(() => {
     const rows = rowsInViewMonth;
@@ -626,17 +644,59 @@ const WebinarGeekDashboard: React.FC = () => {
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 border-b border-slate-100 bg-slate-50/60">
             <p className="text-xs font-medium text-slate-600">
               {selectedDayYmd == null ? monthWindow.title : ymdToShortLabel(selectedDayYmd)}
+              {watchToneFilter === 'full' && (
+                <span className="text-emerald-800 font-semibold"> · Full watch only</span>
+              )}
+              {watchToneFilter === 'half' && (
+                <span className="text-sky-800 font-semibold"> · Half+ only</span>
+              )}
+              {watchToneFilter === 'low' && (
+                <span className="text-rose-800 font-semibold"> · Little / none only</span>
+              )}
             </p>
-            <div className="flex flex-wrap items-center gap-3 text-[10px] text-slate-600">
-              <span className="inline-flex items-center gap-1.5">
-                <span className="h-2.5 w-6 rounded bg-emerald-100 border border-emerald-200/80" /> Full watch
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="h-2.5 w-6 rounded bg-sky-100 border border-sky-200/80" /> Half+
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="h-2.5 w-6 rounded bg-rose-100 border border-rose-200/80" /> Little / none
-              </span>
+            <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-600">
+              <button
+                type="button"
+                onClick={() => toggleWatchToneFilter('full')}
+                aria-pressed={watchToneFilter === 'full'}
+                title="Show only full-watch rows. Click again to clear."
+                className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/80 ${
+                  watchToneFilter === 'full'
+                    ? 'border-emerald-500 bg-emerald-100/90 text-emerald-950 shadow-sm'
+                    : 'border-transparent hover:bg-emerald-50/80 hover:border-emerald-200/80'
+                }`}
+              >
+                <span className="h-2.5 w-6 shrink-0 rounded bg-emerald-100 border border-emerald-200/80" aria-hidden />
+                Full watch
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleWatchToneFilter('half')}
+                aria-pressed={watchToneFilter === 'half'}
+                title="Show only half+ watch rows. Click again to clear."
+                className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/80 ${
+                  watchToneFilter === 'half'
+                    ? 'border-sky-500 bg-sky-100/90 text-sky-950 shadow-sm'
+                    : 'border-transparent hover:bg-sky-50/80 hover:border-sky-200/80'
+                }`}
+              >
+                <span className="h-2.5 w-6 shrink-0 rounded bg-sky-100 border border-sky-200/80" aria-hidden />
+                Half+
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleWatchToneFilter('low')}
+                aria-pressed={watchToneFilter === 'low'}
+                title="Show only little / none watch rows. Click again to clear."
+                className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/80 ${
+                  watchToneFilter === 'low'
+                    ? 'border-rose-500 bg-rose-100/90 text-rose-950 shadow-sm'
+                    : 'border-transparent hover:bg-rose-50/80 hover:border-rose-200/80'
+                }`}
+              >
+                <span className="h-2.5 w-6 shrink-0 rounded bg-rose-100 border border-rose-200/80" aria-hidden />
+                Little / none
+              </button>
             </div>
           </div>
           <div className="overflow-auto max-h-[min(70vh,560px)]">
