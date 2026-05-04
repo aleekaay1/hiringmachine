@@ -72,12 +72,51 @@ async function wgGet(path: string, params?: Record<string, string | number | boo
   return wgRequest(`${path}${suffix}`, { method: 'GET' });
 }
 
-async function wgGetAllSubscriptions(params: Record<string, string | number | boolean | undefined>) {
-  const perPage = Math.min(1000, Math.max(50, Number(params.per_page || 1000)));
+function subscriptionRowEventMs(row: Record<string, unknown>): number | null {
+  const broadcast = row.broadcast && typeof row.broadcast === 'object' ? row.broadcast as Record<string, unknown> : null;
+  const candidates = [broadcast?.date, row.created_at, row.watched_true_set_at];
+  let best: number | null = null;
+  for (const v of candidates) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    const ms = n > 1e12 ? n : n * 1000;
+    if (best == null || ms > best) best = ms;
+  }
+  return best;
+}
+
+function parseYmdToUtcStartMs(ymd: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
+  if (!m) return null;
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+}
+
+function parseYmdToUtcEndMs(ymd: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd.trim());
+  if (!m) return null;
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999);
+}
+
+function rowInWindow(row: Record<string, unknown>, sinceMs: number | null, untilMs: number | null): boolean {
+  const ms = subscriptionRowEventMs(row);
+  if (ms == null) return sinceMs == null && untilMs == null;
+  if (sinceMs != null && ms < sinceMs) return false;
+  if (untilMs != null && ms > untilMs) return false;
+  return true;
+}
+
+async function wgGetAllSubscriptions(
+  params: Record<string, string | number | boolean | undefined>,
+  opts?: { sinceMs?: number | null; untilMs?: number | null; maxPages?: number }
+) {
+  const perPage = Math.min(1000, Math.max(50, Number(params.per_page || 250)));
+  const sinceMs = opts?.sinceMs ?? null;
+  const untilMs = opts?.untilMs ?? null;
+  const maxPages = Math.min(500, Math.max(1, Number(opts?.maxPages ?? 40)));
   const rows: Array<Record<string, unknown>> = [];
   let page = 1;
   let totalPages = 1;
-  for (let guard = 0; guard < 500; guard++) {
+  for (let guard = 0; guard < maxPages; guard++) {
     const res = await wgGet('/subscriptions', {
       ...params,
       per_page: perPage,
@@ -87,12 +126,25 @@ async function wgGetAllSubscriptions(params: Record<string, string | number | bo
     const pageRows = Array.isArray(res.json.subscriptions)
       ? (res.json.subscriptions as Array<Record<string, unknown>>)
       : [];
-    rows.push(...pageRows);
+    const filtered = sinceMs != null || untilMs != null
+      ? pageRows.filter((r) => rowInWindow(r, sinceMs, untilMs))
+      : pageRows;
+    rows.push(...filtered);
+
+    const pageTimes = pageRows.map(subscriptionRowEventMs).filter((n): n is number => n != null);
+    const oldestOnPage = pageTimes.length ? Math.min(...pageTimes) : null;
+    const newestOnPage = pageTimes.length ? Math.max(...pageTimes) : null;
+
     const pages = (res.json.pages && typeof res.json.pages === 'object')
       ? (res.json.pages as Record<string, unknown>)
       : {};
     totalPages = Number(pages.total_pages || totalPages || 1);
     const nextLink = typeof pages.next === 'string' ? pages.next : null;
+
+    if (sinceMs != null && pageRows.length > 0 && oldestOnPage != null && newestOnPage != null && newestOnPage < sinceMs) {
+      break;
+    }
+
     if (!nextLink || page >= totalPages) {
       return { ok: true, status: res.status, json: { ...res.json, subscriptions: rows }, rows, pagesFetched: page, totalPages };
     }
@@ -152,25 +204,35 @@ Deno.serve(async (req) => {
     if (req.method === 'GET' && mode === 'dashboard') {
       const webinarId = url.searchParams.get('webinar_id')?.trim();
       const broadcastId = url.searchParams.get('broadcast_id')?.trim();
-      const perPage = Number(url.searchParams.get('per_page') || '50');
+      const perPage = Number(url.searchParams.get('per_page') || '250');
       const watched = parseBool(url.searchParams.get('watched_webinar'));
       const watchedLive = parseBool(url.searchParams.get('watched_live'));
       const watchedReplay = parseBool(url.searchParams.get('watched_replay'));
+      const since = url.searchParams.get('since')?.trim() || '';
+      const until = url.searchParams.get('until')?.trim() || '';
+      const includeCatalog = url.searchParams.get('include_catalog') !== '0';
+      const maxPages = Math.min(80, Math.max(1, Number(url.searchParams.get('max_pages') || '20')));
 
-      const [account, webinars, broadcasts, subscriptions] = await Promise.all([
-        wgGet('/account'),
-        wgGet('/webinars'),
-        wgGet('/broadcasts', webinarId ? { webinar_id: webinarId } : undefined),
-        wgGetAllSubscriptions({
-          webinar_id: webinarId || undefined,
-          broadcast_id: broadcastId || undefined,
-          watched_webinar: watched,
-          watched_live: watchedLive,
-          watched_replay: watchedReplay,
-          nested_resources: 'broadcast,episode,webinar',
-          per_page: Number.isFinite(perPage) ? perPage : 1000,
-        }),
-      ]);
+      const sinceMs = since ? parseYmdToUtcStartMs(since) : null;
+      const untilMs = until ? parseYmdToUtcEndMs(until) : null;
+
+      const account = await wgGet('/account');
+      const webinars = includeCatalog
+        ? await wgGet('/webinars')
+        : { ok: true as const, status: 200, json: { webinars: [] as unknown[] } };
+      const broadcasts = includeCatalog
+        ? await wgGet('/broadcasts', webinarId ? { webinar_id: webinarId } : undefined)
+        : { ok: true as const, status: 200, json: { broadcasts: [] as unknown[] } };
+
+      const subscriptions = await wgGetAllSubscriptions({
+        webinar_id: webinarId || undefined,
+        broadcast_id: broadcastId || undefined,
+        watched_webinar: watched,
+        watched_live: watchedLive,
+        watched_replay: watchedReplay,
+        nested_resources: 'broadcast,episode,webinar',
+        per_page: Number.isFinite(perPage) ? perPage : 250,
+      }, { sinceMs, untilMs, maxPages });
 
       const selectedWebinar = webinarId ? await wgGet(`/webinars/${webinarId}`) : null;
       const selectedBroadcast = broadcastId ? await wgGet(`/broadcasts/${broadcastId}`) : null;
@@ -184,6 +246,10 @@ Deno.serve(async (req) => {
           watched_webinar: watched ?? null,
           watched_live: watchedLive ?? null,
           watched_replay: watchedReplay ?? null,
+          since: since || null,
+          until: until || null,
+          include_catalog: includeCatalog,
+          max_pages: maxPages,
         },
         account: account.json,
         webinars: webinars.json,
@@ -216,17 +282,25 @@ Deno.serve(async (req) => {
         webinar_id?: string;
         broadcast_id?: string;
         per_page?: number;
+        since?: string;
+        until?: string;
+        max_pages?: number;
       };
       const webinarId = String(body.webinar_id || '').trim();
       const broadcastId = String(body.broadcast_id || '').trim();
       const perPage = Number(body.per_page || 250);
+      const since = String(body.since || '').trim();
+      const until = String(body.until || '').trim();
+      const maxPages = Math.min(80, Math.max(1, Number(body.max_pages || 25)));
+      const sinceMs = since ? parseYmdToUtcStartMs(since) : null;
+      const untilMs = until ? parseYmdToUtcEndMs(until) : null;
 
       const subscriptions = await wgGetAllSubscriptions({
         webinar_id: webinarId || undefined,
         broadcast_id: broadcastId || undefined,
         nested_resources: 'broadcast,episode,webinar',
-        per_page: Number.isFinite(perPage) ? perPage : 1000,
-      });
+        per_page: Number.isFinite(perPage) ? perPage : 250,
+      }, { sinceMs, untilMs, maxPages });
       if (!subscriptions.ok) {
         return new Response(JSON.stringify({
           error: String(subscriptions.json.error || subscriptions.json.message || 'Unable to fetch WebinarGeek subscriptions'),
@@ -380,6 +454,9 @@ Deno.serve(async (req) => {
           webinar_id: webinarId || null,
           broadcast_id: broadcastId || null,
           per_page: perPage,
+          since: since || null,
+          until: until || null,
+          max_pages: maxPages,
           pages_fetched: subscriptions.pagesFetched ?? 1,
           total_pages: subscriptions.totalPages ?? 1,
         },

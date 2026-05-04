@@ -16,6 +16,9 @@ export interface SendEmailParams {
   /** Comma-separated addresses, e.g. CC for staff. */
   cc?: string;
   attachments?: EmailAttachmentPayload[];
+  /** Stored in email_send_logs.trigger_label for auditing. */
+  trigger?: string;
+  candidateId?: string;
 }
 
 /** Send email via Edge Function. Requires auth token. */
@@ -43,6 +46,8 @@ export async function sendEmail(
       bodyHtml: params.bodyHtml || undefined,
       bodyText: params.bodyText || undefined,
       cc: params.cc?.trim() || undefined,
+      trigger: params.trigger?.trim() || undefined,
+      candidateId: params.candidateId?.trim() || undefined,
       attachments:
         params.attachments?.map((a) => ({
           filename: a.filename,

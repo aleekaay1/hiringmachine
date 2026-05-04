@@ -841,12 +841,15 @@ const AdminDashboard: React.FC = () => {
       const origin = getSiteOriginForEmail();
       const bodyCore = `<p>Attached is the candidate PDF report for <strong>${name || 'candidate'}</strong>.</p><p>Candidate email: <a href="mailto:${selectedCandidate.email}">${selectedCandidate.email}</a><br/>Phone: ${selectedCandidate.phone || 'N/A'}</p>`;
       const bodyHtml = appendEmailSignatureToHtml(bodyCore, origin);
+
       const result = await sendEmail(session.access_token, {
         to,
         cc: reportCcAlex ? CC_EMAIL_ALEX : undefined,
         subject,
         bodyHtml,
         attachments: [{ filename, contentBase64: base64, contentType: 'application/pdf' }],
+        trigger: 'candidate_report_pdf_staff',
+        candidateId: selectedCandidate.id,
       });
       if ('ok' in result && result.ok) {
         setReportEmailSent(true);
@@ -885,7 +888,18 @@ const AdminDashboard: React.FC = () => {
           : undefined)
       : undefined;
     const bodyText = !emailBodyIsHtml ? emailBody.trim() || undefined : undefined;
-    const result = await sendEmail(session.access_token, { to, subject, bodyHtml, bodyText });
+    const trigger =
+      emailModalMode && emailModalMode !== 'compose'
+        ? `crm_template:${emailModalMode}`
+        : 'crm_compose_manual';
+    const result = await sendEmail(session.access_token, {
+      to,
+      subject,
+      bodyHtml,
+      bodyText,
+      trigger,
+      candidateId: selectedCandidate.id,
+    });
     setEmailSending(false);
     if ('ok' in result && result.ok) {
       const sentAt = new Date().toISOString();
@@ -931,6 +945,8 @@ const AdminDashboard: React.FC = () => {
         to: selectedCandidate.email,
         subject,
         bodyHtml,
+        trigger: 'crm_template:stage5_evaluation',
+        candidateId: selectedCandidate.id,
       });
       if (!('ok' in send && send.ok)) {
         throw new Error(('error' in send ? send.error : '') || 'Failed to send evaluation email');

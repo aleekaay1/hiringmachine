@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
@@ -7,7 +7,8 @@ import {
   fetchWebinarGeekHealth,
   syncWebinarGeekCandidates,
 } from '../services/webinarGeekIntegrations';
-import { Download, RefreshCw, Search, ShieldCheck, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, RefreshCw, Search, ShieldCheck, X } from 'lucide-react';
+import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
 
 type AnyRow = Record<string, unknown>;
 type DashboardData = Record<string, unknown>;
@@ -21,10 +22,55 @@ function asUnixMs(value: unknown): number | null {
   return n > 1e12 ? n : n * 1000;
 }
 
-function fmtDateTime(value: unknown): string {
-  const ms = asUnixMs(value);
-  if (!ms) return '—';
-  return new Date(ms).toLocaleString();
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+/** Toronto calendar YYYY-MM-DD for "today" (wall clock). */
+function torontoYmdFromDate(d = new Date()): string {
+  const p = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Toronto',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(d);
+  const y = p.find((x) => x.type === 'year')?.value ?? '1970';
+  const mo = p.find((x) => x.type === 'month')?.value ?? '01';
+  const da = p.find((x) => x.type === 'day')?.value ?? '01';
+  return `${y}-${mo}-${da}`;
+}
+
+function torontoMonthStartToday(): string {
+  const t = torontoYmdFromDate();
+  return `${t.slice(0, 7)}-01`;
+}
+
+function shiftMonthFirstYmd(firstYmd: string, delta: number): string {
+  const [y, m] = firstYmd.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-01`;
+}
+
+function monthBoundsFromFirstYmd(firstYmd: string): { since: string; until: string; title: string } {
+  const [y, m] = firstYmd.split('-').map(Number);
+  const lastD = new Date(y, m, 0).getDate();
+  const since = `${y}-${pad2(m)}-01`;
+  const until = `${y}-${pad2(m)}-${pad2(lastD)}`;
+  const title = new Date(y, m - 1, 7).toLocaleDateString('en-CA', { month: 'long', year: 'numeric' });
+  return { since, until, title };
+}
+
+function eventMsToTorontoYmd(ms: number): string {
+  const p = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Toronto',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(ms));
+  const y = p.find((x) => x.type === 'year')?.value ?? '1970';
+  const mo = p.find((x) => x.type === 'month')?.value ?? '01';
+  const da = p.find((x) => x.type === 'day')?.value ?? '01';
+  return `${y}-${mo}-${da}`;
 }
 
 function fmtDateKey(row: AnyRow): string {
@@ -32,8 +78,8 @@ function fmtDateKey(row: AnyRow): string {
     asUnixMs((row.broadcast as AnyRow | undefined)?.date) ??
     asUnixMs(row.created_at) ??
     asUnixMs(row.watched_true_set_at);
-  if (!ms) return 'Unknown date';
-  return new Date(ms).toISOString().slice(0, 10);
+  if (!ms) return 'unknown';
+  return eventMsToTorontoYmd(ms);
 }
 
 function durationLabel(value: unknown): string {
@@ -139,13 +185,15 @@ const WebinarGeekDashboard: React.FC = () => {
 
   const [webinarId, setWebinarId] = useState('');
   const [broadcastId, setBroadcastId] = useState('');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedDate, setSelectedDate] = useState<string>('all');
+  /** First day of the month being viewed (YYYY-MM-01), Toronto wall month via local month arithmetic. */
+  const [monthAnchorYmd, setMonthAnchorYmd] = useState(torontoMonthStartToday);
+  /** When set, table shows only that Toronto calendar day; null = whole month window. */
+  const [selectedDayYmd, setSelectedDayYmd] = useState<string | null>(null);
   const [selectedRow, setSelectedRow] = useState<AnyRow | null>(null);
+  const [includeCatalog, setIncludeCatalog] = useState(false);
 
-  const hasInitializedRef = useRef(false);
+  const monthWindow = useMemo(() => monthBoundsFromFirstYmd(monthAnchorYmd), [monthAnchorYmd]);
 
   const subscriptions = useMemo(() => normalizeSubscriptions(data), [data]);
 
@@ -153,49 +201,51 @@ const WebinarGeekDashboard: React.FC = () => {
     const q = searchQuery.trim().toLowerCase();
     return subscriptions.filter((row) => {
       const key = fmtDateKey(row);
-      if (selectedDate !== 'all' && key !== selectedDate) return false;
-
-      const ms =
-        asUnixMs((row.broadcast as AnyRow | undefined)?.date) ??
-        asUnixMs(row.created_at) ??
-        asUnixMs(row.watched_true_set_at);
-      if (dateFrom && ms) {
-        const from = new Date(`${dateFrom}T00:00:00`).getTime();
-        if (ms < from) return false;
-      }
-      if (dateTo && ms) {
-        const to = new Date(`${dateTo}T23:59:59`).getTime();
-        if (ms > to) return false;
-      }
+      if (selectedDayYmd && key !== selectedDayYmd) return false;
       if (!q) return true;
       const name = `${String(row.firstname ?? '').trim()} ${String(row.surname ?? '').trim()}`.toLowerCase();
       const emailText = String(row.email ?? '').toLowerCase();
       const inviter = getInviterName(row).toLowerCase();
       return name.includes(q) || emailText.includes(q) || inviter.includes(q);
     });
-  }, [subscriptions, selectedDate, dateFrom, dateTo, searchQuery]);
+  }, [subscriptions, selectedDayYmd, searchQuery]);
 
-  const dateRows = useMemo(() => {
-    const map = new Map<string, { date: string; invited: number; watched: number; unsubscribed: number }>();
+  const [viewYear, viewMonth0] = useMemo(() => {
+    const [y, m] = monthAnchorYmd.split('-').map(Number);
+    return [y, m - 1] as const;
+  }, [monthAnchorYmd]);
+
+  const calendarCells = useMemo(() => {
+    const firstDow = new Date(viewYear, viewMonth0, 1).getDay();
+    const lastDay = new Date(viewYear, viewMonth0 + 1, 0).getDate();
+    const cells: (number | null)[] = [];
+    for (let i = 0; i < firstDow; i++) cells.push(null);
+    for (let d = 1; d <= lastDay; d++) cells.push(d);
+    while (cells.length % 7 !== 0) cells.push(null);
+    return cells;
+  }, [viewYear, viewMonth0]);
+
+  const dayCounts = useMemo(() => {
+    const map = new Map<string, { invited: number; watched: number }>();
     for (const row of subscriptions) {
       const key = fmtDateKey(row);
-      if (!map.has(key)) map.set(key, { date: key, invited: 0, watched: 0, unsubscribed: 0 });
-      const entry = map.get(key)!;
-      entry.invited += 1;
-      if (row.watched === true) entry.watched += 1;
-      if (row.unsubscribed === true) entry.unsubscribed += 1;
+      if (key === 'unknown') continue;
+      if (!map.has(key)) map.set(key, { invited: 0, watched: 0 });
+      const e = map.get(key)!;
+      e.invited += 1;
+      if (row.watched === true) e.watched += 1;
     }
-    return [...map.values()].sort((a, b) => (a.date < b.date ? 1 : -1));
+    return map;
   }, [subscriptions]);
 
   const daySummary = useMemo(() => {
-    const rows = selectedDate === 'all' ? filteredRows : filteredRows;
+    const rows = filteredRows;
     const invited = rows.length;
     const watched = rows.filter((r) => r.watched === true).length;
     const fullWatched = rows.filter((r) => watchBucket(Number(r.watch_duration || 0)) === 'full').length;
     const unsubscribed = rows.filter((r) => r.unsubscribed === true).length;
     return { invited, watched, fullWatched, unsubscribed };
-  }, [filteredRows, selectedDate]);
+  }, [filteredRows]);
 
   const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
     const { data: s } = await supabase.auth.getSession();
@@ -225,11 +275,16 @@ const WebinarGeekDashboard: React.FC = () => {
   const loadDashboard = useCallback(async () => {
     setError(null);
     setLoading(true);
+    const { since, until } = monthWindow;
     const result = await withAuthRetry(async (token) => {
       const r = await fetchWebinarGeekDashboard(token, {
         webinarId: webinarId.trim() || undefined,
         broadcastId: broadcastId.trim() || undefined,
-        perPage: 1000,
+        perPage: 250,
+        since,
+        until,
+        includeCatalog,
+        maxPages: 22,
       });
       if (!r.ok && r.error.toLowerCase().includes('unauthorized')) return null;
       return r;
@@ -246,7 +301,7 @@ const WebinarGeekDashboard: React.FC = () => {
       return;
     }
     setData(result.data);
-  }, [broadcastId, webinarId, withAuthRetry]);
+  }, [broadcastId, webinarId, withAuthRetry, monthWindow, includeCatalog]);
 
   const loadHealth = useCallback(async () => {
     setError(null);
@@ -274,10 +329,14 @@ const WebinarGeekDashboard: React.FC = () => {
     setError(null);
     setSyncLoading(true);
     const result = await withAuthRetry(async (token) => {
+      const { since, until } = monthWindow;
       const r = await syncWebinarGeekCandidates(token, {
         webinarId: webinarId.trim() || undefined,
         broadcastId: broadcastId.trim() || undefined,
-        perPage: 1000,
+        perPage: 250,
+        since,
+        until,
+        maxPages: 22,
       });
       if (!r.ok && r.error.toLowerCase().includes('unauthorized')) return null;
       return r;
@@ -293,7 +352,7 @@ const WebinarGeekDashboard: React.FC = () => {
     }
     setSyncResult(result.data);
     await loadDashboard();
-  }, [broadcastId, webinarId, withAuthRetry, loadDashboard]);
+  }, [broadcastId, webinarId, withAuthRetry, loadDashboard, monthWindow]);
 
   const handleCsvExport = useCallback(() => {
     const headers = [
@@ -315,8 +374,15 @@ const WebinarGeekDashboard: React.FC = () => {
         asUnixMs((row.broadcast as AnyRow | undefined)?.date) ??
         asUnixMs(row.created_at) ??
         asUnixMs(row.watched_true_set_at);
-      const dt = ms ? new Date(ms) : null;
       const watched = row.watched === true ? 'Yes' : 'No';
+      const dateLabel = ms ? formatDateCanadaEastern(ms) : '—';
+      const timeOnly =
+        ms
+          ? new Intl.DateTimeFormat('en-CA', {
+              timeZone: 'America/Toronto',
+              timeStyle: 'short',
+            }).format(new Date(ms))
+          : '—';
       const watchType =
         row.watched_live === true ? 'Live'
         : row.watched_replay === true ? 'Replay'
@@ -326,8 +392,8 @@ const WebinarGeekDashboard: React.FC = () => {
         name || '—',
         String(row.email || '—'),
         getInviterName(row),
-        dt ? dt.toISOString().slice(0, 10) : '—',
-        dt ? dt.toLocaleTimeString() : '—',
+        dateLabel,
+        timeOnly,
         watched,
         watchType,
         durationLabel(row.watch_duration),
@@ -355,10 +421,13 @@ const WebinarGeekDashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated || hasInitializedRef.current) return;
-    hasInitializedRef.current = true;
+    if (!isAuthenticated) return;
     void loadDashboard();
   }, [isAuthenticated, loadDashboard]);
+
+  useEffect(() => {
+    setSelectedDayYmd(null);
+  }, [monthAnchorYmd, webinarId, broadcastId]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -393,11 +462,14 @@ const WebinarGeekDashboard: React.FC = () => {
       <div className="w-full p-6 space-y-4">
         <div className="rounded-xl border border-[#d6deea] bg-white p-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-bold text-[#0B1B34]">WebinarGeek Overview (Sheet View)</h1>
-            <p className="text-xs text-[#60728c]">Date-first overview + clean spreadsheet table + candidate detail popup.</p>
+            <h1 className="text-xl font-bold text-[#0B1B34]">WebinarGeek — month calendar</h1>
+            <p className="text-xs text-[#60728c]">
+              Loads subscriptions for <strong>{monthWindow.title}</strong> ({monthWindow.since} → {monthWindow.until}, Toronto dates). Use arrows to change month; click a day to filter the table.
+            </p>
             {data && (
               <p className="text-[11px] text-[#60728c] mt-1">
-                Total fetched records: {String((data?.subscriptions as AnyRow | undefined)?.total_count ?? subscriptions.length)} (after filters on page: {filteredRows.length})
+                Rows in window: {subscriptions.length} · Shown: {filteredRows.length}
+                {includeCatalog ? ' · Full webinar/broadcast catalog loaded' : ''}
               </p>
             )}
             {health && (() => {
@@ -425,21 +497,39 @@ const WebinarGeekDashboard: React.FC = () => {
           </div>
         </div>
 
-        <div className="rounded-xl border border-[#d6deea] bg-white p-4 grid grid-cols-1 md:grid-cols-6 gap-2">
-          <input value={webinarId} onChange={(e) => setWebinarId(e.target.value)} placeholder="webinar_id" className="px-3 py-2 rounded-lg border border-[#cfe3f9]" />
-          <input value={broadcastId} onChange={(e) => setBroadcastId(e.target.value)} placeholder="broadcast_id" className="px-3 py-2 rounded-lg border border-[#cfe3f9]" />
-          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="px-3 py-2 rounded-lg border border-[#cfe3f9]" />
-          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="px-3 py-2 rounded-lg border border-[#cfe3f9]" />
-          <label className="relative">
-            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#789]" />
-            <input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="search name/email/inviter"
-              className="w-full pl-8 pr-3 py-2 rounded-lg border border-[#cfe3f9]"
-            />
-          </label>
-          <Button type="button" onClick={() => void loadDashboard()} disabled={loading}>Apply</Button>
+        <div className="rounded-xl border border-[#d6deea] bg-white p-4 flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" onClick={() => setMonthAnchorYmd((m) => shiftMonthFirstYmd(m, -1))} aria-label="Previous month">
+                <ChevronLeft size={18} />
+              </Button>
+              <span className="text-sm font-semibold text-[#0B1B34] min-w-[10rem] text-center">{monthWindow.title}</span>
+              <Button type="button" variant="outline" onClick={() => setMonthAnchorYmd((m) => shiftMonthFirstYmd(m, 1))} aria-label="Next month">
+                <ChevronRight size={18} />
+              </Button>
+              <Button type="button" variant="outline" onClick={() => setMonthAnchorYmd(torontoMonthStartToday())}>
+                This month
+              </Button>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-[#4f6787] cursor-pointer select-none">
+              <input type="checkbox" checked={includeCatalog} onChange={(e) => setIncludeCatalog(e.target.checked)} className="rounded border-[#cfe3f9]" />
+              Load webinar &amp; broadcast lists (slower)
+            </label>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+            <input value={webinarId} onChange={(e) => setWebinarId(e.target.value)} placeholder="webinar_id (optional)" className="px-3 py-2 rounded-lg border border-[#cfe3f9]" />
+            <input value={broadcastId} onChange={(e) => setBroadcastId(e.target.value)} placeholder="broadcast_id (optional)" className="px-3 py-2 rounded-lg border border-[#cfe3f9]" />
+            <label className="relative md:col-span-1">
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#789]" />
+              <input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search name / email / inviter"
+                className="w-full pl-8 pr-3 py-2 rounded-lg border border-[#cfe3f9]"
+              />
+            </label>
+            <Button type="button" onClick={() => void loadDashboard()} disabled={loading}>Reload data</Button>
+          </div>
         </div>
 
         {syncResult && (
@@ -453,25 +543,52 @@ const WebinarGeekDashboard: React.FC = () => {
         {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{error}</div>}
 
         <div className="rounded-xl border border-[#d6deea] bg-white p-4">
-          <p className="text-sm font-semibold text-[#0B1B34] mb-2">Available dates</p>
-          <div className="flex flex-wrap gap-2">
+          <p className="text-sm font-semibold text-[#0B1B34] mb-3">Calendar (Toronto) — click a day to filter</p>
+          <div className="flex flex-wrap gap-2 mb-3">
             <button
               type="button"
-              onClick={() => setSelectedDate('all')}
-              className={`px-3 py-1.5 rounded-full text-xs border ${selectedDate === 'all' ? 'bg-[#005EB8] text-white border-[#005EB8]' : 'bg-white text-[#4f6787] border-[#cfe3f9]'}`}
+              onClick={() => setSelectedDayYmd(null)}
+              className={`px-3 py-1.5 rounded-full text-xs border ${selectedDayYmd == null ? 'bg-[#005EB8] text-white border-[#005EB8]' : 'bg-white text-[#4f6787] border-[#cfe3f9]'}`}
             >
-              All dates
+              Whole month
             </button>
-            {dateRows.map((d) => (
-              <button
-                key={d.date}
-                type="button"
-                onClick={() => setSelectedDate(d.date)}
-                className={`px-3 py-1.5 rounded-full text-xs border ${selectedDate === d.date ? 'bg-[#005EB8] text-white border-[#005EB8]' : 'bg-white text-[#4f6787] border-[#cfe3f9]'}`}
-              >
-                {d.date} ({d.invited})
-              </button>
+          </div>
+          <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-semibold text-[#60728c] mb-1">
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
+              <div key={d} className="py-1">
+                {d}
+              </div>
             ))}
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {calendarCells.map((day, idx) => {
+              if (day == null) {
+                return <div key={`e-${idx}`} className="min-h-[52px] rounded-lg bg-[#f4f7fb]" />;
+              }
+              const ymd = `${viewYear}-${pad2(viewMonth0 + 1)}-${pad2(day)}`;
+              const counts = dayCounts.get(ymd);
+              const invited = counts?.invited ?? 0;
+              const watched = counts?.watched ?? 0;
+              const active = selectedDayYmd === ymd;
+              return (
+                <button
+                  key={ymd}
+                  type="button"
+                  onClick={() => setSelectedDayYmd((prev) => (prev === ymd ? null : ymd))}
+                  className={`min-h-[52px] rounded-lg border text-left p-1.5 flex flex-col justify-between transition ${
+                    active
+                      ? 'border-[#005EB8] bg-[#e8f2fc] ring-1 ring-[#005EB8]'
+                      : 'border-[#e2eaf5] bg-white hover:border-[#9db7dc]'
+                  }`}
+                >
+                  <span className="text-sm font-bold text-[#0B1B34]">{day}</span>
+                  <span className="text-[10px] text-[#5a6d86] leading-tight">
+                    {invited ? `${invited} reg` : '—'}
+                    {watched ? ` · ${watched} watched` : ''}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -485,7 +602,9 @@ const WebinarGeekDashboard: React.FC = () => {
         <div className="rounded-xl border border-[#d6deea] bg-white overflow-hidden">
           <div className="px-4 py-3 border-b border-[#e7eef8] bg-[#f8fbff]">
             <p className="text-sm font-semibold text-[#0B1B34]">
-              {selectedDate === 'all' ? 'All records (spreadsheet view)' : `Records for ${selectedDate}`}
+              {selectedDayYmd == null
+                ? `All days in ${monthWindow.title}`
+                : `Records for ${selectedDayYmd} (Toronto calendar day)`}
             </p>
           </div>
           <div className="overflow-auto max-h-[60vh]">
@@ -495,7 +614,7 @@ const WebinarGeekDashboard: React.FC = () => {
                   <th className="text-left px-3 py-2">Candidate</th>
                   <th className="text-left px-3 py-2">Email</th>
                   <th className="text-left px-3 py-2">Inviter</th>
-                  <th className="text-left px-3 py-2">Date / Time</th>
+                  <th className="text-left px-3 py-2">When (Toronto)</th>
                   <th className="text-left px-3 py-2">Watched</th>
                   <th className="text-left px-3 py-2">Watch Details</th>
                   <th className="text-left px-3 py-2">Status</th>
@@ -513,7 +632,6 @@ const WebinarGeekDashboard: React.FC = () => {
                     asUnixMs((row.broadcast as AnyRow | undefined)?.date) ??
                     asUnixMs(row.created_at) ??
                     asUnixMs(row.watched_true_set_at);
-                  const dt = ms ? new Date(ms) : null;
                   return (
                     <tr
                       key={String(row.id)}
@@ -523,7 +641,7 @@ const WebinarGeekDashboard: React.FC = () => {
                       <td className="px-3 py-2">{name}</td>
                       <td className="px-3 py-2">{String(row.email || '—')}</td>
                       <td className="px-3 py-2">{getInviterName(row)}</td>
-                      <td className="px-3 py-2">{dt ? dt.toLocaleString() : '—'}</td>
+                      <td className="px-3 py-2">{ms ? formatDateTimeCanadaEastern(ms) : '—'}</td>
                       <td className="px-3 py-2">{row.watched === true ? 'Yes' : 'No'}</td>
                       <td className="px-3 py-2">{durationLabel(durationSec)} ({bucket})</td>
                       <td className="px-3 py-2">{row.unsubscribed === true ? 'Unsubscribed' : 'Subscribed'}</td>
@@ -550,10 +668,28 @@ const WebinarGeekDashboard: React.FC = () => {
                 <Detail label="Email" value={String(selectedRow.email || '—')} />
                 <Detail label="Inviter" value={getInviterName(selectedRow)} />
                 <Detail label="Registration source" value={String(selectedRow.registration_source || '—')} />
-                <Detail label="Created" value={fmtDateTime(selectedRow.created_at)} />
+                <Detail
+                  label="Created"
+                  value={(() => {
+                    const t = asUnixMs(selectedRow.created_at);
+                    return t ? formatDateTimeCanadaEastern(t) : '—';
+                  })()}
+                />
                 <Detail label="Watched" value={selectedRow.watched === true ? 'Yes' : 'No'} />
-                <Detail label="Watch start" value={fmtDateTime(selectedRow.watch_start)} />
-                <Detail label="Watch end" value={fmtDateTime(selectedRow.watch_end)} />
+                <Detail
+                  label="Watch start"
+                  value={(() => {
+                    const t = asUnixMs(selectedRow.watch_start);
+                    return t ? formatDateTimeCanadaEastern(t) : '—';
+                  })()}
+                />
+                <Detail
+                  label="Watch end"
+                  value={(() => {
+                    const t = asUnixMs(selectedRow.watch_end);
+                    return t ? formatDateTimeCanadaEastern(t) : '—';
+                  })()}
+                />
                 <Detail label="Watch duration" value={durationLabel(selectedRow.watch_duration)} />
                 <Detail label="Live watch duration" value={durationLabel(selectedRow.watch_duration_live)} />
                 <Detail label="Replay watch duration" value={durationLabel(selectedRow.watch_duration_replay)} />

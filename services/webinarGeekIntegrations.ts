@@ -8,12 +8,21 @@ export interface WebinarGeekDashboardFilters {
   watchedLive?: boolean;
   watchedReplay?: boolean;
   perPage?: number;
+  /** Inclusive YYYY-MM-DD (UTC calendar day window used by the Edge Function). */
+  since?: string;
+  until?: string;
+  /** When false, skips heavy `/webinars` + `/broadcasts` list calls (default in UI). */
+  includeCatalog?: boolean;
+  maxPages?: number;
 }
 
 export interface WebinarGeekSyncPayload {
   webinarId?: string;
   broadcastId?: string;
   perPage?: number;
+  since?: string;
+  until?: string;
+  maxPages?: number;
 }
 
 function buildFunctionUrl(path: string): string | null {
@@ -67,6 +76,10 @@ export async function fetchWebinarGeekDashboard(
   if (typeof filters.watchedLive === 'boolean') params.set('watched_live', String(filters.watchedLive));
   if (typeof filters.watchedReplay === 'boolean') params.set('watched_replay', String(filters.watchedReplay));
   if (typeof filters.perPage === 'number') params.set('per_page', String(filters.perPage));
+  if (filters.since?.trim()) params.set('since', filters.since.trim());
+  if (filters.until?.trim()) params.set('until', filters.until.trim());
+  if (filters.includeCatalog === false) params.set('include_catalog', '0');
+  if (typeof filters.maxPages === 'number') params.set('max_pages', String(filters.maxPages));
   return callWebinarGeek(accessToken, `?${params.toString()}`);
 }
 
@@ -81,6 +94,9 @@ export async function syncWebinarGeekCandidates(
       webinar_id: payload.webinarId || undefined,
       broadcast_id: payload.broadcastId || undefined,
       per_page: payload.perPage ?? 250,
+      since: payload.since || undefined,
+      until: payload.until || undefined,
+      max_pages: payload.maxPages ?? 25,
     }),
   });
 }

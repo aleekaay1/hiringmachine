@@ -15,6 +15,7 @@ import CheckStatus from './pages/CheckStatus';
 import LiveSessionsDashboard from './pages/LiveSessionsDashboard';
 import WebinarGeekDashboard from './pages/WebinarGeekDashboard';
 import HRDashboard from './pages/HRDashboard';
+import EmailLog from './pages/EmailLog';
 
 const App: React.FC = () => {
   return (
@@ -36,6 +37,7 @@ const App: React.FC = () => {
         <Route path="/webinar-geek" element={<WebinarGeekDashboard />} />
         <Route path="/hr-dashboard" element={<HRDashboard />} />
         <Route path="/qr" element={<QrCodes />} />
+        <Route path="/email-log" element={<EmailLog />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

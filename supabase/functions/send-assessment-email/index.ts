@@ -15,6 +15,7 @@ import {
   type AssessmentNotifyCandidateRow,
 } from '../_shared/assessmentCompleteInternalNotification.ts';
 import { appendCandidateEmailLog } from '../_shared/candidateEmailLog.ts';
+import { insertEmailSendLog } from '../_shared/emailSendLog.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -235,6 +236,17 @@ Deno.serve(async (req) => {
       type: 'automated_post_assessment_submit',
     });
 
+    await insertEmailSendLog(admin, {
+      source: 'send-assessment-email',
+      trigger_label: 'assessment_received_candidate',
+      from_email: from,
+      to_email: candidateEmail,
+      subject,
+      candidate_id: candidateId,
+      status: 'sent',
+      metadata: { path: 'stage4_candidate' },
+    });
+
     const notifyRow = row as AssessmentNotifyCandidateRow;
     try {
       const aq = (notifyRow.applicant_questionnaire && typeof notifyRow.applicant_questionnaire === 'object')
@@ -260,12 +272,13 @@ ${resumeUrls.length > 0 ? `<p><strong>Resume links</strong>: ${resumeUrls.map((u
       const internalHtml = `${buildAssessmentInternalNotificationHtml(notifyRow)}<br/>${summaryHtml}<br/>${buildEmailSignatureHtml()}`;
       const internalRecipients = (Deno.env.get('ASSESSMENT_COMPLETE_NOTIFY_EMAIL')?.trim() || 'leaders@globelife-paz.com');
       const profilePdf = buildCandidateProfilePdfBase64(row as Record<string, unknown>);
+      const internalSubject = `Leadership Assessment submitted — ${candidateName}`;
       await new Promise<void>((resolve, reject) => {
         transport.sendMail(
           {
             from,
             to: internalRecipients,
-            subject: `Leadership Assessment submitted — ${candidateName}`,
+            subject: internalSubject,
             text: internalHtml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
             html: internalHtml,
             attachments: [
@@ -281,9 +294,35 @@ ${resumeUrls.length > 0 ? `<p><strong>Resume links</strong>: ${resumeUrls.map((u
           (err: Error | null) => (err ? reject(err) : resolve())
         );
       });
-      // Internal notification already sent above with summary + resume attachments.
+      await insertEmailSendLog(admin, {
+        source: 'send-assessment-email',
+        trigger_label: 'assessment_received_internal_leaders',
+        from_email: from,
+        to_email: internalRecipients,
+        subject: internalSubject,
+        candidate_id: candidateId,
+        status: 'sent',
+        metadata: { path: 'internal_with_pdf', resumeAttachmentCount: attachments.length },
+      });
     } catch (notifyErr) {
       console.error('send-assessment-email: internal notification failed:', notifyErr);
+      try {
+        const internalRecipients = (Deno.env.get('ASSESSMENT_COMPLETE_NOTIFY_EMAIL')?.trim() || 'leaders@globelife-paz.com');
+        const internalSubject = `Leadership Assessment submitted — ${candidateName}`;
+        await insertEmailSendLog(admin, {
+          source: 'send-assessment-email',
+          trigger_label: 'assessment_received_internal_leaders',
+          from_email: from,
+          to_email: internalRecipients,
+          subject: internalSubject,
+          candidate_id: candidateId,
+          status: 'failed',
+          error_message: notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
+          metadata: { path: 'internal_with_pdf' },
+        });
+      } catch {
+        /* ignore */
+      }
     }
 
     return new Response(JSON.stringify({ ok: true }), {

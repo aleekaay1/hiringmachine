@@ -4,6 +4,7 @@
 
 import nodemailer from 'npm:nodemailer@6.9.10';
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { insertEmailSendLog } from '../_shared/emailSendLog.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -79,6 +80,12 @@ Deno.serve(async (req) => {
     const bodyText = body?.bodyText;
     const cc = typeof body?.cc === 'string' ? body.cc.trim() : '';
     const rawAttachments = Array.isArray(body?.attachments) ? body.attachments : [];
+    const triggerLabel =
+      typeof body?.trigger === 'string' && body.trigger.trim() ? body.trigger.trim() : null;
+    const logCandidateId =
+      body?.candidateId != null && String(body.candidateId).trim()
+        ? String(body.candidateId).trim()
+        : null;
 
     if (!to || !subject) {
       return new Response(JSON.stringify({ error: 'Missing to or subject' }), {
@@ -111,20 +118,58 @@ Deno.serve(async (req) => {
     }>;
 
     const transport = getTransport();
-    await new Promise<void>((resolve, reject) => {
-      transport.sendMail(
-        {
-          from,
-          to,
-          ...(cc ? { cc } : {}),
+    try {
+      await new Promise<void>((resolve, reject) => {
+        transport.sendMail(
+          {
+            from,
+            to,
+            ...(cc ? { cc } : {}),
+            subject,
+            text: bodyText || (typeof bodyHtml === 'string' ? bodyHtml.replace(/<[^>]*>/g, '') : ''),
+            html: typeof bodyHtml === 'string' ? bodyHtml : undefined,
+            ...(attachments.length ? { attachments } : {}),
+          },
+          (err: Error | null) => (err ? reject(err) : resolve())
+        );
+      });
+    } catch (sendErr) {
+      const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.trim();
+      if (serviceRole) {
+        const logClient = createClient(supabaseUrl, serviceRole);
+        await insertEmailSendLog(logClient, {
+          source: 'send-email',
+          trigger_label: triggerLabel,
+          from_email: from,
+          to_email: to,
+          cc_email: cc || null,
           subject,
-          text: bodyText || (typeof bodyHtml === 'string' ? bodyHtml.replace(/<[^>]*>/g, '') : ''),
-          html: typeof bodyHtml === 'string' ? bodyHtml : undefined,
-          ...(attachments.length ? { attachments } : {}),
-        },
-        (err: Error | null) => (err ? reject(err) : resolve())
-      );
-    });
+          candidate_id: logCandidateId,
+          sent_by_user_id: user.id,
+          status: 'failed',
+          error_message: sendErr instanceof Error ? sendErr.message : String(sendErr),
+          metadata: { attachmentCount: attachments.length },
+        });
+      }
+      throw sendErr;
+    }
+
+    const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.trim();
+    if (serviceRole) {
+      const logClient = createClient(supabaseUrl, serviceRole);
+      await insertEmailSendLog(logClient, {
+        source: 'send-email',
+        trigger_label: triggerLabel,
+        from_email: from,
+        to_email: to,
+        cc_email: cc || null,
+        subject,
+        candidate_id: logCandidateId,
+        sent_by_user_id: user.id,
+        status: 'sent',
+        metadata: { attachmentCount: attachments.length },
+      });
+    }
 
     return new Response(
       JSON.stringify({ ok: true }),

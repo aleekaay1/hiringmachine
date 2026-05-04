@@ -21,10 +21,10 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
   return data as UserProfile;
 }
 
-export function canAccessSection(role: AppRole | null, section: 'overview' | 'candidates' | 'qr' | 'live-sessions' | 'webinar-geek' | 'analytics' | 'settings' | 'hr-dashboard'): boolean {
+export function canAccessSection(role: AppRole | null, section: 'overview' | 'candidates' | 'qr' | 'live-sessions' | 'webinar-geek' | 'analytics' | 'settings' | 'hr-dashboard' | 'email-log'): boolean {
   if (!role || role === 'admin') return true;
-  if (role === 'recruiter') return section === 'overview' || section === 'candidates' || section === 'live-sessions';
+  if (role === 'recruiter') return section === 'overview' || section === 'candidates' || section === 'live-sessions' || section === 'email-log';
   if (role === 'webinar') return section === 'overview' || section === 'webinar-geek' || section === 'analytics';
-  if (role === 'hr') return section === 'overview' || section === 'candidates' || section === 'hr-dashboard' || section === 'live-sessions';
+  if (role === 'hr') return section === 'overview' || section === 'candidates' || section === 'hr-dashboard' || section === 'live-sessions' || section === 'email-log';
   return section === 'overview';
 }

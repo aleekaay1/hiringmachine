@@ -12,10 +12,13 @@ import {
 import { buildEmailSignatureHtml } from '../_shared/emailSignatureHtml.ts';
 import { ZOOM_MEETING_URL } from '../_shared/hiringUrls.ts';
 import {
+  buildAssessmentInternalNotificationSubject,
+  parseAssessmentNotifyRecipients,
   sendAssessmentInternalNotificationIfConfigured,
   type AssessmentNotifyCandidateRow,
 } from '../_shared/assessmentCompleteInternalNotification.ts';
 import { appendCandidateEmailLog } from '../_shared/candidateEmailLog.ts';
+import { insertEmailSendLog } from '../_shared/emailSendLog.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -163,12 +166,56 @@ Deno.serve(async (req) => {
       type: logType,
     });
 
+    await insertEmailSendLog(admin, {
+      source: 'send-candidate-email',
+      trigger_label: isPostCheckin ? 'post_checkin' : 'post_assessment_submit',
+      from_email: from,
+      to_email: candidateEmail,
+      subject,
+      candidate_id: candidateId,
+      status: 'sent',
+      metadata: { path: 'candidate_transactional' },
+    });
+
     if (isPostAssessmentSubmit) {
       const notifyRow = row as AssessmentNotifyCandidateRow;
       try {
         await sendAssessmentInternalNotificationIfConfigured(transport, from, notifyRow);
+        const internalTo = parseAssessmentNotifyRecipients().join(', ');
+        const internalSubject = buildAssessmentInternalNotificationSubject(
+          `${firstName} ${(row.last_name as string) || ''}`.trim() || 'Candidate'
+        );
+        await insertEmailSendLog(admin, {
+          source: 'send-candidate-email',
+          trigger_label: 'post_assessment_internal_notification',
+          from_email: from,
+          to_email: internalTo,
+          subject: internalSubject,
+          candidate_id: candidateId,
+          status: 'sent',
+          metadata: { path: 'internal_assessment_complete' },
+        });
       } catch (notifyErr) {
         console.error('send-candidate-email: internal notification failed:', notifyErr);
+        try {
+          const internalTo = parseAssessmentNotifyRecipients().join(', ');
+          const internalSubject = buildAssessmentInternalNotificationSubject(
+            `${firstName} ${(row.last_name as string) || ''}`.trim() || 'Candidate'
+          );
+          await insertEmailSendLog(admin, {
+            source: 'send-candidate-email',
+            trigger_label: 'post_assessment_internal_notification',
+            from_email: from,
+            to_email: internalTo,
+            subject: internalSubject,
+            candidate_id: candidateId,
+            status: 'failed',
+            error_message: notifyErr instanceof Error ? notifyErr.message : String(notifyErr),
+            metadata: { path: 'internal_assessment_complete' },
+          });
+        } catch {
+          /* ignore secondary log errors */
+        }
       }
     }
 

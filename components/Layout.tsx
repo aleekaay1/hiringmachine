@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { COLORS } from '../constants';
 import { supabase } from '../services/supabaseClient';
 import { canAccessSection, getCurrentUserProfile, type AppRole } from '../services/accessControl';
-import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut, MonitorPlay } from 'lucide-react';
+import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut, MonitorPlay, Mail } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -34,6 +34,7 @@ const Layout: React.FC<LayoutProps> = ({
     { name: 'Webinar Geek', route: '/webinar-geek', icon: MonitorPlay, section: 'webinar-geek' as const },
     { name: 'Analytics', route: '/admin?view=analytics', icon: BarChart3, section: 'analytics' as const },
     { name: 'Settings', route: '/admin?view=settings', icon: Settings, section: 'settings' as const },
+    { name: 'Email log', route: '/email-log', icon: Mail, section: 'email-log' as const },
   ] as const;
 
   React.useEffect(() => {
