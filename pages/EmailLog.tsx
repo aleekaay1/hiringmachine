@@ -55,11 +55,13 @@ const EmailLog: React.FC = () => {
     if (error) {
       setRows([]);
       const msg = error.message || 'Failed to load.';
-      const missing =
-        /relation|does not exist|schema cache/i.test(msg) && /email_send_logs/i.test(msg);
+      const code = (error as { code?: string }).code;
+      const missingEmailLogs =
+        code === 'PGRST205' ||
+        (/relation|does not exist|schema cache/i.test(msg) && /email_send_logs/i.test(msg));
       setLoadError(
-        missing
-          ? 'The email_send_logs table is not deployed yet. Run the latest Supabase migration, then refresh.'
+        missingEmailLogs
+          ? 'The email_send_logs table is not visible to the API (often a 404 / PGRST205). In the Supabase SQL editor for this project, run the repo migration that creates public.email_send_logs and its "authenticated users can read email send logs" policy, then refresh the app.'
           : msg
       );
       return;
