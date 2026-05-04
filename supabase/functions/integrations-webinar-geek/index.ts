@@ -72,6 +72,35 @@ async function wgGet(path: string, params?: Record<string, string | number | boo
   return wgRequest(`${path}${suffix}`, { method: 'GET' });
 }
 
+async function wgGetAllSubscriptions(params: Record<string, string | number | boolean | undefined>) {
+  const perPage = Math.min(1000, Math.max(50, Number(params.per_page || 1000)));
+  const rows: Array<Record<string, unknown>> = [];
+  let page = 1;
+  let totalPages = 1;
+  for (let guard = 0; guard < 500; guard++) {
+    const res = await wgGet('/subscriptions', {
+      ...params,
+      per_page: perPage,
+      page,
+    });
+    if (!res.ok) return { ...res, rows, pagesFetched: page - 1, totalPages };
+    const pageRows = Array.isArray(res.json.subscriptions)
+      ? (res.json.subscriptions as Array<Record<string, unknown>>)
+      : [];
+    rows.push(...pageRows);
+    const pages = (res.json.pages && typeof res.json.pages === 'object')
+      ? (res.json.pages as Record<string, unknown>)
+      : {};
+    totalPages = Number(pages.total_pages || totalPages || 1);
+    const nextLink = typeof pages.next === 'string' ? pages.next : null;
+    if (!nextLink || page >= totalPages) {
+      return { ok: true, status: res.status, json: { ...res.json, subscriptions: rows }, rows, pagesFetched: page, totalPages };
+    }
+    page += 1;
+  }
+  return { ok: true, status: 200, json: { subscriptions: rows }, rows, pagesFetched: page - 1, totalPages };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
   if (req.method !== 'GET' && req.method !== 'POST') {
@@ -132,13 +161,14 @@ Deno.serve(async (req) => {
         wgGet('/account'),
         wgGet('/webinars'),
         wgGet('/broadcasts', webinarId ? { webinar_id: webinarId } : undefined),
-        wgGet('/subscriptions', {
+        wgGetAllSubscriptions({
           webinar_id: webinarId || undefined,
           broadcast_id: broadcastId || undefined,
           watched_webinar: watched,
           watched_live: watchedLive,
           watched_replay: watchedReplay,
           nested_resources: 'broadcast,episode,webinar',
+          per_page: Number.isFinite(perPage) ? perPage : 1000,
         }),
       ]);
 
@@ -167,6 +197,13 @@ Deno.serve(async (req) => {
           broadcasts_ok: broadcasts.ok,
           subscriptions_ok: subscriptions.ok,
         },
+        subscriptions_pagination: {
+          pages_fetched: subscriptions.pagesFetched ?? 1,
+          total_pages: subscriptions.totalPages ?? 1,
+          total_rows: Array.isArray((subscriptions.json as Record<string, unknown>).subscriptions)
+            ? ((subscriptions.json as Record<string, unknown>).subscriptions as Array<unknown>).length
+            : 0,
+        },
       };
       return new Response(JSON.stringify(response), {
         status: 200,
@@ -184,11 +221,11 @@ Deno.serve(async (req) => {
       const broadcastId = String(body.broadcast_id || '').trim();
       const perPage = Number(body.per_page || 250);
 
-      const subscriptions = await wgGet('/subscriptions', {
+      const subscriptions = await wgGetAllSubscriptions({
         webinar_id: webinarId || undefined,
         broadcast_id: broadcastId || undefined,
         nested_resources: 'broadcast,episode,webinar',
-        per_page: Number.isFinite(perPage) ? perPage : 250,
+        per_page: Number.isFinite(perPage) ? perPage : 1000,
       });
       if (!subscriptions.ok) {
         return new Response(JSON.stringify({
@@ -203,6 +240,13 @@ Deno.serve(async (req) => {
       const subRows = Array.isArray(subscriptions.json.subscriptions)
         ? subscriptions.json.subscriptions as Array<Record<string, unknown>>
         : [];
+
+      const broadcastsOverview = await wgGet('/broadcasts', webinarId ? { webinar_id: webinarId } : undefined);
+      const broadcastRows = Array.isArray(broadcastsOverview.json.broadcasts)
+        ? broadcastsOverview.json.broadcasts as Array<Record<string, unknown>>
+        : [];
+      const broadcastSubscriptionsTotal = broadcastRows.reduce((s, b) => s + Number(b.subscriptions_count || 0), 0);
+      const estimatedUnverifiedOrPending = Math.max(0, broadcastSubscriptionsTotal - subRows.length);
 
       const { data: candidates, error: candErr } = await admin
         .from('candidates')
@@ -336,8 +380,12 @@ Deno.serve(async (req) => {
           webinar_id: webinarId || null,
           broadcast_id: broadcastId || null,
           per_page: perPage,
+          pages_fetched: subscriptions.pagesFetched ?? 1,
+          total_pages: subscriptions.totalPages ?? 1,
         },
         total_subscriptions: subRows.length,
+        broadcast_subscriptions_total: broadcastSubscriptionsTotal,
+        estimated_unverified_or_pending: estimatedUnverifiedOrPending,
         matched_subscriptions: Array.from(matchedByCandidate.values()).reduce((s, rows) => s + rows.length, 0),
         unmatched_subscriptions: unmatched.length,
         matched_candidates: matchedByCandidate.size,

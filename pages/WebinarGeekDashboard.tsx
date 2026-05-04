@@ -7,143 +7,120 @@ import {
   fetchWebinarGeekHealth,
   syncWebinarGeekCandidates,
 } from '../services/webinarGeekIntegrations';
-import {
-  CalendarClock,
-  BarChart3,
-  CheckCircle2,
-  Clock3,
-  Download,
-  Database,
-  Eye,
-  Mail,
-  RefreshCw,
-  Search,
-  ShieldCheck,
-  UserX,
-  Video,
-} from 'lucide-react';
+import { Download, RefreshCw, Search, ShieldCheck, X } from 'lucide-react';
 
 type AnyRow = Record<string, unknown>;
 type DashboardData = Record<string, unknown>;
+
 const FULL_WATCH_SECONDS = 45 * 60;
 const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
 
-function unixToLabel(value: unknown): string {
+function asUnixMs(value: unknown): number | null {
   const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) return '—';
-  const ms = n > 1e12 ? n : n * 1000;
-  const d = new Date(ms);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString();
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n > 1e12 ? n : n * 1000;
+}
+
+function fmtDateTime(value: unknown): string {
+  const ms = asUnixMs(value);
+  if (!ms) return '—';
+  return new Date(ms).toLocaleString();
+}
+
+function fmtDateKey(row: AnyRow): string {
+  const ms =
+    asUnixMs((row.broadcast as AnyRow | undefined)?.date) ??
+    asUnixMs(row.created_at) ??
+    asUnixMs(row.watched_true_set_at);
+  if (!ms) return 'Unknown date';
+  return new Date(ms).toISOString().slice(0, 10);
 }
 
 function durationLabel(value: unknown): string {
   const sec = Number(value);
-  if (!Number.isFinite(sec) || sec <= 0) return '—';
+  if (!Number.isFinite(sec) || sec <= 0) return '0m 0s';
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = sec % 60;
   if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
+  return `${m}m ${s}s`;
 }
 
-function toCsvValue(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  const raw = String(value);
-  const escaped = raw.replace(/"/g, '""');
-  return `"${escaped}"`;
-}
-
-function getInviterName(row: AnyRow): string {
-  const enrichments = (row.enrichments && typeof row.enrichments === 'object') ? row.enrichments as AnyRow : null;
-  const extraFields = (row.extra_fields && typeof row.extra_fields === 'object') ? row.extra_fields as AnyRow : null;
-  const direct = String(
-    row.inviter_name ||
-    row.invited_by ||
-    row.invited_by_name ||
-    row.utm_source ||
-    row.utm_term ||
-    row.utm_content ||
-    enrichments?.utm_source ||
-    enrichments?.utm_term ||
-    enrichments?.utm_content ||
-    row.custom_field ||
-    row.registration_page_name ||
-    row.referrer_name ||
-    row.affiliate_name ||
-    ''
-  ).trim();
-  if (direct) return direct;
-  const nestedPage = (row.registration_page && typeof row.registration_page === 'object')
-    ? row.registration_page as AnyRow
-    : null;
-  const nestedOwner = (row.owner && typeof row.owner === 'object')
-    ? row.owner as AnyRow
-    : null;
-  const nestedInviter = String(
-    nestedPage?.name ||
-    nestedPage?.title ||
-    nestedOwner?.name ||
-    nestedOwner?.full_name ||
-    ''
-  ).trim();
-  if (nestedInviter) return nestedInviter;
-  const source = String(row.registration_source || '').trim();
-  if (source && source !== 'registration_page') return source;
-  if (extraFields) {
-    const kv = Object.entries(extraFields)
-      .find(([, v]) => typeof v === 'string' && String(v).trim() && String(v).trim().toLowerCase() !== 'registration_page');
-    if (kv) return String(kv[1]).trim();
-  }
-  const utmLike = Object.entries(row)
-    .find(([k, v]) => /^utm_/i.test(k) && typeof v === 'string' && String(v).trim())?.[1];
-  if (typeof utmLike === 'string' && utmLike.trim()) return utmLike.trim();
-  return 'Unknown inviter (no attribution in API)';
-}
-
-function getAttributionDebug(row: AnyRow): string {
-  const parts: string[] = [];
-  const src = String(row.registration_source || '').trim();
-  if (src) parts.push(`source=${src}`);
-  const custom = String(row.custom_field || '').trim();
-  if (custom) parts.push(`custom=${custom}`);
-  const utmSource = String(row.utm_source || '').trim();
-  if (utmSource) parts.push(`utm_source=${utmSource}`);
-  const utmTerm = String(row.utm_term || '').trim();
-  if (utmTerm) parts.push(`utm_term=${utmTerm}`);
-  const utmContent = String(row.utm_content || '').trim();
-  if (utmContent) parts.push(`utm_content=${utmContent}`);
-  const inviterSignal = String(row.inviter_signal || '').trim();
-  if (inviterSignal) parts.push(`signal=${inviterSignal}`);
-  const extraFields = row.extra_fields && typeof row.extra_fields === 'object'
-    ? row.extra_fields as AnyRow
-    : null;
-  if (extraFields && Object.keys(extraFields).length > 0) {
-    parts.push(`extra_fields=${JSON.stringify(extraFields)}`);
-  }
-  return parts.length > 0 ? parts.join(' | ') : 'No attribution fields present in WebinarGeek payload';
+function watchBucket(seconds: number): 'full' | 'half' | 'under_half' | 'no_watch' {
+  if (seconds >= FULL_WATCH_SECONDS) return 'full';
+  if (seconds >= HALF_WATCH_SECONDS) return 'half';
+  if (seconds > 0) return 'under_half';
+  return 'no_watch';
 }
 
 function normalizeSubscriptions(data: DashboardData | null): AnyRow[] {
   const payload = data?.subscriptions as Record<string, unknown> | undefined;
-  if (!payload) return [];
-  const rows = payload.subscriptions;
+  const rows = payload?.subscriptions;
   return Array.isArray(rows) ? (rows as AnyRow[]) : [];
 }
 
-function normalizeWebinars(data: DashboardData | null): AnyRow[] {
-  const payload = data?.webinars as Record<string, unknown> | undefined;
-  if (!payload) return [];
-  const rows = payload.webinars;
-  return Array.isArray(rows) ? (rows as AnyRow[]) : [];
+function normalizeHealth(data: DashboardData | null): { connected: boolean; note?: string } {
+  const h = data?.health as Record<string, unknown> | undefined;
+  const connected = Boolean(h?.subscriptions_ok);
+  return { connected, note: connected ? undefined : 'One or more API calls failed' };
 }
 
-function normalizeBroadcasts(data: DashboardData | null): AnyRow[] {
-  const payload = data?.broadcasts as Record<string, unknown> | undefined;
-  if (!payload) return [];
-  const rows = payload.broadcasts;
-  return Array.isArray(rows) ? (rows as AnyRow[]) : [];
+function toCsvValue(value: unknown): string {
+  const raw = String(value ?? '');
+  return `"${raw.replace(/"/g, '""')}"`;
+}
+
+function getInviterName(row: AnyRow): string {
+  const extraFields = row.extra_fields && typeof row.extra_fields === 'object'
+    ? row.extra_fields as AnyRow
+    : null;
+  const options = [
+    row.inviter_signal,
+    row.inviter_name,
+    row.invited_by,
+    row.invited_by_name,
+    row.utm_source,
+    row.utm_term,
+    row.utm_content,
+    row.custom_field,
+    row.registration_page_name,
+    row.referrer_name,
+    row.affiliate_name,
+  ];
+  for (const option of options) {
+    const s = String(option ?? '').trim();
+    if (s && s.toLowerCase() !== 'registration_page') return s;
+  }
+  const source = String(row.registration_source ?? '').trim();
+  if (source && source.toLowerCase() !== 'registration_page') return source;
+  if (extraFields) {
+    for (const v of Object.values(extraFields)) {
+      const s = String(v ?? '').trim();
+      if (s && s.toLowerCase() !== 'registration_page') return s;
+    }
+  }
+  return 'Unknown inviter';
+}
+
+function getAttributionDebug(row: AnyRow): string {
+  const parts: string[] = [];
+  const source = String(row.registration_source ?? '').trim();
+  if (source) parts.push(`source=${source}`);
+  const custom = String(row.custom_field ?? '').trim();
+  if (custom) parts.push(`custom_field=${custom}`);
+  const signal = String(row.inviter_signal ?? '').trim();
+  if (signal) parts.push(`inviter_signal=${signal}`);
+  const utmSource = String(row.utm_source ?? '').trim();
+  if (utmSource) parts.push(`utm_source=${utmSource}`);
+  const utmTerm = String(row.utm_term ?? '').trim();
+  if (utmTerm) parts.push(`utm_term=${utmTerm}`);
+  const utmContent = String(row.utm_content ?? '').trim();
+  if (utmContent) parts.push(`utm_content=${utmContent}`);
+  const extra = row.extra_fields && typeof row.extra_fields === 'object'
+    ? JSON.stringify(row.extra_fields)
+    : '';
+  if (extra) parts.push(`extra_fields=${extra}`);
+  return parts.length > 0 ? parts.join(' | ') : 'No attribution fields in payload';
 }
 
 const WebinarGeekDashboard: React.FC = () => {
@@ -154,115 +131,71 @@ const WebinarGeekDashboard: React.FC = () => {
 
   const [loading, setLoading] = useState(false);
   const [healthLoading, setHealthLoading] = useState(false);
+  const [syncLoading, setSyncLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [health, setHealth] = useState<Record<string, unknown> | null>(null);
   const [data, setData] = useState<DashboardData | null>(null);
+  const [health, setHealth] = useState<Record<string, unknown> | null>(null);
+  const [syncResult, setSyncResult] = useState<Record<string, unknown> | null>(null);
 
   const [webinarId, setWebinarId] = useState('');
   const [broadcastId, setBroadcastId] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [watchedFilter, setWatchedFilter] = useState<'all' | 'watched' | 'unwatched'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [watchBucketFilter, setWatchBucketFilter] = useState<'all' | 'full' | 'half' | 'under_half' | 'no_watch'>('all');
-  const [watchStatusFilter, setWatchStatusFilter] = useState<'all' | 'watched' | 'not_watched'>('all');
-  const [syncLoading, setSyncLoading] = useState(false);
-  const [syncResult, setSyncResult] = useState<Record<string, unknown> | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string>('all');
+  const [selectedRow, setSelectedRow] = useState<AnyRow | null>(null);
+
   const hasInitializedRef = useRef(false);
 
-  const webinars = useMemo(() => normalizeWebinars(data), [data]);
-  const broadcasts = useMemo(() => normalizeBroadcasts(data), [data]);
   const subscriptions = useMemo(() => normalizeSubscriptions(data), [data]);
-  const filteredSubscriptions = useMemo(() => {
+
+  const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return subscriptions.filter((row) => {
-      const ts = Number(row.created_at || row.watched_true_set_at || (row.broadcast as AnyRow | undefined)?.date || 0);
-      const rowDate = Number.isFinite(ts) && ts > 0 ? new Date((ts > 1e12 ? ts : ts * 1000)) : null;
-      if (dateFrom) {
-        const from = new Date(`${dateFrom}T00:00:00`);
-        if (rowDate && rowDate < from) return false;
+      const key = fmtDateKey(row);
+      if (selectedDate !== 'all' && key !== selectedDate) return false;
+
+      const ms =
+        asUnixMs((row.broadcast as AnyRow | undefined)?.date) ??
+        asUnixMs(row.created_at) ??
+        asUnixMs(row.watched_true_set_at);
+      if (dateFrom && ms) {
+        const from = new Date(`${dateFrom}T00:00:00`).getTime();
+        if (ms < from) return false;
       }
-      if (dateTo) {
-        const to = new Date(`${dateTo}T23:59:59`);
-        if (rowDate && rowDate > to) return false;
+      if (dateTo && ms) {
+        const to = new Date(`${dateTo}T23:59:59`).getTime();
+        if (ms > to) return false;
       }
-      const watchDuration = Number(row.watch_duration || 0);
-      const watchBucket = watchDuration >= FULL_WATCH_SECONDS
-        ? 'full'
-        : watchDuration >= HALF_WATCH_SECONDS
-          ? 'half'
-          : watchDuration > 0
-            ? 'under_half'
-            : 'no_watch';
-      if (watchBucketFilter !== 'all' && watchBucket !== watchBucketFilter) return false;
-      if (watchStatusFilter === 'watched' && row.watched !== true) return false;
-      if (watchStatusFilter === 'not_watched' && row.watched === true) return false;
       if (!q) return true;
-      const name = `${String(row.firstname || '').trim()} ${String(row.surname || '').trim()}`.toLowerCase();
-      const emailText = String(row.email || '').toLowerCase();
-      const ipText = String(row.registration_ip || '').toLowerCase();
-      return name.includes(q) || emailText.includes(q) || ipText.includes(q);
+      const name = `${String(row.firstname ?? '').trim()} ${String(row.surname ?? '').trim()}`.toLowerCase();
+      const emailText = String(row.email ?? '').toLowerCase();
+      const inviter = getInviterName(row).toLowerCase();
+      return name.includes(q) || emailText.includes(q) || inviter.includes(q);
     });
-  }, [subscriptions, searchQuery, watchBucketFilter, watchStatusFilter, dateFrom, dateTo]);
+  }, [subscriptions, selectedDate, dateFrom, dateTo, searchQuery]);
 
-  const metrics = useMemo(() => {
-    const invited = filteredSubscriptions.length;
-    const watched = filteredSubscriptions.filter((s) => s.watched === true).length;
-    const watchedLive = filteredSubscriptions.filter((s) => s.watched_live === true).length;
-    const watchedReplay = filteredSubscriptions.filter((s) => s.watched_replay === true).length;
-    const unsubscribed = filteredSubscriptions.filter((s) => s.unsubscribed === true).length;
-    return { invited, watched, watchedLive, watchedReplay, unsubscribed };
-  }, [filteredSubscriptions]);
-
-  const watchStats = useMemo(() => {
-    const totalRegistrations = filteredSubscriptions.length;
-    const watchedCount = filteredSubscriptions.filter((s) => s.watched === true).length;
-    const watchedRatioPct = totalRegistrations > 0 ? Math.round((watchedCount / totalRegistrations) * 100) : 0;
-    const fullWatched = filteredSubscriptions.filter((s) => Number(s.watch_duration || 0) >= FULL_WATCH_SECONDS).length;
-    const halfWatched = filteredSubscriptions.filter((s) => {
-      const d = Number(s.watch_duration || 0);
-      return d >= HALF_WATCH_SECONDS && d < FULL_WATCH_SECONDS;
-    }).length;
-    const underHalfWatched = filteredSubscriptions.filter((s) => {
-      const d = Number(s.watch_duration || 0);
-      return d > 0 && d < HALF_WATCH_SECONDS;
-    }).length;
-    return {
-      totalRegistrations,
-      watchedCount,
-      watchedRatioPct,
-      fullWatched,
-      halfWatched,
-      underHalfWatched,
-    };
-  }, [filteredSubscriptions]);
-
-  const dailyWatchRows = useMemo(() => {
-    const map = new Map<string, { date: string; registrations: number; watched: number; notWatched: number }>();
-    for (const row of filteredSubscriptions) {
-      const ts = Number(row.created_at || row.watched_true_set_at || 0);
-      const d = Number.isFinite(ts) && ts > 0 ? new Date((ts > 1e12 ? ts : ts * 1000)) : null;
-      const key = d && !Number.isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : 'Unknown date';
-      if (!map.has(key)) map.set(key, { date: key, registrations: 0, watched: 0, notWatched: 0 });
+  const dateRows = useMemo(() => {
+    const map = new Map<string, { date: string; invited: number; watched: number; unsubscribed: number }>();
+    for (const row of subscriptions) {
+      const key = fmtDateKey(row);
+      if (!map.has(key)) map.set(key, { date: key, invited: 0, watched: 0, unsubscribed: 0 });
       const entry = map.get(key)!;
-      entry.registrations += 1;
+      entry.invited += 1;
       if (row.watched === true) entry.watched += 1;
-      else entry.notWatched += 1;
+      if (row.unsubscribed === true) entry.unsubscribed += 1;
     }
     return [...map.values()].sort((a, b) => (a.date < b.date ? 1 : -1));
-  }, [filteredSubscriptions]);
+  }, [subscriptions]);
 
-  const grouped = useMemo(() => {
-    const map = new Map<string, { broadcast: AnyRow | null; webinar: AnyRow | null; rows: AnyRow[] }>();
-    for (const row of filteredSubscriptions) {
-      const b = (row.broadcast && typeof row.broadcast === 'object') ? (row.broadcast as AnyRow) : null;
-      const w = (row.webinar && typeof row.webinar === 'object') ? (row.webinar as AnyRow) : null;
-      const key = b?.id ? `b-${String(b.id)}` : `no-b-${String(row.id ?? Math.random())}`;
-      if (!map.has(key)) map.set(key, { broadcast: b, webinar: w, rows: [] });
-      map.get(key)!.rows.push(row);
-    }
-    return [...map.values()].sort((a, b) => Number(b.broadcast?.date ?? 0) - Number(a.broadcast?.date ?? 0));
-  }, [filteredSubscriptions]);
+  const daySummary = useMemo(() => {
+    const rows = selectedDate === 'all' ? filteredRows : filteredRows;
+    const invited = rows.length;
+    const watched = rows.filter((r) => r.watched === true).length;
+    const fullWatched = rows.filter((r) => watchBucket(Number(r.watch_duration || 0)) === 'full').length;
+    const unsubscribed = rows.filter((r) => r.unsubscribed === true).length;
+    return { invited, watched, fullWatched, unsubscribed };
+  }, [filteredRows, selectedDate]);
 
   const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
     const { data: s } = await supabase.auth.getSession();
@@ -296,15 +229,14 @@ const WebinarGeekDashboard: React.FC = () => {
       const r = await fetchWebinarGeekDashboard(token, {
         webinarId: webinarId.trim() || undefined,
         broadcastId: broadcastId.trim() || undefined,
-        watchedWebinar: watchedFilter === 'all' ? undefined : watchedFilter === 'watched',
-        perPage: 100,
+        perPage: 1000,
       });
       if (!r.ok && r.error.toLowerCase().includes('unauthorized')) return null;
       return r;
     });
     setLoading(false);
     if (!result) {
-      setError('Session unauthorized for WebinarGeek API. Please sign out and sign in again.');
+      setError('Session unauthorized. Sign out and sign in again.');
       setData(null);
       return;
     }
@@ -314,7 +246,7 @@ const WebinarGeekDashboard: React.FC = () => {
       return;
     }
     setData(result.data);
-  }, [broadcastId, webinarId, watchedFilter, withAuthRetry]);
+  }, [broadcastId, webinarId, withAuthRetry]);
 
   const loadHealth = useCallback(async () => {
     setError(null);
@@ -326,7 +258,7 @@ const WebinarGeekDashboard: React.FC = () => {
     });
     setHealthLoading(false);
     if (!result) {
-      setError('Session unauthorized for WebinarGeek health check. Please sign out and sign in again.');
+      setError('Session unauthorized for health check.');
       setHealth(null);
       return;
     }
@@ -337,6 +269,82 @@ const WebinarGeekDashboard: React.FC = () => {
     }
     setHealth(result.data);
   }, [withAuthRetry]);
+
+  const runSync = useCallback(async () => {
+    setError(null);
+    setSyncLoading(true);
+    const result = await withAuthRetry(async (token) => {
+      const r = await syncWebinarGeekCandidates(token, {
+        webinarId: webinarId.trim() || undefined,
+        broadcastId: broadcastId.trim() || undefined,
+        perPage: 1000,
+      });
+      if (!r.ok && r.error.toLowerCase().includes('unauthorized')) return null;
+      return r;
+    });
+    setSyncLoading(false);
+    if (!result) {
+      setError('Session unauthorized for sync.');
+      return;
+    }
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setSyncResult(result.data);
+    await loadDashboard();
+  }, [broadcastId, webinarId, withAuthRetry, loadDashboard]);
+
+  const handleCsvExport = useCallback(() => {
+    const headers = [
+      'candidate_name',
+      'email',
+      'inviter',
+      'date',
+      'time',
+      'watched',
+      'watch_type',
+      'watch_duration',
+      'subscribed_status',
+      'webinar',
+      'broadcast_id',
+    ];
+    const rows = filteredRows.map((row) => {
+      const name = `${String(row.firstname || '').trim()} ${String(row.surname || '').trim()}`.trim();
+      const ms =
+        asUnixMs((row.broadcast as AnyRow | undefined)?.date) ??
+        asUnixMs(row.created_at) ??
+        asUnixMs(row.watched_true_set_at);
+      const dt = ms ? new Date(ms) : null;
+      const watched = row.watched === true ? 'Yes' : 'No';
+      const watchType =
+        row.watched_live === true ? 'Live'
+        : row.watched_replay === true ? 'Replay'
+        : 'None';
+      const status = row.unsubscribed === true ? 'Unsubscribed' : 'Subscribed';
+      return [
+        name || '—',
+        String(row.email || '—'),
+        getInviterName(row),
+        dt ? dt.toISOString().slice(0, 10) : '—',
+        dt ? dt.toLocaleTimeString() : '—',
+        watched,
+        watchType,
+        durationLabel(row.watch_duration),
+        status,
+        String((row.webinar as AnyRow | undefined)?.title || '—'),
+        String((row.broadcast as AnyRow | undefined)?.id || '—'),
+      ];
+    });
+    const csv = [headers.map(toCsvValue).join(','), ...rows.map((r) => r.map(toCsvValue).join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `webinar-clean-export-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [filteredRows]);
 
   useEffect(() => {
     const check = async () => {
@@ -349,7 +357,6 @@ const WebinarGeekDashboard: React.FC = () => {
   useEffect(() => {
     if (!isAuthenticated || hasInitializedRef.current) return;
     hasInitializedRef.current = true;
-    // Load once on page open; further fetches only via explicit buttons.
     void loadDashboard();
   }, [isAuthenticated, loadDashboard]);
 
@@ -364,105 +371,15 @@ const WebinarGeekDashboard: React.FC = () => {
     setIsAuthenticated(true);
   };
 
-  const runSync = useCallback(async () => {
-    setError(null);
-    setSyncLoading(true);
-    const result = await withAuthRetry(async (token) => {
-      const r = await syncWebinarGeekCandidates(token, {
-        webinarId: webinarId.trim() || undefined,
-        broadcastId: broadcastId.trim() || undefined,
-        perPage: 250,
-      });
-      if (!r.ok && r.error.toLowerCase().includes('unauthorized')) return null;
-      return r;
-    });
-    setSyncLoading(false);
-    if (!result) {
-      setError('Session unauthorized for WebinarGeek sync. Please sign out and sign in again.');
-      return;
-    }
-    if (!result.ok) {
-      setError(result.error);
-      return;
-    }
-    setSyncResult(result.data);
-    await loadDashboard();
-  }, [broadcastId, loadDashboard, webinarId, withAuthRetry]);
-
-  const handleCsvExport = useCallback(() => {
-    const headers = [
-      'subscription_id',
-      'first_name',
-      'last_name',
-      'email',
-      'registration_date',
-      'watched',
-      'watched_live',
-      'watched_replay',
-      'watch_duration_seconds',
-      'watch_duration_label',
-      'watch_bucket',
-      'watch_start',
-      'watch_end',
-      'registration_source',
-      'inviter_name',
-      'registration_ip',
-      'broadcast_id',
-      'broadcast_title',
-      'webinar_id',
-      'webinar_title',
-    ];
-    const rows = filteredSubscriptions.map((row) => {
-      const watchDuration = Number(row.watch_duration || 0);
-      const watchBucket = watchDuration >= FULL_WATCH_SECONDS
-        ? 'full'
-        : watchDuration >= HALF_WATCH_SECONDS
-          ? 'half'
-          : watchDuration > 0
-            ? 'under_half'
-            : 'no_watch';
-      return [
-        row.id ?? '',
-        row.firstname ?? '',
-        row.surname ?? '',
-        row.email ?? '',
-        unixToLabel(row.created_at),
-        row.watched === true ? 'yes' : 'no',
-        row.watched_live === true ? 'yes' : 'no',
-        row.watched_replay === true ? 'yes' : 'no',
-        watchDuration,
-        durationLabel(watchDuration),
-        watchBucket,
-        unixToLabel(row.watch_start),
-        unixToLabel(row.watch_end),
-        row.registration_source ?? '',
-        getInviterName(row),
-        row.registration_ip ?? '',
-        (row.broadcast as AnyRow | undefined)?.id ?? '',
-        (row.broadcast as AnyRow | undefined)?.title ?? '',
-        (row.webinar as AnyRow | undefined)?.id ?? '',
-        (row.webinar as AnyRow | undefined)?.title ?? '',
-      ];
-    });
-    const csv = [headers.map(toCsvValue).join(','), ...rows.map((r) => r.map(toCsvValue).join(','))].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `webinar-analytics-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [filteredSubscriptions]);
-
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-[#f7fbff] to-[#eef6ff] flex items-center justify-center p-4">
-        <div className="bg-white border border-[#d9e9fb] p-8 rounded-[28px] shadow-[0_18px_50px_-24px_rgba(0,94,184,0.35)] w-full max-w-sm">
+        <div className="bg-white border border-[#d9e9fb] p-8 rounded-[24px] shadow w-full max-w-sm">
           <h2 className="text-xl font-bold text-[#0B1B34] mb-1 text-center">WebinarGeek dashboard</h2>
           <p className="text-sm text-[#6f7b8d] text-center mb-6">Sign in with your admin account</p>
           <form onSubmit={handleLogin} className="space-y-4">
-            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-4 py-2.5 rounded-2xl border border-[#cfe3f9] text-[#0B1B34]" />
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-4 py-2.5 rounded-2xl border border-[#cfe3f9] text-[#0B1B34]" />
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-[#cfe3f9]" />
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-[#cfe3f9]" />
             <Button fullWidth type="submit">Sign in</Button>
             {authError && <p className="text-sm text-red-600 text-center">{authError}</p>}
           </form>
@@ -473,309 +390,201 @@ const WebinarGeekDashboard: React.FC = () => {
 
   return (
     <Layout isAdmin>
-      <div className="w-full p-5 lg:p-6 space-y-5 text-[#1A2942]">
-        <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-5 py-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2 min-w-0">
-              <Database className="text-[#005EB8] shrink-0" size={22} />
-              <div className="min-w-0">
-                <h1 className="text-lg sm:text-xl font-extrabold text-[#0B1B34] truncate">WebinarGeek Attendance Hub</h1>
-                <p className="text-xs text-[#73839b] truncate">Invitees and attendance insights, fully formatted</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Button type="button" variant="outline" onClick={() => void loadHealth()} disabled={healthLoading}>
-                <ShieldCheck size={16} className={`mr-2 inline ${healthLoading ? 'animate-pulse' : ''}`} /> Health
-              </Button>
-              <Button type="button" onClick={() => void runSync()} disabled={syncLoading}>
-                <Database size={16} className={`mr-2 inline ${syncLoading ? 'animate-pulse' : ''}`} />
-                {syncLoading ? 'Syncing...' : 'Sync to candidates'}
-              </Button>
-              <Button type="button" variant="outline" onClick={handleCsvExport} disabled={filteredSubscriptions.length === 0}>
-                <Download size={16} className="mr-2 inline" /> Export CSV
-              </Button>
-              <Button type="button" variant="outline" onClick={() => void loadDashboard()} disabled={loading}>
-                <RefreshCw size={16} className={`mr-2 inline ${loading ? 'animate-spin' : ''}`} /> Refresh
-              </Button>
-            </div>
+      <div className="w-full p-6 space-y-4">
+        <div className="rounded-xl border border-[#d6deea] bg-white p-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-bold text-[#0B1B34]">WebinarGeek Overview (Sheet View)</h1>
+            <p className="text-xs text-[#60728c]">Date-first overview + clean spreadsheet table + candidate detail popup.</p>
+            {data && (
+              <p className="text-[11px] text-[#60728c] mt-1">
+                Total fetched records: {String((data?.subscriptions as AnyRow | undefined)?.total_count ?? subscriptions.length)} (after filters on page: {filteredRows.length})
+              </p>
+            )}
+            {health && (() => {
+              const status = normalizeHealth(health);
+              return (
+                <p className={`text-[11px] mt-1 ${status.connected ? 'text-green-700' : 'text-amber-700'}`}>
+                  API status: {status.connected ? 'connected' : status.note || 'degraded'}
+                </p>
+              );
+            })()}
           </div>
-          {health && (
-            <p className="text-xs mt-3 text-[#6f7f96]">
-              Connection: <span className={health.connected ? 'text-green-700 font-semibold' : 'text-red-700 font-semibold'}>{health.connected ? 'Connected' : 'Not connected'}</span>
-            </p>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" onClick={() => void loadHealth()} disabled={healthLoading}>
+              <ShieldCheck size={15} className="mr-1" /> Health
+            </Button>
+            <Button type="button" onClick={() => void runSync()} disabled={syncLoading}>
+              {syncLoading ? 'Syncing...' : 'Sync DB'}
+            </Button>
+            <Button type="button" variant="outline" onClick={handleCsvExport}>
+              <Download size={15} className="mr-1" /> Clean CSV
+            </Button>
+            <Button type="button" variant="outline" onClick={() => void loadDashboard()} disabled={loading}>
+              <RefreshCw size={15} className={`mr-1 ${loading ? 'animate-spin' : ''}`} /> Refresh
+            </Button>
+          </div>
         </div>
 
-        <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <div className="grid grid-cols-1 md:grid-cols-7 gap-3">
-            <input value={webinarId} onChange={(e) => setWebinarId(e.target.value)} placeholder="Filter webinar_id" className="px-3 py-2 rounded-xl border border-[#cfe3f9]" />
-            <input value={broadcastId} onChange={(e) => setBroadcastId(e.target.value)} placeholder="Filter broadcast_id" className="px-3 py-2 rounded-xl border border-[#cfe3f9]" />
-            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="px-3 py-2 rounded-xl border border-[#cfe3f9]" />
-            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="px-3 py-2 rounded-xl border border-[#cfe3f9]" />
-            <select value={watchedFilter} onChange={(e) => setWatchedFilter(e.target.value as 'all' | 'watched' | 'unwatched')} className="px-3 py-2 rounded-xl border border-[#cfe3f9]">
-              <option value="all">All invitees</option>
-              <option value="watched">Watched only</option>
-              <option value="unwatched">Did not watch</option>
-            </select>
-            <label className="relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7488a6]" />
-              <input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search candidates/invitees/email/IP"
-                className="w-full pl-9 pr-3 py-2 rounded-xl border border-[#cfe3f9]"
-              />
-            </label>
-            <Button type="button" onClick={() => void loadDashboard()} disabled={loading}>Apply filters</Button>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <FilterChip active={watchStatusFilter === 'all'} onClick={() => setWatchStatusFilter('all')}>All</FilterChip>
-            <FilterChip active={watchStatusFilter === 'watched'} onClick={() => setWatchStatusFilter('watched')}>Watched</FilterChip>
-            <FilterChip active={watchStatusFilter === 'not_watched'} onClick={() => setWatchStatusFilter('not_watched')}>Not watched</FilterChip>
-            <div className="w-px h-6 bg-[#dbe6f7] mx-1" />
-            <FilterChip active={watchBucketFilter === 'all'} onClick={() => setWatchBucketFilter('all')}>All durations</FilterChip>
-            <FilterChip active={watchBucketFilter === 'full'} onClick={() => setWatchBucketFilter('full')}>Full watched</FilterChip>
-            <FilterChip active={watchBucketFilter === 'half'} onClick={() => setWatchBucketFilter('half')}>Half watched</FilterChip>
-            <FilterChip active={watchBucketFilter === 'under_half'} onClick={() => setWatchBucketFilter('under_half')}>Under half</FilterChip>
-          </div>
+        <div className="rounded-xl border border-[#d6deea] bg-white p-4 grid grid-cols-1 md:grid-cols-6 gap-2">
+          <input value={webinarId} onChange={(e) => setWebinarId(e.target.value)} placeholder="webinar_id" className="px-3 py-2 rounded-lg border border-[#cfe3f9]" />
+          <input value={broadcastId} onChange={(e) => setBroadcastId(e.target.value)} placeholder="broadcast_id" className="px-3 py-2 rounded-lg border border-[#cfe3f9]" />
+          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="px-3 py-2 rounded-lg border border-[#cfe3f9]" />
+          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="px-3 py-2 rounded-lg border border-[#cfe3f9]" />
+          <label className="relative">
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#789]" />
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="search name/email/inviter"
+              className="w-full pl-8 pr-3 py-2 rounded-lg border border-[#cfe3f9]"
+            />
+          </label>
+          <Button type="button" onClick={() => void loadDashboard()} disabled={loading}>Apply</Button>
         </div>
 
         {syncResult && (
-          <div className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 grid grid-cols-1 md:grid-cols-3 gap-2">
-            <p><span className="font-semibold">Synced:</span> {String(syncResult.total_subscriptions ?? 0)} subscriptions</p>
-            <p><span className="font-semibold">Matched:</span> {String(syncResult.matched_subscriptions ?? 0)} ({String(syncResult.matched_candidates ?? 0)} candidates)</p>
-            <p><span className="font-semibold">Unmatched:</span> {String(syncResult.unmatched_subscriptions ?? 0)}</p>
+          <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-2 text-sm text-green-800">
+            Synced subscriptions: {String(syncResult.total_subscriptions ?? 0)} | matched: {String(syncResult.matched_subscriptions ?? 0)} | unmatched: {String(syncResult.unmatched_subscriptions ?? 0)}
+            {Number(syncResult.estimated_unverified_or_pending ?? 0) > 0 && (
+              <span> | not-yet-verified/pending (estimated): {String(syncResult.estimated_unverified_or_pending)}</span>
+            )}
           </div>
         )}
+        {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{error}</div>}
 
-        {error && <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
-
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          <Metric icon={<Mail size={15} />} label="Registrations" value={watchStats.totalRegistrations} />
-          <Metric icon={<Eye size={15} />} label="Watched" value={metrics.watched} />
-          <Metric icon={<Video size={15} />} label="Live watched" value={metrics.watchedLive} />
-          <Metric icon={<Clock3 size={15} />} label="Replay watched" value={metrics.watchedReplay} />
-          <Metric icon={<UserX size={15} />} label="Unsubscribed" value={metrics.unsubscribed} />
+        <div className="rounded-xl border border-[#d6deea] bg-white p-4">
+          <p className="text-sm font-semibold text-[#0B1B34] mb-2">Available dates</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedDate('all')}
+              className={`px-3 py-1.5 rounded-full text-xs border ${selectedDate === 'all' ? 'bg-[#005EB8] text-white border-[#005EB8]' : 'bg-white text-[#4f6787] border-[#cfe3f9]'}`}
+            >
+              All dates
+            </button>
+            {dateRows.map((d) => (
+              <button
+                key={d.date}
+                type="button"
+                onClick={() => setSelectedDate(d.date)}
+                className={`px-3 py-1.5 rounded-full text-xs border ${selectedDate === d.date ? 'bg-[#005EB8] text-white border-[#005EB8]' : 'bg-white text-[#4f6787] border-[#cfe3f9]'}`}
+              >
+                {d.date} ({d.invited})
+              </button>
+            ))}
+          </div>
         </div>
 
-        <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <h3 className="font-bold text-[#0B1B34] mb-3 inline-flex items-center gap-2"><BarChart3 size={16} /> Watch analytics</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            <div className="rounded-xl border border-[#e6eef9] p-3">
-              <p className="text-[#5f748f] mb-2">Show ratio</p>
-              <p className="text-2xl font-extrabold text-[#0B1B34]">{watchStats.watchedRatioPct}%</p>
-              <p className="text-xs text-[#6f7f96]">{watchStats.watchedCount} watched / {watchStats.totalRegistrations} registrations</p>
-            </div>
-            <div className="rounded-xl border border-[#e6eef9] p-3 space-y-2">
-              <StatBar
-                label="Full watched (>=45m)"
-                value={watchStats.fullWatched}
-                max={Math.max(1, watchStats.totalRegistrations)}
-                color="bg-green-500"
-                active={watchBucketFilter === 'full'}
-                onClick={() => setWatchBucketFilter(watchBucketFilter === 'full' ? 'all' : 'full')}
-              />
-              <StatBar
-                label="Half watched (23.5m-45m)"
-                value={watchStats.halfWatched}
-                max={Math.max(1, watchStats.totalRegistrations)}
-                color="bg-blue-500"
-                active={watchBucketFilter === 'half'}
-                onClick={() => setWatchBucketFilter(watchBucketFilter === 'half' ? 'all' : 'half')}
-              />
-              <StatBar
-                label="Under half watched"
-                value={watchStats.underHalfWatched}
-                max={Math.max(1, watchStats.totalRegistrations)}
-                color="bg-amber-500"
-                active={watchBucketFilter === 'under_half'}
-                onClick={() => setWatchBucketFilter(watchBucketFilter === 'under_half' ? 'all' : 'under_half')}
-              />
-            </div>
-          </div>
-        </section>
+        <div className="rounded-xl border border-[#d6deea] bg-white p-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <InfoStat label="Invited" value={daySummary.invited} />
+          <InfoStat label="Watched" value={daySummary.watched} />
+          <InfoStat label="Fully Watched" value={daySummary.fullWatched} />
+          <InfoStat label="Unsubscribed" value={daySummary.unsubscribed} />
+        </div>
 
-        <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <h3 className="font-bold text-[#0B1B34] mb-3">Daily watched vs not watched</h3>
-          <div className="overflow-auto">
+        <div className="rounded-xl border border-[#d6deea] bg-white overflow-hidden">
+          <div className="px-4 py-3 border-b border-[#e7eef8] bg-[#f8fbff]">
+            <p className="text-sm font-semibold text-[#0B1B34]">
+              {selectedDate === 'all' ? 'All records (spreadsheet view)' : `Records for ${selectedDate}`}
+            </p>
+          </div>
+          <div className="overflow-auto max-h-[60vh]">
             <table className="min-w-full text-xs">
-              <thead className="bg-[#f6f9ff]">
+              <thead className="bg-[#f7fbff] sticky top-0 z-10">
                 <tr>
-                  <th className="text-left px-3 py-2 font-semibold text-[#5f748f]">Date</th>
-                  <th className="text-left px-3 py-2 font-semibold text-[#5f748f]">Registrations</th>
-                  <th className="text-left px-3 py-2 font-semibold text-[#5f748f]">Watched</th>
-                  <th className="text-left px-3 py-2 font-semibold text-[#5f748f]">Did not watch</th>
+                  <th className="text-left px-3 py-2">Candidate</th>
+                  <th className="text-left px-3 py-2">Email</th>
+                  <th className="text-left px-3 py-2">Inviter</th>
+                  <th className="text-left px-3 py-2">Date / Time</th>
+                  <th className="text-left px-3 py-2">Watched</th>
+                  <th className="text-left px-3 py-2">Watch Details</th>
+                  <th className="text-left px-3 py-2">Status</th>
+                  <th className="text-left px-3 py-2">Webinar</th>
                 </tr>
               </thead>
               <tbody>
-                {dailyWatchRows.length === 0 ? (
-                  <tr><td colSpan={4} className="px-3 py-4 text-center text-[#7b8aa0]">No daily records</td></tr>
-                ) : dailyWatchRows.map((r) => (
-                  <tr key={r.date} className="border-t border-[#edf2fb]">
-                    <td className="px-3 py-2">{r.date}</td>
-                    <td className="px-3 py-2">{r.registrations}</td>
-                    <td className="px-3 py-2">{r.watched}</td>
-                    <td className="px-3 py-2">{r.notWatched}</td>
-                  </tr>
-                ))}
+                {filteredRows.length === 0 ? (
+                  <tr><td colSpan={8} className="px-3 py-6 text-center text-[#7b8aa0]">No records for this filter.</td></tr>
+                ) : filteredRows.map((row) => {
+                  const name = `${String(row.firstname || '').trim()} ${String(row.surname || '').trim()}`.trim() || 'Unnamed';
+                  const durationSec = Number(row.watch_duration || 0);
+                  const bucket = watchBucket(durationSec);
+                  const ms =
+                    asUnixMs((row.broadcast as AnyRow | undefined)?.date) ??
+                    asUnixMs(row.created_at) ??
+                    asUnixMs(row.watched_true_set_at);
+                  const dt = ms ? new Date(ms) : null;
+                  return (
+                    <tr
+                      key={String(row.id)}
+                      className="border-t border-[#edf2fb] hover:bg-[#f8fbff] cursor-pointer"
+                      onClick={() => setSelectedRow(row)}
+                    >
+                      <td className="px-3 py-2">{name}</td>
+                      <td className="px-3 py-2">{String(row.email || '—')}</td>
+                      <td className="px-3 py-2">{getInviterName(row)}</td>
+                      <td className="px-3 py-2">{dt ? dt.toLocaleString() : '—'}</td>
+                      <td className="px-3 py-2">{row.watched === true ? 'Yes' : 'No'}</td>
+                      <td className="px-3 py-2">{durationLabel(durationSec)} ({bucket})</td>
+                      <td className="px-3 py-2">{row.unsubscribed === true ? 'Unsubscribed' : 'Subscribed'}</td>
+                      <td className="px-3 py-2">{String((row.webinar as AnyRow | undefined)?.title || '—')}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-        </section>
+        </div>
 
-        {grouped.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-[#d3e2f5] bg-white p-10 text-center text-[#7a8ca3]">
-            No invitee / attendance records found for current filters.
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {grouped.map((group, idx) => (
-              <section key={`g-${idx}`} className="rounded-2xl border border-[#d6deea] bg-white shadow-sm overflow-hidden">
-                <div className="px-4 py-3 border-b border-[#e7eef8] bg-[#f8fbff] flex flex-wrap items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-[#0B1B34] truncate">
-                      {String(group.webinar?.title || group.broadcast?.id || 'Session')}
-                    </p>
-                    <p className="text-xs text-[#6f7f96] flex flex-wrap items-center gap-3">
-                      <span className="inline-flex items-center gap-1"><CalendarClock size={12} /> {unixToLabel(group.broadcast?.date)}</span>
-                      <span>Broadcast #{String(group.broadcast?.id || '—')}</span>
-                      <span>{group.rows.length} invitees</span>
-                    </p>
-                  </div>
-                  <div className="text-xs text-[#60728c]">
-                    Live viewers: <span className="font-semibold">{String(group.broadcast?.live_viewers_count ?? '—')}</span> · Replay viewers: <span className="font-semibold">{String(group.broadcast?.replay_viewers_count ?? '—')}</span>
-                  </div>
+        {selectedRow && (
+          <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-xl border border-[#d6deea] w-full max-w-2xl max-h-[85vh] overflow-auto">
+              <div className="px-4 py-3 border-b border-[#e7eef8] flex items-center justify-between">
+                <p className="font-semibold text-[#0B1B34]">Webinar candidate details</p>
+                <button type="button" onClick={() => setSelectedRow(null)} className="text-gray-500 hover:text-gray-800">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                <Detail label="Name" value={`${String(selectedRow.firstname || '').trim()} ${String(selectedRow.surname || '').trim()}`.trim() || '—'} />
+                <Detail label="Email" value={String(selectedRow.email || '—')} />
+                <Detail label="Inviter" value={getInviterName(selectedRow)} />
+                <Detail label="Registration source" value={String(selectedRow.registration_source || '—')} />
+                <Detail label="Created" value={fmtDateTime(selectedRow.created_at)} />
+                <Detail label="Watched" value={selectedRow.watched === true ? 'Yes' : 'No'} />
+                <Detail label="Watch start" value={fmtDateTime(selectedRow.watch_start)} />
+                <Detail label="Watch end" value={fmtDateTime(selectedRow.watch_end)} />
+                <Detail label="Watch duration" value={durationLabel(selectedRow.watch_duration)} />
+                <Detail label="Live watch duration" value={durationLabel(selectedRow.watch_duration_live)} />
+                <Detail label="Replay watch duration" value={durationLabel(selectedRow.watch_duration_replay)} />
+                <Detail label="Subscription status" value={selectedRow.unsubscribed === true ? 'Unsubscribed' : 'Subscribed'} />
+                <div className="md:col-span-2">
+                  <p className="text-xs text-[#60728c] mb-1">Attribution debug</p>
+                  <p className="text-xs text-[#334a69] break-words rounded-md border border-[#e7eef8] bg-[#f8fbff] px-2 py-2">
+                    {getAttributionDebug(selectedRow)}
+                  </p>
                 </div>
-                <div className="divide-y divide-[#edf2fb]">
-                  {group.rows.map((row) => {
-                    const name = `${String(row.firstname || '').trim()} ${String(row.surname || '').trim()}`.trim() || 'Unnamed invitee';
-                    const watched = row.watched === true;
-                    const watchedLive = row.watched_live === true;
-                    const watchedReplay = row.watched_replay === true;
-                    return (
-                      <article key={String(row.id)} className="p-4 grid grid-cols-1 xl:grid-cols-3 gap-4">
-                        <div>
-                          <p className="font-semibold text-[#0B1B34]">{name}</p>
-                          <p className="text-sm text-[#546b89]">{String(row.email || '—')}</p>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            <Badge tone={watched ? 'green' : 'gray'} icon={watched ? <CheckCircle2 size={12} /> : <UserX size={12} />}>
-                              {watched ? 'Watched' : 'No watch'}
-                            </Badge>
-                            {watchedLive && <Badge tone="blue" icon={<Video size={12} />}>Live</Badge>}
-                            {watchedReplay && <Badge tone="amber" icon={<Clock3 size={12} />}>Replay</Badge>}
-                            {row.unsubscribed === true && <Badge tone="red" icon={<UserX size={12} />}>Unsubscribed</Badge>}
-                          </div>
-                        </div>
-
-                        <div className="text-xs text-[#5f748f] space-y-1">
-                          <p><span className="font-semibold text-[#334a69]">First watched:</span> {unixToLabel(row.watched_true_set_at)}</p>
-                          <p><span className="font-semibold text-[#334a69]">Watch start:</span> {unixToLabel(row.watch_start)}</p>
-                          <p><span className="font-semibold text-[#334a69]">Watch end:</span> {unixToLabel(row.watch_end)}</p>
-                          <p><span className="font-semibold text-[#334a69]">Total watch:</span> {durationLabel(row.watch_duration)}</p>
-                          <p><span className="font-semibold text-[#334a69]">Live watch:</span> {durationLabel(row.watch_duration_live)}</p>
-                          <p><span className="font-semibold text-[#334a69]">Replay watch:</span> {durationLabel(row.watch_duration_replay)}</p>
-                        </div>
-
-                        <div className="text-xs text-[#5f748f] space-y-1">
-                          <p><span className="font-semibold text-[#334a69]">Source:</span> {String(row.registration_source || '—')}</p>
-                          <p><span className="font-semibold text-[#334a69]">Invited by:</span> {getInviterName(row)}</p>
-                          <p><span className="font-semibold text-[#334a69]">IP:</span> {String(row.registration_ip || '—')}</p>
-                          <p><span className="font-semibold text-[#334a69]">Created:</span> {unixToLabel(row.created_at)}</p>
-                          <p><span className="font-semibold text-[#334a69]">Watch link:</span> {row.watch_link ? <a className="text-[#005EB8] underline" href={String(row.watch_link)} target="_blank" rel="noopener noreferrer">Open</a> : '—'}</p>
-                          <p className="pt-1 border-t border-[#edf2fb] mt-2">
-                            <span className="font-semibold text-[#334a69]">Attribution debug:</span>{' '}
-                            <span className="text-[#445a78] break-words">{getAttributionDebug(row)}</span>
-                          </p>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              </section>
-            ))}
+              </div>
+            </div>
           </div>
         )}
-
-        <section className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-          <h3 className="font-bold text-[#0B1B34] mb-3">Webinars in account</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {webinars.slice(0, 12).map((w) => (
-              <div key={String(w.id)} className="rounded-xl border border-[#e7eef8] p-3">
-                <p className="font-semibold text-sm text-[#0B1B34]">{String(w.title || `Webinar #${String(w.id)}`)}</p>
-                <p className="text-xs text-[#60728c] mt-1">ID: {String(w.id || '—')} · Subs: {String(w.subscriptions_count ?? '—')}</p>
-              </div>
-            ))}
-            {webinars.length === 0 && <p className="text-sm text-[#7a8ca3]">No webinars returned.</p>}
-          </div>
-        </section>
       </div>
     </Layout>
   );
 };
 
-const Metric = ({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) => (
-  <div className="rounded-[20px] border border-[#d6e6f9] bg-white p-3 shadow-sm">
-    <p className="text-xs uppercase tracking-wide text-[#7a8ba1] inline-flex items-center gap-1">{icon}{label}</p>
-    <p className="text-sm font-semibold mt-1 truncate text-[#0B1B34]">{String(value)}</p>
+const InfoStat = ({ label, value }: { label: string; value: number }) => (
+  <div className="rounded-lg border border-[#e7eef8] bg-[#f8fbff] px-3 py-2">
+    <p className="text-[11px] uppercase tracking-wide text-[#6d7f98]">{label}</p>
+    <p className="text-lg font-bold text-[#0B1B34]">{value}</p>
   </div>
 );
 
-const StatBar = ({
-  label,
-  value,
-  max,
-  color,
-  active,
-  onClick,
-}: {
-  label: string;
-  value: number;
-  max: number;
-  color: string;
-  active?: boolean;
-  onClick?: () => void;
-}) => {
-  const pct = max > 0 ? Math.round((value / max) * 100) : 0;
-  return (
-    <button type="button" onClick={onClick} className={`w-full text-left rounded-lg p-1 transition ${active ? 'bg-[#eef6ff]' : 'hover:bg-[#f7fbff]'}`}>
-      <div className="flex items-center justify-between text-xs text-[#5f748f] mb-1">
-        <span>{label}</span>
-        <span className="font-semibold">{value} ({pct}%)</span>
-      </div>
-      <div className="h-2 rounded-full bg-[#edf2fb] overflow-hidden">
-        <div className={`h-full ${color}`} style={{ width: `${pct}%` }} />
-      </div>
-    </button>
-  );
-};
-
-const FilterChip = ({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    className={`px-3 py-1.5 rounded-full border text-xs font-semibold transition ${
-      active
-        ? 'bg-[#005EB8] text-white border-[#005EB8]'
-        : 'bg-white text-[#4f6787] border-[#cfe3f9] hover:bg-[#f3f8ff]'
-    }`}
-  >
-    {children}
-  </button>
+const Detail = ({ label, value }: { label: string; value: string }) => (
+  <div>
+    <p className="text-xs text-[#60728c]">{label}</p>
+    <p className="text-sm text-[#0B1B34]">{value || '—'}</p>
+  </div>
 );
-
-const Badge = ({ children, tone, icon }: { children: React.ReactNode; tone: 'green' | 'blue' | 'amber' | 'red' | 'gray'; icon?: React.ReactNode }) => {
-  const cls =
-    tone === 'green' ? 'bg-green-50 text-green-700 border-green-200'
-      : tone === 'blue' ? 'bg-blue-50 text-blue-700 border-blue-200'
-        : tone === 'amber' ? 'bg-amber-50 text-amber-700 border-amber-200'
-          : tone === 'red' ? 'bg-red-50 text-red-700 border-red-200'
-            : 'bg-gray-50 text-gray-700 border-gray-200';
-  return (
-    <span className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-full border ${cls}`}>
-      {icon}
-      {children}
-    </span>
-  );
-};
 
 export default WebinarGeekDashboard;

@@ -1,14 +1,13 @@
 /**
  * Applies Calendly invite + Zoom attendance from the live-sessions dashboard to portal candidates:
- * tag "Career session invited", pipeline "Attended Live Session" when Zoom shows attendance,
- * and one automated Stage 3 assessment email per candidate (deduped via admin_data.emailsSent).
+ * tag "Career session invited", pipeline "Attended Live Session" when Zoom shows attendance.
+ * Stage 3 assessment link email is MANUAL ONLY from admin and is not auto-sent here.
  * Auth: Supabase JWT (same pattern as integrations-zoom-calendly).
  * Deploy: supabase functions deploy sync-live-session-pipeline
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
-  pipelineStageAfterAssessmentFormSent,
   pipelineStageAfterLiveSessionAttended,
   pipelineStageAfterLiveSessionInvited,
 } from '../_shared/pipelineStageLiveSession.ts';
@@ -19,7 +18,6 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, apikey, x-client-info',
 };
 
-const STAGE3_LOG_TYPE = 'automated_stage3_after_live_session';
 const LEGACY_INVITE_TAG = 'Career session invited';
 
 const DEFAULT_ADMIN = {
@@ -80,28 +78,6 @@ async function fetchCandidatesByEmails(
   return map;
 }
 
-async function sendStage3AssessmentEmail(
-  supabaseUrl: string,
-  anonKey: string,
-  candidateId: string,
-  candidateEmail: string
-): Promise<boolean> {
-  const res = await fetch(`${supabaseUrl}/functions/v1/send-candidate-email`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: anonKey,
-      Authorization: `Bearer ${anonKey}`,
-    },
-    body: JSON.stringify({
-      candidateId,
-      candidateEmail,
-      trigger: 'post_live_session_assessment',
-    }),
-  });
-  return res.ok;
-}
-
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -116,7 +92,6 @@ Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get('Authorization');
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     if (!serviceRole) {
@@ -168,10 +143,7 @@ Deno.serve(async (req) => {
     let invitedStageUpdated = 0;
     let skippedInviteNoRow = 0;
     let attendedUpdated = 0;
-    let assessmentStageUpdated = 0;
     let attendedSkippedNoRow = 0;
-    let assessmentEmailsSent = 0;
-    let assessmentEmailFailed = 0;
 
     for (const email of invitedEmails) {
       const row = byEmail.get(email);
@@ -205,11 +177,6 @@ Deno.serve(async (req) => {
       const newStage = pipelineStageAfterLiveSessionAttended(beforeStage);
       merged.pipelineStage = newStage;
 
-      const emailsSent = Array.isArray(merged.emailsSent) ? merged.emailsSent : [];
-      const alreadyStage3 = emailsSent.some(
-        (e: { type?: string }) => e && typeof e === 'object' && e.type === STAGE3_LOG_TYPE
-      );
-
       const { error: upErr } = await admin.from('candidates').update({ admin_data: merged }).eq('id', row.id);
       if (upErr) {
         console.error('sync-live-session-pipeline attended', upErr);
@@ -218,29 +185,6 @@ Deno.serve(async (req) => {
       attendedUpdated++;
       byEmail.set(email, { ...row, admin_data: merged });
 
-      const shouldSend =
-        !alreadyStage3 &&
-        newStage === 'Live Career Overview Session Attended' &&
-        typeof anonKey === 'string' &&
-        anonKey.length > 0;
-
-      if (shouldSend) {
-        const ok = await sendStage3AssessmentEmail(supabaseUrl, anonKey, row.id, email);
-        if (ok) {
-          assessmentEmailsSent++;
-          const promote = {
-            ...merged,
-            pipelineStage: pipelineStageAfterAssessmentFormSent(merged.pipelineStage),
-          };
-          const { error: promoteErr } = await admin.from('candidates').update({ admin_data: promote }).eq('id', row.id);
-          if (!promoteErr) {
-            assessmentStageUpdated++;
-            byEmail.set(email, { ...row, admin_data: promote });
-          } else {
-            console.error('sync-live-session-pipeline assessment stage promote', promoteErr);
-          }
-        } else assessmentEmailFailed++;
-      }
     }
 
     return new Response(
@@ -249,10 +193,11 @@ Deno.serve(async (req) => {
         invited_stage_updated: invitedStageUpdated,
         skipped_invite_not_in_portal: skippedInviteNoRow,
         attended_rows_updated: attendedUpdated,
-        assessment_stage_updated: assessmentStageUpdated,
         skipped_attended_not_in_portal: attendedSkippedNoRow,
-        assessment_emails_sent: assessmentEmailsSent,
-        assessment_email_send_failed: assessmentEmailFailed,
+        assessment_stage_updated: 0,
+        assessment_emails_sent: 0,
+        assessment_email_send_failed: 0,
+        note: 'Stage 3 assessment link email is manual-only; automation disabled.',
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
