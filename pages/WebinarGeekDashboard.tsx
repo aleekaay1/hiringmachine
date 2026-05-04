@@ -56,6 +56,28 @@ function monthBoundsFromFirstYmd(firstYmd: string): { since: string; until: stri
   return { since, until, title };
 }
 
+/** One API pull: April 15 (Toronto season) through end of next calendar year — all months filter client-side. */
+function fetchWindowBoundsWide(): { since: string; until: string; label: string } {
+  const p = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Toronto',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+  }).formatToParts(new Date());
+  const y = Number(p.find((x) => x.type === 'year')?.value ?? '2026');
+  const m = Number(p.find((x) => x.type === 'month')?.value ?? '1');
+  const d = Number(p.find((x) => x.type === 'day')?.value ?? '1');
+  const seasonYear = m > 4 || (m === 4 && d >= 15) ? y : y - 1;
+  const since = `${seasonYear}-04-15`;
+  const until = `${seasonYear + 1}-12-31`;
+  return { since, until, label: `${since} → ${until}` };
+}
+
+function pct(part: number, whole: number): string {
+  if (!whole || whole <= 0) return '0';
+  return `${Math.round((100 * part) / whole)}%`;
+}
+
 function eventMsToTorontoYmd(ms: number): string {
   const p = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Toronto',
@@ -184,7 +206,10 @@ const WebinarGeekDashboard: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [syncLoading, setSyncLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<DashboardData | null>(null);
+  /** null = never fetched; array = last fetch result (client-side only until next fetch). */
+  const [subscriptionCache, setSubscriptionCache] = useState<AnyRow[] | null>(null);
+  const [lastFetchAt, setLastFetchAt] = useState<string | null>(null);
+  const [lastFetchRange, setLastFetchRange] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   /** First day of the month being viewed (YYYY-MM-01), Toronto wall month via local month arithmetic. */
@@ -194,11 +219,23 @@ const WebinarGeekDashboard: React.FC = () => {
   const [selectedRow, setSelectedRow] = useState<AnyRow | null>(null);
   const monthWindow = useMemo(() => monthBoundsFromFirstYmd(monthAnchorYmd), [monthAnchorYmd]);
 
-  const subscriptions = useMemo(() => normalizeSubscriptions(data), [data]);
+  /** Rows whose event date falls in the calendar month being viewed (no API). */
+  const rowsInViewMonth = useMemo(() => {
+    if (!subscriptionCache) return [];
+    const [vy, vm] = monthAnchorYmd.split('-').map(Number);
+    const start = `${vy}-${pad2(vm)}-01`;
+    const lastD = new Date(vy, vm, 0).getDate();
+    const end = `${vy}-${pad2(vm)}-${pad2(lastD)}`;
+    return subscriptionCache.filter((row) => {
+      const k = fmtDateKey(row);
+      if (k === 'unknown') return false;
+      return k >= start && k <= end;
+    });
+  }, [subscriptionCache, monthAnchorYmd]);
 
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return subscriptions.filter((row) => {
+    return rowsInViewMonth.filter((row) => {
       const key = fmtDateKey(row);
       if (selectedDayYmd && key !== selectedDayYmd) return false;
       if (!q) return true;
@@ -207,7 +244,59 @@ const WebinarGeekDashboard: React.FC = () => {
       const inviter = getInviterName(row).toLowerCase();
       return name.includes(q) || emailText.includes(q) || inviter.includes(q);
     });
-  }, [subscriptions, selectedDayYmd, searchQuery]);
+  }, [rowsInViewMonth, selectedDayYmd, searchQuery]);
+
+  const monthOverview = useMemo(() => {
+    const rows = rowsInViewMonth;
+    const n = rows.length;
+    let watched = 0;
+    let full = 0;
+    let half = 0;
+    let low = 0;
+    for (const r of rows) {
+      if (r.watched === true) watched += 1;
+      const sec = Number(r.watch_duration || 0);
+      const b = watchBucket(sec);
+      if (b === 'full') full += 1;
+      else if (b === 'half') half += 1;
+      else low += 1;
+    }
+    return { n, watched, full, half, low, ymd: null as string | null };
+  }, [rowsInViewMonth]);
+
+  const selectedDayOverview = useMemo(() => {
+    if (!selectedDayYmd) return null;
+    const rows = rowsInViewMonth.filter((r) => fmtDateKey(r) === selectedDayYmd);
+    const n = rows.length;
+    let watched = 0;
+    let full = 0;
+    let half = 0;
+    let low = 0;
+    for (const r of rows) {
+      if (r.watched === true) watched += 1;
+      const sec = Number(r.watch_duration || 0);
+      const b = watchBucket(sec);
+      if (b === 'full') full += 1;
+      else if (b === 'half') half += 1;
+      else low += 1;
+    }
+    return { n, watched, full, half, low, ymd: selectedDayYmd };
+  }, [rowsInViewMonth, selectedDayYmd]);
+
+  const overviewForUi = selectedDayOverview ?? monthOverview;
+
+  const statTiles = useMemo(() => {
+    const { n, watched, full, half, low } = overviewForUi;
+    const fullOfWatched = watched > 0 ? Math.round((100 * full) / watched) : 0;
+    return [
+      { k: 'Registrations', v: String(n), sub: 'in scope' },
+      { k: 'Watched', v: pct(watched, n), sub: `${watched} marked yes` },
+      { k: 'Full watch', v: pct(full, n), sub: `${full} rows` },
+      { k: 'Half+', v: pct(half, n), sub: `${half} rows` },
+      { k: 'Little / none', v: pct(low, n), sub: `${low} rows` },
+      { k: 'Full of watched', v: `${fullOfWatched}%`, sub: watched ? `${full} / ${watched}` : '—' },
+    ];
+  }, [overviewForUi]);
 
   const [viewYear, viewMonth0] = useMemo(() => {
     const [y, m] = monthAnchorYmd.split('-').map(Number);
@@ -226,7 +315,7 @@ const WebinarGeekDashboard: React.FC = () => {
 
   const dayCounts = useMemo(() => {
     const map = new Map<string, { invited: number; watched: number }>();
-    for (const row of subscriptions) {
+    for (const row of rowsInViewMonth) {
       const key = fmtDateKey(row);
       if (key === 'unknown') continue;
       if (!map.has(key)) map.set(key, { invited: 0, watched: 0 });
@@ -235,7 +324,7 @@ const WebinarGeekDashboard: React.FC = () => {
       if (row.watched === true) e.watched += 1;
     }
     return map;
-  }, [subscriptions]);
+  }, [rowsInViewMonth]);
 
   const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
     const { data: s } = await supabase.auth.getSession();
@@ -262,17 +351,17 @@ const WebinarGeekDashboard: React.FC = () => {
     [getFreshAccessToken]
   );
 
-  const loadDashboard = useCallback(async () => {
+  const fetchDashboardData = useCallback(async () => {
     setError(null);
     setLoading(true);
-    const { since, until } = monthWindow;
+    const { since, until, label } = fetchWindowBoundsWide();
     const result = await withAuthRetry(async (token) => {
       const r = await fetchWebinarGeekDashboard(token, {
         perPage: 250,
         since,
         until,
         includeCatalog: false,
-        maxPages: 22,
+        maxPages: 36,
       });
       if (!r.ok && r.error.toLowerCase().includes('unauthorized')) return null;
       return r;
@@ -280,27 +369,28 @@ const WebinarGeekDashboard: React.FC = () => {
     setLoading(false);
     if (!result) {
       setError('Session unauthorized. Sign out and sign in again.');
-      setData(null);
       return;
     }
     if (!result.ok) {
       setError(result.error);
-      setData(null);
       return;
     }
-    setData(result.data);
-  }, [withAuthRetry, monthWindow]);
+    const rows = normalizeSubscriptions(result.data);
+    setSubscriptionCache(rows);
+    setLastFetchAt(new Date().toISOString());
+    setLastFetchRange(label);
+  }, [withAuthRetry]);
 
   const runSync = useCallback(async () => {
     setError(null);
     setSyncLoading(true);
+    const { since, until } = fetchWindowBoundsWide();
     const result = await withAuthRetry(async (token) => {
-      const { since, until } = monthWindow;
       const r = await syncWebinarGeekCandidates(token, {
         perPage: 250,
         since,
         until,
-        maxPages: 22,
+        maxPages: 36,
       });
       if (!r.ok && r.error.toLowerCase().includes('unauthorized')) return null;
       return r;
@@ -314,8 +404,8 @@ const WebinarGeekDashboard: React.FC = () => {
       setError(result.error);
       return;
     }
-    await loadDashboard();
-  }, [withAuthRetry, loadDashboard, monthWindow]);
+    await fetchDashboardData();
+  }, [withAuthRetry, fetchDashboardData]);
 
   const handleCsvExport = useCallback(() => {
     const headers = [
@@ -370,11 +460,6 @@ const WebinarGeekDashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
-    void loadDashboard();
-  }, [isAuthenticated, loadDashboard]);
-
-  useEffect(() => {
     setSelectedDayYmd(null);
   }, [monthAnchorYmd]);
 
@@ -410,19 +495,55 @@ const WebinarGeekDashboard: React.FC = () => {
     <Layout isAdmin>
       <div className="w-full max-w-6xl mx-auto p-5 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-lg font-semibold text-[#0B1B34] tracking-tight">WebinarGeek</h1>
+          <div>
+            <h1 className="text-lg font-semibold text-[#0B1B34] tracking-tight">WebinarGeek</h1>
+            {lastFetchAt && (
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Loaded {new Date(lastFetchAt).toLocaleString()} · range {lastFetchRange}
+              </p>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" onClick={() => void runSync()} disabled={syncLoading}>
+            <Button type="button" onClick={() => void fetchDashboardData()} disabled={loading}>
+              {loading ? (
+                <>
+                  <RefreshCw size={15} className="mr-1 animate-spin" /> Fetching…
+                </>
+              ) : (
+                'Fetch data'
+              )}
+            </Button>
+            <Button type="button" variant="outline" onClick={() => void runSync()} disabled={syncLoading || loading}>
               {syncLoading ? 'Syncing…' : 'Sync'}
             </Button>
-            <Button type="button" variant="outline" onClick={handleCsvExport}>
+            <Button type="button" variant="outline" onClick={handleCsvExport} disabled={!filteredRows.length}>
               <Download size={15} className="mr-1" /> CSV
-            </Button>
-            <Button type="button" variant="outline" onClick={() => void loadDashboard()} disabled={loading}>
-              <RefreshCw size={15} className={`mr-1 ${loading ? 'animate-spin' : ''}`} />
             </Button>
           </div>
         </div>
+
+        {subscriptionCache !== null && (
+          <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-3">
+              {overviewForUi.ymd ? `Day · ${ymdToShortLabel(overviewForUi.ymd)}` : `Month · ${monthWindow.title}`}
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+              {statTiles.map((c) => (
+                <div key={c.k} className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2">
+                  <p className="text-[10px] text-slate-500 font-medium">{c.k}</p>
+                  <p className="text-lg font-semibold text-slate-900 tabular-nums">{c.v}</p>
+                  <p className="text-[10px] text-slate-400">{c.sub}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {subscriptionCache === null && !loading && (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/50 px-4 py-6 text-center text-sm text-slate-600">
+            Press <strong>Fetch data</strong> to load a snapshot. Month and day views are local only until you fetch again or reload the page.
+          </div>
+        )}
 
         <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -469,7 +590,7 @@ const WebinarGeekDashboard: React.FC = () => {
           <div className="grid grid-cols-7 gap-1.5">
             {calendarCells.map((day, idx) => {
               if (day == null) {
-                return <div key={`e-${idx}`} className="min-h-[56px] rounded-xl bg-slate-50/80" />;
+                return <div key={`e-${idx}`} className="min-h-[64px] rounded-xl bg-slate-50/80" />;
               }
               const ymd = `${viewYear}-${pad2(viewMonth0 + 1)}-${pad2(day)}`;
               const counts = dayCounts.get(ymd);
@@ -482,14 +603,17 @@ const WebinarGeekDashboard: React.FC = () => {
                   key={ymd}
                   type="button"
                   onClick={() => setSelectedDayYmd((prev) => (prev === ymd ? null : ymd))}
-                  className={`min-h-[56px] rounded-xl border text-left px-2 py-1.5 flex flex-col justify-center gap-0.5 transition ${
+                  className={`min-h-[64px] rounded-xl border text-left px-2 py-1 flex flex-col justify-center gap-0.5 transition ${
                     active ? 'border-slate-800 bg-slate-100 shadow-inner' : 'border-slate-200 bg-white hover:bg-slate-50'
                   }`}
                 >
                   <span className="text-[11px] font-semibold text-slate-900 leading-tight">{label}</span>
-                  <span className="text-[10px] text-slate-500 tabular-nums">
-                    {invited} · {watched} watched
+                  <span className="text-[10px] text-slate-500 tabular-nums leading-tight">
+                    {invited === 0 ? '—' : `${invited} invited`}
                   </span>
+                  {invited > 0 && (
+                    <span className="text-[9px] text-slate-600 tabular-nums font-medium leading-tight">{pct(watched, invited)} watched</span>
+                  )}
                 </button>
               );
             })}
