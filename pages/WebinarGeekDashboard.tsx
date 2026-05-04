@@ -3,8 +3,14 @@ import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import { fetchWebinarGeekDashboard, syncWebinarGeekCandidates } from '../services/webinarGeekIntegrations';
-import { ChevronLeft, ChevronRight, Download, RefreshCw, Search, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, MessageSquare, RefreshCw, Search, X } from 'lucide-react';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
+import type { AdminNote } from '../types';
+import {
+  fetchWebinarGeekNotesForIds,
+  insertWebinarGeekHrNote,
+  latestWebinarGeekNote,
+} from '../services/webinarGeekHrNotes';
 
 type AnyRow = Record<string, unknown>;
 type DashboardData = Record<string, unknown>;
@@ -208,6 +214,10 @@ function getInviterName(row: AnyRow): string {
   return v || '0';
 }
 
+function subscriptionKey(row: AnyRow): string {
+  return String(row.id ?? '').trim();
+}
+
 const WebinarGeekDashboard: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [email, setEmail] = useState('admin@globelife-paz.com');
@@ -230,6 +240,11 @@ const WebinarGeekDashboard: React.FC = () => {
   /** Click legend to filter table; click same legend again to clear (null). */
   const [watchToneFilter, setWatchToneFilter] = useState<WatchToneFilter | null>(null);
   const [selectedRow, setSelectedRow] = useState<AnyRow | null>(null);
+  const [wgNotesBySubId, setWgNotesBySubId] = useState<Record<string, AdminNote[]>>({});
+  const [wgNotesLoading, setWgNotesLoading] = useState(false);
+  const [wgNotesError, setWgNotesError] = useState<string | null>(null);
+  const [newWgNote, setNewWgNote] = useState('');
+  const [savingWgNote, setSavingWgNote] = useState(false);
   const monthWindow = useMemo(() => monthBoundsFromFirstYmd(monthAnchorYmd), [monthAnchorYmd]);
 
   /** Rows whose event date falls in the calendar month being viewed (no API). */
@@ -256,13 +271,92 @@ const WebinarGeekDashboard: React.FC = () => {
       const name = `${String(row.firstname ?? '').trim()} ${String(row.surname ?? '').trim()}`.toLowerCase();
       const emailText = String(row.email ?? '').toLowerCase();
       const inviter = getInviterName(row).toLowerCase();
-      return name.includes(q) || emailText.includes(q) || inviter.includes(q);
+      const sid = subscriptionKey(row);
+      const notesHay = (wgNotesBySubId[sid] ?? [])
+        .map((n) => `${n.text} ${n.authorEmail ?? ''}`)
+        .join(' ')
+        .toLowerCase();
+      return name.includes(q) || emailText.includes(q) || inviter.includes(q) || notesHay.includes(q);
     });
-  }, [rowsInViewMonth, selectedDayYmd, searchQuery, watchToneFilter]);
+  }, [rowsInViewMonth, selectedDayYmd, searchQuery, watchToneFilter, wgNotesBySubId]);
 
   const toggleWatchToneFilter = useCallback((tone: WatchToneFilter) => {
     setWatchToneFilter((prev) => (prev === tone ? null : tone));
   }, []);
+
+  useEffect(() => {
+    if (!subscriptionCache?.length) {
+      setWgNotesBySubId({});
+      setWgNotesError(null);
+      return;
+    }
+    const ids = [...new Set(rowsInViewMonth.map((r) => subscriptionKey(r)).filter(Boolean))];
+    if (ids.length === 0) {
+      setWgNotesBySubId({});
+      return;
+    }
+    let cancelled = false;
+    setWgNotesLoading(true);
+    setWgNotesError(null);
+    void (async () => {
+      try {
+        const map = await fetchWebinarGeekNotesForIds(ids);
+        if (cancelled) return;
+        const next: Record<string, AdminNote[]> = {};
+        map.forEach((notes, k) => {
+          next[k] = notes;
+        });
+        setWgNotesBySubId(next);
+      } catch (e) {
+        if (!cancelled) {
+          const msg = e instanceof Error ? e.message : String(e);
+          setWgNotesError(
+            /relation|does not exist|schema cache|PGRST205/i.test(msg)
+              ? 'HR notes table is not deployed. Run migration 20260506_webinar_geek_hr_notes.sql on this Supabase project, then refresh.'
+              : msg
+          );
+          setWgNotesBySubId({});
+        }
+      } finally {
+        if (!cancelled) setWgNotesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [subscriptionCache, rowsInViewMonth]);
+
+  const handleAddWgHrNote = useCallback(async () => {
+    const row = selectedRow;
+    const text = newWgNote.trim();
+    if (!row || !text) return;
+    const sid = subscriptionKey(row);
+    if (!sid) return;
+    setSavingWgNote(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const authorLabel =
+        String(user?.user_metadata?.full_name || user?.user_metadata?.name || user?.email || '').trim() || undefined;
+      const note = await insertWebinarGeekHrNote(sid, text, authorLabel);
+      setWgNotesBySubId((prev) => {
+        const prevList = prev[sid] ?? [];
+        const merged = [...prevList, note].sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+        );
+        return { ...prev, [sid]: merged };
+      });
+      setNewWgNote('');
+    } catch (err) {
+      console.error(err);
+      window.alert(err instanceof Error ? err.message : 'Could not save note.');
+    } finally {
+      setSavingWgNote(false);
+    }
+  }, [selectedRow, newWgNote]);
+
+  useEffect(() => {
+    setNewWgNote('');
+  }, [selectedRow?.id]);
 
   const monthOverview = useMemo(() => {
     const rows = rowsInViewMonth;
@@ -639,11 +733,19 @@ const WebinarGeekDashboard: React.FC = () => {
         </div>
 
         {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">{error}</div>}
+        {wgNotesError && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-950">{wgNotesError}</div>
+        )}
 
         <div className="rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 border-b border-slate-100 bg-slate-50/60">
-            <p className="text-xs font-medium text-slate-600">
-              {selectedDayYmd == null ? monthWindow.title : ymdToShortLabel(selectedDayYmd)}
+            <p className="text-xs font-medium text-slate-600 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span>
+                {selectedDayYmd == null ? monthWindow.title : ymdToShortLabel(selectedDayYmd)}
+              </span>
+              {wgNotesLoading && (
+                <span className="text-[10px] font-normal text-slate-400">Loading HR notes…</span>
+              )}
               {watchToneFilter === 'full' && (
                 <span className="text-emerald-800 font-semibold"> · Full watch only</span>
               )}
@@ -706,6 +808,7 @@ const WebinarGeekDashboard: React.FC = () => {
                   <th className="px-3 py-2 font-medium">Name</th>
                   <th className="px-3 py-2 font-medium">Email</th>
                   <th className="px-3 py-2 font-medium">Invited by</th>
+                  <th className="px-3 py-2 font-medium min-w-[9rem]">Status / notes</th>
                   <th className="px-3 py-2 font-medium">Registered</th>
                   <th className="px-3 py-2 font-medium">Watched</th>
                   <th className="px-3 py-2 font-medium">Watch (min)</th>
@@ -714,7 +817,7 @@ const WebinarGeekDashboard: React.FC = () => {
               <tbody>
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-3 py-8 text-center text-slate-500">
+                    <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
                       No rows
                     </td>
                   </tr>
@@ -724,6 +827,7 @@ const WebinarGeekDashboard: React.FC = () => {
                     const durationSec = Number(row.watch_duration || 0);
                     const regMs = asUnixMs(row.created_at);
                     const tone = watchRowToneClass(durationSec);
+                    const latest = latestWebinarGeekNote(wgNotesBySubId[subscriptionKey(row)]);
                     return (
                       <tr
                         key={String(row.id)}
@@ -733,6 +837,19 @@ const WebinarGeekDashboard: React.FC = () => {
                         <td className="px-3 py-2 font-medium text-slate-900">{name}</td>
                         <td className="px-3 py-2 text-slate-700">{String(row.email || '0')}</td>
                         <td className="px-3 py-2 text-slate-700">{getInviterName(row)}</td>
+                        <td className="px-3 py-2 text-slate-700 align-top max-w-[14rem]">
+                          {latest ? (
+                            <>
+                              <p className="text-[11px] leading-snug line-clamp-2">{latest.text}</p>
+                              <p className="text-[9px] text-slate-500 mt-0.5 tabular-nums">
+                                {latest.authorEmail ? `${latest.authorEmail} · ` : ''}
+                                {formatDateTimeCanadaEastern(latest.createdAt)}
+                              </p>
+                            </>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-slate-600 tabular-nums">
                           {regMs ? formatDateTimeCanadaEastern(regMs) : '0'}
                         </td>
@@ -749,14 +866,14 @@ const WebinarGeekDashboard: React.FC = () => {
 
         {selectedRow && (
           <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-lg max-h-[85vh] overflow-auto shadow-xl">
-              <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+            <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-lg max-h-[85vh] overflow-auto shadow-xl flex flex-col">
+              <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between shrink-0">
                 <p className="font-semibold text-slate-900">Details</p>
                 <button type="button" onClick={() => setSelectedRow(null)} className="text-slate-400 hover:text-slate-700 p-1" aria-label="Close">
                   <X size={18} />
                 </button>
               </div>
-              <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm shrink-0">
                 <Detail label="Name" value={`${String(selectedRow.firstname || '').trim()} ${String(selectedRow.surname || '').trim()}`.trim() || '0'} />
                 <Detail label="Email" value={String(selectedRow.email || '0')} />
                 <Detail label="Invited by" value={getInviterName(selectedRow)} />
@@ -770,6 +887,44 @@ const WebinarGeekDashboard: React.FC = () => {
                 <Detail label="Watched" value={selectedRow.watched === true ? 'Yes' : 'No'} />
                 <Detail label="Watch (min)" value={String(watchMinutes(selectedRow.watch_duration))} />
                 <Detail label="Subscription" value={selectedRow.unsubscribed === true ? 'Unsubscribed' : 'Active'} />
+              </div>
+              <div className="border-t border-slate-100 px-4 py-3 flex-1 min-h-0 flex flex-col gap-3">
+                <p className="text-xs font-medium text-slate-500 flex items-center gap-1.5">
+                  <MessageSquare size={14} className="text-slate-400" />
+                  HR notes (shared)
+                </p>
+                <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                  {(() => {
+                    const sid = subscriptionKey(selectedRow);
+                    const list = [...(wgNotesBySubId[sid] ?? [])].sort(
+                      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+                    );
+                    if (list.length === 0) {
+                      return <p className="text-xs text-slate-400">No notes yet.</p>;
+                    }
+                    return list.map((n) => (
+                      <div key={n.id} className="text-xs bg-slate-50 border border-slate-100 rounded-lg p-2.5">
+                        <p className="text-slate-800 whitespace-pre-wrap break-words">{n.text}</p>
+                        <p className="text-[10px] text-slate-500 mt-1 tabular-nums">
+                          {formatDateTimeCanadaEastern(n.createdAt)}
+                          {n.authorEmail ? ` · ${n.authorEmail}` : ''}
+                        </p>
+                      </div>
+                    ));
+                  })()}
+                </div>
+                <div className="flex flex-col gap-2">
+                  <textarea
+                    value={newWgNote}
+                    onChange={(e) => setNewWgNote(e.target.value)}
+                    placeholder="Add a note for this subscriber…"
+                    rows={3}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-300/80 resize-y min-h-[4.5rem]"
+                  />
+                  <Button type="button" onClick={() => void handleAddWgHrNote()} disabled={!newWgNote.trim() || savingWgNote}>
+                    {savingWgNote ? 'Saving…' : 'Save note'}
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
