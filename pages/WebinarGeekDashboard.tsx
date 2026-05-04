@@ -2,13 +2,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
-import {
-  fetchWebinarGeekDashboard,
-  fetchWebinarGeekHealth,
-  syncWebinarGeekCandidates,
-} from '../services/webinarGeekIntegrations';
-import { ChevronLeft, ChevronRight, Download, RefreshCw, Search, ShieldCheck, X } from 'lucide-react';
-import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
+import { fetchWebinarGeekDashboard, syncWebinarGeekCandidates } from '../services/webinarGeekIntegrations';
+import { ChevronLeft, ChevronRight, Download, RefreshCw, Search, X } from 'lucide-react';
+import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 
 type AnyRow = Record<string, unknown>;
 type DashboardData = Record<string, unknown>;
@@ -82,53 +78,42 @@ function fmtDateKey(row: AnyRow): string {
   return eventMsToTorontoYmd(ms);
 }
 
-function durationLabel(value: unknown): string {
+/** Whole minutes from watch_duration seconds (0 if none). */
+function watchMinutes(value: unknown): number {
   const sec = Number(value);
-  if (!Number.isFinite(sec) || sec <= 0) return '0m 0s';
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m ${s}s`;
+  if (!Number.isFinite(sec) || sec <= 0) return 0;
+  return Math.round(sec / 60);
 }
 
-function watchBucket(seconds: number): 'full' | 'half' | 'under_half' | 'no_watch' {
-  if (seconds >= FULL_WATCH_SECONDS) return 'full';
-  if (seconds >= HALF_WATCH_SECONDS) return 'half';
-  if (seconds > 0) return 'under_half';
-  return 'no_watch';
+function shortCalendarDayLabel(viewYear: number, viewMonth0: number, day: number): string {
+  return new Date(viewYear, viewMonth0, day).toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: '2-digit',
+  });
 }
 
-function normalizeSubscriptions(data: DashboardData | null): AnyRow[] {
-  const payload = data?.subscriptions as Record<string, unknown> | undefined;
-  const rows = payload?.subscriptions;
-  return Array.isArray(rows) ? (rows as AnyRow[]) : [];
+function ymdToShortLabel(ymd: string): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return ymd;
+  return shortCalendarDayLabel(y, m - 1, d);
 }
 
-function normalizeHealth(data: DashboardData | null): { connected: boolean; note?: string } {
-  const h = data?.health as Record<string, unknown> | undefined;
-  const connected = Boolean(h?.subscriptions_ok);
-  return { connected, note: connected ? undefined : 'One or more API calls failed' };
-}
-
-function toCsvValue(value: unknown): string {
-  const raw = String(value ?? '');
-  return `"${raw.replace(/"/g, '""')}"`;
-}
-
-function getInviterName(row: AnyRow): string {
+/** Prefer WebinarGeek custom_field (inviter name), then other attribution fields. */
+function getInvitedByDisplay(row: AnyRow): string {
+  const custom = String(row.custom_field ?? '').trim();
+  if (custom && custom.toLowerCase() !== 'registration_page') return custom;
   const extraFields = row.extra_fields && typeof row.extra_fields === 'object'
     ? row.extra_fields as AnyRow
     : null;
   const options = [
-    row.inviter_signal,
     row.inviter_name,
     row.invited_by,
     row.invited_by_name,
+    row.inviter_signal,
     row.utm_source,
     row.utm_term,
     row.utm_content,
-    row.custom_field,
     row.registration_page_name,
     row.referrer_name,
     row.affiliate_name,
@@ -145,28 +130,49 @@ function getInviterName(row: AnyRow): string {
       if (s && s.toLowerCase() !== 'registration_page') return s;
     }
   }
-  return 'Unknown inviter';
+  return '';
 }
 
-function getAttributionDebug(row: AnyRow): string {
-  const parts: string[] = [];
-  const source = String(row.registration_source ?? '').trim();
-  if (source) parts.push(`source=${source}`);
-  const custom = String(row.custom_field ?? '').trim();
-  if (custom) parts.push(`custom_field=${custom}`);
-  const signal = String(row.inviter_signal ?? '').trim();
-  if (signal) parts.push(`inviter_signal=${signal}`);
-  const utmSource = String(row.utm_source ?? '').trim();
-  if (utmSource) parts.push(`utm_source=${utmSource}`);
-  const utmTerm = String(row.utm_term ?? '').trim();
-  if (utmTerm) parts.push(`utm_term=${utmTerm}`);
-  const utmContent = String(row.utm_content ?? '').trim();
-  if (utmContent) parts.push(`utm_content=${utmContent}`);
-  const extra = row.extra_fields && typeof row.extra_fields === 'object'
-    ? JSON.stringify(row.extra_fields)
-    : '';
-  if (extra) parts.push(`extra_fields=${extra}`);
-  return parts.length > 0 ? parts.join(' | ') : 'No attribution fields in payload';
+/** CSV / Excel: no em-dash mojibake — use 0 when missing. */
+function csvScalar(value: string | number): string {
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '0';
+  const t = value
+    .replace(/\u2014/g, '-')
+    .replace(/\u2013/g, '-')
+    .replace(/\u2212/g, '-')
+    .trim();
+  if (!t || t === '-' || t === '—') return '0';
+  return t;
+}
+
+function toCsvCell(value: unknown): string {
+  const s = csvScalar(String(value ?? ''));
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+function watchBucket(seconds: number): 'full' | 'half' | 'under_half' | 'no_watch' {
+  if (seconds >= FULL_WATCH_SECONDS) return 'full';
+  if (seconds >= HALF_WATCH_SECONDS) return 'half';
+  if (seconds > 0) return 'under_half';
+  return 'no_watch';
+}
+
+function watchRowToneClass(seconds: number): string {
+  const b = watchBucket(seconds);
+  if (b === 'full') return 'bg-emerald-50 hover:bg-emerald-100/90';
+  if (b === 'half') return 'bg-sky-50 hover:bg-sky-100/90';
+  return 'bg-rose-50 hover:bg-rose-100/90';
+}
+
+function normalizeSubscriptions(data: DashboardData | null): AnyRow[] {
+  const payload = data?.subscriptions as Record<string, unknown> | undefined;
+  const rows = payload?.subscriptions;
+  return Array.isArray(rows) ? (rows as AnyRow[]) : [];
+}
+
+function getInviterName(row: AnyRow): string {
+  const v = getInvitedByDisplay(row);
+  return v || '0';
 }
 
 const WebinarGeekDashboard: React.FC = () => {
@@ -176,23 +182,16 @@ const WebinarGeekDashboard: React.FC = () => {
   const [authError, setAuthError] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(false);
-  const [healthLoading, setHealthLoading] = useState(false);
   const [syncLoading, setSyncLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<DashboardData | null>(null);
-  const [health, setHealth] = useState<Record<string, unknown> | null>(null);
-  const [syncResult, setSyncResult] = useState<Record<string, unknown> | null>(null);
 
-  const [webinarId, setWebinarId] = useState('');
-  const [broadcastId, setBroadcastId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   /** First day of the month being viewed (YYYY-MM-01), Toronto wall month via local month arithmetic. */
   const [monthAnchorYmd, setMonthAnchorYmd] = useState(torontoMonthStartToday);
   /** When set, table shows only that Toronto calendar day; null = whole month window. */
   const [selectedDayYmd, setSelectedDayYmd] = useState<string | null>(null);
   const [selectedRow, setSelectedRow] = useState<AnyRow | null>(null);
-  const [includeCatalog, setIncludeCatalog] = useState(false);
-
   const monthWindow = useMemo(() => monthBoundsFromFirstYmd(monthAnchorYmd), [monthAnchorYmd]);
 
   const subscriptions = useMemo(() => normalizeSubscriptions(data), [data]);
@@ -238,15 +237,6 @@ const WebinarGeekDashboard: React.FC = () => {
     return map;
   }, [subscriptions]);
 
-  const daySummary = useMemo(() => {
-    const rows = filteredRows;
-    const invited = rows.length;
-    const watched = rows.filter((r) => r.watched === true).length;
-    const fullWatched = rows.filter((r) => watchBucket(Number(r.watch_duration || 0)) === 'full').length;
-    const unsubscribed = rows.filter((r) => r.unsubscribed === true).length;
-    return { invited, watched, fullWatched, unsubscribed };
-  }, [filteredRows]);
-
   const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
     const { data: s } = await supabase.auth.getSession();
     const session = s.session;
@@ -278,12 +268,10 @@ const WebinarGeekDashboard: React.FC = () => {
     const { since, until } = monthWindow;
     const result = await withAuthRetry(async (token) => {
       const r = await fetchWebinarGeekDashboard(token, {
-        webinarId: webinarId.trim() || undefined,
-        broadcastId: broadcastId.trim() || undefined,
         perPage: 250,
         since,
         until,
-        includeCatalog,
+        includeCatalog: false,
         maxPages: 22,
       });
       if (!r.ok && r.error.toLowerCase().includes('unauthorized')) return null;
@@ -301,29 +289,7 @@ const WebinarGeekDashboard: React.FC = () => {
       return;
     }
     setData(result.data);
-  }, [broadcastId, webinarId, withAuthRetry, monthWindow, includeCatalog]);
-
-  const loadHealth = useCallback(async () => {
-    setError(null);
-    setHealthLoading(true);
-    const result = await withAuthRetry(async (token) => {
-      const r = await fetchWebinarGeekHealth(token);
-      if (!r.ok && r.error.toLowerCase().includes('unauthorized')) return null;
-      return r;
-    });
-    setHealthLoading(false);
-    if (!result) {
-      setError('Session unauthorized for health check.');
-      setHealth(null);
-      return;
-    }
-    if (!result.ok) {
-      setError(result.error);
-      setHealth(null);
-      return;
-    }
-    setHealth(result.data);
-  }, [withAuthRetry]);
+  }, [withAuthRetry, monthWindow]);
 
   const runSync = useCallback(async () => {
     setError(null);
@@ -331,8 +297,6 @@ const WebinarGeekDashboard: React.FC = () => {
     const result = await withAuthRetry(async (token) => {
       const { since, until } = monthWindow;
       const r = await syncWebinarGeekCandidates(token, {
-        webinarId: webinarId.trim() || undefined,
-        broadcastId: broadcastId.trim() || undefined,
         perPage: 250,
         since,
         until,
@@ -350,59 +314,44 @@ const WebinarGeekDashboard: React.FC = () => {
       setError(result.error);
       return;
     }
-    setSyncResult(result.data);
     await loadDashboard();
-  }, [broadcastId, webinarId, withAuthRetry, loadDashboard, monthWindow]);
+  }, [withAuthRetry, loadDashboard, monthWindow]);
 
   const handleCsvExport = useCallback(() => {
     const headers = [
-      'candidate_name',
+      'subscription_id',
+      'first_name',
+      'last_name',
       'email',
-      'inviter',
-      'date',
-      'time',
+      'invited_by',
+      'registration',
+      'watch_minutes',
       'watched',
-      'watch_type',
-      'watch_duration',
-      'subscribed_status',
-      'webinar',
-      'broadcast_id',
     ];
     const rows = filteredRows.map((row) => {
-      const name = `${String(row.firstname || '').trim()} ${String(row.surname || '').trim()}`.trim();
-      const ms =
-        asUnixMs((row.broadcast as AnyRow | undefined)?.date) ??
-        asUnixMs(row.created_at) ??
-        asUnixMs(row.watched_true_set_at);
+      const first = csvScalar(String(row.firstname ?? '').trim());
+      const last = csvScalar(String(row.surname ?? '').trim());
+      const email = csvScalar(String(row.email ?? '').trim());
+      const invited = csvScalar(getInvitedByDisplay(row) || '0');
+      const regMs = asUnixMs(row.created_at);
+      const registration =
+        regMs != null ? new Date(regMs).toISOString().slice(0, 16).replace('T', ' ') : '0';
+      const mins = watchMinutes(row.watch_duration);
       const watched = row.watched === true ? 'Yes' : 'No';
-      const dateLabel = ms ? formatDateCanadaEastern(ms) : '—';
-      const timeOnly =
-        ms
-          ? new Intl.DateTimeFormat('en-CA', {
-              timeZone: 'America/Toronto',
-              timeStyle: 'short',
-            }).format(new Date(ms))
-          : '—';
-      const watchType =
-        row.watched_live === true ? 'Live'
-        : row.watched_replay === true ? 'Replay'
-        : 'None';
-      const status = row.unsubscribed === true ? 'Unsubscribed' : 'Subscribed';
       return [
-        name || '—',
-        String(row.email || '—'),
-        getInviterName(row),
-        dateLabel,
-        timeOnly,
+        String(row.id ?? '0'),
+        first,
+        last,
+        email,
+        invited,
+        registration,
+        String(mins),
         watched,
-        watchType,
-        durationLabel(row.watch_duration),
-        status,
-        String((row.webinar as AnyRow | undefined)?.title || '—'),
-        String((row.broadcast as AnyRow | undefined)?.id || '—'),
       ];
     });
-    const csv = [headers.map(toCsvValue).join(','), ...rows.map((r) => r.map(toCsvValue).join(','))].join('\n');
+    const line = (cells: string[]) => cells.map(toCsvCell).join(',');
+    const csvBody = [line(headers), ...rows.map((r) => line(r))].join('\r\n');
+    const csv = `\uFEFF${csvBody}`;
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -427,7 +376,7 @@ const WebinarGeekDashboard: React.FC = () => {
 
   useEffect(() => {
     setSelectedDayYmd(null);
-  }, [monthAnchorYmd, webinarId, broadcastId]);
+  }, [monthAnchorYmd]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -459,132 +408,77 @@ const WebinarGeekDashboard: React.FC = () => {
 
   return (
     <Layout isAdmin>
-      <div className="w-full p-6 space-y-4">
-        <div className="rounded-xl border border-[#d6deea] bg-white p-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-bold text-[#0B1B34]">WebinarGeek — month calendar</h1>
-            <p className="text-xs text-[#60728c]">
-              Loads subscriptions for <strong>{monthWindow.title}</strong> ({monthWindow.since} → {monthWindow.until}, Toronto dates). Use arrows to change month; click a day to filter the table.
-            </p>
-            {data && (
-              <p className="text-[11px] text-[#60728c] mt-1">
-                Rows in window: {subscriptions.length} · Shown: {filteredRows.length}
-                {includeCatalog ? ' · Full webinar/broadcast catalog loaded' : ''}
-              </p>
-            )}
-            {health && (() => {
-              const status = normalizeHealth(health);
-              return (
-                <p className={`text-[11px] mt-1 ${status.connected ? 'text-green-700' : 'text-amber-700'}`}>
-                  API status: {status.connected ? 'connected' : status.note || 'degraded'}
-                </p>
-              );
-            })()}
-          </div>
+      <div className="w-full max-w-6xl mx-auto p-5 space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-lg font-semibold text-[#0B1B34] tracking-tight">WebinarGeek</h1>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" onClick={() => void loadHealth()} disabled={healthLoading}>
-              <ShieldCheck size={15} className="mr-1" /> Health
-            </Button>
             <Button type="button" onClick={() => void runSync()} disabled={syncLoading}>
-              {syncLoading ? 'Syncing...' : 'Sync DB'}
+              {syncLoading ? 'Syncing…' : 'Sync'}
             </Button>
             <Button type="button" variant="outline" onClick={handleCsvExport}>
-              <Download size={15} className="mr-1" /> Clean CSV
+              <Download size={15} className="mr-1" /> CSV
             </Button>
             <Button type="button" variant="outline" onClick={() => void loadDashboard()} disabled={loading}>
-              <RefreshCw size={15} className={`mr-1 ${loading ? 'animate-spin' : ''}`} /> Refresh
+              <RefreshCw size={15} className={`mr-1 ${loading ? 'animate-spin' : ''}`} />
             </Button>
           </div>
         </div>
 
-        <div className="rounded-xl border border-[#d6deea] bg-white p-4 flex flex-col gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Button type="button" variant="outline" onClick={() => setMonthAnchorYmd((m) => shiftMonthFirstYmd(m, -1))} aria-label="Previous month">
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div className="flex items-center gap-1">
+              <Button type="button" variant="outline" className="h-9 w-9 p-0" onClick={() => setMonthAnchorYmd((m) => shiftMonthFirstYmd(m, -1))} aria-label="Previous month">
                 <ChevronLeft size={18} />
               </Button>
-              <span className="text-sm font-semibold text-[#0B1B34] min-w-[10rem] text-center">{monthWindow.title}</span>
-              <Button type="button" variant="outline" onClick={() => setMonthAnchorYmd((m) => shiftMonthFirstYmd(m, 1))} aria-label="Next month">
+              <span className="text-sm font-medium text-slate-800 min-w-[9rem] text-center px-2">{monthWindow.title}</span>
+              <Button type="button" variant="outline" className="h-9 w-9 p-0" onClick={() => setMonthAnchorYmd((m) => shiftMonthFirstYmd(m, 1))} aria-label="Next month">
                 <ChevronRight size={18} />
               </Button>
-              <Button type="button" variant="outline" onClick={() => setMonthAnchorYmd(torontoMonthStartToday())}>
-                This month
+              <Button type="button" variant="outline" className="h-9 text-xs ml-1" onClick={() => setMonthAnchorYmd(torontoMonthStartToday())}>
+                Current
               </Button>
             </div>
-            <label className="flex items-center gap-2 text-xs text-[#4f6787] cursor-pointer select-none">
-              <input type="checkbox" checked={includeCatalog} onChange={(e) => setIncludeCatalog(e.target.checked)} className="rounded border-[#cfe3f9]" />
-              Load webinar &amp; broadcast lists (slower)
-            </label>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-            <input value={webinarId} onChange={(e) => setWebinarId(e.target.value)} placeholder="webinar_id (optional)" className="px-3 py-2 rounded-lg border border-[#cfe3f9]" />
-            <input value={broadcastId} onChange={(e) => setBroadcastId(e.target.value)} placeholder="broadcast_id (optional)" className="px-3 py-2 rounded-lg border border-[#cfe3f9]" />
-            <label className="relative md:col-span-1">
-              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#789]" />
+            <label className="relative flex-1 min-w-[12rem] max-w-md">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search name / email / inviter"
-                className="w-full pl-8 pr-3 py-2 rounded-lg border border-[#cfe3f9]"
+                placeholder="Name, email, or inviter"
+                className="w-full pl-9 pr-3 py-2 text-sm rounded-xl border border-slate-200 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-slate-300/80"
               />
             </label>
-            <Button type="button" onClick={() => void loadDashboard()} disabled={loading}>Reload data</Button>
           </div>
-        </div>
 
-        {syncResult && (
-          <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-2 text-sm text-green-800">
-            Synced subscriptions: {String(syncResult.total_subscriptions ?? 0)} | matched: {String(syncResult.matched_subscriptions ?? 0)} | unmatched: {String(syncResult.unmatched_subscriptions ?? 0)}
-            {Number(syncResult.estimated_unverified_or_pending ?? 0) > 0 && (
-              <span> | not-yet-verified/pending (estimated): {String(syncResult.estimated_unverified_or_pending)}</span>
-            )}
-          </div>
-        )}
-        {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{error}</div>}
-
-        <div className="rounded-xl border border-[#d6deea] bg-white p-4">
-          <p className="text-sm font-semibold text-[#0B1B34] mb-3">Calendar (Toronto) — click a day to filter</p>
-          <div className="flex flex-wrap gap-2 mb-3">
-            <button
-              type="button"
-              onClick={() => setSelectedDayYmd(null)}
-              className={`px-3 py-1.5 rounded-full text-xs border ${selectedDayYmd == null ? 'bg-[#005EB8] text-white border-[#005EB8]' : 'bg-white text-[#4f6787] border-[#cfe3f9]'}`}
-            >
-              Whole month
-            </button>
-          </div>
-          <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-semibold text-[#60728c] mb-1">
+          <div className="grid grid-cols-7 gap-1.5 text-center text-[10px] font-medium uppercase tracking-wide text-slate-500 mb-1.5">
             {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
               <div key={d} className="py-1">
                 {d}
               </div>
             ))}
           </div>
-          <div className="grid grid-cols-7 gap-1">
+          <div className="grid grid-cols-7 gap-1.5">
             {calendarCells.map((day, idx) => {
               if (day == null) {
-                return <div key={`e-${idx}`} className="min-h-[52px] rounded-lg bg-[#f4f7fb]" />;
+                return <div key={`e-${idx}`} className="min-h-[56px] rounded-xl bg-slate-50/80" />;
               }
               const ymd = `${viewYear}-${pad2(viewMonth0 + 1)}-${pad2(day)}`;
               const counts = dayCounts.get(ymd);
               const invited = counts?.invited ?? 0;
               const watched = counts?.watched ?? 0;
               const active = selectedDayYmd === ymd;
+              const label = shortCalendarDayLabel(viewYear, viewMonth0, day);
               return (
                 <button
                   key={ymd}
                   type="button"
                   onClick={() => setSelectedDayYmd((prev) => (prev === ymd ? null : ymd))}
-                  className={`min-h-[52px] rounded-lg border text-left p-1.5 flex flex-col justify-between transition ${
-                    active
-                      ? 'border-[#005EB8] bg-[#e8f2fc] ring-1 ring-[#005EB8]'
-                      : 'border-[#e2eaf5] bg-white hover:border-[#9db7dc]'
+                  className={`min-h-[56px] rounded-xl border text-left px-2 py-1.5 flex flex-col justify-center gap-0.5 transition ${
+                    active ? 'border-slate-800 bg-slate-100 shadow-inner' : 'border-slate-200 bg-white hover:bg-slate-50'
                   }`}
                 >
-                  <span className="text-sm font-bold text-[#0B1B34]">{day}</span>
-                  <span className="text-[10px] text-[#5a6d86] leading-tight">
-                    {invited ? `${invited} reg` : '—'}
-                    {watched ? ` · ${watched} watched` : ''}
+                  <span className="text-[11px] font-semibold text-slate-900 leading-tight">{label}</span>
+                  <span className="text-[10px] text-slate-500 tabular-nums">
+                    {invited} · {watched} watched
                   </span>
                 </button>
               );
@@ -592,63 +486,68 @@ const WebinarGeekDashboard: React.FC = () => {
           </div>
         </div>
 
-        <div className="rounded-xl border border-[#d6deea] bg-white p-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-          <InfoStat label="Invited" value={daySummary.invited} />
-          <InfoStat label="Watched" value={daySummary.watched} />
-          <InfoStat label="Fully Watched" value={daySummary.fullWatched} />
-          <InfoStat label="Unsubscribed" value={daySummary.unsubscribed} />
-        </div>
+        {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">{error}</div>}
 
-        <div className="rounded-xl border border-[#d6deea] bg-white overflow-hidden">
-          <div className="px-4 py-3 border-b border-[#e7eef8] bg-[#f8fbff]">
-            <p className="text-sm font-semibold text-[#0B1B34]">
-              {selectedDayYmd == null
-                ? `All days in ${monthWindow.title}`
-                : `Records for ${selectedDayYmd} (Toronto calendar day)`}
+        <div className="rounded-2xl border border-slate-200/80 bg-white shadow-sm overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 border-b border-slate-100 bg-slate-50/60">
+            <p className="text-xs font-medium text-slate-600">
+              {selectedDayYmd == null ? monthWindow.title : ymdToShortLabel(selectedDayYmd)}
             </p>
+            <div className="flex flex-wrap items-center gap-3 text-[10px] text-slate-600">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-6 rounded bg-emerald-100 border border-emerald-200/80" /> Full watch
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-6 rounded bg-sky-100 border border-sky-200/80" /> Half+
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2.5 w-6 rounded bg-rose-100 border border-rose-200/80" /> Little / none
+              </span>
+            </div>
           </div>
-          <div className="overflow-auto max-h-[60vh]">
-            <table className="min-w-full text-xs">
-              <thead className="bg-[#f7fbff] sticky top-0 z-10">
-                <tr>
-                  <th className="text-left px-3 py-2">Candidate</th>
-                  <th className="text-left px-3 py-2">Email</th>
-                  <th className="text-left px-3 py-2">Inviter</th>
-                  <th className="text-left px-3 py-2">When (Toronto)</th>
-                  <th className="text-left px-3 py-2">Watched</th>
-                  <th className="text-left px-3 py-2">Watch Details</th>
-                  <th className="text-left px-3 py-2">Status</th>
-                  <th className="text-left px-3 py-2">Webinar</th>
+          <div className="overflow-auto max-h-[min(70vh,560px)]">
+            <table className="min-w-full text-xs text-slate-800">
+              <thead className="bg-white sticky top-0 z-10 border-b border-slate-200">
+                <tr className="text-left text-[10px] uppercase tracking-wide text-slate-500">
+                  <th className="px-3 py-2 font-medium">Name</th>
+                  <th className="px-3 py-2 font-medium">Email</th>
+                  <th className="px-3 py-2 font-medium">Invited by</th>
+                  <th className="px-3 py-2 font-medium">Registered</th>
+                  <th className="px-3 py-2 font-medium">Watched</th>
+                  <th className="px-3 py-2 font-medium">Watch (min)</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredRows.length === 0 ? (
-                  <tr><td colSpan={8} className="px-3 py-6 text-center text-[#7b8aa0]">No records for this filter.</td></tr>
-                ) : filteredRows.map((row) => {
-                  const name = `${String(row.firstname || '').trim()} ${String(row.surname || '').trim()}`.trim() || 'Unnamed';
-                  const durationSec = Number(row.watch_duration || 0);
-                  const bucket = watchBucket(durationSec);
-                  const ms =
-                    asUnixMs((row.broadcast as AnyRow | undefined)?.date) ??
-                    asUnixMs(row.created_at) ??
-                    asUnixMs(row.watched_true_set_at);
-                  return (
-                    <tr
-                      key={String(row.id)}
-                      className="border-t border-[#edf2fb] hover:bg-[#f8fbff] cursor-pointer"
-                      onClick={() => setSelectedRow(row)}
-                    >
-                      <td className="px-3 py-2">{name}</td>
-                      <td className="px-3 py-2">{String(row.email || '—')}</td>
-                      <td className="px-3 py-2">{getInviterName(row)}</td>
-                      <td className="px-3 py-2">{ms ? formatDateTimeCanadaEastern(ms) : '—'}</td>
-                      <td className="px-3 py-2">{row.watched === true ? 'Yes' : 'No'}</td>
-                      <td className="px-3 py-2">{durationLabel(durationSec)} ({bucket})</td>
-                      <td className="px-3 py-2">{row.unsubscribed === true ? 'Unsubscribed' : 'Subscribed'}</td>
-                      <td className="px-3 py-2">{String((row.webinar as AnyRow | undefined)?.title || '—')}</td>
-                    </tr>
-                  );
-                })}
+                  <tr>
+                    <td colSpan={6} className="px-3 py-8 text-center text-slate-500">
+                      No rows
+                    </td>
+                  </tr>
+                ) : (
+                  filteredRows.map((row) => {
+                    const name = `${String(row.firstname || '').trim()} ${String(row.surname || '').trim()}`.trim() || '0';
+                    const durationSec = Number(row.watch_duration || 0);
+                    const regMs = asUnixMs(row.created_at);
+                    const tone = watchRowToneClass(durationSec);
+                    return (
+                      <tr
+                        key={String(row.id)}
+                        className={`border-b border-slate-100/90 cursor-pointer ${tone}`}
+                        onClick={() => setSelectedRow(row)}
+                      >
+                        <td className="px-3 py-2 font-medium text-slate-900">{name}</td>
+                        <td className="px-3 py-2 text-slate-700">{String(row.email || '0')}</td>
+                        <td className="px-3 py-2 text-slate-700">{getInviterName(row)}</td>
+                        <td className="px-3 py-2 text-slate-600 tabular-nums">
+                          {regMs ? formatDateTimeCanadaEastern(regMs) : '0'}
+                        </td>
+                        <td className="px-3 py-2">{row.watched === true ? 'Yes' : 'No'}</td>
+                        <td className="px-3 py-2 tabular-nums">{watchMinutes(row.watch_duration)}</td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
@@ -656,50 +555,27 @@ const WebinarGeekDashboard: React.FC = () => {
 
         {selectedRow && (
           <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-xl border border-[#d6deea] w-full max-w-2xl max-h-[85vh] overflow-auto">
-              <div className="px-4 py-3 border-b border-[#e7eef8] flex items-center justify-between">
-                <p className="font-semibold text-[#0B1B34]">Webinar candidate details</p>
-                <button type="button" onClick={() => setSelectedRow(null)} className="text-gray-500 hover:text-gray-800">
+            <div className="bg-white rounded-2xl border border-slate-200 w-full max-w-lg max-h-[85vh] overflow-auto shadow-xl">
+              <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+                <p className="font-semibold text-slate-900">Details</p>
+                <button type="button" onClick={() => setSelectedRow(null)} className="text-slate-400 hover:text-slate-700 p-1" aria-label="Close">
                   <X size={18} />
                 </button>
               </div>
-              <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                <Detail label="Name" value={`${String(selectedRow.firstname || '').trim()} ${String(selectedRow.surname || '').trim()}`.trim() || '—'} />
-                <Detail label="Email" value={String(selectedRow.email || '—')} />
-                <Detail label="Inviter" value={getInviterName(selectedRow)} />
-                <Detail label="Registration source" value={String(selectedRow.registration_source || '—')} />
+              <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                <Detail label="Name" value={`${String(selectedRow.firstname || '').trim()} ${String(selectedRow.surname || '').trim()}`.trim() || '0'} />
+                <Detail label="Email" value={String(selectedRow.email || '0')} />
+                <Detail label="Invited by" value={getInviterName(selectedRow)} />
                 <Detail
-                  label="Created"
+                  label="Registered"
                   value={(() => {
                     const t = asUnixMs(selectedRow.created_at);
-                    return t ? formatDateTimeCanadaEastern(t) : '—';
+                    return t ? formatDateTimeCanadaEastern(t) : '0';
                   })()}
                 />
                 <Detail label="Watched" value={selectedRow.watched === true ? 'Yes' : 'No'} />
-                <Detail
-                  label="Watch start"
-                  value={(() => {
-                    const t = asUnixMs(selectedRow.watch_start);
-                    return t ? formatDateTimeCanadaEastern(t) : '—';
-                  })()}
-                />
-                <Detail
-                  label="Watch end"
-                  value={(() => {
-                    const t = asUnixMs(selectedRow.watch_end);
-                    return t ? formatDateTimeCanadaEastern(t) : '—';
-                  })()}
-                />
-                <Detail label="Watch duration" value={durationLabel(selectedRow.watch_duration)} />
-                <Detail label="Live watch duration" value={durationLabel(selectedRow.watch_duration_live)} />
-                <Detail label="Replay watch duration" value={durationLabel(selectedRow.watch_duration_replay)} />
-                <Detail label="Subscription status" value={selectedRow.unsubscribed === true ? 'Unsubscribed' : 'Subscribed'} />
-                <div className="md:col-span-2">
-                  <p className="text-xs text-[#60728c] mb-1">Attribution debug</p>
-                  <p className="text-xs text-[#334a69] break-words rounded-md border border-[#e7eef8] bg-[#f8fbff] px-2 py-2">
-                    {getAttributionDebug(selectedRow)}
-                  </p>
-                </div>
+                <Detail label="Watch (min)" value={String(watchMinutes(selectedRow.watch_duration))} />
+                <Detail label="Subscription" value={selectedRow.unsubscribed === true ? 'Unsubscribed' : 'Active'} />
               </div>
             </div>
           </div>
@@ -709,17 +585,10 @@ const WebinarGeekDashboard: React.FC = () => {
   );
 };
 
-const InfoStat = ({ label, value }: { label: string; value: number }) => (
-  <div className="rounded-lg border border-[#e7eef8] bg-[#f8fbff] px-3 py-2">
-    <p className="text-[11px] uppercase tracking-wide text-[#6d7f98]">{label}</p>
-    <p className="text-lg font-bold text-[#0B1B34]">{value}</p>
-  </div>
-);
-
 const Detail = ({ label, value }: { label: string; value: string }) => (
   <div>
     <p className="text-xs text-[#60728c]">{label}</p>
-    <p className="text-sm text-[#0B1B34]">{value || '—'}</p>
+    <p className="text-sm text-[#0B1B34]">{value?.trim() ? value : '0'}</p>
   </div>
 );
 
