@@ -427,14 +427,24 @@ const WebinarGeekDashboard: React.FC = () => {
         <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <div className="flex items-center gap-1">
-              <Button type="button" variant="outline" className="h-9 w-9 p-0" onClick={() => setMonthAnchorYmd((m) => shiftMonthFirstYmd(m, -1))} aria-label="Previous month">
-                <ChevronLeft size={18} />
-              </Button>
+              <button
+                type="button"
+                onClick={() => setMonthAnchorYmd((m) => shiftMonthFirstYmd(m, -1))}
+                aria-label="Previous month"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-800 shadow-sm hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+              >
+                <ChevronLeft className="h-5 w-5" strokeWidth={2.5} aria-hidden />
+              </button>
               <span className="text-sm font-medium text-slate-800 min-w-[9rem] text-center px-2">{monthWindow.title}</span>
-              <Button type="button" variant="outline" className="h-9 w-9 p-0" onClick={() => setMonthAnchorYmd((m) => shiftMonthFirstYmd(m, 1))} aria-label="Next month">
-                <ChevronRight size={18} />
-              </Button>
-              <Button type="button" variant="outline" className="h-9 text-xs ml-1" onClick={() => setMonthAnchorYmd(torontoMonthStartToday())}>
+              <button
+                type="button"
+                onClick={() => setMonthAnchorYmd((m) => shiftMonthFirstYmd(m, 1))}
+                aria-label="Next month"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-800 shadow-sm hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
+              >
+                <ChevronRight className="h-5 w-5" strokeWidth={2.5} aria-hidden />
+              </button>
+              <Button type="button" variant="outline" className="!min-h-0 h-9 px-3 py-0 text-xs ml-1" onClick={() => setMonthAnchorYmd(torontoMonthStartToday())}>
                 Current
               </Button>
             </div>
