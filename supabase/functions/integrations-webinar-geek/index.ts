@@ -105,9 +105,29 @@ function rowInWindow(row: Record<string, unknown>, sinceMs: number | null, until
   return true;
 }
 
-async function wgGetAllSubscriptions(
+/** Default list excludes people who have not confirmed email (WG docs). Prefer primary row on id clash (watch stats). */
+function mergeSubscriptionsPreferFirst(
+  primary: Array<Record<string, unknown>>,
+  secondary: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const r of primary) {
+    const id = r.id;
+    if (id == null || id === '') continue;
+    byId.set(String(id), r);
+  }
+  for (const r of secondary) {
+    const id = r.id;
+    if (id == null || id === '') continue;
+    const key = String(id);
+    if (!byId.has(key)) byId.set(key, r);
+  }
+  return [...byId.values()];
+}
+
+async function wgGetAllSubscriptionsOnePass(
   params: Record<string, string | number | boolean | undefined>,
-  opts?: { sinceMs?: number | null; untilMs?: number | null; maxPages?: number }
+  opts?: { sinceMs?: number | null; untilMs?: number | null; maxPages?: number },
 ) {
   const perPage = Math.min(1000, Math.max(50, Number(params.per_page || 250)));
   const sinceMs = opts?.sinceMs ?? null;
@@ -146,11 +166,69 @@ async function wgGetAllSubscriptions(
     }
 
     if (!nextLink || page >= totalPages) {
-      return { ok: true, status: res.status, json: { ...res.json, subscriptions: rows }, rows, pagesFetched: page, totalPages };
+      return { ok: true as const, status: res.status, json: { ...res.json, subscriptions: rows }, rows, pagesFetched: page, totalPages };
     }
     page += 1;
   }
-  return { ok: true, status: 200, json: { subscriptions: rows }, rows, pagesFetched: page - 1, totalPages };
+  return { ok: true as const, status: 200, json: { subscriptions: rows }, rows, pagesFetched: page - 1, totalPages };
+}
+
+/**
+ * Fetches subscriptions and merges an extra pass with `email_verified=false` so invited people who have not
+ * confirmed their email in WebinarGeek still appear (default GET list omits them per WG docs).
+ * Set WEBINARGEEK_SUBSCRIPTIONS_SKIP_UNVERIFIED_PASS=1 to disable the extra pass (fewer API calls).
+ */
+async function wgGetAllSubscriptions(
+  params: Record<string, string | number | boolean | undefined>,
+  opts?: { sinceMs?: number | null; untilMs?: number | null; maxPages?: number },
+) {
+  const primary = await wgGetAllSubscriptionsOnePass(params, opts);
+  if (!primary.ok) return { ...primary, unverified_pass: 'not_applicable' };
+
+  const skipExtra = Deno.env.get('WEBINARGEEK_SUBSCRIPTIONS_SKIP_UNVERIFIED_PASS') === '1';
+  if (skipExtra) {
+    return { ...primary, unverified_pass: 'skipped_env' };
+  }
+
+  if (params.email_verified === false) {
+    return { ...primary, unverified_pass: 'not_applicable' };
+  }
+
+  let secondary = await wgGetAllSubscriptionsOnePass({ ...params, email_verified: false }, opts);
+  let unverifiedStrategy: 'email_verified_false' | 'include_unverified_true' = 'email_verified_false';
+  if (!secondary.ok) {
+    secondary = await wgGetAllSubscriptionsOnePass({ ...params, include_unverified: true }, opts);
+    unverifiedStrategy = 'include_unverified_true';
+  }
+  if (!secondary.ok) {
+    return {
+      ...primary,
+      unverified_pass: 'failed',
+      pages_fetched_unverified: secondary.pagesFetched ?? 0,
+    };
+  }
+
+  const mergedRows = mergeSubscriptionsPreferFirst(primary.rows, secondary.rows);
+  if (mergedRows.length === primary.rows.length) {
+    return {
+      ...primary,
+      unverified_pass: 'skipped_duplicate',
+      pages_fetched_unverified: secondary.pagesFetched ?? 0,
+      unverified_strategy: unverifiedStrategy,
+    };
+  }
+
+  return {
+    ok: true,
+    status: primary.status,
+    json: { ...primary.json, subscriptions: mergedRows },
+    rows: mergedRows,
+    pagesFetched: primary.pagesFetched,
+    totalPages: Math.max(primary.totalPages ?? 1, secondary.totalPages ?? 1),
+    unverified_pass: 'ok',
+    pages_fetched_unverified: secondary.pagesFetched ?? 0,
+    unverified_strategy: unverifiedStrategy,
+  };
 }
 
 Deno.serve(async (req) => {
@@ -269,6 +347,9 @@ Deno.serve(async (req) => {
           total_rows: Array.isArray((subscriptions.json as Record<string, unknown>).subscriptions)
             ? ((subscriptions.json as Record<string, unknown>).subscriptions as Array<unknown>).length
             : 0,
+          unverified_email_pass: (subscriptions as { unverified_pass?: string }).unverified_pass ?? null,
+          pages_fetched_unverified_pass: (subscriptions as { pages_fetched_unverified?: number }).pages_fetched_unverified ?? null,
+          unverified_merge_strategy: (subscriptions as { unverified_strategy?: string }).unverified_strategy ?? null,
         },
       };
       return new Response(JSON.stringify(response), {
@@ -463,6 +544,9 @@ Deno.serve(async (req) => {
         total_subscriptions: subRows.length,
         broadcast_subscriptions_total: broadcastSubscriptionsTotal,
         estimated_unverified_or_pending: estimatedUnverifiedOrPending,
+        unverified_email_pass: (subscriptions as { unverified_pass?: string }).unverified_pass ?? null,
+        pages_fetched_unverified_pass: (subscriptions as { pages_fetched_unverified?: number }).pages_fetched_unverified ?? null,
+        unverified_merge_strategy: (subscriptions as { unverified_strategy?: string }).unverified_strategy ?? null,
         matched_subscriptions: Array.from(matchedByCandidate.values()).reduce((s, rows) => s + rows.length, 0),
         unmatched_subscriptions: unmatched.length,
         matched_candidates: matchedByCandidate.size,
