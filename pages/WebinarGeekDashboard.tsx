@@ -214,6 +214,11 @@ function getInviterName(row: AnyRow): string {
   return v || '0';
 }
 
+function getPhoneDisplay(row: AnyRow): string {
+  const phone = String(row.phone ?? row.telephone ?? row.mobile ?? '').trim();
+  return phone || '0';
+}
+
 function subscriptionKey(row: AnyRow): string {
   return String(row.id ?? '').trim();
 }
@@ -270,13 +275,14 @@ const WebinarGeekDashboard: React.FC = () => {
       if (!q) return true;
       const name = `${String(row.firstname ?? '').trim()} ${String(row.surname ?? '').trim()}`.toLowerCase();
       const emailText = String(row.email ?? '').toLowerCase();
+      const phoneText = getPhoneDisplay(row).toLowerCase();
       const inviter = getInviterName(row).toLowerCase();
       const sid = subscriptionKey(row);
       const notesHay = (wgNotesBySubId[sid] ?? [])
         .map((n) => `${n.text} ${n.authorEmail ?? ''}`)
         .join(' ')
         .toLowerCase();
-      return name.includes(q) || emailText.includes(q) || inviter.includes(q) || notesHay.includes(q);
+      return name.includes(q) || emailText.includes(q) || phoneText.includes(q) || inviter.includes(q) || notesHay.includes(q);
     });
   }, [rowsInViewMonth, selectedDayYmd, searchQuery, watchToneFilter, wgNotesBySubId]);
 
@@ -525,6 +531,7 @@ const WebinarGeekDashboard: React.FC = () => {
       'first_name',
       'last_name',
       'email',
+      'phone',
       'invited_by',
       'registration',
       'watch_minutes',
@@ -534,6 +541,7 @@ const WebinarGeekDashboard: React.FC = () => {
       const first = csvScalar(String(row.firstname ?? '').trim());
       const last = csvScalar(String(row.surname ?? '').trim());
       const email = csvScalar(String(row.email ?? '').trim());
+      const phone = csvScalar(getPhoneDisplay(row));
       const invited = csvScalar(getInvitedByDisplay(row) || '0');
       const regMs = asUnixMs(row.created_at);
       const registration =
@@ -545,6 +553,7 @@ const WebinarGeekDashboard: React.FC = () => {
         first,
         last,
         email,
+        phone,
         invited,
         registration,
         String(mins),
@@ -686,7 +695,7 @@ const WebinarGeekDashboard: React.FC = () => {
               <input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Name, email, or inviter"
+                placeholder="Name, email, phone, inviter, or notes"
                 className="w-full pl-9 pr-3 py-2 text-sm rounded-xl border border-slate-200 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-slate-300/80"
               />
             </label>
@@ -807,6 +816,7 @@ const WebinarGeekDashboard: React.FC = () => {
                 <tr className="text-left text-[10px] uppercase tracking-wide text-slate-500">
                   <th className="px-3 py-2 font-medium">Name</th>
                   <th className="px-3 py-2 font-medium">Email</th>
+                  <th className="px-3 py-2 font-medium">Phone</th>
                   <th className="px-3 py-2 font-medium">Invited by</th>
                   <th className="px-3 py-2 font-medium min-w-[9rem]">Status / notes</th>
                   <th className="px-3 py-2 font-medium">Registered</th>
@@ -817,7 +827,7 @@ const WebinarGeekDashboard: React.FC = () => {
               <tbody>
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
+                    <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
                       No rows
                     </td>
                   </tr>
@@ -836,6 +846,7 @@ const WebinarGeekDashboard: React.FC = () => {
                       >
                         <td className="px-3 py-2 font-medium text-slate-900">{name}</td>
                         <td className="px-3 py-2 text-slate-700">{String(row.email || '0')}</td>
+                        <td className="px-3 py-2 text-slate-700 tabular-nums">{getPhoneDisplay(row)}</td>
                         <td className="px-3 py-2 text-slate-700">{getInviterName(row)}</td>
                         <td className="px-3 py-2 text-slate-700 align-top max-w-[14rem]">
                           {latest ? (
@@ -876,6 +887,7 @@ const WebinarGeekDashboard: React.FC = () => {
               <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm shrink-0">
                 <Detail label="Name" value={`${String(selectedRow.firstname || '').trim()} ${String(selectedRow.surname || '').trim()}`.trim() || '0'} />
                 <Detail label="Email" value={String(selectedRow.email || '0')} />
+                <Detail label="Phone" value={getPhoneDisplay(selectedRow)} />
                 <Detail label="Invited by" value={getInviterName(selectedRow)} />
                 <Detail
                   label="Registered"
