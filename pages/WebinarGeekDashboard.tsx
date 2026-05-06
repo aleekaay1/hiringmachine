@@ -18,6 +18,9 @@ type BroadcastSchedule = {
   id: string;
   dateMs: number;
   title: string;
+  webinarTitle: string;
+  status: string;
+  subscriptionsCount: number | null;
 };
 
 const FULL_WATCH_SECONDS = 45 * 60;
@@ -224,10 +227,16 @@ function normalizeBroadcastSchedules(data: DashboardData | null): BroadcastSched
     if (!dateMs) continue;
     const title =
       String(raw.title ?? raw.name ?? (raw.webinar as AnyRow | undefined)?.title ?? `Broadcast ${String(raw.id ?? '')}`).trim() || 'Broadcast';
+    const webinarTitle = String((raw.webinar as AnyRow | undefined)?.title ?? '').trim();
+    const status = String(raw.status ?? '').trim();
+    const subscriptionsCountNum = Number(raw.subscriptions_count);
     mapped.push({
       id: String(raw.id ?? ''),
       dateMs,
       title,
+      webinarTitle: webinarTitle || title,
+      status: status || 'scheduled',
+      subscriptionsCount: Number.isFinite(subscriptionsCountNum) ? subscriptionsCountNum : null,
     });
   }
   return mapped;
@@ -275,6 +284,8 @@ const WebinarGeekDashboard: React.FC = () => {
   const [wgNotesError, setWgNotesError] = useState<string | null>(null);
   const [newWgNote, setNewWgNote] = useState('');
   const [savingWgNote, setSavingWgNote] = useState(false);
+  const [showAllSchedules, setShowAllSchedules] = useState(false);
+  const [expandedScheduleKey, setExpandedScheduleKey] = useState<string | null>(null);
   const monthWindow = useMemo(() => monthBoundsFromFirstYmd(monthAnchorYmd), [monthAnchorYmd]);
 
   /** Rows whose event date falls in the calendar month being viewed (no API). */
@@ -300,6 +311,11 @@ const WebinarGeekDashboard: React.FC = () => {
       .filter((b) => b.dateMs >= nowMs && b.dateMs >= start && b.dateMs <= end)
       .sort((a, b) => a.dateMs - b.dateMs);
   }, [broadcastCache, monthAnchorYmd]);
+
+  useEffect(() => {
+    setShowAllSchedules(false);
+    setExpandedScheduleKey(null);
+  }, [monthAnchorYmd]);
 
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -793,14 +809,50 @@ const WebinarGeekDashboard: React.FC = () => {
               <p className="text-xs text-indigo-900/70">No future schedules in this month.</p>
             ) : (
               <div className="space-y-1.5">
-                {schedulesInViewMonth.slice(0, 8).map((s) => (
-                  <div key={`${s.id}-${s.dateMs}`} className="text-xs text-indigo-950 flex flex-wrap items-center gap-x-2">
-                    <span className="font-medium tabular-nums">{formatDateTimeCanadaEastern(s.dateMs)}</span>
-                    <span className="text-indigo-700">{s.title}</span>
-                  </div>
-                ))}
+                {(showAllSchedules ? schedulesInViewMonth : schedulesInViewMonth.slice(0, 8)).map((s) => {
+                  const key = `${s.id}-${s.dateMs}`;
+                  const expanded = expandedScheduleKey === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setExpandedScheduleKey((prev) => (prev === key ? null : key))}
+                      className="w-full text-left rounded-lg border border-indigo-100 bg-white/70 px-2.5 py-1.5 hover:bg-white transition"
+                    >
+                      <div className="text-xs text-indigo-950 flex flex-wrap items-center gap-x-2">
+                        <span className="font-medium tabular-nums">{formatDateTimeCanadaEastern(s.dateMs)}</span>
+                        <span className="text-indigo-700">{s.title}</span>
+                      </div>
+                      {expanded && (
+                        <div className="mt-1.5 text-[11px] text-indigo-800/90 space-y-0.5">
+                          <p>
+                            <span className="font-medium">Webinar:</span> {s.webinarTitle}
+                          </p>
+                          <p>
+                            <span className="font-medium">Status:</span> {s.status}
+                          </p>
+                          <p>
+                            <span className="font-medium">Registered:</span>{' '}
+                            {s.subscriptionsCount == null ? 'n/a' : String(s.subscriptionsCount)}
+                          </p>
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
                 {schedulesInViewMonth.length > 8 && (
-                  <p className="text-[11px] text-indigo-700">+{schedulesInViewMonth.length - 8} more schedules</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAllSchedules((prev) => !prev);
+                      setExpandedScheduleKey(null);
+                    }}
+                    className="text-[11px] text-indigo-700 hover:text-indigo-900 font-medium underline underline-offset-2"
+                  >
+                    {showAllSchedules
+                      ? 'Hide extra schedules'
+                      : `+${schedulesInViewMonth.length - 8} more schedules (click to expand)`}
+                  </button>
                 )}
               </div>
             )}
