@@ -14,6 +14,11 @@ import {
 
 type AnyRow = Record<string, unknown>;
 type DashboardData = Record<string, unknown>;
+type BroadcastSchedule = {
+  id: string;
+  dateMs: number;
+  title: string;
+};
 
 const FULL_WATCH_SECONDS = 45 * 60;
 const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
@@ -209,6 +214,25 @@ function normalizeSubscriptions(data: DashboardData | null): AnyRow[] {
   return Array.isArray(rows) ? (rows as AnyRow[]) : [];
 }
 
+function normalizeBroadcastSchedules(data: DashboardData | null): BroadcastSchedule[] {
+  const payload = data?.broadcasts as Record<string, unknown> | undefined;
+  const rows = payload?.broadcasts;
+  if (!Array.isArray(rows)) return [];
+  const mapped: BroadcastSchedule[] = [];
+  for (const raw of rows as AnyRow[]) {
+    const dateMs = asUnixMs(raw.date);
+    if (!dateMs) continue;
+    const title =
+      String(raw.title ?? raw.name ?? (raw.webinar as AnyRow | undefined)?.title ?? `Broadcast ${String(raw.id ?? '')}`).trim() || 'Broadcast';
+    mapped.push({
+      id: String(raw.id ?? ''),
+      dateMs,
+      title,
+    });
+  }
+  return mapped;
+}
+
 function getInviterName(row: AnyRow): string {
   const v = getInvitedByDisplay(row);
   return v || '0';
@@ -234,6 +258,7 @@ const WebinarGeekDashboard: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   /** null = never fetched; array = last fetch result (client-side only until next fetch). */
   const [subscriptionCache, setSubscriptionCache] = useState<AnyRow[] | null>(null);
+  const [broadcastCache, setBroadcastCache] = useState<BroadcastSchedule[]>([]);
   const [lastFetchAt, setLastFetchAt] = useState<string | null>(null);
   const [lastFetchRange, setLastFetchRange] = useState<string | null>(null);
 
@@ -265,6 +290,16 @@ const WebinarGeekDashboard: React.FC = () => {
       return k >= start && k <= end;
     });
   }, [subscriptionCache, monthAnchorYmd]);
+
+  const schedulesInViewMonth = useMemo(() => {
+    const nowMs = Date.now();
+    const [vy, vm] = monthAnchorYmd.split('-').map(Number);
+    const start = Date.UTC(vy, vm - 1, 1, 0, 0, 0, 0);
+    const end = Date.UTC(vy, vm, 0, 23, 59, 59, 999);
+    return broadcastCache
+      .filter((b) => b.dateMs >= nowMs && b.dateMs >= start && b.dateMs <= end)
+      .sort((a, b) => a.dateMs - b.dateMs);
+  }, [broadcastCache, monthAnchorYmd]);
 
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -432,17 +467,22 @@ const WebinarGeekDashboard: React.FC = () => {
   }, [viewYear, viewMonth0]);
 
   const dayCounts = useMemo(() => {
-    const map = new Map<string, { invited: number; watched: number }>();
+    const map = new Map<string, { invited: number; watched: number; schedules: number }>();
     for (const row of rowsInViewMonth) {
       const key = fmtDateKey(row);
       if (key === 'unknown') continue;
-      if (!map.has(key)) map.set(key, { invited: 0, watched: 0 });
+      if (!map.has(key)) map.set(key, { invited: 0, watched: 0, schedules: 0 });
       const e = map.get(key)!;
       e.invited += 1;
       if (row.watched === true) e.watched += 1;
     }
+    for (const b of schedulesInViewMonth) {
+      const key = eventMsToTorontoYmd(b.dateMs);
+      if (!map.has(key)) map.set(key, { invited: 0, watched: 0, schedules: 0 });
+      map.get(key)!.schedules += 1;
+    }
     return map;
-  }, [rowsInViewMonth]);
+  }, [rowsInViewMonth, schedulesInViewMonth]);
 
   const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
     const { data: s } = await supabase.auth.getSession();
@@ -478,7 +518,7 @@ const WebinarGeekDashboard: React.FC = () => {
         perPage: 250,
         since,
         until,
-        includeCatalog: false,
+        includeCatalog: true,
         maxPages: 36,
       });
       if (!r.ok && r.error.toLowerCase().includes('unauthorized')) return null;
@@ -494,7 +534,9 @@ const WebinarGeekDashboard: React.FC = () => {
       return;
     }
     const rows = normalizeSubscriptions(result.data);
+    const schedules = normalizeBroadcastSchedules(result.data);
     setSubscriptionCache(rows);
+    setBroadcastCache(schedules);
     setLastFetchAt(new Date().toISOString());
     setLastFetchRange(label);
   }, [withAuthRetry]);
@@ -717,6 +759,7 @@ const WebinarGeekDashboard: React.FC = () => {
               const counts = dayCounts.get(ymd);
               const invited = counts?.invited ?? 0;
               const watched = counts?.watched ?? 0;
+              const schedules = counts?.schedules ?? 0;
               const active = selectedDayYmd === ymd;
               const label = shortCalendarDayLabel(viewYear, viewMonth0, day);
               return (
@@ -732,12 +775,35 @@ const WebinarGeekDashboard: React.FC = () => {
                   <span className="text-[10px] text-slate-500 tabular-nums leading-tight">
                     {invited === 0 ? '—' : `${invited} invited`}
                   </span>
+                  {schedules > 0 && (
+                    <span className="text-[9px] text-indigo-700 tabular-nums font-medium leading-tight">
+                      {schedules} scheduled
+                    </span>
+                  )}
                   {invited > 0 && (
                     <span className="text-[9px] text-slate-600 tabular-nums font-medium leading-tight">{pct(watched, invited)} watched</span>
                   )}
                 </button>
               );
             })}
+          </div>
+          <div className="mt-3 rounded-xl border border-indigo-100 bg-indigo-50/40 px-3 py-2">
+            <p className="text-[10px] uppercase tracking-wide font-semibold text-indigo-700 mb-1">Upcoming webinar schedules</p>
+            {schedulesInViewMonth.length === 0 ? (
+              <p className="text-xs text-indigo-900/70">No future schedules in this month.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {schedulesInViewMonth.slice(0, 8).map((s) => (
+                  <div key={`${s.id}-${s.dateMs}`} className="text-xs text-indigo-950 flex flex-wrap items-center gap-x-2">
+                    <span className="font-medium tabular-nums">{formatDateTimeCanadaEastern(s.dateMs)}</span>
+                    <span className="text-indigo-700">{s.title}</span>
+                  </div>
+                ))}
+                {schedulesInViewMonth.length > 8 && (
+                  <p className="text-[11px] text-indigo-700">+{schedulesInViewMonth.length - 8} more schedules</p>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
