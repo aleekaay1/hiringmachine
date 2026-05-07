@@ -936,6 +936,7 @@ const WebinarGeekDashboard: React.FC = () => {
                   <th className="px-3 py-2 font-medium">Email</th>
                   <th className="px-3 py-2 font-medium">Phone</th>
                   <th className="px-3 py-2 font-medium">Invited by</th>
+                  <th className="px-3 py-2 font-medium">Scheduled</th>
                   <th className="px-3 py-2 font-medium min-w-[9rem]">Status / notes</th>
                   <th className="px-3 py-2 font-medium">Registered</th>
                   <th className="px-3 py-2 font-medium">Watched</th>
@@ -945,7 +946,7 @@ const WebinarGeekDashboard: React.FC = () => {
               <tbody>
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
+                    <td colSpan={9} className="px-3 py-8 text-center text-slate-500">
                       No rows
                     </td>
                   </tr>
@@ -954,6 +955,7 @@ const WebinarGeekDashboard: React.FC = () => {
                     const name = `${String(row.firstname || '').trim()} ${String(row.surname || '').trim()}`.trim() || '0';
                     const durationSec = Number(row.watch_duration || 0);
                     const regMs = asUnixMs(row.created_at);
+                    const scheduledMs = asUnixMs((row.broadcast as AnyRow | undefined)?.date);
                     const tone = watchRowToneClass(durationSec);
                     const latest = latestWebinarGeekNote(wgNotesBySubId[subscriptionKey(row)]);
                     return (
@@ -966,6 +968,9 @@ const WebinarGeekDashboard: React.FC = () => {
                         <td className="px-3 py-2 text-slate-700">{String(row.email || '0')}</td>
                         <td className="px-3 py-2 text-slate-700 tabular-nums">{getPhoneDisplay(row)}</td>
                         <td className="px-3 py-2 text-slate-700">{getInviterName(row)}</td>
+                        <td className="px-3 py-2 text-slate-600 tabular-nums">
+                          {scheduledMs ? formatDateTimeCanadaEastern(scheduledMs) : '0'}
+                        </td>
                         <td className="px-3 py-2 text-slate-700 align-top max-w-[14rem]">
                           {latest ? (
                             <>
@@ -1007,6 +1012,13 @@ const WebinarGeekDashboard: React.FC = () => {
                 <Detail label="Email" value={String(selectedRow.email || '0')} />
                 <Detail label="Phone" value={getPhoneDisplay(selectedRow)} />
                 <Detail label="Invited by" value={getInviterName(selectedRow)} />
+                <Detail
+                  label="Scheduled"
+                  value={(() => {
+                    const t = asUnixMs((selectedRow.broadcast as AnyRow | undefined)?.date);
+                    return t ? formatDateTimeCanadaEastern(t) : '0';
+                  })()}
+                />
                 <Detail
                   label="Registered"
                   value={(() => {
