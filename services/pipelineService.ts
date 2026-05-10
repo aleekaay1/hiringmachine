@@ -1,4 +1,6 @@
 import { supabase } from './supabaseClient';
+import mammoth from 'mammoth';
+import { createWorker } from 'tesseract.js';
 
 const PIPELINE_BUCKET = 'pipeline-resumes';
 
@@ -115,6 +117,76 @@ function guessEmailFromText(v: string): string | null {
   return m ? m[0].toLowerCase() : null;
 }
 
+function mergeHints(fileName: string, parsedText: string): { name: string; phone: string | null; email: string | null } {
+  const combined = `${fileName}\n${parsedText}`;
+  const email = guessEmailFromText(combined);
+  const phone = guessPhoneFromText(combined);
+  const nameFromHeader = parsedText
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .find((l) => /^[A-Za-z][A-Za-z .'-]{2,60}$/.test(l));
+  return {
+    name: (nameFromHeader || guessNameFromFilename(fileName)).slice(0, 120),
+    phone,
+    email,
+  };
+}
+
+async function extractTextFromPdf(file: File): Promise<string> {
+  try {
+    const pdfjs = await import('pdfjs-dist');
+    const workerSrc = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+    (pdfjs as any).GlobalWorkerOptions.workerSrc = workerSrc.default;
+    const buf = await file.arrayBuffer();
+    const task = (pdfjs as any).getDocument({ data: buf });
+    const doc = await task.promise;
+    const pagesToRead = Math.min(doc.numPages, 5);
+    let out = '';
+    for (let i = 1; i <= pagesToRead; i += 1) {
+      const page = await doc.getPage(i);
+      const text = await page.getTextContent();
+      out += `\n${text.items.map((it: any) => String(it.str || '')).join(' ')}`;
+    }
+    return out;
+  } catch {
+    return '';
+  }
+}
+
+async function extractTextFromImage(file: File): Promise<string> {
+  try {
+    const worker = await createWorker('eng');
+    const result = await worker.recognize(file);
+    await worker.terminate();
+    return String(result.data.text || '');
+  } catch {
+    return '';
+  }
+}
+
+async function extractTextFromWord(file: File): Promise<string> {
+  try {
+    const arr = await file.arrayBuffer();
+    const res = await mammoth.extractRawText({ arrayBuffer: arr });
+    return String(res.value || '');
+  } catch {
+    return '';
+  }
+}
+
+async function extractCandidateHints(file: File, cleanName: string): Promise<{ name: string; phone: string | null; email: string | null }> {
+  const mime = (file.type || '').toLowerCase();
+  let parsed = '';
+  if (mime.includes('pdf')) parsed = await extractTextFromPdf(file);
+  else if (mime.startsWith('image/')) parsed = await extractTextFromImage(file);
+  else if (mime.includes('word') || cleanName.toLowerCase().endsWith('.docx')) parsed = await extractTextFromWord(file);
+  else if (mime.includes('text') || cleanName.toLowerCase().endsWith('.txt') || cleanName.toLowerCase().endsWith('.rtf')) {
+    parsed = await file.text().catch(() => '');
+  }
+  return mergeHints(cleanName, parsed);
+}
+
 function fileViewerKind(resume: PipelineResume): 'pdf' | 'image' | 'other' {
   const mime = String(resume.mime_type || '').toLowerCase();
   if (resume.converted_pdf_url || mime.includes('pdf')) return 'pdf';
@@ -218,15 +290,13 @@ export async function bulkUploadPipelineResumes(files: File[], actorLabel?: stri
   for (const file of files) {
     try {
       const cleanName = sanitizeFilename(file.name);
-      const guessName = guessNameFromFilename(cleanName);
-      const guessPhone = guessPhoneFromText(cleanName);
-      const guessEmail = guessEmailFromText(cleanName);
+      const hints = await extractCandidateHints(file, cleanName);
       const { data: cand, error: cErr } = await supabase
         .from('pipeline_candidates')
         .insert({
-          full_name: guessName,
-          phone: guessPhone,
-          email: guessEmail,
+          full_name: hints.name,
+          phone: hints.phone,
+          email: hints.email,
           uploader_user_id: userId,
           uploader_label: actorLabel ?? null,
           source: 'bulk_upload',
@@ -275,6 +345,35 @@ export async function bulkUploadPipelineResumes(files: File[], actorLabel?: stri
     }
   }
   return { created, failed };
+}
+
+export async function deletePipelineCandidate(candidateId: string): Promise<void> {
+  const { data: resumes, error: rErr } = await supabase
+    .from('pipeline_resumes')
+    .select('storage_bucket,storage_path')
+    .eq('candidate_id', candidateId);
+  if (rErr) throw rErr;
+  const grouped = new Map<string, string[]>();
+  for (const row of resumes || []) {
+    const bucket = String((row as any).storage_bucket || PIPELINE_BUCKET);
+    const path = String((row as any).storage_path || '');
+    if (!path) continue;
+    if (!grouped.has(bucket)) grouped.set(bucket, []);
+    grouped.get(bucket)!.push(path);
+  }
+  for (const [bucket, paths] of grouped.entries()) {
+    if (paths.length) {
+      await supabase.storage.from(bucket).remove(paths);
+    }
+  }
+  const { error } = await supabase.from('pipeline_candidates').delete().eq('id', candidateId);
+  if (error) throw error;
+}
+
+export async function bulkDeletePipelineCandidates(candidateIds: string[]): Promise<void> {
+  for (const id of candidateIds) {
+    await deletePipelineCandidate(id);
+  }
 }
 
 export async function addPipelineNote(candidateId: string, body: string, authorLabel?: string): Promise<PipelineNote> {

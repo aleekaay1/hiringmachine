@@ -4,7 +4,9 @@ import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import {
   addPipelineNote,
+  bulkDeletePipelineCandidates,
   bulkUploadPipelineResumes,
+  deletePipelineCandidate,
   getPipelineCandidateBundle,
   getPipelineResumeDisplayUrl,
   getPipelineResumeViewerKind,
@@ -19,7 +21,12 @@ import {
 } from '../services/pipelineService';
 import { buildThreeCxWebclientUrl, runThreeCxAction, type ThreeCxAction } from '../services/threeCxService';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
-import { FileUp, Phone, RefreshCw, Search } from 'lucide-react';
+import { FileUp, Phone, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { Document, Page, pdfjs } from 'react-pdf';
+import 'react-pdf/dist/Page/AnnotationLayer.css';
+import 'react-pdf/dist/Page/TextLayer.css';
+
+pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
 
 const JOURNEY_OPTIONS = ['new', 'queued_for_call', 'attempted', 'connected', 'follow_up', 'qualified', 'not_interested', 'hired'];
 const DISPOSITION_OPTIONS = ['Need callback', 'No answer', 'Connected', 'Not interested', 'Qualified', 'Close'];
@@ -52,6 +59,7 @@ const Pipeline: React.FC = () => {
   const [search, setSearch] = useState('');
   const [stageFilter, setStageFilter] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<string>('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const [newNote, setNewNote] = useState('');
   const [noteSaving, setNoteSaving] = useState(false);
@@ -73,6 +81,7 @@ const Pipeline: React.FC = () => {
   const [dtmfDigits, setDtmfDigits] = useState('');
   const [callActionRunning, setCallActionRunning] = useState(false);
   const [callActionMsg, setCallActionMsg] = useState<string | null>(null);
+  const [numPdfPages, setNumPdfPages] = useState<number>(0);
 
   useEffect(() => {
     const ext = localStorage.getItem('pipeline_3cx_ext');
@@ -165,6 +174,55 @@ const Pipeline: React.FC = () => {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setUploading(false);
+    }
+  };
+
+  const toggleSelectedId = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const deleteCurrentCandidate = async () => {
+    if (!selectedBundle?.candidate.id) return;
+    const ok = window.confirm(`Delete ${safeName(selectedBundle.candidate)} and all related resume/call/note data?`);
+    if (!ok) return;
+    try {
+      setLoading(true);
+      await deletePipelineCandidate(selectedBundle.candidate.id);
+      setSelectedBundle(null);
+      setSelectedCandidateId(null);
+      setSelectedResumeId(null);
+      setSelectedIds(new Set());
+      await loadCandidates();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const bulkDeleteSelected = async () => {
+    if (!selectedIds.size) return;
+    const ok = window.confirm(`Delete ${selectedIds.size} selected candidate(s) and related data?`);
+    if (!ok) return;
+    try {
+      setLoading(true);
+      await bulkDeletePipelineCandidates(Array.from(selectedIds));
+      if (selectedCandidateId && selectedIds.has(selectedCandidateId)) {
+        setSelectedBundle(null);
+        setSelectedCandidateId(null);
+        setSelectedResumeId(null);
+      }
+      setSelectedIds(new Set());
+      await loadCandidates();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -274,6 +332,10 @@ const Pipeline: React.FC = () => {
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
+  const keypadPress = (digit: string) => {
+    setDialTarget((prev) => `${prev}${digit}`);
+  };
+
   const refreshConversion = async () => {
     if (!selectedResume) return;
     try {
@@ -343,17 +405,12 @@ const Pipeline: React.FC = () => {
 
         {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">{error}</div>}
 
-        <div className="grid grid-cols-1 xl:grid-cols-[420px_1fr] gap-4">
+        <div className="grid grid-cols-1 xl:grid-cols-[340px_1fr] gap-4">
           <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
             <div className="p-3 border-b border-slate-100 space-y-2">
               <div className="relative">
                 <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search name, phone, email"
-                  className="w-full rounded-lg border border-slate-200 pl-8 pr-3 py-2 text-xs"
-                />
+                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, phone, email" className="w-full rounded-lg border border-slate-200 pl-8 pr-3 py-2 text-xs" />
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value)} className="rounded-lg border border-slate-200 px-2 py-2 text-xs">
@@ -367,25 +424,30 @@ const Pipeline: React.FC = () => {
                   <option value="closed">closed</option>
                 </select>
               </div>
-              <p className="text-[11px] text-slate-500">Showing {filteredCandidates.length} / {candidates.length}</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] text-slate-500">Showing {filteredCandidates.length} / {candidates.length}</p>
+                <Button variant="outline" className="!min-h-0 h-7 px-2 text-[11px]" onClick={() => void bulkDeleteSelected()} disabled={!selectedIds.size || loading}>
+                  <Trash2 size={12} className="mr-1" /> Delete {selectedIds.size || ''}
+                </Button>
+              </div>
             </div>
-            <div className="max-h-[calc(100vh-260px)] overflow-auto">
+            <div className="max-h-[calc(100vh-250px)] overflow-auto">
               {filteredCandidates.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => setSelectedCandidateId(c.id)}
-                  className={`w-full text-left px-3 py-2 border-b border-slate-100 hover:bg-slate-50 ${selectedCandidateId === c.id ? 'bg-slate-100' : ''}`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium text-slate-900 truncate">{safeName(c)}</p>
-                    <span className="text-[10px] rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">{c.journey_stage}</span>
+                <div key={c.id} className={`w-full px-3 py-2 border-b border-slate-100 ${selectedCandidateId === c.id ? 'bg-slate-100' : 'hover:bg-slate-50'}`}>
+                  <div className="flex items-start gap-2">
+                    <input type="checkbox" checked={selectedIds.has(c.id)} onChange={() => toggleSelectedId(c.id)} className="mt-1 rounded border-slate-300" />
+                    <button type="button" onClick={() => setSelectedCandidateId(c.id)} className="flex-1 text-left min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-medium text-slate-900 truncate">{safeName(c)}</p>
+                        <span className="text-[10px] rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">{c.journey_stage}</span>
+                      </div>
+                      <p className="text-xs text-slate-600 truncate">{c.phone || 'No phone'} {c.email ? `· ${c.email}` : ''}</p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {c.scheduled_for ? `Scheduled ${formatDateTimeCanadaEastern(c.scheduled_for)}` : 'No schedule'} · {c.status}
+                      </p>
+                    </button>
                   </div>
-                  <p className="text-xs text-slate-600 truncate">{c.phone || 'No phone'} {c.email ? `· ${c.email}` : ''}</p>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    {c.scheduled_for ? `Scheduled ${formatDateTimeCanadaEastern(c.scheduled_for)}` : 'No schedule'} · {c.status}
-                  </p>
-                </button>
+                </div>
               ))}
               {!loading && filteredCandidates.length === 0 && (
                 <div className="p-6 text-center text-sm text-slate-500">No pipeline candidates yet.</div>
@@ -397,92 +459,85 @@ const Pipeline: React.FC = () => {
             {!selectedBundle ? (
               <div className="p-8 text-sm text-slate-500">Select a candidate to open resume + call controls.</div>
             ) : (
-              <div className="grid grid-cols-1 2xl:grid-cols-[minmax(420px,1fr)_420px] min-h-[calc(100vh-260px)]">
-                <div className="border-b 2xl:border-b-0 2xl:border-r border-slate-200 flex flex-col min-h-0">
-                  <div className="p-3 border-b border-slate-100 flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-semibold text-slate-900 flex-1 truncate">{safeName(selectedBundle.candidate)}</p>
-                    <select
-                      value={selectedResume?.id || ''}
-                      onChange={(e) => setSelectedResumeId(e.target.value)}
-                      className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs"
-                    >
-                      {selectedBundle.resumes.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.original_filename}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="flex-1 min-h-0 bg-slate-50">
-                    {selectedResume ? (
-                      (() => {
-                        const kind = getPipelineResumeViewerKind(selectedResume);
-                        const url = getPipelineResumeDisplayUrl(selectedResume);
-                        if (!url) {
-                          return (
-                            <div className="p-4 text-sm text-slate-600">
-                              <p>No display URL available.</p>
-                              {selectedResume.conversion_status !== 'ready' && selectedResume.conversion_status !== 'not_required' && (
-                                <Button className="mt-2" onClick={() => void refreshConversion()} variant="outline">Retry conversion</Button>
-                              )}
-                            </div>
-                          );
-                        }
-                        if (kind === 'image') {
-                          return <img src={url} alt={selectedResume.original_filename} className="w-full h-full object-contain" />;
-                        }
-                        if (kind === 'pdf') {
-                          return <iframe title={selectedResume.original_filename} src={url} className="w-full h-full border-0" />;
-                        }
-                        return (
-                          <div className="p-4 text-sm text-slate-600 space-y-2">
-                            <p>This document type needs conversion before inline viewing.</p>
-                            <p>Status: <strong>{selectedResume.conversion_status}</strong></p>
-                            {selectedResume.conversion_error && <p className="text-red-600">{selectedResume.conversion_error}</p>}
-                            <Button onClick={() => void refreshConversion()} variant="outline">Convert / Retry</Button>
-                            <a href={url} target="_blank" rel="noreferrer" className="block text-blue-700 underline">Open source file</a>
-                          </div>
-                        );
-                      })()
-                    ) : (
-                      <div className="p-4 text-sm text-slate-500">No resume uploaded for this candidate.</div>
-                    )}
-                  </div>
+              <div className="min-h-[calc(100vh-250px)] flex flex-col">
+                <div className="px-3 py-2.5 border-b border-slate-100 flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-semibold text-slate-900 flex-1 truncate">{safeName(selectedBundle.candidate)}</p>
+                  <select value={selectedResume?.id || ''} onChange={(e) => setSelectedResumeId(e.target.value)} className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs">
+                    {selectedBundle.resumes.map((r) => (
+                      <option key={r.id} value={r.id}>{r.original_filename}</option>
+                    ))}
+                  </select>
+                  {selectedResume && (
+                    <span className="text-[11px] rounded-full px-2 py-0.5 bg-slate-100 text-slate-700">
+                      {selectedResume.conversion_status}
+                    </span>
+                  )}
+                  <Button variant="outline" className="!min-h-0 h-8 px-2 text-xs" onClick={() => void deleteCurrentCandidate()} disabled={loading}>
+                    <Trash2 size={13} className="mr-1" /> Delete
+                  </Button>
                 </div>
 
-                <div className="min-h-0 overflow-auto p-3 space-y-3 bg-white">
-                  <section className="rounded-xl border border-slate-200 p-3 space-y-2">
-                    <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Quick profile</h3>
-                    <p className="text-sm text-slate-900">{safeName(selectedBundle.candidate)}</p>
-                    <p className="text-xs text-slate-600">{selectedBundle.candidate.phone || 'No phone'} {selectedBundle.candidate.email ? `· ${selectedBundle.candidate.email}` : ''}</p>
-                    <p className="text-xs text-slate-500">Latest note: {latestNoteText(selectedBundle)}</p>
-                    <div className="grid grid-cols-2 gap-2 items-end">
-                      <label className="text-xs text-slate-600">
-                        Schedule
-                        <input
-                          type="datetime-local"
-                          value={scheduledForInput}
-                          onChange={(e) => setScheduledForInput(e.target.value)}
-                          className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs"
-                        />
-                      </label>
-                      <Button onClick={() => void saveSchedule()} disabled={scheduleSaving}>
-                        {scheduleSaving ? 'Saving…' : 'Save schedule'}
-                      </Button>
-                    </div>
-                  </section>
+                <div className="flex-1 min-h-[62vh] bg-slate-50 border-b border-slate-200">
+                  {selectedResume ? (() => {
+                    const kind = getPipelineResumeViewerKind(selectedResume);
+                    const url = getPipelineResumeDisplayUrl(selectedResume);
+                    if (!url) {
+                      return (
+                        <div className="p-4 text-sm text-slate-600">
+                          <p>No display URL available.</p>
+                          {selectedResume.conversion_status !== 'ready' && selectedResume.conversion_status !== 'not_required' && (
+                            <Button className="mt-2" onClick={() => void refreshConversion()} variant="outline">Retry conversion</Button>
+                          )}
+                        </div>
+                      );
+                    }
+                    if (kind === 'image') {
+                      return <img src={url} alt={selectedResume.original_filename} className="w-full h-full object-contain" />;
+                    }
+                    if (kind === 'pdf') {
+                      return (
+                        <div className="h-full overflow-auto px-2 py-2">
+                          <Document file={url} onLoadSuccess={(d) => setNumPdfPages(d.numPages)} loading={<div className="p-4 text-sm">Loading PDF…</div>}>
+                            {Array.from({ length: numPdfPages || 1 }, (_, i) => (
+                              <div key={`p-${i + 1}`} className="mb-2 flex justify-center">
+                                <Page pageNumber={i + 1} width={Math.min(window.innerWidth - 460, 920)} renderTextLayer renderAnnotationLayer />
+                              </div>
+                            ))}
+                          </Document>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="p-4 text-sm text-slate-600 space-y-2">
+                        <p>This document type needs conversion before inline viewing.</p>
+                        <p>Status: <strong>{selectedResume.conversion_status}</strong></p>
+                        {selectedResume.conversion_error && <p className="text-red-600">{selectedResume.conversion_error}</p>}
+                        <Button onClick={() => void refreshConversion()} variant="outline">Convert / Retry</Button>
+                        <a href={url} target="_blank" rel="noreferrer" className="block text-blue-700 underline">Open source file</a>
+                      </div>
+                    );
+                  })() : (
+                    <div className="p-4 text-sm text-slate-500">No resume uploaded for this candidate.</div>
+                  )}
+                </div>
 
+                <div className="p-3 space-y-3">
                   <section className="rounded-xl border border-slate-200 p-3 space-y-2">
-                    <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1"><Phone size={13} /> 3CX call controls</h3>
-                    <div className="grid grid-cols-2 gap-2">
+                    <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1"><Phone size={13} /> Call controls</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                       <input value={agentExtension} onChange={(e) => setAgentExtension(e.target.value)} placeholder="Agent extension" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                      <input value={dialTarget} onChange={(e) => setDialTarget(e.target.value)} placeholder="Dial target (phone)" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                      <input value={activeCallId} onChange={(e) => setActiveCallId(e.target.value)} placeholder="Active call ID" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                      <input value={targetExtension} onChange={(e) => setTargetExtension(e.target.value)} placeholder="Transfer extension" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                      <input value={dtmfDigits} onChange={(e) => setDtmfDigits(e.target.value)} placeholder="DTMF digits" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                      <input value={dialTarget} onChange={(e) => setDialTarget(e.target.value)} placeholder="Dial number" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                      <input value={activeCallId} onChange={(e) => setActiveCallId(e.target.value)} placeholder="Call ID" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                      <input value={targetExtension} onChange={(e) => setTargetExtension(e.target.value)} placeholder="Transfer ext" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                      <input value={dtmfDigits} onChange={(e) => setDtmfDigits(e.target.value)} placeholder="DTMF" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
                     </div>
-                    <div className="grid grid-cols-3 gap-2">
+
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                      {['1','2','3','4','5','6','7','8','9','*','0','#'].map((d) => (
+                        <button key={d} type="button" onClick={() => keypadPress(d)} className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs hover:bg-slate-50">{d}</button>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-3 md:grid-cols-9 gap-2">
                       <Button onClick={() => void runCallAction('dial')} disabled={callActionRunning}>Dial</Button>
                       <Button variant="outline" onClick={() => void runCallAction('hangup')} disabled={callActionRunning}>Hangup</Button>
                       <Button variant="outline" onClick={() => void runCallAction('active_calls')} disabled={callActionRunning}>Active</Button>
@@ -493,85 +548,83 @@ const Pipeline: React.FC = () => {
                       <Button variant="outline" onClick={() => void runCallAction('unmute')} disabled={callActionRunning}>Unmute</Button>
                       <Button variant="outline" onClick={() => void runCallAction('dtmf')} disabled={callActionRunning}>DTMF</Button>
                     </div>
-                    <Button variant="secondary" onClick={openWebClientFallback}>Open 3CX web client fallback</Button>
-                    {callActionMsg && <p className="text-xs text-slate-600">{callActionMsg}</p>}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button variant="secondary" onClick={openWebClientFallback}>Open 3CX web client fallback</Button>
+                      {callActionMsg && <p className="text-xs text-slate-600">{callActionMsg}</p>}
+                    </div>
                   </section>
 
-                  <section className="rounded-xl border border-slate-200 p-3 space-y-2">
-                    <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Notes</h3>
-                    <div className="space-y-2 max-h-36 overflow-auto">
-                      {selectedBundle.notes.map((n) => (
-                        <div key={n.id} className="rounded-lg bg-slate-50 border border-slate-100 p-2">
-                          <p className="text-xs text-slate-800 whitespace-pre-wrap">{n.body}</p>
-                          <p className="text-[10px] text-slate-500 mt-1">{formatDateTimeCanadaEastern(n.created_at)}{n.author_label ? ` · ${n.author_label}` : ''}</p>
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                    <section className="rounded-xl border border-slate-200 p-3 space-y-2">
+                      <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Notes</h3>
+                      <div className="space-y-2 max-h-40 overflow-auto">
+                        {selectedBundle.notes.map((n) => (
+                          <div key={n.id} className="rounded-lg bg-slate-50 border border-slate-100 p-2">
+                            <p className="text-xs text-slate-800 whitespace-pre-wrap">{n.body}</p>
+                            <p className="text-[10px] text-slate-500 mt-1">{formatDateTimeCanadaEastern(n.created_at)}{n.author_label ? ` · ${n.author_label}` : ''}</p>
+                          </div>
+                        ))}
+                        {selectedBundle.notes.length === 0 && <p className="text-xs text-slate-400">No notes yet.</p>}
+                      </div>
+                      <textarea value={newNote} onChange={(e) => setNewNote(e.target.value)} rows={3} placeholder="Write note…" className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                      <Button onClick={() => void addNote()} disabled={!newNote.trim() || noteSaving}>
+                        {noteSaving ? 'Saving…' : 'Add note'}
+                      </Button>
+                    </section>
+
+                    <section className="rounded-xl border border-slate-200 p-3 space-y-2">
+                      <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Evaluation + schedule</h3>
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="text-xs text-slate-600">
+                          Fit (1-10)
+                          <input type="number" min={1} max={10} value={fitScore ?? ''} onChange={(e) => setFitScore(e.target.value ? Number(e.target.value) : null)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                        </label>
+                        <label className="text-xs text-slate-600">
+                          Journey stage
+                          <select value={journeyStage} onChange={(e) => setJourneyStage(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs">
+                            {JOURNEY_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                        </label>
+                        <label className="text-xs text-slate-600 col-span-2">
+                          Disposition
+                          <select value={disposition} onChange={(e) => setDisposition(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs">
+                            <option value="">Select</option>
+                            {DISPOSITION_OPTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+                          </select>
+                        </label>
+                        <label className="text-xs text-slate-600 col-span-2">
+                          Schedule
+                          <input type="datetime-local" value={scheduledForInput} onChange={(e) => setScheduledForInput(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                        </label>
+                        <label className="text-xs text-slate-600 col-span-2">
+                          Next action
+                          <input value={nextAction} onChange={(e) => setNextAction(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                        </label>
+                        <label className="text-xs text-slate-600 col-span-2">
+                          Comments
+                          <textarea value={evaluationComments} onChange={(e) => setEvaluationComments(e.target.value)} rows={3} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                        </label>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button onClick={() => void saveEvaluation()} disabled={evalSaving}>{evalSaving ? 'Saving…' : 'Save evaluation'}</Button>
+                        <Button variant="outline" onClick={() => void saveSchedule()} disabled={scheduleSaving}>{scheduleSaving ? 'Saving…' : 'Save schedule'}</Button>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2 text-xs">
+                        <div className="rounded-lg bg-slate-50 border border-slate-100 p-2">
+                          <p className="text-slate-500">Total logs</p>
+                          <p className="font-semibold text-slate-900">{selectedBundle.callLogs.length}</p>
                         </div>
-                      ))}
-                      {selectedBundle.notes.length === 0 && <p className="text-xs text-slate-400">No notes yet.</p>}
-                    </div>
-                    <textarea value={newNote} onChange={(e) => setNewNote(e.target.value)} rows={3} placeholder="Write note…" className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                    <Button onClick={() => void addNote()} disabled={!newNote.trim() || noteSaving}>
-                      {noteSaving ? 'Saving…' : 'Add note'}
-                    </Button>
-                  </section>
-
-                  <section className="rounded-xl border border-slate-200 p-3 space-y-2">
-                    <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Short evaluation</h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      <label className="text-xs text-slate-600">
-                        Fit (1-10)
-                        <input
-                          type="number"
-                          min={1}
-                          max={10}
-                          value={fitScore ?? ''}
-                          onChange={(e) => setFitScore(e.target.value ? Number(e.target.value) : null)}
-                          className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs"
-                        />
-                      </label>
-                      <label className="text-xs text-slate-600">
-                        Journey stage
-                        <select value={journeyStage} onChange={(e) => setJourneyStage(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs">
-                          {JOURNEY_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                      </label>
-                      <label className="text-xs text-slate-600 col-span-2">
-                        Disposition
-                        <select value={disposition} onChange={(e) => setDisposition(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs">
-                          <option value="">Select</option>
-                          {DISPOSITION_OPTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
-                        </select>
-                      </label>
-                      <label className="text-xs text-slate-600 col-span-2">
-                        Next action
-                        <input value={nextAction} onChange={(e) => setNextAction(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                      </label>
-                      <label className="text-xs text-slate-600 col-span-2">
-                        Comments
-                        <textarea value={evaluationComments} onChange={(e) => setEvaluationComments(e.target.value)} rows={3} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                      </label>
-                    </div>
-                    <Button onClick={() => void saveEvaluation()} disabled={evalSaving}>
-                      {evalSaving ? 'Saving…' : 'Save evaluation'}
-                    </Button>
-                  </section>
-
-                  <section className="rounded-xl border border-slate-200 p-3 space-y-2">
-                    <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Call stats</h3>
-                    <div className="grid grid-cols-3 gap-2 text-xs">
-                      <div className="rounded-lg bg-slate-50 border border-slate-100 p-2">
-                        <p className="text-slate-500">Total logs</p>
-                        <p className="font-semibold text-slate-900">{selectedBundle.callLogs.length}</p>
+                        <div className="rounded-lg bg-slate-50 border border-slate-100 p-2">
+                          <p className="text-slate-500">Successful</p>
+                          <p className="font-semibold text-slate-900">{selectedBundle.callLogs.filter((x) => x.outcome === 'ok').length}</p>
+                        </div>
+                        <div className="rounded-lg bg-slate-50 border border-slate-100 p-2">
+                          <p className="text-slate-500">Failed</p>
+                          <p className="font-semibold text-slate-900">{selectedBundle.callLogs.filter((x) => x.outcome === 'failed').length}</p>
+                        </div>
                       </div>
-                      <div className="rounded-lg bg-slate-50 border border-slate-100 p-2">
-                        <p className="text-slate-500">Successful</p>
-                        <p className="font-semibold text-slate-900">{selectedBundle.callLogs.filter((x) => x.outcome === 'ok').length}</p>
-                      </div>
-                      <div className="rounded-lg bg-slate-50 border border-slate-100 p-2">
-                        <p className="text-slate-500">Failed</p>
-                        <p className="font-semibold text-slate-900">{selectedBundle.callLogs.filter((x) => x.outcome === 'failed').length}</p>
-                      </div>
-                    </div>
-                  </section>
+                    </section>
+                  </div>
                 </div>
               </div>
             )}
