@@ -29,6 +29,14 @@ type ThreeCxCall = {
   body?: Record<string, unknown>;
 };
 
+class HttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 function normalizeBase(v: string): string {
   return v.replace(/\/$/, '');
 }
@@ -39,7 +47,7 @@ async function getThreeCxToken(): Promise<string> {
   const clientId = Deno.env.get('THREECX_CLIENT_ID')?.trim();
   const clientSecret = Deno.env.get('THREECX_CLIENT_SECRET')?.trim();
   if (!baseUrl || !clientId || !clientSecret) {
-    throw new Error('3CX credentials are missing (THREECX_BASE_URL / THREECX_CLIENT_ID / THREECX_CLIENT_SECRET)');
+    throw new HttpError(500, '3CX credentials are missing (THREECX_BASE_URL / THREECX_CLIENT_ID / THREECX_CLIENT_SECRET)');
   }
   const oauthUrl = tokenUrl || `${normalizeBase(baseUrl)}/connect/token`;
   const payload = new URLSearchParams({
@@ -52,9 +60,17 @@ async function getThreeCxToken(): Promise<string> {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: payload.toString(),
   });
-  const jsonBody = (await res.json().catch(() => ({}))) as { access_token?: string; error?: string };
+  const raw = await res.text();
+  const jsonBody = (() => {
+    try {
+      return JSON.parse(raw) as { access_token?: string; error?: string; error_description?: string };
+    } catch {
+      return {};
+    }
+  })();
   if (!res.ok || !jsonBody.access_token) {
-    throw new Error(String(jsonBody.error || `3CX token request failed (${res.status})`));
+    const reason = String(jsonBody.error_description || jsonBody.error || raw || `3CX token request failed (${res.status})`).slice(0, 500);
+    throw new HttpError(res.status === 401 || res.status === 403 ? 401 : 502, `3CX token request failed (${res.status}): ${reason}`);
   }
   return jsonBody.access_token;
 }
@@ -83,43 +99,43 @@ function buildActionCall(input: ActionPayload): ThreeCxCall {
     case 'health':
       return { method: 'GET', path: '/xapi/v1/SystemStatus' };
     case 'dial':
-      if (!ext || !dest) throw new Error('dial requires extension and destination');
+      if (!ext || !dest) throw new HttpError(400, 'dial requires extension and destination');
       return { method: 'POST', path: `/xapi/v1/CallControl/${encodeURIComponent(ext)}/makecall`, body: { destination: dest } };
     case 'hangup':
-      if (!callId) throw new Error('hangup requires callId');
+      if (!callId) throw new HttpError(400, 'hangup requires callId');
       return { method: 'POST', path: `/xapi/v1/CallControl/Calls/${encodeURIComponent(callId)}/hangup` };
     case 'hold':
-      if (!callId) throw new Error('hold requires callId');
+      if (!callId) throw new HttpError(400, 'hold requires callId');
       return { method: 'POST', path: `/xapi/v1/CallControl/Calls/${encodeURIComponent(callId)}/hold` };
     case 'resume':
-      if (!callId) throw new Error('resume requires callId');
+      if (!callId) throw new HttpError(400, 'resume requires callId');
       return { method: 'POST', path: `/xapi/v1/CallControl/Calls/${encodeURIComponent(callId)}/resume` };
     case 'mute':
-      if (!callId) throw new Error('mute requires callId');
+      if (!callId) throw new HttpError(400, 'mute requires callId');
       return { method: 'POST', path: `/xapi/v1/CallControl/Calls/${encodeURIComponent(callId)}/mute` };
     case 'unmute':
-      if (!callId) throw new Error('unmute requires callId');
+      if (!callId) throw new HttpError(400, 'unmute requires callId');
       return { method: 'POST', path: `/xapi/v1/CallControl/Calls/${encodeURIComponent(callId)}/unmute` };
     case 'transfer':
-      if (!callId || !targetExt) throw new Error('transfer requires callId and targetExtension');
+      if (!callId || !targetExt) throw new HttpError(400, 'transfer requires callId and targetExtension');
       return { method: 'POST', path: `/xapi/v1/CallControl/Calls/${encodeURIComponent(callId)}/transfer`, body: { extension: targetExt } };
     case 'dtmf':
-      if (!callId || !digits) throw new Error('dtmf requires callId and dtmfDigits');
+      if (!callId || !digits) throw new HttpError(400, 'dtmf requires callId and dtmfDigits');
       return { method: 'POST', path: `/xapi/v1/CallControl/Calls/${encodeURIComponent(callId)}/dtmf`, body: { digits } };
     case 'active_calls':
-      if (!ext) throw new Error('active_calls requires extension');
+      if (!ext) throw new HttpError(400, 'active_calls requires extension');
       return { method: 'GET', path: `/xapi/v1/CallControl/${encodeURIComponent(ext)}/calls` };
     case 'agent_state':
-      if (!ext) throw new Error('agent_state requires extension');
+      if (!ext) throw new HttpError(400, 'agent_state requires extension');
       return { method: 'GET', path: `/xapi/v1/Extensions/${encodeURIComponent(ext)}` };
     default:
-      throw new Error(`Unsupported action: ${action}`);
+      throw new HttpError(400, `Unsupported action: ${action}`);
   }
 }
 
 async function callThreeCx(apiToken: string, call: ThreeCxCall): Promise<Record<string, unknown>> {
   const baseUrl = Deno.env.get('THREECX_BASE_URL')?.trim();
-  if (!baseUrl) throw new Error('THREECX_BASE_URL is missing');
+  if (!baseUrl) throw new HttpError(500, 'THREECX_BASE_URL is missing');
   const url = `${normalizeBase(baseUrl)}${call.path.startsWith('/') ? '' : '/'}${call.path}`;
   const res = await fetch(url, {
     method: call.method,
@@ -130,9 +146,17 @@ async function callThreeCx(apiToken: string, call: ThreeCxCall): Promise<Record<
     },
     body: call.body ? JSON.stringify(call.body) : undefined,
   });
-  const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  const raw = await res.text();
+  const payload = (() => {
+    try {
+      return JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
+  })();
   if (!res.ok) {
-    throw new Error(String(payload.error || payload.message || `3CX API failed (${res.status})`));
+    const upstreamMessage = String(payload.error || payload.message || raw || `3CX API failed (${res.status})`).slice(0, 600);
+    throw new HttpError(res.status === 401 || res.status === 403 ? 401 : 502, `3CX API failed (${res.status}): ${upstreamMessage}`);
   }
   return payload;
 }
@@ -155,6 +179,12 @@ Deno.serve(async (req) => {
 
     const body = (await req.json().catch(() => ({}))) as ActionPayload;
     const actionCall = buildActionCall(body);
+    console.log('threecx action request', {
+      action: body.action,
+      method: actionCall.method,
+      path: actionCall.path,
+      extension: body.extension || null,
+    });
     const token = await getThreeCxToken();
     const data = await callThreeCx(token, actionCall);
     return json(200, {
@@ -165,6 +195,9 @@ Deno.serve(async (req) => {
       data,
     });
   } catch (error) {
-    return json(500, { error: error instanceof Error ? error.message : String(error) });
+    const status = error instanceof HttpError ? error.status : 500;
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('threecx-call-control failed', { status, message });
+    return json(status, { error: message });
   }
 });
