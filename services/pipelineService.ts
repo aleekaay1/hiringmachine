@@ -107,30 +107,91 @@ function guessNameFromFilename(fileName: string): string {
   return cleaned || 'Unknown Candidate';
 }
 
-function guessPhoneFromText(v: string): string | null {
-  const m = v.match(/(\+?\d[\d\s().-]{7,}\d)/);
-  return m ? m[1].trim() : null;
+function normalizeExtractText(v: string): string {
+  return v
+    .replace(/[•●▪◦◆▶►]/g, ' ')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function guessEmailFromText(v: string): string | null {
-  const m = v.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  return m ? m[0].toLowerCase() : null;
+function titleCaseName(v: string): string {
+  return v
+    .toLowerCase()
+    .split(/\s+/)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(' ');
 }
 
-function mergeHints(fileName: string, parsedText: string): { name: string; phone: string | null; email: string | null } {
-  const combined = `${fileName}\n${parsedText}`;
-  const email = guessEmailFromText(combined);
-  const phone = guessPhoneFromText(combined);
-  const nameFromHeader = parsedText
+function extractEmailCandidates(raw: string): string[] {
+  const normalized = raw
+    .replace(/\s*\(?at\)?\s*/gi, '@')
+    .replace(/\s*\(?dot\)?\s*/gi, '.')
+    .replace(/\s*\[\s*at\s*\]\s*/gi, '@')
+    .replace(/\s*\[\s*dot\s*\]\s*/gi, '.');
+  const hits = normalized.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+  return [...new Set(hits.map((h) => h.toLowerCase()))];
+}
+
+function extractPhoneCandidates(raw: string): string[] {
+  const out: string[] = [];
+  const withSeparators = raw.match(/(?:\+?\d[\d\s().-]{7,}\d)/g) || [];
+  for (const item of withSeparators) {
+    const digits = item.replace(/\D/g, '');
+    if (digits.length >= 9 && digits.length <= 13) out.push(item.trim());
+  }
+  const contiguous = raw.match(/(?<!\d)(\+?\d{9,13})(?!\d)/g) || [];
+  for (const item of contiguous) {
+    const digits = item.replace(/\D/g, '');
+    if (digits.length >= 9 && digits.length <= 13) out.push(item.trim());
+  }
+  return [...new Set(out)];
+}
+
+function chooseBestPhone(candidates: string[]): string | null {
+  if (!candidates.length) return null;
+  const ranked = [...candidates].sort((a, b) => {
+    const da = a.replace(/\D/g, '').length;
+    const db = b.replace(/\D/g, '').length;
+    const aIntl = a.trim().startsWith('+') ? 1 : 0;
+    const bIntl = b.trim().startsWith('+') ? 1 : 0;
+    return (bIntl - aIntl) || Math.abs(10 - da) - Math.abs(10 - db);
+  });
+  return ranked[0] || null;
+}
+
+function inferNameFromText(parsedText: string): string | null {
+  const lines = parsedText
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean)
-    .find((l) => /^[A-Za-z][A-Za-z .'-]{2,60}$/.test(l));
-  return {
-    name: (nameFromHeader || guessNameFromFilename(fileName)).slice(0, 120),
-    phone,
-    email,
-  };
+    .slice(0, 24);
+  const blacklist = /(resume|curriculum|vitae|email|phone|mobile|contact|linkedin|github|objective|summary|profile)/i;
+  for (const line of lines) {
+    if (line.length < 3 || line.length > 80) continue;
+    if (line.includes('@')) continue;
+    if (/\d/.test(line)) continue;
+    if (blacklist.test(line)) continue;
+    const parts = line.split(/\s+/).filter(Boolean);
+    if (parts.length < 2 || parts.length > 4) continue;
+    const alphabeticParts = parts.filter((p) => /^[A-Za-z][A-Za-z'`.-]*$/.test(p));
+    if (alphabeticParts.length < 2) continue;
+    const candidate = alphabeticParts.join(' ');
+    const hasTitleCase = alphabeticParts.every((p) => /^[A-Z][a-z'`.-]*$/.test(p));
+    const hasAllCaps = alphabeticParts.every((p) => /^[A-Z'`.-]+$/.test(p));
+    if (hasTitleCase) return candidate;
+    if (hasAllCaps) return titleCaseName(candidate);
+  }
+  return null;
+}
+
+function mergeHints(fileName: string, parsedText: string): { name: string; phone: string | null; email: string | null } {
+  const normalizedText = normalizeExtractText(parsedText);
+  const combined = `${fileName}\n${normalizedText}`;
+  const email = extractEmailCandidates(combined)[0] || null;
+  const phone = chooseBestPhone(extractPhoneCandidates(combined));
+  const name = inferNameFromText(parsedText) || guessNameFromFilename(fileName);
+  return { name: name.slice(0, 120), phone, email };
 }
 
 async function extractTextFromPdf(file: File): Promise<string> {
@@ -147,6 +208,29 @@ async function extractTextFromPdf(file: File): Promise<string> {
       const page = await doc.getPage(i);
       const text = await page.getTextContent();
       out += `\n${text.items.map((it: any) => String(it.str || '')).join(' ')}`;
+    }
+    // OCR fallback for scanned PDFs with little/no text layer.
+    if (normalizeExtractText(out).length < 80) {
+      try {
+        const firstPage = await doc.getPage(1);
+        const viewport = firstPage.getViewport({ scale: 2 });
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          canvas.width = Math.ceil(viewport.width);
+          canvas.height = Math.ceil(viewport.height);
+          await firstPage.render({ canvasContext: ctx, viewport }).promise;
+          const worker = await createWorker('eng');
+          const result = await worker.recognize(canvas);
+          await worker.terminate();
+          const ocrText = String(result.data.text || '');
+          if (normalizeExtractText(ocrText).length > normalizeExtractText(out).length) {
+            out += `\n${ocrText}`;
+          }
+        }
+      } catch {
+        // ignore OCR fallback failures
+      }
     }
     return out;
   } catch {
