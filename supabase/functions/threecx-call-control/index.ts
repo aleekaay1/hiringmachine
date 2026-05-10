@@ -27,6 +27,7 @@ type ThreeCxCall = {
   method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   path: string;
   body?: Record<string, unknown>;
+  fallbackPath?: string;
 };
 
 class HttpError extends Error {
@@ -97,10 +98,15 @@ function buildActionCall(input: ActionPayload): ThreeCxCall {
 
   switch (action) {
     case 'health':
-      return { method: 'GET', path: '/xapi/v1/SystemStatus' };
+      return { method: 'GET', path: '/xapi/v1/SystemStatus', fallbackPath: '/callcontrol' };
     case 'dial':
       if (!ext || !dest) throw new HttpError(400, 'dial requires extension and destination');
-      return { method: 'POST', path: `/xapi/v1/CallControl/${encodeURIComponent(ext)}/makecall`, body: { destination: dest } };
+      return {
+        method: 'POST',
+        path: `/xapi/v1/CallControl/${encodeURIComponent(ext)}/makecall`,
+        fallbackPath: `/callcontrol/${encodeURIComponent(ext)}/makecall`,
+        body: { destination: dest },
+      };
     case 'hangup':
       if (!callId) throw new HttpError(400, 'hangup requires callId');
       return { method: 'POST', path: `/xapi/v1/CallControl/Calls/${encodeURIComponent(callId)}/hangup` };
@@ -124,7 +130,11 @@ function buildActionCall(input: ActionPayload): ThreeCxCall {
       return { method: 'POST', path: `/xapi/v1/CallControl/Calls/${encodeURIComponent(callId)}/dtmf`, body: { digits } };
     case 'active_calls':
       if (!ext) throw new HttpError(400, 'active_calls requires extension');
-      return { method: 'GET', path: `/xapi/v1/CallControl/${encodeURIComponent(ext)}/calls` };
+      return {
+        method: 'GET',
+        path: `/xapi/v1/CallControl/${encodeURIComponent(ext)}/calls`,
+        fallbackPath: `/callcontrol/${encodeURIComponent(ext)}/participants`,
+      };
     case 'agent_state':
       if (!ext) throw new HttpError(400, 'agent_state requires extension');
       return { method: 'GET', path: `/xapi/v1/Extensions/${encodeURIComponent(ext)}` };
@@ -136,8 +146,8 @@ function buildActionCall(input: ActionPayload): ThreeCxCall {
 async function callThreeCx(apiToken: string, call: ThreeCxCall): Promise<Record<string, unknown>> {
   const baseUrl = Deno.env.get('THREECX_BASE_URL')?.trim();
   if (!baseUrl) throw new HttpError(500, 'THREECX_BASE_URL is missing');
-  const url = `${normalizeBase(baseUrl)}${call.path.startsWith('/') ? '' : '/'}${call.path}`;
-  const res = await fetch(url, {
+  const buildUrl = (path: string) => `${normalizeBase(baseUrl)}${path.startsWith('/') ? '' : '/'}${path}`;
+  const runHttp = async (path: string) => fetch(buildUrl(path), {
     method: call.method,
     headers: {
       Authorization: `Bearer ${apiToken}`,
@@ -146,6 +156,13 @@ async function callThreeCx(apiToken: string, call: ThreeCxCall): Promise<Record<
     },
     body: call.body ? JSON.stringify(call.body) : undefined,
   });
+  let attemptedPath = call.path;
+  let res = await runHttp(call.path);
+  if (res.status === 404 && call.fallbackPath) {
+    console.warn('threecx primary path 404, retrying fallback path', { primary: call.path, fallback: call.fallbackPath });
+    attemptedPath = call.fallbackPath;
+    res = await runHttp(call.fallbackPath);
+  }
   const raw = await res.text();
   const payload = (() => {
     try {
@@ -156,7 +173,7 @@ async function callThreeCx(apiToken: string, call: ThreeCxCall): Promise<Record<
   })();
   if (!res.ok) {
     const upstreamMessage = String(payload.error || payload.message || raw || `3CX API failed (${res.status})`).slice(0, 600);
-    throw new HttpError(res.status === 401 || res.status === 403 ? 401 : 502, `3CX API failed (${res.status}): ${upstreamMessage}`);
+    throw new HttpError(res.status === 401 || res.status === 403 ? 401 : 502, `3CX API failed (${res.status}) at ${attemptedPath}: ${upstreamMessage}`);
   }
   return payload;
 }
