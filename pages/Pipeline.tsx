@@ -30,6 +30,20 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.m
 
 const JOURNEY_OPTIONS = ['new', 'queued_for_call', 'attempted', 'connected', 'follow_up', 'qualified', 'not_interested', 'hired'];
 const DISPOSITION_OPTIONS = ['Need callback', 'No answer', 'Connected', 'Not interested', 'Qualified', 'Close'];
+const DIAL_PAD = [
+  { d: '1', s: '' },
+  { d: '2', s: 'ABC' },
+  { d: '3', s: 'DEF' },
+  { d: '4', s: 'GHI' },
+  { d: '5', s: 'JKL' },
+  { d: '6', s: 'MNO' },
+  { d: '7', s: 'PQRS' },
+  { d: '8', s: 'TUV' },
+  { d: '9', s: 'WXYZ' },
+  { d: '*', s: '' },
+  { d: '0', s: '+' },
+  { d: '#', s: '' },
+];
 
 function latestNoteText(bundle: PipelineCandidateBundle | null): string {
   const n = bundle?.notes?.[0];
@@ -336,6 +350,36 @@ const Pipeline: React.FC = () => {
     setDialTarget((prev) => `${prev}${digit}`);
   };
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      const isTypingField = tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable;
+      if (isTypingField) return;
+      if (event.key >= '0' && event.key <= '9') {
+        event.preventDefault();
+        keypadPress(event.key);
+        return;
+      }
+      if (event.key === '*' || event.key === '#') {
+        event.preventDefault();
+        keypadPress(event.key);
+        return;
+      }
+      if (event.key === 'Backspace') {
+        event.preventDefault();
+        setDialTarget((prev) => prev.slice(0, -1));
+        return;
+      }
+      if (event.key === 'Enter' && selectedBundle?.candidate.id && !callActionRunning) {
+        event.preventDefault();
+        void runCallAction('dial');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedBundle?.candidate.id, callActionRunning]);
+
   const refreshConversion = async () => {
     if (!selectedResume) return;
     try {
@@ -524,29 +568,61 @@ const Pipeline: React.FC = () => {
                 <div className="p-3 space-y-3">
                   <section className="rounded-xl border border-slate-200 p-3 space-y-2">
                     <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1"><Phone size={13} /> Call controls</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                      <input value={agentExtension} onChange={(e) => setAgentExtension(e.target.value)} placeholder="Agent extension" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                      <input value={dialTarget} onChange={(e) => setDialTarget(e.target.value)} placeholder="Dial number" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                      <input value={activeCallId} onChange={(e) => setActiveCallId(e.target.value)} placeholder="Call ID" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                      <input value={targetExtension} onChange={(e) => setTargetExtension(e.target.value)} placeholder="Transfer ext" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                      <input value={dtmfDigits} onChange={(e) => setDtmfDigits(e.target.value)} placeholder="DTMF" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                    </div>
+                    <div className="flex flex-wrap items-start gap-3">
+                      <div className="w-[220px] rounded-2xl border border-slate-300 bg-gradient-to-b from-slate-100 to-slate-50 p-3 shadow-inner">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-1">Dialer</p>
+                        <input
+                          value={dialTarget}
+                          onChange={(e) => setDialTarget(e.target.value)}
+                          placeholder="Type number or use keypad"
+                          className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold tracking-wide text-slate-900 mb-2"
+                        />
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {DIAL_PAD.map((k) => (
+                            <button
+                              key={k.d}
+                              type="button"
+                              onClick={() => keypadPress(k.d)}
+                              className="rounded-xl border border-slate-300 bg-white py-2 hover:bg-slate-50 transition"
+                            >
+                              <p className="text-sm font-semibold text-slate-900 leading-tight">{k.d}</p>
+                              <p className="text-[9px] text-slate-500 leading-tight min-h-[10px]">{k.s}</p>
+                            </button>
+                          ))}
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5 mt-2">
+                          <button
+                            type="button"
+                            onClick={() => setDialTarget((prev) => prev.slice(0, -1))}
+                            className="rounded-lg border border-slate-300 bg-white py-1.5 text-xs hover:bg-slate-50"
+                          >
+                            Backspace
+                          </button>
+                          <Button className="!min-h-0 h-8 text-xs" onClick={() => void runCallAction('dial')} disabled={callActionRunning}>
+                            Dial
+                          </Button>
+                        </div>
+                        <p className="text-[10px] text-slate-500 mt-2">Keyboard: 0-9, *, #, Backspace, Enter</p>
+                      </div>
 
-                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-                      {['1','2','3','4','5','6','7','8','9','*','0','#'].map((d) => (
-                        <button key={d} type="button" onClick={() => keypadPress(d)} className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs hover:bg-slate-50">{d}</button>
-                      ))}
-                    </div>
-                    <div className="grid grid-cols-3 md:grid-cols-9 gap-2">
-                      <Button onClick={() => void runCallAction('dial')} disabled={callActionRunning}>Dial</Button>
-                      <Button variant="outline" onClick={() => void runCallAction('hangup')} disabled={callActionRunning}>Hangup</Button>
-                      <Button variant="outline" onClick={() => void runCallAction('active_calls')} disabled={callActionRunning}>Active</Button>
-                      <Button variant="outline" onClick={() => void runCallAction('hold')} disabled={callActionRunning}>Hold</Button>
-                      <Button variant="outline" onClick={() => void runCallAction('resume')} disabled={callActionRunning}>Resume</Button>
-                      <Button variant="outline" onClick={() => void runCallAction('transfer')} disabled={callActionRunning}>Transfer</Button>
-                      <Button variant="outline" onClick={() => void runCallAction('mute')} disabled={callActionRunning}>Mute</Button>
-                      <Button variant="outline" onClick={() => void runCallAction('unmute')} disabled={callActionRunning}>Unmute</Button>
-                      <Button variant="outline" onClick={() => void runCallAction('dtmf')} disabled={callActionRunning}>DTMF</Button>
+                      <div className="flex-1 min-w-[260px] space-y-2">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          <input value={agentExtension} onChange={(e) => setAgentExtension(e.target.value)} placeholder="Agent extension" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                          <input value={activeCallId} onChange={(e) => setActiveCallId(e.target.value)} placeholder="Call ID" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                          <input value={targetExtension} onChange={(e) => setTargetExtension(e.target.value)} placeholder="Transfer ext" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                          <input value={dtmfDigits} onChange={(e) => setDtmfDigits(e.target.value)} placeholder="DTMF" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                        </div>
+                        <div className="grid grid-cols-3 md:grid-cols-8 gap-2">
+                          <Button variant="outline" onClick={() => void runCallAction('hangup')} disabled={callActionRunning}>Hangup</Button>
+                          <Button variant="outline" onClick={() => void runCallAction('active_calls')} disabled={callActionRunning}>Active</Button>
+                          <Button variant="outline" onClick={() => void runCallAction('hold')} disabled={callActionRunning}>Hold</Button>
+                          <Button variant="outline" onClick={() => void runCallAction('resume')} disabled={callActionRunning}>Resume</Button>
+                          <Button variant="outline" onClick={() => void runCallAction('transfer')} disabled={callActionRunning}>Transfer</Button>
+                          <Button variant="outline" onClick={() => void runCallAction('mute')} disabled={callActionRunning}>Mute</Button>
+                          <Button variant="outline" onClick={() => void runCallAction('unmute')} disabled={callActionRunning}>Unmute</Button>
+                          <Button variant="outline" onClick={() => void runCallAction('dtmf')} disabled={callActionRunning}>DTMF</Button>
+                        </div>
+                      </div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <Button variant="secondary" onClick={openWebClientFallback}>Open 3CX web client fallback</Button>
