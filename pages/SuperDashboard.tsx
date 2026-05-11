@@ -137,6 +137,7 @@ const SuperDashboard: React.FC = () => {
   const runSnapshotPipeline = async (token: string, candidateCount: number) => {
     if (candidateCount === 0) return;
     try {
+      let automationWarning: string | null = null;
       setSnapshotStatus({
         running: true,
         message: 'Refreshing analytics snapshot (rollup + automation)...',
@@ -155,13 +156,8 @@ const SuperDashboard: React.FC = () => {
       }
       const automation = await runHrAutomation(token, false);
       if (!automation.ok) {
-        setSnapshotStatus({
-          running: false,
-          message: null,
-          error: normalizeErrorText(automation.error),
-          updatedAt: null,
-        });
-        return;
+        // Keep snapshot flow alive when automation fails.
+        automationWarning = normalizeErrorText(automation.error);
       }
 
       // Poll briefly so page stays loaded while snapshot catches up.
@@ -173,7 +169,9 @@ const SuperDashboard: React.FC = () => {
         if (!needsSnapshotRefresh(latest, candidateCount) || i === 5) {
           setSnapshotStatus({
             running: false,
-            message: 'Snapshot data loaded.',
+            message: automationWarning
+              ? `Snapshot data loaded (automation warning: ${automationWarning}).`
+              : 'Snapshot data loaded.',
             error: null,
             updatedAt: new Date().toISOString(),
           });

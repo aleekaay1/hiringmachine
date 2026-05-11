@@ -6,6 +6,25 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, apikey, x-client-info',
 };
 
+function normalizeErr(e: unknown): string {
+  if (typeof e === 'string') return e || 'Unknown error';
+  if (e instanceof Error) return e.message || e.name || 'Unknown error';
+  if (e && typeof e === 'object') {
+    const obj = e as Record<string, unknown>;
+    const msg = obj.message;
+    if (typeof msg === 'string' && msg.trim()) return msg;
+    const details = obj.details;
+    if (typeof details === 'string' && details.trim()) return details;
+    try {
+      const text = JSON.stringify(obj);
+      if (text && text !== '{}' && text !== '[]') return text;
+    } catch {
+      // ignore stringify failures
+    }
+  }
+  return String(e || 'Unknown error');
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
   if (req.method !== 'POST') {
@@ -33,12 +52,15 @@ Deno.serve(async (req) => {
     const allowWrites = (Deno.env.get('HR_AUTOMATION_ENABLED')?.trim() || '').toLowerCase() === 'true';
     const writesEnabled = !dryRun && allowWrites;
 
+    const warnings: string[] = [];
     const { data: candidates, error: candErr } = await hrAdmin
       .from('v_hr_latest_readiness')
       .select('candidate_id,score,band')
       .order('score', { ascending: false })
       .limit(300);
-    if (candErr) throw candErr;
+    if (candErr) {
+      warnings.push(`v_hr_latest_readiness unavailable: ${normalizeErr(candErr)}`);
+    }
 
     const recommendations: Array<Record<string, unknown>> = [];
     for (const row of candidates || []) {
@@ -72,10 +94,11 @@ Deno.serve(async (req) => {
         source: 'automation_beta',
         metadata: { recommendation: r },
       }));
-      const { data: inserted } = await hrAdmin.from('hr_tasks').insert(taskRows).select('id');
+      const { data: inserted, error: taskErr } = await hrAdmin.from('hr_tasks').insert(taskRows).select('id');
+      if (taskErr) warnings.push(`hr_tasks insert failed: ${normalizeErr(taskErr)}`);
       createdTasks = inserted?.length || 0;
       if (inserted && inserted.length > 0) {
-        await hrAdmin.from('hr_task_events').insert(
+        const { error: evtErr } = await hrAdmin.from('hr_task_events').insert(
           inserted.map((t: Record<string, unknown>) => ({
             task_id: t.id,
             event_type: 'created',
@@ -83,6 +106,7 @@ Deno.serve(async (req) => {
             payload: { source: 'hr-automation-runner' },
           })),
         );
+        if (evtErr) warnings.push(`hr_task_events insert failed: ${normalizeErr(evtErr)}`);
       }
     }
 
@@ -94,11 +118,12 @@ Deno.serve(async (req) => {
         recommendations: recommendations.slice(0, 100),
         recommendation_count: recommendations.length,
         tasks_created: createdTasks,
+        warnings,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (e) {
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), {
+    return new Response(JSON.stringify({ error: normalizeErr(e) }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
