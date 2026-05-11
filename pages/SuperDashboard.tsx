@@ -166,7 +166,8 @@ const SuperDashboard: React.FC = () => {
           await new Promise((r) => window.setTimeout(r, 1500));
         }
         const latest = await refreshHrOnly(token);
-        if (!needsSnapshotRefresh(latest, candidateCount) || i === 5) {
+        const stillNeedsRefresh = needsSnapshotRefresh(latest, candidateCount);
+        if (!stillNeedsRefresh) {
           setSnapshotStatus({
             running: false,
             message: automationWarning
@@ -174,6 +175,17 @@ const SuperDashboard: React.FC = () => {
               : 'Snapshot data loaded.',
             error: null,
             updatedAt: new Date().toISOString(),
+          });
+          return;
+        }
+        if (i === 5) {
+          setSnapshotStatus({
+            running: false,
+            message: null,
+            error: automationWarning
+              ? `Snapshot still stale after refresh. Automation warning: ${automationWarning}`
+              : 'Snapshot still stale after refresh. Try again in a few seconds.',
+            updatedAt: null,
           });
           return;
         }

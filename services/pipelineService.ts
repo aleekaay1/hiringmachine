@@ -233,6 +233,15 @@ function linesFromText(raw: string): string[] {
     .filter((l) => l.length >= 2 && l.length <= 140);
 }
 
+function compactText(raw: string): string {
+  return raw
+    .replace(/\u0000/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\r/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function firstMatchingLine(lines: string[], re: RegExp): string | null {
   const hit = lines.find((l) => re.test(l));
   return hit ? hit.slice(0, 160) : null;
@@ -241,6 +250,8 @@ function firstMatchingLine(lines: string[], re: RegExp): string | null {
 function extractYearsExperience(raw: string): string | null {
   const direct = raw.match(/(\d{1,2})\s*\+?\s*(?:years|yrs)\b/i);
   if (direct) return `${direct[1]}+ years`;
+  const verbose = raw.match(/experience[^.\n]{0,80}?(\d{1,2})\s*\+?\s*(?:years|yrs)\b/i);
+  if (verbose) return `${verbose[1]}+ years`;
   return null;
 }
 
@@ -263,11 +274,26 @@ function extractLocation(lines: string[]): string | null {
 function extractTitle(lines: string[]): string | null {
   return firstMatchingLine(
     lines.slice(0, 30),
-    /(advisor|manager|specialist|representative|associate|consultant|coordinator|analyst|developer|engineer|recruiter|sales)/i,
+    /(advisor|manager|specialist|representative|associate|consultant|coordinator|analyst|developer|engineer|recruiter|sales|executive|administrator|designer|architect)/i,
   );
 }
 
-function extractSkillsSummary(lines: string[]): string | null {
+function extractSection(raw: string, headerRegex: RegExp): string | null {
+  const normalized = raw.replace(/\r/g, '\n');
+  const headerMatch = normalized.match(headerRegex);
+  if (!headerMatch || headerMatch.index == null) return null;
+  const start = headerMatch.index + headerMatch[0].length;
+  const tail = normalized.slice(start);
+  const endMatch = tail.match(/\n\s*(experience|education|skills?|projects?|certifications?|summary|profile|objective)\b\s*[:\-]?\s*\n?/i);
+  const chunk = endMatch ? tail.slice(0, endMatch.index) : tail.slice(0, 420);
+  const cleaned = compactText(chunk).replace(/\n/g, ' ');
+  if (!cleaned || cleaned.length < 16) return null;
+  return cleaned.slice(0, 320);
+}
+
+function extractSkillsSummary(lines: string[], raw: string): string | null {
+  const section = extractSection(raw, /\bskills?\b\s*[:\-]?\s*\n?/i);
+  if (section) return section.slice(0, 220);
   const idx = lines.findIndex((l) => /skills?/i.test(l));
   if (idx >= 0) {
     const slice = lines.slice(idx + 1, idx + 4).join(', ');
@@ -279,24 +305,29 @@ function extractSkillsSummary(lines: string[]): string | null {
   return null;
 }
 
-function extractWorkSummary(lines: string[]): string | null {
+function extractWorkSummary(lines: string[], raw: string): string | null {
+  const expSection = extractSection(raw, /\b(work\s+)?experience\b\s*[:\-]?\s*\n?/i);
+  if (expSection) return expSection.slice(0, 280);
+  const summarySection = extractSection(raw, /\b(summary|profile|objective)\b\s*[:\-]?\s*\n?/i);
+  if (summarySection) return summarySection.slice(0, 280);
   const idx = lines.findIndex((l) => /(summary|profile|objective|experience)/i.test(l));
   if (idx >= 0) {
-    const text = lines.slice(idx + 1, idx + 4).join(' ').trim();
+    const text = lines.slice(idx + 1, idx + 5).join(' ').trim();
     if (text.length >= 20) return text.slice(0, 280);
   }
   return null;
 }
 
 function buildOcrProfile(parsedText: string): PipelineCandidateProfile {
-  const lines = linesFromText(parsedText);
+  const prepared = compactText(parsedText);
+  const lines = linesFromText(prepared);
   return {
     current_title: extractTitle(lines),
     location: extractLocation(lines),
-    total_experience_years: extractYearsExperience(parsedText),
+    total_experience_years: extractYearsExperience(prepared),
     education_highest: extractEducation(lines),
-    skills_summary: extractSkillsSummary(lines),
-    work_summary: extractWorkSummary(lines),
+    skills_summary: extractSkillsSummary(lines, prepared),
+    work_summary: extractWorkSummary(lines, prepared),
   };
 }
 
@@ -316,24 +347,27 @@ async function extractTextFromPdf(file: File): Promise<string> {
       out += `\n${text.items.map((it: any) => String(it.str || '')).join(' ')}`;
     }
     // OCR fallback for scanned PDFs with little/no text layer.
-    if (normalizeExtractText(out).length < 80) {
+    if (normalizeExtractText(out).length < 180) {
       try {
-        const firstPage = await doc.getPage(1);
-        const viewport = firstPage.getViewport({ scale: 2 });
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          canvas.width = Math.ceil(viewport.width);
-          canvas.height = Math.ceil(viewport.height);
-          await firstPage.render({ canvasContext: ctx, viewport }).promise;
-          const worker = await createWorker('eng');
-          const result = await worker.recognize(canvas);
-          await worker.terminate();
-          const ocrText = String(result.data.text || '');
-          if (normalizeExtractText(ocrText).length > normalizeExtractText(out).length) {
-            out += `\n${ocrText}`;
+        const worker = await createWorker('eng');
+        const pagesForOcr = Math.min(doc.numPages, 2);
+        for (let i = 1; i <= pagesForOcr; i += 1) {
+          const page = await doc.getPage(i);
+          const viewport = page.getViewport({ scale: 2 });
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            canvas.width = Math.ceil(viewport.width);
+            canvas.height = Math.ceil(viewport.height);
+            await page.render({ canvasContext: ctx, viewport }).promise;
+            const result = await worker.recognize(canvas);
+            const ocrText = String(result.data.text || '');
+            if (normalizeExtractText(ocrText).length > 40) {
+              out += `\n${ocrText}`;
+            }
           }
         }
+        await worker.terminate();
       } catch {
         // ignore OCR fallback failures
       }
@@ -537,6 +571,7 @@ export async function bulkUploadPipelineResumes(
           metadata: {
             original_file_name: file.name,
             ocr_profile: profile,
+            ocr_text_excerpt: compactText(parsedText).slice(0, 12000),
           },
         })
         .select('id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at')

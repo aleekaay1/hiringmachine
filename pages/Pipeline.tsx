@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
+import mammoth from 'mammoth';
 import {
   addPipelineNote,
   bulkDeletePipelineCandidates,
@@ -141,6 +142,30 @@ function readCandidateProfile(candidate: PipelineCandidate | null): PipelineCand
   };
 }
 
+function readCandidateTextExcerpt(candidate: PipelineCandidate | null): string {
+  const meta = candidate?.metadata && typeof candidate.metadata === 'object' ? candidate.metadata : {};
+  const raw = (meta as Record<string, unknown>).ocr_text_excerpt;
+  return typeof raw === 'string' ? raw : '';
+}
+
+function getResumeExt(name: string): string {
+  const clean = name.trim().toLowerCase();
+  const dot = clean.lastIndexOf('.');
+  if (dot < 0) return '';
+  return clean.slice(dot + 1);
+}
+
+function stripRtf(raw: string): string {
+  return raw
+    .replace(/\\par[d]?/g, '\n')
+    .replace(/\\'[0-9a-fA-F]{2}/g, ' ')
+    .replace(/\\[a-z]+\d* ?/g, '')
+    .replace(/[{}]/g, '')
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function uploadStageLabel(stage: PipelineUploadProgress['stage']): string {
   switch (stage) {
     case 'starting':
@@ -221,6 +246,8 @@ const Pipeline: React.FC = () => {
   const [uploadProgressByIndex, setUploadProgressByIndex] = useState<Record<number, PipelineUploadProgress>>({});
   const [uploadTotalCount, setUploadTotalCount] = useState(0);
   const [uploadCurrentMessage, setUploadCurrentMessage] = useState<string>('Starting upload...');
+  const [docPreviewText, setDocPreviewText] = useState('');
+  const [docPreviewLoading, setDocPreviewLoading] = useState(false);
   const [numPdfPages, setNumPdfPages] = useState<number>(0);
   const toneCtxRef = useRef<AudioContext | null>(null);
 
@@ -290,6 +317,58 @@ const Pipeline: React.FC = () => {
     setProfileSummary(profile.work_summary || '');
     setProfileMsg(null);
   }, [selectedBundle?.candidate.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      const resume = selectedResume;
+      if (!resume || !selectedBundle?.candidate) {
+        setDocPreviewText('');
+        setDocPreviewLoading(false);
+        return;
+      }
+      const kind = getPipelineResumeViewerKind(resume);
+      const url = getPipelineResumeDisplayUrl(resume);
+      if (!url || kind === 'pdf' || kind === 'image') {
+        setDocPreviewText('');
+        setDocPreviewLoading(false);
+        return;
+      }
+      const excerpt = readCandidateTextExcerpt(selectedBundle.candidate);
+      if (excerpt.trim()) {
+        setDocPreviewText(excerpt);
+      } else {
+        setDocPreviewText('');
+      }
+      setDocPreviewLoading(true);
+      try {
+        const ext = getResumeExt(resume.original_filename);
+        const response = await fetch(url, { method: 'GET' });
+        if (!response.ok) throw new Error(`Preview fetch failed (${response.status})`);
+        if (ext === 'docx') {
+          const arr = await response.arrayBuffer();
+          const result = await mammoth.extractRawText({ arrayBuffer: arr });
+          if (!cancelled) setDocPreviewText(String(result.value || '').trim() || excerpt || 'No preview text found.');
+        } else if (ext === 'rtf' || ext === 'txt' || ext === 'doc') {
+          const text = await response.text();
+          const preview = ext === 'rtf' ? stripRtf(text) : text;
+          if (!cancelled) setDocPreviewText(preview.trim() || excerpt || 'No preview text found.');
+        } else if (!excerpt.trim()) {
+          if (!cancelled) setDocPreviewText('Preview is not available for this file type without external conversion.');
+        }
+      } catch {
+        if (!cancelled && !excerpt.trim()) {
+          setDocPreviewText('Unable to render this document inline. Upload DOCX/PDF/Image for best inline viewing.');
+        }
+      } finally {
+        if (!cancelled) setDocPreviewLoading(false);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedResume?.id, selectedBundle?.candidate?.id]);
 
   const filteredCandidates = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -835,10 +914,16 @@ const Pipeline: React.FC = () => {
                     }
                     return (
                       <div className="p-4 text-sm text-slate-600 space-y-2">
-                        <p>This document type needs conversion before inline viewing.</p>
+                        <p>This document type does not require external converter anymore; showing extracted text preview.</p>
                         <p>Status: <strong>{selectedResume.conversion_status}</strong></p>
                         {selectedResume.conversion_error && <p className="text-red-600">{selectedResume.conversion_error}</p>}
-                        <Button onClick={() => void refreshConversion()} variant="outline">Convert / Retry</Button>
+                        {docPreviewLoading && <p className="text-xs text-slate-500">Extracting text preview...</p>}
+                        {docPreviewText && (
+                          <pre className="whitespace-pre-wrap rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-700 max-h-[45vh] overflow-auto">
+                            {docPreviewText}
+                          </pre>
+                        )}
+                        <Button onClick={() => void refreshConversion()} variant="outline">Retry optional conversion</Button>
                         <a href={url} target="_blank" rel="noreferrer" className="block text-blue-700 underline">Open source file</a>
                       </div>
                     );
