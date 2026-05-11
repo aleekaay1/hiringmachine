@@ -550,6 +550,10 @@ const Pipeline: React.FC = () => {
     () => PIPELINE_EMAIL_TEMPLATES.find((t) => t.id === emailTemplateId) ?? PIPELINE_EMAIL_TEMPLATES[0],
     [emailTemplateId],
   );
+  const emailLogs = useMemo(
+    () => (selectedBundle?.callLogs || []).filter((x) => x.action === 'email_sent' || x.action === 'email_send_failed'),
+    [selectedBundle?.callLogs],
+  );
 
   const applyTemplate = (templateId: string) => {
     const t = PIPELINE_EMAIL_TEMPLATES.find((x) => x.id === templateId);
@@ -651,11 +655,43 @@ const Pipeline: React.FC = () => {
         trigger: `pipeline_${emailTemplateId}`,
         candidateId: selectedBundle.candidate.id,
       });
+      const { data: u } = await supabase.auth.getUser();
+      const actorLabel = String(u.user?.user_metadata?.full_name || u.user?.user_metadata?.name || u.user?.email || '').trim() || undefined;
       if (!('ok' in result)) {
         setEmailMsg(result.error || 'Failed to send email.');
+        await logPipelineCallAction({
+          candidateId: selectedBundle.candidate.id,
+          resumeId: selectedResume?.id ?? null,
+          action: 'email_send_failed',
+          outcome: 'failed',
+          requestPayload: {
+            to: emailTo.trim(),
+            cc: emailCc.trim() || '',
+            subject: emailSubject.trim(),
+            templateId: emailTemplateId,
+          },
+          responsePayload: { error: result.error || 'Failed to send email.' },
+          actorLabel,
+        });
+        await loadSelectedBundle(selectedBundle.candidate.id);
         return;
       }
       setEmailMsg('Email sent successfully.');
+      await logPipelineCallAction({
+        candidateId: selectedBundle.candidate.id,
+        resumeId: selectedResume?.id ?? null,
+        action: 'email_sent',
+        outcome: 'ok',
+        requestPayload: {
+          to: emailTo.trim(),
+          cc: emailCc.trim() || '',
+          subject: emailSubject.trim(),
+          templateId: emailTemplateId,
+        },
+        responsePayload: { trigger: `pipeline_${emailTemplateId}` },
+        actorLabel,
+      });
+      await loadSelectedBundle(selectedBundle.candidate.id);
     } catch (e) {
       setEmailMsg(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1089,6 +1125,33 @@ const Pipeline: React.FC = () => {
                           <p className="text-slate-500">Failed</p>
                           <p className="font-semibold text-slate-900">{selectedBundle.callLogs.filter((x) => x.outcome === 'failed').length}</p>
                         </div>
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-white p-2 space-y-2">
+                        <p className="text-[11px] font-semibold text-slate-700 uppercase tracking-wide">Email logs</p>
+                        {emailLogs.length === 0 ? (
+                          <p className="text-[11px] text-slate-500">No emails logged yet for this candidate/resume.</p>
+                        ) : (
+                          <div className="max-h-36 overflow-auto space-y-1.5">
+                            {emailLogs.map((log) => {
+                              const req = (log.request_payload || {}) as Record<string, unknown>;
+                              return (
+                                <details key={log.id} className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1.5">
+                                  <summary className="cursor-pointer list-none flex items-center justify-between gap-2 text-[11px] text-slate-700">
+                                    <span className="truncate">{String(req.to || '—')} · {log.action === 'email_sent' ? 'sent' : 'failed'}</span>
+                                    <span className="text-slate-500">{formatDateTimeCanadaEastern(log.created_at)}</span>
+                                  </summary>
+                                  <div className="mt-1 text-[10px] text-slate-600 space-y-0.5">
+                                    <p><strong>To:</strong> {String(req.to || '—')}</p>
+                                    <p><strong>CC:</strong> {String(req.cc || '—')}</p>
+                                    <p><strong>Subject:</strong> {String(req.subject || '—')}</p>
+                                    <p><strong>Template:</strong> {String(req.templateId || '—')}</p>
+                                    <p><strong>When:</strong> {formatDateTimeCanadaEastern(log.created_at)}</p>
+                                  </div>
+                                </details>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     </section>
                   </div>
