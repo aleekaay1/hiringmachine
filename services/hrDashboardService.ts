@@ -20,6 +20,37 @@ function fnUrl(name: string): string | null {
   return `${SUPABASE_URL}/functions/v1/${name}`;
 }
 
+function normalizeUnknownError(input: unknown): string {
+  if (typeof input === 'string') {
+    const text = input.trim();
+    if (!text) return 'Unknown error';
+    return text;
+  }
+  if (input instanceof Error) {
+    return input.message || input.name || 'Unknown error';
+  }
+  if (!input) return 'Unknown error';
+  if (typeof input === 'object') {
+    const obj = input as Record<string, unknown>;
+    const keys = ['error', 'message', 'details', 'hint', 'msg'] as const;
+    for (const key of keys) {
+      const value = obj[key];
+      if (typeof value === 'string' && value.trim()) return value;
+      if (value && typeof value === 'object') {
+        const nested = normalizeUnknownError(value);
+        if (nested && nested !== 'Unknown error') return nested;
+      }
+    }
+    try {
+      const text = JSON.stringify(obj);
+      if (text && text !== '{}' && text !== '[]') return text;
+    } catch {
+      // ignore stringify failures
+    }
+  }
+  return String(input) || 'Unknown error';
+}
+
 async function callFn(
   name: string,
   token: string,
@@ -31,27 +62,35 @@ async function callFn(
   const url = fnUrl(name);
   if (!url) return { ok: false, error: 'Missing function URL' };
 
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      apikey: SUPABASE_ANON_KEY,
-      'Content-Type': 'application/json',
-      ...(init.headers || {}),
-    },
-  });
-  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!res.ok) {
-    const rawError = json.error;
-    const normalizedError =
-      typeof rawError === 'string'
-        ? rawError
-        : (rawError && typeof rawError === 'object'
-          ? String((rawError as Record<string, unknown>).message || JSON.stringify(rawError))
-          : (typeof json.message === 'string' ? json.message : ''));
-    return { ok: false, error: normalizedError || res.statusText || `Request failed (${res.status})` };
+  try {
+    const res = await fetch(url, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+        ...(init.headers || {}),
+      },
+    });
+    const rawText = await res.text().catch(() => '');
+    let json: Record<string, unknown> = {};
+    if (rawText) {
+      try {
+        json = JSON.parse(rawText) as Record<string, unknown>;
+      } catch {
+        json = { message: rawText };
+      }
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: normalizeUnknownError(json.error ?? json.message ?? rawText) || res.statusText || `Request failed (${res.status})`,
+      };
+    }
+    return { ok: true, data: json };
+  } catch (error) {
+    return { ok: false, error: normalizeUnknownError(error) };
   }
-  return { ok: true, data: json };
 }
 
 export async function fetchHrDashboard(

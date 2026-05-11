@@ -127,7 +127,7 @@ const SuperDashboard: React.FC = () => {
   const refreshHrOnly = async (token: string): Promise<HrDashboardPayload | null> => {
     const res = await fetchHrDashboard(token);
     if (!res.ok) {
-      setSnapshotStatus((prev) => ({ ...prev, error: res.error, running: false }));
+      setSnapshotStatus((prev) => ({ ...prev, error: normalizeErrorText(res.error), running: false }));
       return null;
     }
     setHrData(res.data);
@@ -136,53 +136,76 @@ const SuperDashboard: React.FC = () => {
 
   const runSnapshotPipeline = async (token: string, candidateCount: number) => {
     if (candidateCount === 0) return;
-    setSnapshotStatus({
-      running: true,
-      message: 'Refreshing analytics snapshot (rollup + automation)...',
-      error: null,
-      updatedAt: null,
-    });
-    const rollup = await runHrRollup(token, false);
-    if (!rollup.ok) {
+    try {
       setSnapshotStatus({
-        running: false,
-        message: null,
-        error: normalizeErrorText(rollup.error),
+        running: true,
+        message: 'Refreshing analytics snapshot (rollup + automation)...',
+        error: null,
         updatedAt: null,
       });
-      return;
-    }
-    const automation = await runHrAutomation(token, false);
-    if (!automation.ok) {
-      setSnapshotStatus({
-        running: false,
-        message: null,
-        error: normalizeErrorText(automation.error),
-        updatedAt: null,
-      });
-      return;
-    }
-
-    // Poll briefly so page stays loaded while snapshot catches up.
-    for (let i = 0; i < 5; i += 1) {
-      if (i > 0) {
-        await new Promise((r) => window.setTimeout(r, 1400));
-      }
-      const latest = await refreshHrOnly(token);
-      if (!needsSnapshotRefresh(latest, candidateCount) || i === 4) {
+      const rollup = await runHrRollup(token, false);
+      if (!rollup.ok) {
         setSnapshotStatus({
           running: false,
-          message: 'Snapshot data loaded.',
-          error: null,
-          updatedAt: new Date().toISOString(),
+          message: null,
+          error: normalizeErrorText(rollup.error),
+          updatedAt: null,
         });
         return;
       }
-      setSnapshotStatus((prev) => ({
-        ...prev,
-        message: `Processing snapshot... (${i + 1}/5)`,
-      }));
+      const automation = await runHrAutomation(token, false);
+      if (!automation.ok) {
+        setSnapshotStatus({
+          running: false,
+          message: null,
+          error: normalizeErrorText(automation.error),
+          updatedAt: null,
+        });
+        return;
+      }
+
+      // Poll briefly so page stays loaded while snapshot catches up.
+      for (let i = 0; i < 6; i += 1) {
+        if (i > 0) {
+          await new Promise((r) => window.setTimeout(r, 1500));
+        }
+        const latest = await refreshHrOnly(token);
+        if (!needsSnapshotRefresh(latest, candidateCount) || i === 5) {
+          setSnapshotStatus({
+            running: false,
+            message: 'Snapshot data loaded.',
+            error: null,
+            updatedAt: new Date().toISOString(),
+          });
+          return;
+        }
+        setSnapshotStatus((prev) => ({
+          ...prev,
+          message: `Processing snapshot... (${i + 1}/6)`,
+        }));
+      }
+    } catch (error) {
+      setSnapshotStatus({
+        running: false,
+        message: null,
+        error: normalizeErrorText(error),
+        updatedAt: null,
+      });
     }
+  };
+
+  const runSnapshotRecovery = async (token: string, candidateCount: number) => {
+    if (candidateCount === 0) return;
+    await runSnapshotPipeline(token, candidateCount);
+    const latest = await refreshHrOnly(token);
+    if (latest && !needsSnapshotRefresh(latest, candidateCount)) {
+      setError(null);
+      return;
+    }
+    setError((prev) => {
+      if (prev?.trim()) return prev;
+      return 'Analytics snapshot is still processing. Retry in a few seconds.';
+    });
   };
 
   const load = async (autoProcess = true) => {
@@ -203,7 +226,7 @@ const SuperDashboard: React.FC = () => {
       ]);
 
       if (!hrRes.ok) {
-        setError(hrRes.error);
+        setError(normalizeErrorText(hrRes.error));
       } else {
         setHrData(hrRes.data);
       }
@@ -217,11 +240,11 @@ const SuperDashboard: React.FC = () => {
       const onlyPortal = ((callRes.data || []) as CallLite[]).filter((r) => r.action === 'dial_webclient_popup');
       setPortalCalls(onlyPortal);
 
-      if (autoProcess && hrRes.ok && needsSnapshotRefresh(hrRes.data, candidateRows.length)) {
-        void runSnapshotPipeline(token, candidateRows.length);
+      if (autoProcess && (!hrRes.ok || needsSnapshotRefresh(hrRes.ok ? hrRes.data : null, candidateRows.length))) {
+        void runSnapshotRecovery(token, candidateRows.length);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(normalizeErrorText(e));
     } finally {
       setLoading(false);
     }
