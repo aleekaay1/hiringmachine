@@ -44,10 +44,21 @@ async function getAccessToken(): Promise<string | null> {
 export function buildThreeCxWebclientUrl(phone: string): string | null {
   if (!THREEX_WEBCLIENT_URL) return null;
   const trimmed = phone.trim();
-  if (!trimmed) return THREEX_WEBCLIENT_URL;
-  const u = new URL(THREEX_WEBCLIENT_URL);
-  u.searchParams.set('destination', trimmed);
-  return u.toString();
+  const sanitized = trimmed.replace(/[^\d+]/g, '');
+  let base: URL;
+  try {
+    base = new URL(THREEX_WEBCLIENT_URL);
+  } catch {
+    return null;
+  }
+  const pathname = base.pathname.replace(/\/+$/, '');
+  if (!pathname.endsWith('/webclient')) {
+    base.pathname = `${pathname}/webclient`;
+  }
+  if (!sanitized) return base.toString();
+  // 3CX webclient uses hash route for click-to-dial.
+  base.hash = `/call?phone=${encodeURIComponent(sanitized)}`;
+  return base.toString();
 }
 
 export async function runThreeCxAction(payload: ThreeCxActionPayload): Promise<ThreeCxResult> {

@@ -124,10 +124,11 @@ const Pipeline: React.FC = () => {
   const [activeCallId, setActiveCallId] = useState('');
   const [callActionRunning, setCallActionRunning] = useState(false);
   const [callActionMsg, setCallActionMsg] = useState<string | null>(null);
-  const [mediaPanelVisible, setMediaPanelVisible] = useState(true);
+  const [mediaPanelVisible, setMediaPanelVisible] = useState(false);
   const [mediaPanelLoaded, setMediaPanelLoaded] = useState(false);
   const [mediaEmbedBlocked, setMediaEmbedBlocked] = useState(false);
   const [mediaAutoPopOpened, setMediaAutoPopOpened] = useState(false);
+  const [mediaPanelRequested, setMediaPanelRequested] = useState(false);
   const [toneEnabled, setToneEnabled] = useState(true);
   const [numPdfPages, setNumPdfPages] = useState<number>(0);
   const toneCtxRef = useRef<AudioContext | null>(null);
@@ -366,6 +367,7 @@ const Pipeline: React.FC = () => {
       setCallActionMsg('Media session opened in 3CX webclient tab.');
       return;
     }
+    setMediaPanelRequested(true);
     setMediaPanelVisible(true);
     setMediaPanelLoaded(false);
     setMediaAutoPopOpened(false);
@@ -412,7 +414,12 @@ const Pipeline: React.FC = () => {
       };
       const result = await runThreeCxAction(payload);
       if (!result.ok) {
-        setCallActionMsg(result.error || 'Call action failed');
+        if (action === 'dial') {
+          openMediaSession('popup');
+          setCallActionMsg(`API dial failed, opened webclient dialer: ${result.error || 'Call action failed'}`);
+        } else {
+          setCallActionMsg(result.error || 'Call action failed');
+        }
       } else {
         setCallActionMsg(`${action} OK`);
         const callIdMaybe = extractCallIdCandidate(result.data ?? null);
@@ -491,7 +498,7 @@ const Pipeline: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!mediaPanelVisible || mediaPanelLoaded || !mediaSessionUrl || mediaEmbedBlocked || mediaAutoPopOpened) return;
+    if (!mediaPanelRequested || !mediaPanelVisible || mediaPanelLoaded || !mediaSessionUrl || mediaEmbedBlocked || mediaAutoPopOpened) return;
     const timeout = window.setTimeout(() => {
       setMediaEmbedBlocked(true);
       setCallActionMsg('3CX blocks embedded panel (CSP). Opened pop out for audio session.');
@@ -499,7 +506,7 @@ const Pipeline: React.FC = () => {
       setMediaAutoPopOpened(true);
     }, 2200);
     return () => window.clearTimeout(timeout);
-  }, [mediaPanelVisible, mediaPanelLoaded, mediaSessionUrl, mediaEmbedBlocked, mediaAutoPopOpened]);
+  }, [mediaPanelRequested, mediaPanelVisible, mediaPanelLoaded, mediaSessionUrl, mediaEmbedBlocked, mediaAutoPopOpened]);
 
   const refreshConversion = async () => {
     if (!selectedResume) return;
