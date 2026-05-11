@@ -19,9 +19,9 @@ import {
   type PipelineResume,
   updatePipelineCandidateSchedule,
 } from '../services/pipelineService';
-import { buildThreeCxWebclientUrl, runThreeCxAction, type ThreeCxAction } from '../services/threeCxService';
+import { buildThreeCxWebclientUrl } from '../services/threeCxService';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
-import { ExternalLink, FileUp, Mic, MicOff, MonitorSmartphone, Phone, PhoneOff, RefreshCw, Search, Trash2, Volume2 } from 'lucide-react';
+import { ExternalLink, FileUp, Phone, RefreshCw, Search, Trash2, Volume2 } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -63,29 +63,6 @@ function normalizeDialDestination(raw: string): string {
   return cleaned;
 }
 
-function extractCallIdCandidate(payload: unknown): string | null {
-  const walk = (node: unknown): string | null => {
-    if (!node) return null;
-    if (Array.isArray(node)) {
-      for (const item of node) {
-        const found = walk(item);
-        if (found) return found;
-      }
-      return null;
-    }
-    if (typeof node !== 'object') return null;
-    const obj = node as Record<string, unknown>;
-    const own = obj.callid ?? obj.callId ?? obj.id;
-    if (own != null && String(own).trim()) return String(own).trim();
-    for (const value of Object.values(obj)) {
-      const found = walk(value);
-      if (found) return found;
-    }
-    return null;
-  };
-  return walk(payload);
-}
-
 const Pipeline: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [email, setEmail] = useState('admin@globelife-paz.com');
@@ -119,28 +96,11 @@ const Pipeline: React.FC = () => {
   const [scheduledForInput, setScheduledForInput] = useState('');
   const [scheduleSaving, setScheduleSaving] = useState(false);
 
-  const [agentExtension, setAgentExtension] = useState('');
   const [dialTarget, setDialTarget] = useState('');
-  const [activeCallId, setActiveCallId] = useState('');
-  const [callActionRunning, setCallActionRunning] = useState(false);
   const [callActionMsg, setCallActionMsg] = useState<string | null>(null);
-  const [mediaPanelVisible, setMediaPanelVisible] = useState(false);
-  const [mediaPanelLoaded, setMediaPanelLoaded] = useState(false);
-  const [mediaEmbedBlocked, setMediaEmbedBlocked] = useState(false);
-  const [mediaAutoPopOpened, setMediaAutoPopOpened] = useState(false);
-  const [mediaPanelRequested, setMediaPanelRequested] = useState(false);
   const [toneEnabled, setToneEnabled] = useState(true);
   const [numPdfPages, setNumPdfPages] = useState<number>(0);
   const toneCtxRef = useRef<AudioContext | null>(null);
-
-  useEffect(() => {
-    const ext = localStorage.getItem('pipeline_3cx_ext');
-    if (ext) setAgentExtension(ext);
-  }, []);
-
-  useEffect(() => {
-    if (agentExtension.trim()) localStorage.setItem('pipeline_3cx_ext', agentExtension.trim());
-  }, [agentExtension]);
 
   const loadCandidates = async () => {
     setError(null);
@@ -357,102 +317,48 @@ const Pipeline: React.FC = () => {
     osc.stop(ctx.currentTime + 0.06);
   };
 
-  const openMediaSession = (mode: 'embedded' | 'popup') => {
-    if (!mediaSessionUrl) {
-      setCallActionMsg('Set VITE_3CX_WEBCLIENT_URL to enable media session panel.');
-      return;
-    }
-    if (mode === 'popup' || mediaEmbedBlocked) {
-      window.open(mediaSessionUrl, '_blank', 'noopener,noreferrer');
-      setCallActionMsg('Media session opened in 3CX webclient tab.');
-      return;
-    }
-    setMediaPanelRequested(true);
-    setMediaPanelVisible(true);
-    setMediaPanelLoaded(false);
-    setMediaAutoPopOpened(false);
-    setCallActionMsg('Embedded media panel opened. If blocked, use Pop out.');
-  };
-
-  const resolveActiveCallId = async (): Promise<string | null> => {
-    if (activeCallId.trim()) return activeCallId.trim();
-    const result = await runThreeCxAction({
-      action: 'active_calls',
-      extension: agentExtension.trim() || undefined,
-    });
-    if (!result.ok) return null;
-    const found = extractCallIdCandidate(result.data ?? null);
-    if (found) setActiveCallId(found);
-    return found;
-  };
-
-  const runCallAction = async (action: ThreeCxAction) => {
+  const dialViaWebclient = async () => {
     if (!selectedBundle?.candidate.id) return;
     const normalizedDestination = normalizeDialDestination(dialTarget.trim());
-    if (action === 'dial' && !agentExtension.trim()) {
-      setCallActionMsg('Enter your 3CX extension before dialing.');
-      return;
-    }
-    if (action === 'dial' && !normalizedDestination) {
+    if (!normalizedDestination) {
       setCallActionMsg('Enter a destination number to dial.');
       return;
     }
-    const requiresCallId = action === 'hangup' || action === 'hold' || action === 'resume' || action === 'mute' || action === 'unmute' || action === 'transfer' || action === 'dtmf';
-    setCallActionRunning(true);
-    setCallActionMsg(null);
+    const url = buildThreeCxWebclientUrl(normalizedDestination);
+    if (!url) {
+      setCallActionMsg('Set VITE_3CX_WEBCLIENT_URL in Vercel and redeploy.');
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+    setCallActionMsg('Opened 3CX webclient dialer with this number.');
     try {
-      const resolvedCallId = requiresCallId ? await resolveActiveCallId() : null;
-      if (requiresCallId && !resolvedCallId) {
-        setCallActionMsg('No active call found yet. Dial first, then try this control.');
-        return;
-      }
-      const payload = {
-        action,
-        extension: agentExtension.trim() || undefined,
-        destination: action === 'dial' ? normalizedDestination || undefined : dialTarget.trim() || undefined,
-        callId: resolvedCallId || activeCallId.trim() || undefined,
-      };
-      const result = await runThreeCxAction(payload);
-      if (!result.ok) {
-        if (action === 'dial') {
-          openMediaSession('popup');
-          setCallActionMsg(`API dial failed, opened webclient dialer: ${result.error || 'Call action failed'}`);
-        } else {
-          setCallActionMsg(result.error || 'Call action failed');
-        }
-      } else {
-        setCallActionMsg(`${action} OK`);
-        const callIdMaybe = extractCallIdCandidate(result.data ?? null);
-        if ((action === 'dial' || action === 'active_calls') && callIdMaybe != null) {
-          setActiveCallId(String(callIdMaybe));
-        }
-        if (action === 'dial') {
-          setDialTarget(normalizedDestination || dialTarget);
-          openMediaSession('embedded');
-        }
-      }
+      setDialTarget(normalizedDestination || dialTarget);
       const { data } = await supabase.auth.getUser();
       const actorLabel = String(data.user?.user_metadata?.full_name || data.user?.user_metadata?.name || data.user?.email || '').trim() || undefined;
       await logPipelineCallAction({
         candidateId: selectedBundle.candidate.id,
         resumeId: selectedResume?.id ?? null,
-        action,
-        outcome: result.ok ? 'ok' : 'failed',
-        agentExtension: agentExtension.trim() || null,
-        requestPayload: payload,
-        responsePayload: result.data ?? (result.error ? { error: result.error } : null),
+        action: 'dial_webclient_popup',
+        outcome: 'ok',
+        agentExtension: null,
+        requestPayload: { destination: normalizedDestination },
+        responsePayload: { mode: 'webclient_popup', url },
         actorLabel,
       });
       await loadSelectedBundle(selectedBundle.candidate.id);
     } catch (e) {
       setCallActionMsg(e instanceof Error ? e.message : String(e));
-    } finally {
-      setCallActionRunning(false);
     }
   };
 
-  const openWebClientFallback = () => {
-    openMediaSession('popup');
+  const openWebClientHome = () => {
+    const url = buildThreeCxWebclientUrl('');
+    if (!url) {
+      setCallActionMsg('Set VITE_3CX_WEBCLIENT_URL in Vercel and redeploy.');
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+    setCallActionMsg('Opened 3CX webclient.');
   };
 
   const keypadPress = (digit: string) => {
@@ -481,14 +387,14 @@ const Pipeline: React.FC = () => {
         setDialTarget((prev) => prev.slice(0, -1));
         return;
       }
-      if (event.key === 'Enter' && selectedBundle?.candidate.id && !callActionRunning) {
+      if (event.key === 'Enter' && selectedBundle?.candidate.id) {
         event.preventDefault();
-        void runCallAction('dial');
+        void dialViaWebclient();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [selectedBundle?.candidate.id, callActionRunning]);
+  }, [selectedBundle?.candidate.id, dialTarget]);
 
   useEffect(() => () => {
     if (toneCtxRef.current) {
@@ -496,17 +402,6 @@ const Pipeline: React.FC = () => {
       toneCtxRef.current = null;
     }
   }, []);
-
-  useEffect(() => {
-    if (!mediaPanelRequested || !mediaPanelVisible || mediaPanelLoaded || !mediaSessionUrl || mediaEmbedBlocked || mediaAutoPopOpened) return;
-    const timeout = window.setTimeout(() => {
-      setMediaEmbedBlocked(true);
-      setCallActionMsg('3CX blocks embedded panel (CSP). Opened pop out for audio session.');
-      window.open(mediaSessionUrl, '_blank', 'noopener,noreferrer');
-      setMediaAutoPopOpened(true);
-    }, 2200);
-    return () => window.clearTimeout(timeout);
-  }, [mediaPanelRequested, mediaPanelVisible, mediaPanelLoaded, mediaSessionUrl, mediaEmbedBlocked, mediaAutoPopOpened]);
 
   const refreshConversion = async () => {
     if (!selectedResume) return;
@@ -696,65 +591,20 @@ const Pipeline: React.FC = () => {
                 <div className="p-3 space-y-3">
                   <section className="rounded-xl border border-slate-200 p-3 space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1"><Phone size={13} /> Softphone + call controls</h3>
+                      <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1"><Phone size={13} /> Softphone dialer</h3>
                       <div className="flex items-center gap-1.5">
                         <button type="button" onClick={() => setToneEnabled((v) => !v)} className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] ${toneEnabled ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-500'}`}>
                           <Volume2 size={12} /> Key tones
                         </button>
-                        <Button variant="outline" className="!min-h-0 h-7 px-2 text-[11px]" onClick={() => openMediaSession('embedded')}>
-                          <MonitorSmartphone size={12} className="mr-1" /> Open panel
-                        </Button>
-                        <Button variant="outline" className="!min-h-0 h-7 px-2 text-[11px]" onClick={openWebClientFallback}>
+                        <Button variant="outline" className="!min-h-0 h-7 px-2 text-[11px]" onClick={openWebClientHome}>
                           <ExternalLink size={12} className="mr-1" /> Pop out
                         </Button>
                       </div>
                     </div>
 
-                    {mediaPanelVisible && (
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 overflow-hidden">
-                        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-slate-200">
-                          <div className="flex items-center gap-2 text-[11px] text-slate-600">
-                            <Mic size={12} className={mediaPanelLoaded ? 'text-emerald-600' : 'text-slate-400'} />
-                            <span>
-                              {mediaEmbedBlocked
-                                ? 'Embedded panel blocked by 3CX CSP'
-                                : (mediaPanelLoaded ? 'Media panel connected' : 'Loading media panel...')}
-                            </span>
-                          </div>
-                          <button type="button" onClick={() => setMediaPanelVisible(false)} className="text-[11px] text-slate-500 hover:text-slate-700">Hide</button>
-                        </div>
-                        {mediaEmbedBlocked ? (
-                          <div className="px-3 py-4 bg-white space-y-2">
-                            <p className="text-xs text-slate-700">
-                              3CX does not allow embedding on this domain. Use pop-out media session for mic/speaker.
-                            </p>
-                            <Button variant="outline" className="!min-h-0 h-8 text-xs" onClick={openWebClientFallback}>
-                              <ExternalLink size={12} className="mr-1" /> Open 3CX media window
-                            </Button>
-                          </div>
-                        ) : mediaSessionUrl ? (
-                          <iframe
-                            key={mediaSessionUrl}
-                            src={mediaSessionUrl}
-                            title="3CX Media Session"
-                            className="w-full h-[240px] bg-white"
-                            allow="microphone; camera; autoplay; clipboard-read; clipboard-write"
-                            onLoad={() => setMediaPanelLoaded(true)}
-                            onError={() => {
-                              setMediaEmbedBlocked(true);
-                              setCallActionMsg('Embedded panel blocked. Use pop out media session.');
-                            }}
-                          />
-                        ) : (
-                          <div className="px-3 py-4 text-xs text-slate-500">
-                            Set <code>VITE_3CX_WEBCLIENT_URL</code> to use embedded media. Until then, use Pop out fallback.
-                          </div>
-                        )}
-                        <div className="px-3 py-2 bg-white text-[11px] text-slate-500 border-t border-slate-200">
-                          If embedded panel is blocked by browser policy, use <span className="font-medium text-slate-700">Pop out</span> and keep the tab open during calls.
-                        </div>
-                      </div>
-                    )}
+                    <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 px-3 py-2 text-[11px] text-slate-600">
+                      Calls are handled by 3CX WebClient popup for stable browser audio. Enter number here, then hit Dial to open it prefilled.
+                    </div>
 
                     <div className="flex flex-wrap items-start gap-3">
                       <div className="w-[220px] rounded-2xl border border-slate-300 bg-gradient-to-b from-slate-100 to-slate-50 p-3 shadow-inner">
@@ -776,37 +626,19 @@ const Pipeline: React.FC = () => {
                         </div>
                         <div className="grid grid-cols-2 gap-1.5 mt-2">
                           <button type="button" onClick={() => setDialTarget((prev) => prev.slice(0, -1))} className="rounded-lg border border-slate-300 bg-white py-1.5 text-xs hover:bg-slate-50">Backspace</button>
-                          <Button className="!min-h-0 h-8 text-xs" onClick={() => void runCallAction('dial')} disabled={callActionRunning}>Dial</Button>
+                          <Button className="!min-h-0 h-8 text-xs" onClick={() => void dialViaWebclient()}>Dial</Button>
                         </div>
                         <p className="text-[10px] text-slate-500 mt-2">Keyboard: 0-9, *, #, Backspace, Enter</p>
                       </div>
 
-                      <div className="flex-1 min-w-[260px] space-y-2">
-                        <div className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-2 items-center">
-                          <input value={agentExtension} onChange={(e) => setAgentExtension(e.target.value)} placeholder="Agent extension" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                          <div className="text-[11px] text-slate-500">
-                            Active call: <span className="font-medium text-slate-700">{activeCallId || 'Auto-detected after dial'}</span>
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                          <button type="button" onClick={() => void runCallAction('hold')} disabled={callActionRunning} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs hover:bg-slate-50 inline-flex items-center justify-center gap-1.5 disabled:opacity-60">
-                            <Phone size={13} className="text-amber-600" /> Hold
-                          </button>
-                          <button type="button" onClick={() => void runCallAction('mute')} disabled={callActionRunning} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs hover:bg-slate-50 inline-flex items-center justify-center gap-1.5 disabled:opacity-60">
-                            <MicOff size={13} className="text-slate-700" /> Mute
-                          </button>
-                          <button type="button" onClick={() => void runCallAction('unmute')} disabled={callActionRunning} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs hover:bg-slate-50 inline-flex items-center justify-center gap-1.5 disabled:opacity-60">
-                            <Mic size={13} className="text-emerald-600" /> Unmute
-                          </button>
-                          <button type="button" onClick={() => void runCallAction('hangup')} disabled={callActionRunning} className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 hover:bg-red-100 inline-flex items-center justify-center gap-1.5 disabled:opacity-60">
-                            <PhoneOff size={13} /> Hangup
-                          </button>
-                        </div>
+                      <div className="flex-1 min-w-[260px] rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600 space-y-1.5">
+                        <p><span className="font-medium text-slate-700">No in-page call controls</span> while API mode is disabled.</p>
+                        <p>Use 3CX popup controls (hold/mute/hangup) during the live call.</p>
+                        <p className="text-slate-500">This avoids API failures and keeps calling stable.</p>
                       </div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <Button variant="secondary" onClick={openWebClientFallback}>Open 3CX web client fallback</Button>
-                      <Button variant="outline" onClick={() => void runCallAction('active_calls')} disabled={callActionRunning}>Refresh active calls</Button>
+                      <Button variant="secondary" onClick={openWebClientHome}>Open 3CX web client</Button>
                       {callActionMsg && <p className="text-xs text-slate-600">{callActionMsg}</p>}
                     </div>
                   </section>

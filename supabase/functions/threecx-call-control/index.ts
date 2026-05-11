@@ -304,6 +304,9 @@ async function callThreeCx(apiToken: string, call: ThreeCxCall): Promise<Record<
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
   if (req.method !== 'POST') return json(405, { error: 'Method not allowed' });
+  return json(503, {
+    error: 'threecx-call-control is temporarily disabled. Use 3CX webclient popup dialing from /pipeline.',
+  });
 
   try {
     const authHeader = req.headers.get('Authorization');
