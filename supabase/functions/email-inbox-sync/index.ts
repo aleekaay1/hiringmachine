@@ -1,5 +1,6 @@
 import { ImapFlow } from 'npm:imapflow@1.0.181';
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import PostalMime from 'npm:postal-mime@2.4.4';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -23,6 +24,45 @@ function safeMessageId(id: string | null | undefined, uid: number): string {
   const clean = String(id || '').trim();
   if (clean) return clean;
   return `imap-uid-${uid}`;
+}
+
+function compactText(v: string): string {
+  return v
+    .replace(/\r/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+}
+
+function stripHtml(v: string): string {
+  return compactText(
+    v
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>'),
+  );
+}
+
+async function extractSnippetFromSource(source: Uint8Array | null | undefined): Promise<string | null> {
+  if (!source || source.length === 0) return null;
+  try {
+    const parser = new PostalMime();
+    const parsed = await parser.parse(source);
+    const textBody = compactText(String(parsed.text || ''));
+    if (textBody) return textBody.slice(0, 800);
+    const htmlBody = stripHtml(String(parsed.html || ''));
+    if (htmlBody) return htmlBody.slice(0, 800);
+    return null;
+  } catch {
+    const fallback = compactText(new TextDecoder().decode(source));
+    return fallback ? fallback.slice(0, 800) : null;
+  }
 }
 
 Deno.serve(async (req) => {
@@ -89,13 +129,14 @@ Deno.serve(async (req) => {
     try {
       const uids = await imap.search({ since });
       const selected = uids.slice(-limit);
-      for await (const msg of imap.fetch(selected, { uid: true, envelope: true, internalDate: true })) {
+      for await (const msg of imap.fetch(selected, { uid: true, envelope: true, internalDate: true, source: true })) {
         const env = msg.envelope;
         const fromEmail = emailFromAddress(env?.from?.[0]);
         if (!fromEmail) continue;
         const messageId = safeMessageId(env?.messageId || null, Number(msg.uid || 0));
         const subject = String(env?.subject || '').trim() || null;
-        const snippet = subject ? subject.slice(0, 220) : null;
+        const bodySnippet = await extractSnippetFromSource(msg.source as Uint8Array | null | undefined);
+        const snippet = bodySnippet || (subject ? subject.slice(0, 220) : null);
         rows.push({
           provider: 'imap',
           message_id: messageId,
