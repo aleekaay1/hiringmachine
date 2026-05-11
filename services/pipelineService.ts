@@ -32,6 +32,15 @@ export interface PipelineCandidate {
   updated_at: string;
 }
 
+export interface PipelineCandidateProfile {
+  current_title: string | null;
+  location: string | null;
+  total_experience_years: string | null;
+  education_highest: string | null;
+  skills_summary: string | null;
+  work_summary: string | null;
+}
+
 export interface PipelineResume {
   id: string;
   candidate_id: string;
@@ -194,6 +203,80 @@ function mergeHints(fileName: string, parsedText: string): { name: string; phone
   return { name: name.slice(0, 120), phone, email };
 }
 
+function linesFromText(raw: string): string[] {
+  return raw
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter((l) => l.length >= 2 && l.length <= 140);
+}
+
+function firstMatchingLine(lines: string[], re: RegExp): string | null {
+  const hit = lines.find((l) => re.test(l));
+  return hit ? hit.slice(0, 160) : null;
+}
+
+function extractYearsExperience(raw: string): string | null {
+  const direct = raw.match(/(\d{1,2})\s*\+?\s*(?:years|yrs)\b/i);
+  if (direct) return `${direct[1]}+ years`;
+  return null;
+}
+
+function extractEducation(lines: string[]): string | null {
+  return firstMatchingLine(
+    lines,
+    /(bachelor|master|mba|phd|diploma|degree|university|college|polytechnic|b\.sc|m\.sc|bba|ba\b)/i,
+  );
+}
+
+function extractLocation(lines: string[]): string | null {
+  const hit = lines.find((l) => {
+    if (/@|\d{4,}/.test(l)) return false;
+    if (l.length < 4 || l.length > 60) return false;
+    return /,/.test(l) && /\b(ON|BC|AB|MB|SK|NS|NB|NL|PE|QC|USA|CANADA|UK)\b/i.test(l);
+  });
+  return hit ? hit.slice(0, 120) : null;
+}
+
+function extractTitle(lines: string[]): string | null {
+  return firstMatchingLine(
+    lines.slice(0, 30),
+    /(advisor|manager|specialist|representative|associate|consultant|coordinator|analyst|developer|engineer|recruiter|sales)/i,
+  );
+}
+
+function extractSkillsSummary(lines: string[]): string | null {
+  const idx = lines.findIndex((l) => /skills?/i.test(l));
+  if (idx >= 0) {
+    const slice = lines.slice(idx + 1, idx + 4).join(', ');
+    const clean = slice.replace(/\s*,\s*/g, ', ').trim();
+    if (clean.length >= 6) return clean.slice(0, 220);
+  }
+  const top = lines.filter((l) => /crm|excel|salesforce|communication|leadership|customer service|javascript|python|accounting/i.test(l));
+  if (top.length > 0) return top.slice(0, 3).join(', ').slice(0, 220);
+  return null;
+}
+
+function extractWorkSummary(lines: string[]): string | null {
+  const idx = lines.findIndex((l) => /(summary|profile|objective|experience)/i.test(l));
+  if (idx >= 0) {
+    const text = lines.slice(idx + 1, idx + 4).join(' ').trim();
+    if (text.length >= 20) return text.slice(0, 280);
+  }
+  return null;
+}
+
+function buildOcrProfile(parsedText: string): PipelineCandidateProfile {
+  const lines = linesFromText(parsedText);
+  return {
+    current_title: extractTitle(lines),
+    location: extractLocation(lines),
+    total_experience_years: extractYearsExperience(parsedText),
+    education_highest: extractEducation(lines),
+    skills_summary: extractSkillsSummary(lines),
+    work_summary: extractWorkSummary(lines),
+  };
+}
+
 async function extractTextFromPdf(file: File): Promise<string> {
   try {
     const pdfjs = await import('pdfjs-dist');
@@ -269,6 +352,18 @@ async function extractCandidateHints(file: File, cleanName: string): Promise<{ n
     parsed = await file.text().catch(() => '');
   }
   return mergeHints(cleanName, parsed);
+}
+
+async function extractCandidateProfile(file: File, cleanName: string): Promise<PipelineCandidateProfile> {
+  const mime = (file.type || '').toLowerCase();
+  let parsed = '';
+  if (mime.includes('pdf')) parsed = await extractTextFromPdf(file);
+  else if (mime.startsWith('image/')) parsed = await extractTextFromImage(file);
+  else if (mime.includes('word') || cleanName.toLowerCase().endsWith('.docx')) parsed = await extractTextFromWord(file);
+  else if (mime.includes('text') || cleanName.toLowerCase().endsWith('.txt') || cleanName.toLowerCase().endsWith('.rtf')) {
+    parsed = await file.text().catch(() => '');
+  }
+  return buildOcrProfile(parsed);
 }
 
 function fileViewerKind(resume: PipelineResume): 'pdf' | 'image' | 'other' {
@@ -375,6 +470,7 @@ export async function bulkUploadPipelineResumes(files: File[], actorLabel?: stri
     try {
       const cleanName = sanitizeFilename(file.name);
       const hints = await extractCandidateHints(file, cleanName);
+      const profile = await extractCandidateProfile(file, cleanName);
       const { data: cand, error: cErr } = await supabase
         .from('pipeline_candidates')
         .insert({
@@ -384,7 +480,10 @@ export async function bulkUploadPipelineResumes(files: File[], actorLabel?: stri
           uploader_user_id: userId,
           uploader_label: actorLabel ?? null,
           source: 'bulk_upload',
-          metadata: { original_file_name: file.name },
+          metadata: {
+            original_file_name: file.name,
+            ocr_profile: profile,
+          },
         })
         .select('id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at')
         .single();
@@ -519,6 +618,39 @@ export async function updatePipelineCandidateSchedule(candidateId: string, sched
     .from('pipeline_candidates')
     .update({ scheduled_for: scheduledFor || null })
     .eq('id', candidateId);
+  if (error) throw error;
+}
+
+export async function updatePipelineCandidateProfile(input: {
+  candidateId: string;
+  fullName: string;
+  email: string | null;
+  phone: string | null;
+  profile: PipelineCandidateProfile;
+}): Promise<void> {
+  const { data: existing, error: getErr } = await supabase
+    .from('pipeline_candidates')
+    .select('metadata')
+    .eq('id', input.candidateId)
+    .maybeSingle();
+  if (getErr) throw getErr;
+  const currentMetadata = (existing?.metadata && typeof existing.metadata === 'object')
+    ? existing.metadata as Record<string, unknown>
+    : {};
+  const nextMetadata: Record<string, unknown> = {
+    ...currentMetadata,
+    ocr_profile: input.profile,
+    ocr_profile_updated_at: new Date().toISOString(),
+  };
+  const { error } = await supabase
+    .from('pipeline_candidates')
+    .update({
+      full_name: input.fullName.trim() || 'Unknown Candidate',
+      email: input.email?.trim() || null,
+      phone: input.phone?.trim() || null,
+      metadata: nextMetadata,
+    })
+    .eq('id', input.candidateId);
   if (error) throw error;
 }
 

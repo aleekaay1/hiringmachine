@@ -16,7 +16,9 @@ import {
   triggerPipelineResumeConversion,
   type PipelineCandidate,
   type PipelineCandidateBundle,
+  type PipelineCandidateProfile,
   type PipelineResume,
+  updatePipelineCandidateProfile,
   updatePipelineCandidateSchedule,
 } from '../services/pipelineService';
 import { buildThreeCxWebclientUrl } from '../services/threeCxService';
@@ -124,6 +126,20 @@ function normalizeDialDestination(raw: string): string {
   return cleaned;
 }
 
+function readCandidateProfile(candidate: PipelineCandidate | null): PipelineCandidateProfile {
+  const meta = candidate?.metadata && typeof candidate.metadata === 'object' ? candidate.metadata : {};
+  const p = (meta as Record<string, unknown>).ocr_profile;
+  const obj = p && typeof p === 'object' ? p as Record<string, unknown> : {};
+  return {
+    current_title: typeof obj.current_title === 'string' ? obj.current_title : null,
+    location: typeof obj.location === 'string' ? obj.location : null,
+    total_experience_years: typeof obj.total_experience_years === 'string' ? obj.total_experience_years : null,
+    education_highest: typeof obj.education_highest === 'string' ? obj.education_highest : null,
+    skills_summary: typeof obj.skills_summary === 'string' ? obj.skills_summary : null,
+    work_summary: typeof obj.work_summary === 'string' ? obj.work_summary : null,
+  };
+}
+
 const Pipeline: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [email, setEmail] = useState('admin@globelife-paz.com');
@@ -167,6 +183,17 @@ const Pipeline: React.FC = () => {
   const [emailBody, setEmailBody] = useState('');
   const [emailSending, setEmailSending] = useState(false);
   const [emailMsg, setEmailMsg] = useState<string | null>(null);
+  const [profileFullName, setProfileFullName] = useState('');
+  const [profileEmail, setProfileEmail] = useState('');
+  const [profilePhone, setProfilePhone] = useState('');
+  const [profileTitle, setProfileTitle] = useState('');
+  const [profileLocation, setProfileLocation] = useState('');
+  const [profileExperience, setProfileExperience] = useState('');
+  const [profileEducation, setProfileEducation] = useState('');
+  const [profileSkills, setProfileSkills] = useState('');
+  const [profileSummary, setProfileSummary] = useState('');
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileMsg, setProfileMsg] = useState<string | null>(null);
   const [numPdfPages, setNumPdfPages] = useState<number>(0);
   const toneCtxRef = useRef<AudioContext | null>(null);
 
@@ -224,6 +251,17 @@ const Pipeline: React.FC = () => {
     setEmailCc('');
     setEmailMsg(null);
     applyTemplate('no_answer_followup');
+    const profile = readCandidateProfile(c);
+    setProfileFullName(c.full_name || '');
+    setProfileEmail(c.email || '');
+    setProfilePhone(c.phone || '');
+    setProfileTitle(profile.current_title || '');
+    setProfileLocation(profile.location || '');
+    setProfileExperience(profile.total_experience_years || '');
+    setProfileEducation(profile.education_highest || '');
+    setProfileSkills(profile.skills_summary || '');
+    setProfileSummary(profile.work_summary || '');
+    setProfileMsg(null);
   }, [selectedBundle?.candidate.id]);
 
   const filteredCandidates = useMemo(() => {
@@ -493,6 +531,37 @@ const Pipeline: React.FC = () => {
     }
   };
 
+  const saveCandidateProfile = async () => {
+    if (!selectedBundle?.candidate.id) return;
+    setProfileSaving(true);
+    setProfileMsg(null);
+    try {
+      await updatePipelineCandidateProfile({
+        candidateId: selectedBundle.candidate.id,
+        fullName: profileFullName,
+        email: profileEmail || null,
+        phone: profilePhone || null,
+        profile: {
+          current_title: profileTitle || null,
+          location: profileLocation || null,
+          total_experience_years: profileExperience || null,
+          education_highest: profileEducation || null,
+          skills_summary: profileSkills || null,
+          work_summary: profileSummary || null,
+        },
+      });
+      setProfileMsg('Candidate profile saved.');
+      if (selectedBundle.candidate.id) {
+        await loadSelectedBundle(selectedBundle.candidate.id);
+      }
+      await loadCandidates();
+    } catch (e) {
+      setProfileMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setProfileSaving(false);
+    }
+  };
+
   const keypadPress = (digit: string) => {
     playDialTone();
     setDialTarget((prev) => `${prev}${digit}`);
@@ -631,17 +700,22 @@ const Pipeline: React.FC = () => {
               </div>
             </div>
             <div className="max-h-[calc(100vh-250px)] overflow-auto">
+              <div className="sticky top-0 z-10 grid grid-cols-[1fr_1.2fr_90px] gap-2 bg-slate-50 border-b border-slate-200 px-3 py-1.5 text-[10px] uppercase tracking-wide text-slate-500">
+                <span>Name</span>
+                <span>Contact</span>
+                <span className="text-right">Stage</span>
+              </div>
               {filteredCandidates.map((c) => (
-                <div key={c.id} className={`w-full px-3 py-2 border-b border-slate-100 ${selectedCandidateId === c.id ? 'bg-slate-100' : 'hover:bg-slate-50'}`}>
+                <div key={c.id} className={`w-full px-3 py-1.5 border-b border-slate-100 ${selectedCandidateId === c.id ? 'bg-slate-100' : 'hover:bg-slate-50'}`}>
                   <div className="flex items-start gap-2">
                     <input type="checkbox" checked={selectedIds.has(c.id)} onChange={() => toggleSelectedId(c.id)} className="mt-1 rounded border-slate-300" />
                     <button type="button" onClick={() => setSelectedCandidateId(c.id)} className="flex-1 text-left min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-medium text-slate-900 truncate">{safeName(c)}</p>
-                        <span className="text-[10px] rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">{c.journey_stage}</span>
+                      <div className="grid grid-cols-[1fr_1.2fr_90px] gap-2 items-center">
+                        <p className="text-xs font-medium text-slate-900 truncate">{safeName(c)}</p>
+                        <p className="text-[11px] text-slate-600 truncate">{c.phone || 'No phone'} {c.email ? `· ${c.email}` : ''}</p>
+                        <span className="text-[10px] rounded-full bg-slate-100 px-2 py-0.5 text-slate-700 text-right">{c.journey_stage}</span>
                       </div>
-                      <p className="text-xs text-slate-600 truncate">{c.phone || 'No phone'} {c.email ? `· ${c.email}` : ''}</p>
-                      <p className="text-[11px] text-slate-500 mt-0.5">
+                      <p className="text-[10px] text-slate-500 mt-0.5">
                         {c.scheduled_for ? `Scheduled ${formatDateTimeCanadaEastern(c.scheduled_for)}` : 'No schedule'} · {c.status}
                       </p>
                     </button>
@@ -888,6 +962,57 @@ const Pipeline: React.FC = () => {
                       </div>
                     </section>
                   </div>
+
+                  <section className="rounded-xl border border-slate-200 p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Candidate profile (OCR + manual edit)</h3>
+                      <Button className="!min-h-0 h-8 text-xs" onClick={() => void saveCandidateProfile()} disabled={profileSaving}>
+                        {profileSaving ? 'Saving…' : 'Save profile'}
+                      </Button>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Keep only relevant hiring details. Correct OCR mistakes here so phone/email/name and summary stay reliable.
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                      <label className="text-xs text-slate-600">
+                        Full name
+                        <input value={profileFullName} onChange={(e) => setProfileFullName(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                      </label>
+                      <label className="text-xs text-slate-600">
+                        Email
+                        <input value={profileEmail} onChange={(e) => setProfileEmail(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                      </label>
+                      <label className="text-xs text-slate-600">
+                        Phone
+                        <input value={profilePhone} onChange={(e) => setProfilePhone(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                      </label>
+                      <label className="text-xs text-slate-600">
+                        Current title
+                        <input value={profileTitle} onChange={(e) => setProfileTitle(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                      </label>
+                      <label className="text-xs text-slate-600">
+                        Location
+                        <input value={profileLocation} onChange={(e) => setProfileLocation(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                      </label>
+                      <label className="text-xs text-slate-600">
+                        Experience
+                        <input value={profileExperience} onChange={(e) => setProfileExperience(e.target.value)} placeholder="e.g. 5+ years" className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                      </label>
+                      <label className="text-xs text-slate-600 md:col-span-2">
+                        Highest education
+                        <input value={profileEducation} onChange={(e) => setProfileEducation(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                      </label>
+                      <label className="text-xs text-slate-600 md:col-span-3">
+                        Skills summary
+                        <input value={profileSkills} onChange={(e) => setProfileSkills(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                      </label>
+                      <label className="text-xs text-slate-600 md:col-span-3">
+                        Work summary
+                        <textarea value={profileSummary} onChange={(e) => setProfileSummary(e.target.value)} rows={3} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                      </label>
+                    </div>
+                    {profileMsg && <p className="text-[11px] text-slate-600">{profileMsg}</p>}
+                  </section>
                 </div>
               </div>
             )}
