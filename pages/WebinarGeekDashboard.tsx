@@ -22,6 +22,7 @@ type BroadcastSchedule = {
   status: string;
   subscriptionsCount: number | null;
 };
+type ScopeMode = 'month' | 'week' | 'day';
 
 const FULL_WATCH_SECONDS = 45 * 60;
 const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
@@ -67,6 +68,36 @@ function monthBoundsFromFirstYmd(firstYmd: string): { since: string; until: stri
   const since = `${y}-${pad2(m)}-01`;
   const until = `${y}-${pad2(m)}-${pad2(lastD)}`;
   const title = new Date(y, m - 1, 7).toLocaleDateString('en-CA', { month: 'long', year: 'numeric' });
+  return { since, until, title };
+}
+
+function ymdToLocalDate(ymd: string): Date {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+
+function localDateToYmd(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function shiftYmdDays(ymd: string, deltaDays: number): string {
+  const d = ymdToLocalDate(ymd);
+  d.setDate(d.getDate() + deltaDays);
+  return localDateToYmd(d);
+}
+
+/** Friday -> Thursday week boundaries for a given YMD (Toronto wall date). */
+function fridayWeekBoundsFromYmd(ymd: string): { since: string; until: string; title: string } {
+  const d = ymdToLocalDate(ymd);
+  const dow = d.getDay(); // Sun=0..Sat=6
+  const offsetToFriday = (dow + 2) % 7;
+  const start = new Date(d);
+  start.setDate(d.getDate() - offsetToFriday);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  const since = localDateToYmd(start);
+  const until = localDateToYmd(end);
+  const title = `${ymdToShortLabel(since)} → ${ymdToShortLabel(until)}`;
   return { since, until, title };
 }
 
@@ -276,6 +307,8 @@ const WebinarGeekDashboard: React.FC = () => {
   const [monthAnchorYmd, setMonthAnchorYmd] = useState(torontoMonthStartToday);
   /** When set, table shows only that Toronto calendar day; null = whole month window. */
   const [selectedDayYmd, setSelectedDayYmd] = useState<string | null>(null);
+  const [scopeMode, setScopeMode] = useState<ScopeMode>('month');
+  const [weekAnchorYmd, setWeekAnchorYmd] = useState(() => torontoYmdFromDate());
   /** Click legend to filter table; click same legend again to clear (null). */
   const [watchToneFilter, setWatchToneFilter] = useState<WatchToneFilter | null>(null);
   const [selectedRow, setSelectedRow] = useState<AnyRow | null>(null);
@@ -302,6 +335,17 @@ const WebinarGeekDashboard: React.FC = () => {
     });
   }, [subscriptionCache, monthAnchorYmd]);
 
+  const weekWindow = useMemo(() => fridayWeekBoundsFromYmd(weekAnchorYmd), [weekAnchorYmd]);
+
+  const rowsInViewWeek = useMemo(() => {
+    if (!subscriptionCache) return [];
+    return subscriptionCache.filter((row) => {
+      const k = fmtDateKey(row);
+      if (k === 'unknown') return false;
+      return k >= weekWindow.since && k <= weekWindow.until;
+    });
+  }, [subscriptionCache, weekWindow.since, weekWindow.until]);
+
   const schedulesInViewMonth = useMemo(() => {
     const nowMs = Date.now();
     const [vy, vm] = monthAnchorYmd.split('-').map(Number);
@@ -317,11 +361,18 @@ const WebinarGeekDashboard: React.FC = () => {
     setExpandedScheduleKey(null);
   }, [monthAnchorYmd]);
 
+  const rowsForScope = useMemo(() => {
+    if (scopeMode === 'week') return rowsInViewWeek;
+    if (scopeMode === 'day') {
+      if (!selectedDayYmd) return [];
+      return rowsInViewMonth.filter((r) => fmtDateKey(r) === selectedDayYmd);
+    }
+    return rowsInViewMonth;
+  }, [scopeMode, rowsInViewWeek, rowsInViewMonth, selectedDayYmd]);
+
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return rowsInViewMonth.filter((row) => {
-      const key = fmtDateKey(row);
-      if (selectedDayYmd && key !== selectedDayYmd) return false;
+    return rowsForScope.filter((row) => {
       if (watchToneFilter && !rowMatchesWatchToneFilter(row, watchToneFilter)) return false;
       if (!q) return true;
       const name = `${String(row.firstname ?? '').trim()} ${String(row.surname ?? '').trim()}`.toLowerCase();
@@ -335,7 +386,7 @@ const WebinarGeekDashboard: React.FC = () => {
         .toLowerCase();
       return name.includes(q) || emailText.includes(q) || phoneText.includes(q) || inviter.includes(q) || notesHay.includes(q);
     });
-  }, [rowsInViewMonth, selectedDayYmd, searchQuery, watchToneFilter, wgNotesBySubId]);
+  }, [rowsForScope, searchQuery, watchToneFilter, wgNotesBySubId]);
 
   const toggleWatchToneFilter = useCallback((tone: WatchToneFilter) => {
     setWatchToneFilter((prev) => (prev === tone ? null : tone));
@@ -452,7 +503,27 @@ const WebinarGeekDashboard: React.FC = () => {
     return { n, watched, full, half, low, ymd: selectedDayYmd };
   }, [rowsInViewMonth, selectedDayYmd]);
 
-  const overviewForUi = selectedDayOverview ?? monthOverview;
+  const selectedWeekOverview = useMemo(() => {
+    const rows = rowsInViewWeek;
+    const n = rows.length;
+    let watched = 0;
+    let full = 0;
+    let half = 0;
+    let low = 0;
+    for (const r of rows) {
+      if (r.watched === true) watched += 1;
+      const sec = Number(r.watch_duration || 0);
+      const b = watchBucket(sec);
+      if (b === 'full') full += 1;
+      else if (b === 'half') half += 1;
+      else low += 1;
+    }
+    return { n, watched, full, half, low, ymd: null as string | null };
+  }, [rowsInViewWeek]);
+
+  const overviewForUi = scopeMode === 'day'
+    ? (selectedDayOverview ?? monthOverview)
+    : (scopeMode === 'week' ? selectedWeekOverview : monthOverview);
 
   const statTiles = useMemo(() => {
     const { n, watched, full, half, low } = overviewForUi;
@@ -471,6 +542,12 @@ const WebinarGeekDashboard: React.FC = () => {
     const [y, m] = monthAnchorYmd.split('-').map(Number);
     return [y, m - 1] as const;
   }, [monthAnchorYmd]);
+
+  const scopeTitle = useMemo(() => {
+    if (scopeMode === 'week') return `Week · ${weekWindow.title}`;
+    if (scopeMode === 'day' && selectedDayYmd) return `Day · ${ymdToShortLabel(selectedDayYmd)}`;
+    return `Month · ${monthWindow.title}`;
+  }, [scopeMode, weekWindow.title, selectedDayYmd, monthWindow.title]);
 
   const calendarCells = useMemo(() => {
     const firstDow = new Date(viewYear, viewMonth0, 1).getDay();
@@ -703,9 +780,7 @@ const WebinarGeekDashboard: React.FC = () => {
 
         {subscriptionCache !== null && (
           <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-3">
-              {overviewForUi.ymd ? `Day · ${ymdToShortLabel(overviewForUi.ymd)}` : `Month · ${monthWindow.title}`}
-            </p>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-3">{scopeTitle}</p>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
               {statTiles.map((c) => (
                 <div key={c.k} className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2">
@@ -729,24 +804,62 @@ const WebinarGeekDashboard: React.FC = () => {
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                onClick={() => setMonthAnchorYmd((m) => shiftMonthFirstYmd(m, -1))}
-                aria-label="Previous month"
+                onClick={() => {
+                  if (scopeMode === 'week') setWeekAnchorYmd((v) => shiftYmdDays(v, -7));
+                  else if (scopeMode === 'day') setSelectedDayYmd((v) => shiftYmdDays(v || torontoYmdFromDate(), -1));
+                  else setMonthAnchorYmd((m) => shiftMonthFirstYmd(m, -1));
+                }}
+                aria-label={`Previous ${scopeMode}`}
                 className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-800 shadow-sm hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
               >
                 <ChevronLeft className="h-5 w-5" strokeWidth={2.5} aria-hidden />
               </button>
-              <span className="text-sm font-medium text-slate-800 min-w-[9rem] text-center px-2">{monthWindow.title}</span>
+              <span className="text-sm font-medium text-slate-800 min-w-[12rem] text-center px-2">
+                {scopeMode === 'week'
+                  ? weekWindow.title
+                  : (scopeMode === 'day' && selectedDayYmd ? ymdToShortLabel(selectedDayYmd) : monthWindow.title)}
+              </span>
               <button
                 type="button"
-                onClick={() => setMonthAnchorYmd((m) => shiftMonthFirstYmd(m, 1))}
-                aria-label="Next month"
+                onClick={() => {
+                  if (scopeMode === 'week') setWeekAnchorYmd((v) => shiftYmdDays(v, 7));
+                  else if (scopeMode === 'day') setSelectedDayYmd((v) => shiftYmdDays(v || torontoYmdFromDate(), 1));
+                  else setMonthAnchorYmd((m) => shiftMonthFirstYmd(m, 1));
+                }}
+                aria-label={`Next ${scopeMode}`}
                 className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-800 shadow-sm hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
               >
                 <ChevronRight className="h-5 w-5" strokeWidth={2.5} aria-hidden />
               </button>
-              <Button type="button" variant="outline" className="!min-h-0 h-9 px-3 py-0 text-xs ml-1" onClick={() => setMonthAnchorYmd(torontoMonthStartToday())}>
+              <Button
+                type="button"
+                variant="outline"
+                className="!min-h-0 h-9 px-3 py-0 text-xs ml-1"
+                onClick={() => {
+                  setMonthAnchorYmd(torontoMonthStartToday());
+                  setSelectedDayYmd(torontoYmdFromDate());
+                  setWeekAnchorYmd(torontoYmdFromDate());
+                }}
+              >
                 Current
               </Button>
+              <div className="ml-2 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-0.5 text-[11px]">
+                {(['month', 'week', 'day'] as ScopeMode[]).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => {
+                      setScopeMode(m);
+                      if (m === 'day' && !selectedDayYmd) setSelectedDayYmd(torontoYmdFromDate());
+                    }}
+                    className={`px-2.5 py-1 rounded-lg capitalize ${
+                      scopeMode === m ? 'bg-white border border-slate-300 text-slate-900' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
             </div>
             <label className="relative flex-1 min-w-[12rem] max-w-md">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -782,9 +895,18 @@ const WebinarGeekDashboard: React.FC = () => {
                 <button
                   key={ymd}
                   type="button"
-                  onClick={() => setSelectedDayYmd((prev) => (prev === ymd ? null : ymd))}
+                  onClick={() => {
+                    if (scopeMode === 'week') {
+                      setWeekAnchorYmd(ymd);
+                    } else {
+                      setSelectedDayYmd((prev) => (prev === ymd ? null : ymd));
+                      if (scopeMode === 'day') setSelectedDayYmd(ymd);
+                    }
+                  }}
                   className={`min-h-[64px] rounded-xl border text-left px-2 py-1 flex flex-col justify-center gap-0.5 transition ${
-                    active ? 'border-slate-800 bg-slate-100 shadow-inner' : 'border-slate-200 bg-white hover:bg-slate-50'
+                    active || (scopeMode === 'week' && ymd >= weekWindow.since && ymd <= weekWindow.until)
+                      ? 'border-slate-800 bg-slate-100 shadow-inner'
+                      : 'border-slate-200 bg-white hover:bg-slate-50'
                   }`}
                 >
                   <span className="text-[11px] font-semibold text-slate-900 leading-tight">{label}</span>
@@ -868,7 +990,9 @@ const WebinarGeekDashboard: React.FC = () => {
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 border-b border-slate-100 bg-slate-50/60">
             <p className="text-xs font-medium text-slate-600 flex flex-wrap items-center gap-x-2 gap-y-1">
               <span>
-                {selectedDayYmd == null ? monthWindow.title : ymdToShortLabel(selectedDayYmd)}
+                {scopeMode === 'week'
+                  ? weekWindow.title
+                  : (scopeMode === 'day' && selectedDayYmd ? ymdToShortLabel(selectedDayYmd) : monthWindow.title)}
               </span>
               {wgNotesLoading && (
                 <span className="text-[10px] font-normal text-slate-400">Loading HR notes…</span>
