@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
-import { fetchHrDashboard, type HrDashboardPayload } from '../services/hrDashboardService';
+import { fetchHrDashboard, runHrAutomation, runHrRollup, type HrDashboardPayload } from '../services/hrDashboardService';
 
 type CandidateLite = {
   id: string;
@@ -27,6 +27,13 @@ type CallLite = {
   request_payload: Record<string, unknown> | null;
   created_by_label: string | null;
   candidate_id: string;
+};
+
+type SnapshotStatus = {
+  running: boolean;
+  message: string | null;
+  error: string | null;
+  updatedAt: string | null;
 };
 
 function toPercent(numerator: number, denominator: number): string {
@@ -62,6 +69,12 @@ const SuperDashboard: React.FC = () => {
   const [candidates, setCandidates] = useState<CandidateLite[]>([]);
   const [pipelineRows, setPipelineRows] = useState<PipelineLite[]>([]);
   const [portalCalls, setPortalCalls] = useState<CallLite[]>([]);
+  const [snapshotStatus, setSnapshotStatus] = useState<SnapshotStatus>({
+    running: false,
+    message: null,
+    error: null,
+    updatedAt: null,
+  });
 
   useEffect(() => {
     const link = document.createElement('link');
@@ -82,7 +95,81 @@ const SuperDashboard: React.FC = () => {
     return refreshed.session?.access_token ?? null;
   };
 
-  const load = async () => {
+  const needsSnapshotRefresh = (data: HrDashboardPayload | null, candidateCount: number): boolean => {
+    if (!data) return candidateCount > 0;
+    const summary = (data.summary || {}) as Record<string, unknown>;
+    const webinar = (data.webinar_metrics || {}) as Record<string, unknown>;
+    const live = (data.live_metrics || {}) as Record<string, unknown>;
+    const summaryCandidates = Number(summary.total_candidates || 0);
+    const invited30 = Number(webinar.invited_30d || 0);
+    const sessions = Number(live.sessions_count || 0);
+    const hasFunnel = Array.isArray(data.funnel_daily) && data.funnel_daily.length > 0;
+    if (candidateCount === 0) return false;
+    return summaryCandidates === 0 || (!hasFunnel && invited30 === 0 && sessions === 0);
+  };
+
+  const refreshHrOnly = async (token: string): Promise<HrDashboardPayload | null> => {
+    const res = await fetchHrDashboard(token);
+    if (!res.ok) {
+      setSnapshotStatus((prev) => ({ ...prev, error: res.error, running: false }));
+      return null;
+    }
+    setHrData(res.data);
+    return res.data;
+  };
+
+  const runSnapshotPipeline = async (token: string, candidateCount: number) => {
+    if (candidateCount === 0) return;
+    setSnapshotStatus({
+      running: true,
+      message: 'Refreshing analytics snapshot (rollup + automation)...',
+      error: null,
+      updatedAt: null,
+    });
+    const rollup = await runHrRollup(token, false);
+    if (!rollup.ok) {
+      setSnapshotStatus({
+        running: false,
+        message: null,
+        error: rollup.error,
+        updatedAt: null,
+      });
+      return;
+    }
+    const automation = await runHrAutomation(token, false);
+    if (!automation.ok) {
+      setSnapshotStatus({
+        running: false,
+        message: null,
+        error: automation.error,
+        updatedAt: null,
+      });
+      return;
+    }
+
+    // Poll briefly so page stays loaded while snapshot catches up.
+    for (let i = 0; i < 5; i += 1) {
+      if (i > 0) {
+        await new Promise((r) => window.setTimeout(r, 1400));
+      }
+      const latest = await refreshHrOnly(token);
+      if (!needsSnapshotRefresh(latest, candidateCount) || i === 4) {
+        setSnapshotStatus({
+          running: false,
+          message: 'Snapshot data loaded.',
+          error: null,
+          updatedAt: new Date().toISOString(),
+        });
+        return;
+      }
+      setSnapshotStatus((prev) => ({
+        ...prev,
+        message: `Processing snapshot... (${i + 1}/5)`,
+      }));
+    }
+  };
+
+  const load = async (autoProcess = true) => {
     setLoading(true);
     setError(null);
     try {
@@ -108,10 +195,15 @@ const SuperDashboard: React.FC = () => {
       if (pRes.error) throw pRes.error;
       if (callRes.error) throw callRes.error;
 
-      setCandidates((cRes.data || []) as CandidateLite[]);
+      const candidateRows = (cRes.data || []) as CandidateLite[];
+      setCandidates(candidateRows);
       setPipelineRows((pRes.data || []) as PipelineLite[]);
       const onlyPortal = ((callRes.data || []) as CallLite[]).filter((r) => r.action === 'dial_webclient_popup');
       setPortalCalls(onlyPortal);
+
+      if (autoProcess && hrRes.ok && needsSnapshotRefresh(hrRes.data, candidateRows.length)) {
+        void runSnapshotPipeline(token, candidateRows.length);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -240,6 +332,21 @@ const SuperDashboard: React.FC = () => {
         </div>
 
         {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{error}</div>}
+        {snapshotStatus.running && (
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm text-indigo-700">
+            {snapshotStatus.message || 'Processing snapshot data...'}
+          </div>
+        )}
+        {!snapshotStatus.running && snapshotStatus.error && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-700">
+            Snapshot refresh failed: {snapshotStatus.error}
+          </div>
+        )}
+        {!snapshotStatus.running && snapshotStatus.message && snapshotStatus.updatedAt && (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+            {snapshotStatus.message} Updated {new Date(snapshotStatus.updatedAt).toLocaleTimeString()}.
+          </div>
+        )}
 
         <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-3">
           <Kpi title="Applicants" value={String(appliedCount)} tone="blue" />
