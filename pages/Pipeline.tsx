@@ -12,11 +12,14 @@ import {
   getPipelineResumeDisplayUrl,
   getPipelineResumeViewerKind,
   listPipelineCandidates,
+  listPipelineIncomingEmailLogs,
   logPipelineCallAction,
   savePipelineEvaluation,
+  syncPipelineIncomingEmails,
   triggerPipelineResumeConversion,
   type PipelineCandidate,
   type PipelineCandidateBundle,
+  type PipelineIncomingEmailLog,
   type PipelineCandidateProfile,
   type PipelineUploadProgress,
   type PipelineResume,
@@ -232,6 +235,9 @@ const Pipeline: React.FC = () => {
   const [emailBody, setEmailBody] = useState('');
   const [emailSending, setEmailSending] = useState(false);
   const [emailMsg, setEmailMsg] = useState<string | null>(null);
+  const [incomingEmailLogs, setIncomingEmailLogs] = useState<PipelineIncomingEmailLog[]>([]);
+  const [incomingSyncing, setIncomingSyncing] = useState(false);
+  const [incomingMsg, setIncomingMsg] = useState<string | null>(null);
   const [profileFullName, setProfileFullName] = useState('');
   const [profileEmail, setProfileEmail] = useState('');
   const [profilePhone, setProfilePhone] = useState('');
@@ -316,6 +322,9 @@ const Pipeline: React.FC = () => {
     setProfileSkills(profile.skills_summary || '');
     setProfileSummary(profile.work_summary || '');
     setProfileMsg(null);
+    void listPipelineIncomingEmailLogs(c.id)
+      .then(setIncomingEmailLogs)
+      .catch((e) => setIncomingMsg(e instanceof Error ? e.message : String(e)));
   }, [selectedBundle?.candidate.id]);
 
   const selectedResume: PipelineResume | null = useMemo(() => {
@@ -554,6 +563,10 @@ const Pipeline: React.FC = () => {
     () => (selectedBundle?.callLogs || []).filter((x) => x.action === 'email_sent' || x.action === 'email_send_failed'),
     [selectedBundle?.callLogs],
   );
+  const incomingLogs = useMemo(
+    () => [...incomingEmailLogs].sort((a, b) => new Date(b.received_at).getTime() - new Date(a.received_at).getTime()),
+    [incomingEmailLogs],
+  );
 
   const applyTemplate = (templateId: string) => {
     const t = PIPELINE_EMAIL_TEMPLATES.find((x) => x.id === templateId);
@@ -696,6 +709,22 @@ const Pipeline: React.FC = () => {
       setEmailMsg(e instanceof Error ? e.message : String(e));
     } finally {
       setEmailSending(false);
+    }
+  };
+
+  const syncIncomingEmails = async () => {
+    if (!selectedBundle?.candidate.id) return;
+    setIncomingSyncing(true);
+    setIncomingMsg(null);
+    try {
+      const result = await syncPipelineIncomingEmails(14, 120);
+      const rows = await listPipelineIncomingEmailLogs(selectedBundle.candidate.id);
+      setIncomingEmailLogs(rows);
+      setIncomingMsg(`Inbox synced: ${result.synced} messages checked, ${result.mapped} mapped.`);
+    } catch (e) {
+      setIncomingMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIncomingSyncing(false);
     }
   };
 
@@ -1150,6 +1179,42 @@ const Pipeline: React.FC = () => {
                                 </details>
                               );
                             })}
+                          </div>
+                        )}
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-white p-2 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[11px] font-semibold text-slate-700 uppercase tracking-wide">Incoming replies</p>
+                          <Button
+                            variant="outline"
+                            className="!min-h-0 h-7 px-2 text-[11px]"
+                            onClick={() => void syncIncomingEmails()}
+                            disabled={incomingSyncing}
+                          >
+                            {incomingSyncing ? 'Syncing…' : 'Sync inbox'}
+                          </Button>
+                        </div>
+                        {incomingMsg && <p className="text-[11px] text-slate-600">{incomingMsg}</p>}
+                        {incomingLogs.length === 0 ? (
+                          <p className="text-[11px] text-slate-500">No incoming replies matched yet.</p>
+                        ) : (
+                          <div className="max-h-36 overflow-auto space-y-1.5">
+                            {incomingLogs.map((log) => (
+                              <details key={log.id} className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1.5">
+                                <summary className="cursor-pointer list-none flex items-center justify-between gap-2 text-[11px] text-slate-700">
+                                  <span className="truncate">{log.from_email || '—'} · reply</span>
+                                  <span className="text-slate-500">{formatDateTimeCanadaEastern(log.received_at)}</span>
+                                </summary>
+                                <div className="mt-1 text-[10px] text-slate-600 space-y-0.5">
+                                  <p><strong>From:</strong> {log.from_email || '—'}</p>
+                                  <p><strong>To:</strong> {log.to_email || '—'}</p>
+                                  <p><strong>CC:</strong> {log.cc_email || '—'}</p>
+                                  <p><strong>Subject:</strong> {log.subject || '—'}</p>
+                                  {log.snippet && <p><strong>Snippet:</strong> {log.snippet}</p>}
+                                  <p><strong>When:</strong> {formatDateTimeCanadaEastern(log.received_at)}</p>
+                                </div>
+                              </details>
+                            ))}
                           </div>
                         )}
                       </div>

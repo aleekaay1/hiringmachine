@@ -97,6 +97,23 @@ export interface PipelineCallLog {
   created_at: string;
 }
 
+export interface PipelineIncomingEmailLog {
+  id: string;
+  provider: string;
+  message_id: string;
+  thread_id: string | null;
+  from_email: string;
+  to_email: string | null;
+  cc_email: string | null;
+  subject: string | null;
+  snippet: string | null;
+  received_at: string;
+  candidate_id: string | null;
+  raw_headers: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface PipelineCandidateBundle {
   candidate: PipelineCandidate;
   resumes: PipelineResume[];
@@ -784,4 +801,42 @@ export async function logPipelineCallAction(input: {
     .single();
   if (error) throw error;
   return data as PipelineCallLog;
+}
+
+export async function listPipelineIncomingEmailLogs(candidateId: string): Promise<PipelineIncomingEmailLog[]> {
+  const { data, error } = await supabase
+    .from('email_inbox_logs')
+    .select('*')
+    .eq('candidate_id', candidateId)
+    .order('received_at', { ascending: false })
+    .limit(200);
+  if (error) throw error;
+  return (data || []) as PipelineIncomingEmailLog[];
+}
+
+export async function syncPipelineIncomingEmails(days = 10, limit = 80): Promise<{ synced: number; mapped: number }> {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+  if (!supabaseUrl || !anonKey) throw new Error('Missing Supabase environment configuration.');
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token;
+  if (!token) throw new Error('You are not signed in.');
+  const res = await fetch(`${supabaseUrl}/functions/v1/email-inbox-sync`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: anonKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ days, limit }),
+  });
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) {
+    const err = typeof json.error === 'string' ? json.error : (typeof json.message === 'string' ? json.message : `Sync failed (${res.status})`);
+    throw new Error(err);
+  }
+  return {
+    synced: Number(json.synced || 0),
+    mapped: Number(json.mapped || 0),
+  };
 }
