@@ -318,6 +318,11 @@ const Pipeline: React.FC = () => {
     setProfileMsg(null);
   }, [selectedBundle?.candidate.id]);
 
+  const selectedResume: PipelineResume | null = useMemo(() => {
+    if (!selectedBundle?.resumes?.length) return null;
+    return selectedBundle.resumes.find((r) => r.id === selectedResumeId) || selectedBundle.resumes[0];
+  }, [selectedBundle, selectedResumeId]);
+
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
@@ -383,11 +388,6 @@ const Pipeline: React.FC = () => {
       );
     });
   }, [candidates, search, stageFilter, statusFilter]);
-
-  const selectedResume: PipelineResume | null = useMemo(() => {
-    if (!selectedBundle?.resumes?.length) return null;
-    return selectedBundle.resumes.find((r) => r.id === selectedResumeId) || selectedBundle.resumes[0];
-  }, [selectedBundle, selectedResumeId]);
 
   const uploadFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
