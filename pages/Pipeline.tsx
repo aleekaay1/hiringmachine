@@ -21,7 +21,7 @@ import {
 } from '../services/pipelineService';
 import { buildThreeCxWebclientUrl, runThreeCxAction, type ThreeCxAction } from '../services/threeCxService';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
-import { ExternalLink, FileUp, Mic, MonitorSmartphone, Phone, RefreshCw, Search, Trash2, Volume2 } from 'lucide-react';
+import { ExternalLink, FileUp, Mic, MicOff, MonitorSmartphone, Phone, PhoneOff, RefreshCw, Search, Trash2, Volume2 } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -63,6 +63,29 @@ function normalizeDialDestination(raw: string): string {
   return cleaned;
 }
 
+function extractCallIdCandidate(payload: unknown): string | null {
+  const walk = (node: unknown): string | null => {
+    if (!node) return null;
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        const found = walk(item);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (typeof node !== 'object') return null;
+    const obj = node as Record<string, unknown>;
+    const own = obj.callid ?? obj.callId ?? obj.id;
+    if (own != null && String(own).trim()) return String(own).trim();
+    for (const value of Object.values(obj)) {
+      const found = walk(value);
+      if (found) return found;
+    }
+    return null;
+  };
+  return walk(payload);
+}
+
 const Pipeline: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [email, setEmail] = useState('admin@globelife-paz.com');
@@ -99,12 +122,12 @@ const Pipeline: React.FC = () => {
   const [agentExtension, setAgentExtension] = useState('');
   const [dialTarget, setDialTarget] = useState('');
   const [activeCallId, setActiveCallId] = useState('');
-  const [targetExtension, setTargetExtension] = useState('');
-  const [dtmfDigits, setDtmfDigits] = useState('');
   const [callActionRunning, setCallActionRunning] = useState(false);
   const [callActionMsg, setCallActionMsg] = useState<string | null>(null);
   const [mediaPanelVisible, setMediaPanelVisible] = useState(true);
   const [mediaPanelLoaded, setMediaPanelLoaded] = useState(false);
+  const [mediaEmbedBlocked, setMediaEmbedBlocked] = useState(false);
+  const [mediaAutoPopOpened, setMediaAutoPopOpened] = useState(false);
   const [toneEnabled, setToneEnabled] = useState(true);
   const [numPdfPages, setNumPdfPages] = useState<number>(0);
   const toneCtxRef = useRef<AudioContext | null>(null);
@@ -338,14 +361,27 @@ const Pipeline: React.FC = () => {
       setCallActionMsg('Set VITE_3CX_WEBCLIENT_URL to enable media session panel.');
       return;
     }
-    if (mode === 'popup') {
+    if (mode === 'popup' || mediaEmbedBlocked) {
       window.open(mediaSessionUrl, '_blank', 'noopener,noreferrer');
       setCallActionMsg('Media session opened in 3CX webclient tab.');
       return;
     }
     setMediaPanelVisible(true);
     setMediaPanelLoaded(false);
+    setMediaAutoPopOpened(false);
     setCallActionMsg('Embedded media panel opened. If blocked, use Pop out.');
+  };
+
+  const resolveActiveCallId = async (): Promise<string | null> => {
+    if (activeCallId.trim()) return activeCallId.trim();
+    const result = await runThreeCxAction({
+      action: 'active_calls',
+      extension: agentExtension.trim() || undefined,
+    });
+    if (!result.ok) return null;
+    const found = extractCallIdCandidate(result.data ?? null);
+    if (found) setActiveCallId(found);
+    return found;
   };
 
   const runCallAction = async (action: ThreeCxAction) => {
@@ -359,27 +395,27 @@ const Pipeline: React.FC = () => {
       setCallActionMsg('Enter a destination number to dial.');
       return;
     }
+    const requiresCallId = action === 'hangup' || action === 'hold' || action === 'resume' || action === 'mute' || action === 'unmute' || action === 'transfer' || action === 'dtmf';
     setCallActionRunning(true);
     setCallActionMsg(null);
     try {
+      const resolvedCallId = requiresCallId ? await resolveActiveCallId() : null;
+      if (requiresCallId && !resolvedCallId) {
+        setCallActionMsg('No active call found yet. Dial first, then try this control.');
+        return;
+      }
       const payload = {
         action,
         extension: agentExtension.trim() || undefined,
         destination: action === 'dial' ? normalizedDestination || undefined : dialTarget.trim() || undefined,
-        callId: activeCallId.trim() || undefined,
-        targetExtension: targetExtension.trim() || undefined,
-        dtmfDigits: dtmfDigits.trim() || undefined,
+        callId: resolvedCallId || activeCallId.trim() || undefined,
       };
       const result = await runThreeCxAction(payload);
       if (!result.ok) {
         setCallActionMsg(result.error || 'Call action failed');
       } else {
         setCallActionMsg(`${action} OK`);
-        const body = (result.data || {}) as Record<string, unknown>;
-        const upstream = (body.data || {}) as Record<string, unknown>;
-        const callIdMaybe =
-          upstream.callid ??
-          (upstream.result && typeof upstream.result === 'object' ? (upstream.result as Record<string, unknown>).callid : null);
+        const callIdMaybe = extractCallIdCandidate(result.data ?? null);
         if ((action === 'dial' || action === 'active_calls') && callIdMaybe != null) {
           setActiveCallId(String(callIdMaybe));
         }
@@ -453,6 +489,17 @@ const Pipeline: React.FC = () => {
       toneCtxRef.current = null;
     }
   }, []);
+
+  useEffect(() => {
+    if (!mediaPanelVisible || mediaPanelLoaded || !mediaSessionUrl || mediaEmbedBlocked || mediaAutoPopOpened) return;
+    const timeout = window.setTimeout(() => {
+      setMediaEmbedBlocked(true);
+      setCallActionMsg('3CX blocks embedded panel (CSP). Opened pop out for audio session.');
+      window.open(mediaSessionUrl, '_blank', 'noopener,noreferrer');
+      setMediaAutoPopOpened(true);
+    }, 2200);
+    return () => window.clearTimeout(timeout);
+  }, [mediaPanelVisible, mediaPanelLoaded, mediaSessionUrl, mediaEmbedBlocked, mediaAutoPopOpened]);
 
   const refreshConversion = async () => {
     if (!selectedResume) return;
@@ -661,11 +708,24 @@ const Pipeline: React.FC = () => {
                         <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-slate-200">
                           <div className="flex items-center gap-2 text-[11px] text-slate-600">
                             <Mic size={12} className={mediaPanelLoaded ? 'text-emerald-600' : 'text-slate-400'} />
-                            <span>{mediaPanelLoaded ? 'Media panel connected' : 'Loading media panel...'}</span>
+                            <span>
+                              {mediaEmbedBlocked
+                                ? 'Embedded panel blocked by 3CX CSP'
+                                : (mediaPanelLoaded ? 'Media panel connected' : 'Loading media panel...')}
+                            </span>
                           </div>
                           <button type="button" onClick={() => setMediaPanelVisible(false)} className="text-[11px] text-slate-500 hover:text-slate-700">Hide</button>
                         </div>
-                        {mediaSessionUrl ? (
+                        {mediaEmbedBlocked ? (
+                          <div className="px-3 py-4 bg-white space-y-2">
+                            <p className="text-xs text-slate-700">
+                              3CX does not allow embedding on this domain. Use pop-out media session for mic/speaker.
+                            </p>
+                            <Button variant="outline" className="!min-h-0 h-8 text-xs" onClick={openWebClientFallback}>
+                              <ExternalLink size={12} className="mr-1" /> Open 3CX media window
+                            </Button>
+                          </div>
+                        ) : mediaSessionUrl ? (
                           <iframe
                             key={mediaSessionUrl}
                             src={mediaSessionUrl}
@@ -673,6 +733,10 @@ const Pipeline: React.FC = () => {
                             className="w-full h-[240px] bg-white"
                             allow="microphone; camera; autoplay; clipboard-read; clipboard-write"
                             onLoad={() => setMediaPanelLoaded(true)}
+                            onError={() => {
+                              setMediaEmbedBlocked(true);
+                              setCallActionMsg('Embedded panel blocked. Use pop out media session.');
+                            }}
                           />
                         ) : (
                           <div className="px-3 py-4 text-xs text-slate-500">
@@ -711,21 +775,25 @@ const Pipeline: React.FC = () => {
                       </div>
 
                       <div className="flex-1 min-w-[260px] space-y-2">
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                        <div className="grid grid-cols-1 md:grid-cols-[180px_1fr] gap-2 items-center">
                           <input value={agentExtension} onChange={(e) => setAgentExtension(e.target.value)} placeholder="Agent extension" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                          <input value={activeCallId} onChange={(e) => setActiveCallId(e.target.value)} placeholder="Call ID" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                          <input value={targetExtension} onChange={(e) => setTargetExtension(e.target.value)} placeholder="Transfer ext" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                          <input value={dtmfDigits} onChange={(e) => setDtmfDigits(e.target.value)} placeholder="DTMF" className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
+                          <div className="text-[11px] text-slate-500">
+                            Active call: <span className="font-medium text-slate-700">{activeCallId || 'Auto-detected after dial'}</span>
+                          </div>
                         </div>
-                        <div className="grid grid-cols-3 md:grid-cols-8 gap-2">
-                          <Button variant="outline" onClick={() => void runCallAction('hangup')} disabled={callActionRunning}>Hangup</Button>
-                          <Button variant="outline" onClick={() => void runCallAction('active_calls')} disabled={callActionRunning}>Active</Button>
-                          <Button variant="outline" onClick={() => void runCallAction('hold')} disabled={callActionRunning}>Hold</Button>
-                          <Button variant="outline" onClick={() => void runCallAction('resume')} disabled={callActionRunning}>Resume</Button>
-                          <Button variant="outline" onClick={() => void runCallAction('transfer')} disabled={callActionRunning}>Transfer</Button>
-                          <Button variant="outline" onClick={() => void runCallAction('mute')} disabled={callActionRunning}>Mute</Button>
-                          <Button variant="outline" onClick={() => void runCallAction('unmute')} disabled={callActionRunning}>Unmute</Button>
-                          <Button variant="outline" onClick={() => void runCallAction('dtmf')} disabled={callActionRunning}>DTMF</Button>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          <button type="button" onClick={() => void runCallAction('hold')} disabled={callActionRunning} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs hover:bg-slate-50 inline-flex items-center justify-center gap-1.5 disabled:opacity-60">
+                            <Phone size={13} className="text-amber-600" /> Hold
+                          </button>
+                          <button type="button" onClick={() => void runCallAction('mute')} disabled={callActionRunning} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs hover:bg-slate-50 inline-flex items-center justify-center gap-1.5 disabled:opacity-60">
+                            <MicOff size={13} className="text-slate-700" /> Mute
+                          </button>
+                          <button type="button" onClick={() => void runCallAction('unmute')} disabled={callActionRunning} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs hover:bg-slate-50 inline-flex items-center justify-center gap-1.5 disabled:opacity-60">
+                            <Mic size={13} className="text-emerald-600" /> Unmute
+                          </button>
+                          <button type="button" onClick={() => void runCallAction('hangup')} disabled={callActionRunning} className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 hover:bg-red-100 inline-flex items-center justify-center gap-1.5 disabled:opacity-60">
+                            <PhoneOff size={13} /> Hangup
+                          </button>
                         </div>
                       </div>
                     </div>
