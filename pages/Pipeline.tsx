@@ -17,6 +17,7 @@ import {
   type PipelineCandidate,
   type PipelineCandidateBundle,
   type PipelineCandidateProfile,
+  type PipelineUploadProgress,
   type PipelineResume,
   updatePipelineCandidateProfile,
   updatePipelineCandidateSchedule,
@@ -140,6 +141,29 @@ function readCandidateProfile(candidate: PipelineCandidate | null): PipelineCand
   };
 }
 
+function uploadStageLabel(stage: PipelineUploadProgress['stage']): string {
+  switch (stage) {
+    case 'starting':
+      return 'Preparing';
+    case 'extracting':
+      return 'Extracting OCR';
+    case 'saving_candidate':
+      return 'Saving candidate';
+    case 'uploading_file':
+      return 'Uploading file';
+    case 'creating_resume':
+      return 'Saving resume';
+    case 'queueing_conversion':
+      return 'Queueing conversion';
+    case 'completed':
+      return 'Completed';
+    case 'failed':
+      return 'Failed';
+    default:
+      return 'Processing';
+  }
+}
+
 const Pipeline: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [email, setEmail] = useState('admin@globelife-paz.com');
@@ -194,6 +218,9 @@ const Pipeline: React.FC = () => {
   const [profileSummary, setProfileSummary] = useState('');
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMsg, setProfileMsg] = useState<string | null>(null);
+  const [uploadProgressByIndex, setUploadProgressByIndex] = useState<Record<number, PipelineUploadProgress>>({});
+  const [uploadTotalCount, setUploadTotalCount] = useState(0);
+  const [uploadCurrentMessage, setUploadCurrentMessage] = useState<string>('Starting upload...');
   const [numPdfPages, setNumPdfPages] = useState<number>(0);
   const toneCtxRef = useRef<AudioContext | null>(null);
 
@@ -285,12 +312,33 @@ const Pipeline: React.FC = () => {
 
   const uploadFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
+    const fileArray = Array.from(files);
     setUploading(true);
+    setUploadTotalCount(fileArray.length);
+    setUploadCurrentMessage('Preparing upload...');
+    const initialProgress: Record<number, PipelineUploadProgress> = {};
+    fileArray.forEach((file, index) => {
+      initialProgress[index] = {
+        index,
+        total: fileArray.length,
+        fileName: file.name,
+        stage: 'starting',
+        percent: 0,
+        processed: 0,
+        succeeded: 0,
+        failed: 0,
+        message: 'Queued',
+      };
+    });
+    setUploadProgressByIndex(initialProgress);
     setError(null);
     try {
       const { data } = await supabase.auth.getUser();
       const actorLabel = String(data.user?.user_metadata?.full_name || data.user?.user_metadata?.name || data.user?.email || '').trim() || undefined;
-      const result = await bulkUploadPipelineResumes(Array.from(files), actorLabel);
+      const result = await bulkUploadPipelineResumes(fileArray, actorLabel, (progress) => {
+        setUploadProgressByIndex((prev) => ({ ...prev, [progress.index]: progress }));
+        setUploadCurrentMessage(`${uploadStageLabel(progress.stage)}: ${progress.fileName}`);
+      });
       if (result.failed.length > 0) {
         setError(`Uploaded ${result.created.length}, failed ${result.failed.length}. First error: ${result.failed[0].error}`);
       }
@@ -299,6 +347,11 @@ const Pipeline: React.FC = () => {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setUploading(false);
+      setUploadCurrentMessage('Upload finished.');
+      setTimeout(() => {
+        setUploadProgressByIndex({});
+        setUploadTotalCount(0);
+      }, 900);
     }
   };
 
@@ -1019,6 +1072,76 @@ const Pipeline: React.FC = () => {
           </div>
         </div>
       </div>
+      {uploading && (
+        <div className="fixed inset-0 z-[90] bg-slate-900/35 backdrop-blur-sm flex items-center justify-center px-4">
+          <div className="w-full max-w-2xl rounded-3xl border border-white/30 bg-white/90 shadow-2xl p-5 space-y-4">
+            <div className="flex items-center gap-4">
+              <div className="relative h-16 w-16 shrink-0 rounded-2xl border border-slate-200 bg-white flex items-center justify-center overflow-hidden">
+                <img src="/logo.png" alt="Globe Life" className="h-12 w-12 object-contain animate-pulse" />
+                <div className="absolute inset-0 bg-gradient-to-r from-blue-200/20 via-green-200/35 to-blue-200/20 animate-[pulse_2s_ease-in-out_infinite]" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-slate-900">Processing resumes in background</p>
+                <p className="text-xs text-slate-600 truncate">{uploadCurrentMessage}</p>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center justify-between text-xs text-slate-600 mb-1">
+                <span>Overall progress</span>
+                <span>
+                  {Object.values(uploadProgressByIndex).filter((p) => p.stage === 'completed' || p.stage === 'failed').length}
+                  {' / '}
+                  {uploadTotalCount}
+                </span>
+              </div>
+              <div className="h-2 rounded-full bg-slate-200 overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-[#005EB8] to-[#37B06D] transition-all duration-300"
+                  style={{
+                    width: `${uploadTotalCount
+                      ? Math.round((Object.values(uploadProgressByIndex).filter((p) => p.stage === 'completed' || p.stage === 'failed').length / uploadTotalCount) * 100)
+                      : 0}%`,
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="max-h-56 overflow-auto space-y-2 pr-1">
+              {Object.values(uploadProgressByIndex)
+                .sort((a, b) => a.index - b.index)
+                .map((p) => (
+                  <div key={`${p.index}-${p.fileName}`} className="rounded-xl border border-slate-200 bg-white p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-medium text-slate-800 truncate">{p.fileName}</p>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full ${
+                        p.stage === 'failed'
+                          ? 'bg-red-100 text-red-700'
+                          : p.stage === 'completed'
+                            ? 'bg-green-100 text-green-700'
+                            : 'bg-blue-100 text-blue-700'
+                      }`}
+                      >
+                        {uploadStageLabel(p.stage)}
+                      </span>
+                    </div>
+                    <div className="mt-1.5 h-1.5 rounded-full bg-slate-200 overflow-hidden">
+                      <div
+                        className={`h-full transition-all duration-300 ${
+                          p.stage === 'failed' ? 'bg-red-400' : 'bg-[#005EB8]'
+                        }`}
+                        style={{ width: `${Math.max(0, Math.min(100, p.percent))}%` }}
+                      />
+                    </div>
+                    <p className="mt-1 text-[10px] text-slate-500 truncate">
+                      {p.error ? `${p.message} ${p.error}` : p.message}
+                    </p>
+                  </div>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 };

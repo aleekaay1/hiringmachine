@@ -105,6 +105,29 @@ export interface PipelineCandidateBundle {
   callLogs: PipelineCallLog[];
 }
 
+export type PipelineUploadStage =
+  | 'starting'
+  | 'extracting'
+  | 'saving_candidate'
+  | 'uploading_file'
+  | 'creating_resume'
+  | 'queueing_conversion'
+  | 'completed'
+  | 'failed';
+
+export interface PipelineUploadProgress {
+  index: number;
+  total: number;
+  fileName: string;
+  stage: PipelineUploadStage;
+  percent: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  message: string;
+  error?: string;
+}
+
 function sanitizeFilename(name: string): string {
   const clean = name.replace(/[^a-zA-Z0-9.\-_ ]/g, '_').trim();
   return clean || `resume-${Date.now()}`;
@@ -343,18 +366,11 @@ async function extractTextFromWord(file: File): Promise<string> {
 }
 
 async function extractCandidateHints(file: File, cleanName: string): Promise<{ name: string; phone: string | null; email: string | null }> {
-  const mime = (file.type || '').toLowerCase();
-  let parsed = '';
-  if (mime.includes('pdf')) parsed = await extractTextFromPdf(file);
-  else if (mime.startsWith('image/')) parsed = await extractTextFromImage(file);
-  else if (mime.includes('word') || cleanName.toLowerCase().endsWith('.docx')) parsed = await extractTextFromWord(file);
-  else if (mime.includes('text') || cleanName.toLowerCase().endsWith('.txt') || cleanName.toLowerCase().endsWith('.rtf')) {
-    parsed = await file.text().catch(() => '');
-  }
+  const parsed = await extractResumeParsedText(file, cleanName);
   return mergeHints(cleanName, parsed);
 }
 
-async function extractCandidateProfile(file: File, cleanName: string): Promise<PipelineCandidateProfile> {
+async function extractResumeParsedText(file: File, cleanName: string): Promise<string> {
   const mime = (file.type || '').toLowerCase();
   let parsed = '';
   if (mime.includes('pdf')) parsed = await extractTextFromPdf(file);
@@ -363,6 +379,11 @@ async function extractCandidateProfile(file: File, cleanName: string): Promise<P
   else if (mime.includes('text') || cleanName.toLowerCase().endsWith('.txt') || cleanName.toLowerCase().endsWith('.rtf')) {
     parsed = await file.text().catch(() => '');
   }
+  return parsed;
+}
+
+async function extractCandidateProfile(file: File, cleanName: string): Promise<PipelineCandidateProfile> {
+  const parsed = await extractResumeParsedText(file, cleanName);
   return buildOcrProfile(parsed);
 }
 
@@ -460,17 +481,50 @@ export async function triggerPipelineResumeConversion(resumeId: string): Promise
   await invokePipelineConvertResume({ resume_id: resumeId });
 }
 
-export async function bulkUploadPipelineResumes(files: File[], actorLabel?: string): Promise<{ created: PipelineCandidate[]; failed: Array<{ file: string; error: string }> }> {
+export async function bulkUploadPipelineResumes(
+  files: File[],
+  actorLabel?: string,
+  onProgress?: (progress: PipelineUploadProgress) => void,
+): Promise<{ created: PipelineCandidate[]; failed: Array<{ file: string; error: string }> }> {
   const { data: auth } = await supabase.auth.getUser();
   const userId = auth.user?.id ?? null;
   const created: PipelineCandidate[] = [];
   const failed: Array<{ file: string; error: string }> = [];
+  const total = files.length;
 
-  for (const file of files) {
+  const emit = (
+    index: number,
+    fileName: string,
+    stage: PipelineUploadStage,
+    percent: number,
+    message: string,
+    error?: string,
+  ) => {
+    if (!onProgress) return;
+    onProgress({
+      index,
+      total,
+      fileName,
+      stage,
+      percent,
+      processed: created.length + failed.length,
+      succeeded: created.length,
+      failed: failed.length,
+      message,
+      error,
+    });
+  };
+
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
     try {
+      emit(index, file.name, 'starting', 5, 'Preparing file...');
       const cleanName = sanitizeFilename(file.name);
-      const hints = await extractCandidateHints(file, cleanName);
-      const profile = await extractCandidateProfile(file, cleanName);
+      emit(index, file.name, 'extracting', 18, 'Reading and extracting resume text...');
+      const parsedText = await extractResumeParsedText(file, cleanName);
+      const hints = mergeHints(cleanName, parsedText);
+      const profile = buildOcrProfile(parsedText);
+      emit(index, file.name, 'saving_candidate', 35, 'Creating candidate record...');
       const { data: cand, error: cErr } = await supabase
         .from('pipeline_candidates')
         .insert({
@@ -491,6 +545,7 @@ export async function bulkUploadPipelineResumes(files: File[], actorLabel?: stri
       const candidate = cand as PipelineCandidate;
 
       const path = `${candidate.id}/${Date.now()}-${cleanName}`;
+      emit(index, file.name, 'uploading_file', 58, 'Uploading file to storage...');
       const { error: upErr } = await supabase.storage.from(PIPELINE_BUCKET).upload(path, file, {
         cacheControl: '3600',
         upsert: false,
@@ -503,6 +558,7 @@ export async function bulkUploadPipelineResumes(files: File[], actorLabel?: stri
       const isImage = (file.type || '').toLowerCase().startsWith('image/');
       const conversionStatus = isPdf || isImage ? 'not_required' : 'pending';
 
+      emit(index, file.name, 'creating_resume', 78, 'Saving resume metadata...');
       const { data: resume, error: rErr } = await supabase
         .from('pipeline_resumes')
         .insert({
@@ -520,11 +576,15 @@ export async function bulkUploadPipelineResumes(files: File[], actorLabel?: stri
       if (rErr) throw rErr;
 
       if (conversionStatus === 'pending') {
+        emit(index, file.name, 'queueing_conversion', 92, 'Queueing document conversion...');
         void invokePipelineConvertResume({ resume_id: (resume as PipelineResume).id });
       }
       created.push(candidate);
+      emit(index, file.name, 'completed', 100, 'Completed.');
     } catch (err) {
-      failed.push({ file: file.name, error: err instanceof Error ? err.message : String(err) });
+      const errorText = err instanceof Error ? err.message : String(err);
+      failed.push({ file: file.name, error: errorText });
+      emit(index, file.name, 'failed', 100, 'Failed.', errorText);
     }
   }
   return { created, failed };
