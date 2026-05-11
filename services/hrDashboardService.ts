@@ -42,7 +42,14 @@ async function callFn(
   });
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
-    return { ok: false, error: (json.error as string) || res.statusText || 'Request failed' };
+    const rawError = json.error;
+    const normalizedError =
+      typeof rawError === 'string'
+        ? rawError
+        : (rawError && typeof rawError === 'object'
+          ? String((rawError as Record<string, unknown>).message || JSON.stringify(rawError))
+          : (typeof json.message === 'string' ? json.message : ''));
+    return { ok: false, error: normalizedError || res.statusText || `Request failed (${res.status})` };
   }
   return { ok: true, data: json };
 }

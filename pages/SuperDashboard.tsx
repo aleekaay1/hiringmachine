@@ -36,6 +36,22 @@ type SnapshotStatus = {
   updatedAt: string | null;
 };
 
+function normalizeErrorText(error: unknown): string {
+  if (!error) return 'Unknown error';
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'object') {
+    const msg = (error as Record<string, unknown>).message;
+    if (typeof msg === 'string' && msg.trim()) return msg;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+  return String(error);
+}
+
 function toPercent(numerator: number, denominator: number): string {
   if (!denominator) return '0%';
   return `${Math.round((numerator / denominator) * 100)}%`;
@@ -131,7 +147,7 @@ const SuperDashboard: React.FC = () => {
       setSnapshotStatus({
         running: false,
         message: null,
-        error: rollup.error,
+        error: normalizeErrorText(rollup.error),
         updatedAt: null,
       });
       return;
@@ -141,7 +157,7 @@ const SuperDashboard: React.FC = () => {
       setSnapshotStatus({
         running: false,
         message: null,
-        error: automation.error,
+        error: normalizeErrorText(automation.error),
         updatedAt: null,
       });
       return;
