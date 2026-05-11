@@ -17,6 +17,7 @@ import WebinarGeekDashboard from './pages/WebinarGeekDashboard';
 import HRDashboard from './pages/HRDashboard';
 import EmailLog from './pages/EmailLog';
 import Pipeline from './pages/Pipeline';
+import SuperDashboard from './pages/SuperDashboard';
 
 const App: React.FC = () => {
   return (
@@ -38,6 +39,7 @@ const App: React.FC = () => {
         <Route path="/webinar-geek" element={<WebinarGeekDashboard />} />
         <Route path="/hr-dashboard" element={<HRDashboard />} />
         <Route path="/pipeline" element={<Pipeline />} />
+        <Route path="/superdashboard" element={<SuperDashboard />} />
         <Route path="/qr" element={<QrCodes />} />
         <Route path="/email-log" element={<EmailLog />} />
         <Route path="*" element={<Navigate to="/" replace />} />
