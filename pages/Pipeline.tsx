@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
@@ -21,7 +21,7 @@ import {
 } from '../services/pipelineService';
 import { buildThreeCxWebclientUrl, runThreeCxAction, type ThreeCxAction } from '../services/threeCxService';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
-import { FileUp, Phone, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { ExternalLink, FileUp, Mic, MonitorSmartphone, Phone, RefreshCw, Search, Trash2, Volume2 } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -53,6 +53,14 @@ function latestNoteText(bundle: PipelineCandidateBundle | null): string {
 
 function safeName(candidate: PipelineCandidate): string {
   return candidate.full_name?.trim() || 'Unknown Candidate';
+}
+
+function normalizeDialDestination(raw: string): string {
+  const cleaned = raw.replace(/[^\d+]/g, '').trim();
+  if (!cleaned) return '';
+  if (cleaned.startsWith('+1')) return cleaned.slice(1);
+  if (cleaned.startsWith('+')) return cleaned.slice(1);
+  return cleaned;
 }
 
 const Pipeline: React.FC = () => {
@@ -95,7 +103,11 @@ const Pipeline: React.FC = () => {
   const [dtmfDigits, setDtmfDigits] = useState('');
   const [callActionRunning, setCallActionRunning] = useState(false);
   const [callActionMsg, setCallActionMsg] = useState<string | null>(null);
+  const [mediaPanelVisible, setMediaPanelVisible] = useState(true);
+  const [mediaPanelLoaded, setMediaPanelLoaded] = useState(false);
+  const [toneEnabled, setToneEnabled] = useState(true);
   const [numPdfPages, setNumPdfPages] = useState<number>(0);
+  const toneCtxRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
     const ext = localStorage.getItem('pipeline_3cx_ext');
@@ -298,15 +310,62 @@ const Pipeline: React.FC = () => {
     }
   };
 
+  const mediaSessionUrl = useMemo(
+    () => buildThreeCxWebclientUrl(dialTarget || selectedBundle?.candidate.phone || ''),
+    [dialTarget, selectedBundle?.candidate.phone],
+  );
+
+  const playDialTone = () => {
+    if (!toneEnabled || typeof window === 'undefined') return;
+    const Ctx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
+    if (!toneCtxRef.current) toneCtxRef.current = new Ctx();
+    const ctx = toneCtxRef.current;
+    if (ctx.state === 'suspended') void ctx.resume();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 880;
+    gain.gain.value = 0.03;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.06);
+  };
+
+  const openMediaSession = (mode: 'embedded' | 'popup') => {
+    if (!mediaSessionUrl) {
+      setCallActionMsg('Set VITE_3CX_WEBCLIENT_URL to enable media session panel.');
+      return;
+    }
+    if (mode === 'popup') {
+      window.open(mediaSessionUrl, '_blank', 'noopener,noreferrer');
+      setCallActionMsg('Media session opened in 3CX webclient tab.');
+      return;
+    }
+    setMediaPanelVisible(true);
+    setMediaPanelLoaded(false);
+    setCallActionMsg('Embedded media panel opened. If blocked, use Pop out.');
+  };
+
   const runCallAction = async (action: ThreeCxAction) => {
     if (!selectedBundle?.candidate.id) return;
+    const normalizedDestination = normalizeDialDestination(dialTarget.trim());
+    if (action === 'dial' && !agentExtension.trim()) {
+      setCallActionMsg('Enter your 3CX extension before dialing.');
+      return;
+    }
+    if (action === 'dial' && !normalizedDestination) {
+      setCallActionMsg('Enter a destination number to dial.');
+      return;
+    }
     setCallActionRunning(true);
     setCallActionMsg(null);
     try {
       const payload = {
         action,
         extension: agentExtension.trim() || undefined,
-        destination: dialTarget.trim() || undefined,
+        destination: action === 'dial' ? normalizedDestination || undefined : dialTarget.trim() || undefined,
         callId: activeCallId.trim() || undefined,
         targetExtension: targetExtension.trim() || undefined,
         dtmfDigits: dtmfDigits.trim() || undefined,
@@ -316,6 +375,18 @@ const Pipeline: React.FC = () => {
         setCallActionMsg(result.error || 'Call action failed');
       } else {
         setCallActionMsg(`${action} OK`);
+        const body = (result.data || {}) as Record<string, unknown>;
+        const upstream = (body.data || {}) as Record<string, unknown>;
+        const callIdMaybe =
+          upstream.callid ??
+          (upstream.result && typeof upstream.result === 'object' ? (upstream.result as Record<string, unknown>).callid : null);
+        if ((action === 'dial' || action === 'active_calls') && callIdMaybe != null) {
+          setActiveCallId(String(callIdMaybe));
+        }
+        if (action === 'dial') {
+          setDialTarget(normalizedDestination || dialTarget);
+          openMediaSession('embedded');
+        }
       }
       const { data } = await supabase.auth.getUser();
       const actorLabel = String(data.user?.user_metadata?.full_name || data.user?.user_metadata?.name || data.user?.email || '').trim() || undefined;
@@ -338,15 +409,11 @@ const Pipeline: React.FC = () => {
   };
 
   const openWebClientFallback = () => {
-    const url = buildThreeCxWebclientUrl(dialTarget || selectedBundle?.candidate.phone || '');
-    if (!url) {
-      setCallActionMsg('Set VITE_3CX_WEBCLIENT_URL in environment for fallback.');
-      return;
-    }
-    window.open(url, '_blank', 'noopener,noreferrer');
+    openMediaSession('popup');
   };
 
   const keypadPress = (digit: string) => {
+    playDialTone();
     setDialTarget((prev) => `${prev}${digit}`);
   };
 
@@ -379,6 +446,13 @@ const Pipeline: React.FC = () => {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [selectedBundle?.candidate.id, callActionRunning]);
+
+  useEffect(() => () => {
+    if (toneCtxRef.current) {
+      void toneCtxRef.current.close();
+      toneCtxRef.current = null;
+    }
+  }, []);
 
   const refreshConversion = async () => {
     if (!selectedResume) return;
@@ -567,40 +641,71 @@ const Pipeline: React.FC = () => {
 
                 <div className="p-3 space-y-3">
                   <section className="rounded-xl border border-slate-200 p-3 space-y-2">
-                    <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1"><Phone size={13} /> Call controls</h3>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1"><Phone size={13} /> Softphone + call controls</h3>
+                      <div className="flex items-center gap-1.5">
+                        <button type="button" onClick={() => setToneEnabled((v) => !v)} className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] ${toneEnabled ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-500'}`}>
+                          <Volume2 size={12} /> Key tones
+                        </button>
+                        <Button variant="outline" className="!min-h-0 h-7 px-2 text-[11px]" onClick={() => openMediaSession('embedded')}>
+                          <MonitorSmartphone size={12} className="mr-1" /> Open panel
+                        </Button>
+                        <Button variant="outline" className="!min-h-0 h-7 px-2 text-[11px]" onClick={openWebClientFallback}>
+                          <ExternalLink size={12} className="mr-1" /> Pop out
+                        </Button>
+                      </div>
+                    </div>
+
+                    {mediaPanelVisible && (
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 overflow-hidden">
+                        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-slate-200">
+                          <div className="flex items-center gap-2 text-[11px] text-slate-600">
+                            <Mic size={12} className={mediaPanelLoaded ? 'text-emerald-600' : 'text-slate-400'} />
+                            <span>{mediaPanelLoaded ? 'Media panel connected' : 'Loading media panel...'}</span>
+                          </div>
+                          <button type="button" onClick={() => setMediaPanelVisible(false)} className="text-[11px] text-slate-500 hover:text-slate-700">Hide</button>
+                        </div>
+                        {mediaSessionUrl ? (
+                          <iframe
+                            key={mediaSessionUrl}
+                            src={mediaSessionUrl}
+                            title="3CX Media Session"
+                            className="w-full h-[240px] bg-white"
+                            allow="microphone; camera; autoplay; clipboard-read; clipboard-write"
+                            onLoad={() => setMediaPanelLoaded(true)}
+                          />
+                        ) : (
+                          <div className="px-3 py-4 text-xs text-slate-500">
+                            Set <code>VITE_3CX_WEBCLIENT_URL</code> to use embedded media. Until then, use Pop out fallback.
+                          </div>
+                        )}
+                        <div className="px-3 py-2 bg-white text-[11px] text-slate-500 border-t border-slate-200">
+                          If embedded panel is blocked by browser policy, use <span className="font-medium text-slate-700">Pop out</span> and keep the tab open during calls.
+                        </div>
+                      </div>
+                    )}
+
                     <div className="flex flex-wrap items-start gap-3">
                       <div className="w-[220px] rounded-2xl border border-slate-300 bg-gradient-to-b from-slate-100 to-slate-50 p-3 shadow-inner">
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-1">Dialer</p>
                         <input
                           value={dialTarget}
                           onChange={(e) => setDialTarget(e.target.value)}
-                          placeholder="Type number or use keypad"
+                          placeholder="10/11 digit number"
                           className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold tracking-wide text-slate-900 mb-2"
                         />
+                        <div className="text-[10px] text-slate-500 mb-1">Normalized: <span className="font-semibold text-slate-700">{normalizeDialDestination(dialTarget) || '—'}</span></div>
                         <div className="grid grid-cols-3 gap-1.5">
                           {DIAL_PAD.map((k) => (
-                            <button
-                              key={k.d}
-                              type="button"
-                              onClick={() => keypadPress(k.d)}
-                              className="rounded-xl border border-slate-300 bg-white py-2 hover:bg-slate-50 transition"
-                            >
+                            <button key={k.d} type="button" onClick={() => keypadPress(k.d)} className="rounded-xl border border-slate-300 bg-white py-2 hover:bg-slate-50 transition">
                               <p className="text-sm font-semibold text-slate-900 leading-tight">{k.d}</p>
                               <p className="text-[9px] text-slate-500 leading-tight min-h-[10px]">{k.s}</p>
                             </button>
                           ))}
                         </div>
                         <div className="grid grid-cols-2 gap-1.5 mt-2">
-                          <button
-                            type="button"
-                            onClick={() => setDialTarget((prev) => prev.slice(0, -1))}
-                            className="rounded-lg border border-slate-300 bg-white py-1.5 text-xs hover:bg-slate-50"
-                          >
-                            Backspace
-                          </button>
-                          <Button className="!min-h-0 h-8 text-xs" onClick={() => void runCallAction('dial')} disabled={callActionRunning}>
-                            Dial
-                          </Button>
+                          <button type="button" onClick={() => setDialTarget((prev) => prev.slice(0, -1))} className="rounded-lg border border-slate-300 bg-white py-1.5 text-xs hover:bg-slate-50">Backspace</button>
+                          <Button className="!min-h-0 h-8 text-xs" onClick={() => void runCallAction('dial')} disabled={callActionRunning}>Dial</Button>
                         </div>
                         <p className="text-[10px] text-slate-500 mt-2">Keyboard: 0-9, *, #, Backspace, Enter</p>
                       </div>
@@ -626,6 +731,7 @@ const Pipeline: React.FC = () => {
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <Button variant="secondary" onClick={openWebClientFallback}>Open 3CX web client fallback</Button>
+                      <Button variant="outline" onClick={() => void runCallAction('active_calls')} disabled={callActionRunning}>Refresh active calls</Button>
                       {callActionMsg && <p className="text-xs text-slate-600">{callActionMsg}</p>}
                     </div>
                   </section>

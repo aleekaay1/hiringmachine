@@ -101,11 +101,17 @@ function buildActionCall(input: ActionPayload): ThreeCxCall {
       return { method: 'GET', path: '/xapi/v1/SystemStatus', fallbackPath: '/callcontrol' };
     case 'dial':
       if (!ext || !dest) throw new HttpError(400, 'dial requires extension and destination');
+      // callcontrol makecall expects timeout fields on many PBX setups; include both names for compatibility.
+      // xapi will ignore this because this project falls back to callcontrol when xapi is unavailable.
       return {
         method: 'POST',
         path: `/xapi/v1/CallControl/${encodeURIComponent(ext)}/makecall`,
         fallbackPath: `/callcontrol/${encodeURIComponent(ext)}/makecall`,
-        body: { destination: dest },
+        body: {
+          destination: dest,
+          timeout: 30,
+          timeoutSec: 30,
+        },
       };
     case 'hangup':
       if (!callId) throw new HttpError(400, 'hangup requires callId');
@@ -147,21 +153,138 @@ async function callThreeCx(apiToken: string, call: ThreeCxCall): Promise<Record<
   const baseUrl = Deno.env.get('THREECX_BASE_URL')?.trim();
   if (!baseUrl) throw new HttpError(500, 'THREECX_BASE_URL is missing');
   const buildUrl = (path: string) => `${normalizeBase(baseUrl)}${path.startsWith('/') ? '' : '/'}${path}`;
-  const runHttp = async (path: string) => fetch(buildUrl(path), {
-    method: call.method,
+  const runHttp = async (
+    path: string,
+    bodyOverride?: Record<string, unknown>,
+    methodOverride?: ThreeCxCall['method'],
+  ) => {
+    const method = methodOverride ?? call.method;
+    const effectiveBody = bodyOverride ?? call.body;
+    return fetch(buildUrl(path), {
+      method,
     headers: {
       Authorization: `Bearer ${apiToken}`,
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
-    body: call.body ? JSON.stringify(call.body) : undefined,
-  });
+      body: method === 'GET' || method === 'DELETE'
+        ? undefined
+        : (effectiveBody ? JSON.stringify(effectiveBody) : undefined),
+    });
+  };
   let attemptedPath = call.path;
   let res = await runHttp(call.path);
   if (res.status === 404 && call.fallbackPath) {
     console.warn('threecx primary path 404, retrying fallback path', { primary: call.path, fallback: call.fallbackPath });
     attemptedPath = call.fallbackPath;
     res = await runHttp(call.fallbackPath);
+  }
+  const collectDeviceIds = (input: unknown, out: Set<string>, depth = 0, includeGenericId = false): void => {
+    if (!input || depth > 4) return;
+    if (Array.isArray(input)) {
+      for (const item of input) collectDeviceIds(item, out, depth + 1);
+      return;
+    }
+    if (typeof input !== 'object') return;
+    const obj = input as Record<string, unknown>;
+    const directKeys = includeGenericId ? ['device_id', 'deviceid', 'deviceId', 'id'] : ['device_id', 'deviceid', 'deviceId'];
+    for (const k of directKeys) {
+      const raw = obj[k];
+      const val = String(raw ?? '').trim();
+      if (val) out.add(val);
+    }
+    for (const v of Object.values(obj)) {
+      if (v && (Array.isArray(v) || typeof v === 'object')) collectDeviceIds(v, out, depth + 1, includeGenericId);
+    }
+  };
+
+  const getJson = async (path: string): Promise<unknown> => {
+    const r = await runHttp(path, undefined, 'GET');
+    const t = await r.text();
+    try {
+      return JSON.parse(t) as unknown;
+    } catch {
+      return null;
+    }
+  };
+
+  // Some 3CX setups are strict about makecall request schema.
+  // If generic /callcontrol/{dn}/makecall returns 422, retry with common payload variants first.
+  if (res.status === 422 && attemptedPath.match(/^\/callcontrol\/[^/]+\/makecall$/i)) {
+    const baseDest = String(call.body?.destination ?? '').trim();
+    if (baseDest) {
+      const variants: Record<string, unknown>[] = [
+        { destination: baseDest },
+        { destination: baseDest, timeout: 30 },
+        { destination: baseDest, timeoutSec: 30 },
+      ];
+      for (const variant of variants) {
+        console.warn('threecx makecall 422, retrying with payload variant', { attemptedPath, variantKeys: Object.keys(variant) });
+        res = await runHttp(attemptedPath, variant);
+        if (res.ok) break;
+      }
+    }
+  }
+
+  // Some 3CX setups require device-scoped makecall endpoint.
+  // If generic /callcontrol/{dn}/makecall still returns 422, discover device and retry.
+  if (res.status === 422 && attemptedPath.match(/^\/callcontrol\/[^/]+\/makecall$/i)) {
+    const dnMatch = attemptedPath.match(/^\/callcontrol\/([^/]+)\/makecall$/i);
+    const dn = dnMatch?.[1] ? decodeURIComponent(dnMatch[1]) : '';
+    if (dn) {
+      const dnStatePath = `/callcontrol/${encodeURIComponent(dn)}`;
+      const dnDevicesPath = `/callcontrol/${encodeURIComponent(dn)}/devices`;
+      const allCallcontrolPath = '/callcontrol';
+      const [dnStatePayload, dnDevicesPayload, allPayload] = await Promise.all([
+        getJson(dnStatePath),
+        getJson(dnDevicesPath),
+        getJson(allCallcontrolPath),
+      ]);
+      const deviceCandidates = new Set<string>();
+      // /devices is authoritative; allow generic "id" there as device id.
+      collectDeviceIds(dnDevicesPayload, deviceCandidates, 0, true);
+      collectDeviceIds(dnStatePayload, deviceCandidates);
+      if (Array.isArray(allPayload)) {
+        const dnEntry = allPayload.find((x) => {
+          if (!x || typeof x !== 'object') return false;
+          const obj = x as Record<string, unknown>;
+          return String(obj.dn ?? '').trim() === dn;
+        });
+        collectDeviceIds(dnEntry, deviceCandidates);
+      }
+
+      let retried = false;
+      for (const deviceId of deviceCandidates) {
+        const deviceMakecallPath = `/callcontrol/${encodeURIComponent(dn)}/devices/${encodeURIComponent(deviceId)}/makecall`;
+        console.warn('threecx makecall 422, retrying device endpoint', { dn, deviceId, deviceMakecallPath });
+        attemptedPath = deviceMakecallPath;
+        const baseDest = String(call.body?.destination ?? '').trim();
+        const variants: Record<string, unknown>[] = baseDest
+          ? [
+            { destination: baseDest, timeoutSec: 30 },
+            { destination: baseDest, timeout: 30 },
+            { destination: baseDest },
+          ]
+          : [call.body ?? {}];
+        for (const variant of variants) {
+          res = await runHttp(deviceMakecallPath, variant);
+          retried = true;
+          if (res.ok) break;
+        }
+        retried = true;
+        if (res.ok) break;
+      }
+
+      if (!retried) {
+        console.warn('threecx makecall 422 and no device id found', {
+          dn,
+          dnStatePath,
+          dnDevicesPath,
+          allCallcontrolPath,
+          candidateCount: deviceCandidates.size,
+        });
+      }
+    }
   }
   const raw = await res.text();
   const payload = (() => {
