@@ -21,6 +21,8 @@ import {
 } from '../services/pipelineService';
 import { buildThreeCxWebclientUrl } from '../services/threeCxService';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
+import { sendEmail } from '../services/emailService';
+import { appendEmailSignatureToHtml } from '../services/emailSignatureHtml';
 import { ExternalLink, FileUp, Phone, RefreshCw, Search, Trash2, Volume2 } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
@@ -44,6 +46,65 @@ const DIAL_PAD = [
   { d: '0', s: '+' },
   { d: '#', s: '' },
 ];
+
+const PIPELINE_EMAIL_TEMPLATES = [
+  {
+    id: 'no_answer_followup',
+    label: 'No answer follow-up',
+    subject: 'Quick follow-up from Globe Life AIL – Paz Organization',
+    body: `Hi {{candidateName}},
+
+We tried reaching you regarding your resume and wanted to quickly follow up.
+
+Your profile looks aligned with one of our current opportunities, and we would like to connect for a short introductory call.
+
+Please reply with a convenient time, or you can join our career session link shared by our team.
+
+Best regards,`,
+  },
+  {
+    id: 'invite_session',
+    label: 'Invite to career session',
+    subject: 'Invitation: Live Career Overview Session',
+    body: `Hi {{candidateName}},
+
+Thank you for your interest in opportunities with Globe Life AIL Division – Paz Organization.
+
+We would like to invite you to our Live Career Overview Session where we explain the role, growth path, and expectations in detail.
+
+Reply to this email and our team will share the session schedule and next steps.
+
+Best regards,`,
+  },
+  {
+    id: 'post_call_next_step',
+    label: 'Post-call next steps',
+    subject: 'Next step after our conversation',
+    body: `Hi {{candidateName}},
+
+Thank you for speaking with us today.
+
+As discussed, your profile is moving to the next step. Please keep an eye on your email for scheduling and assessment instructions.
+
+If you have any questions, you can reply directly to this email.
+
+Best regards,`,
+  },
+  {
+    id: 'declined_polite',
+    label: 'Polite close / not moving',
+    subject: 'Update regarding your application',
+    body: `Hi {{candidateName}},
+
+Thank you for taking the time to connect with our team.
+
+At this stage, we are moving forward with candidates whose current profile is more closely aligned with this opening. We appreciate your interest and professionalism throughout the process.
+
+We wish you success and may reconnect for future roles that match your background.
+
+Best regards,`,
+  },
+] as const;
 
 function latestNoteText(bundle: PipelineCandidateBundle | null): string {
   const n = bundle?.notes?.[0];
@@ -99,6 +160,13 @@ const Pipeline: React.FC = () => {
   const [dialTarget, setDialTarget] = useState('');
   const [callActionMsg, setCallActionMsg] = useState<string | null>(null);
   const [toneEnabled, setToneEnabled] = useState(true);
+  const [emailTemplateId, setEmailTemplateId] = useState<string>('no_answer_followup');
+  const [emailTo, setEmailTo] = useState('');
+  const [emailCc, setEmailCc] = useState('');
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailBody, setEmailBody] = useState('');
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailMsg, setEmailMsg] = useState<string | null>(null);
   const [numPdfPages, setNumPdfPages] = useState<number>(0);
   const toneCtxRef = useRef<AudioContext | null>(null);
 
@@ -148,6 +216,15 @@ const Pipeline: React.FC = () => {
   useEffect(() => {
     if (selectedCandidateId && isAuthenticated) void loadSelectedBundle(selectedCandidateId);
   }, [selectedCandidateId, isAuthenticated]);
+
+  useEffect(() => {
+    const c = selectedBundle?.candidate;
+    if (!c) return;
+    setEmailTo(String(c.email || '').trim());
+    setEmailCc('');
+    setEmailMsg(null);
+    applyTemplate('no_answer_followup');
+  }, [selectedBundle?.candidate.id]);
 
   const filteredCandidates = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -299,6 +376,25 @@ const Pipeline: React.FC = () => {
     [dialTarget, selectedBundle?.candidate.phone],
   );
 
+  const selectedTemplate = useMemo(
+    () => PIPELINE_EMAIL_TEMPLATES.find((t) => t.id === emailTemplateId) ?? PIPELINE_EMAIL_TEMPLATES[0],
+    [emailTemplateId],
+  );
+
+  const applyTemplate = (templateId: string) => {
+    const t = PIPELINE_EMAIL_TEMPLATES.find((x) => x.id === templateId);
+    if (!t) return;
+    const name = (selectedBundle?.candidate.full_name || '').trim() || 'there';
+    setEmailTemplateId(templateId);
+    setEmailSubject(t.subject.replaceAll('{{candidateName}}', name));
+    setEmailBody(t.body.replaceAll('{{candidateName}}', name));
+  };
+
+  const plainToHtml = (text: string) => text
+    .split('\n')
+    .map((line) => `<p>${line || '&nbsp;'}</p>`)
+    .join('');
+
   const playDialTone = () => {
     if (!toneEnabled || typeof window === 'undefined') return;
     const Ctx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -359,6 +455,42 @@ const Pipeline: React.FC = () => {
     }
     window.open(url, '_blank', 'noopener,noreferrer');
     setCallActionMsg('Opened 3CX webclient.');
+  };
+
+  const sendPipelineEmail = async () => {
+    if (!selectedBundle?.candidate.id) return;
+    if (!emailTo.trim() || !emailSubject.trim() || !emailBody.trim()) {
+      setEmailMsg('Email, subject, and body are required.');
+      return;
+    }
+    setEmailSending(true);
+    setEmailMsg(null);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) {
+        setEmailMsg('You are not signed in.');
+        return;
+      }
+      const html = appendEmailSignatureToHtml(plainToHtml(emailBody));
+      const result = await sendEmail(token, {
+        to: emailTo.trim(),
+        cc: emailCc.trim() || undefined,
+        subject: emailSubject.trim(),
+        bodyHtml: html,
+        trigger: `pipeline_${emailTemplateId}`,
+        candidateId: selectedBundle.candidate.id,
+      });
+      if (!('ok' in result)) {
+        setEmailMsg(result.error || 'Failed to send email.');
+        return;
+      }
+      setEmailMsg('Email sent successfully.');
+    } catch (e) {
+      setEmailMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEmailSending(false);
+    }
   };
 
   const keypadPress = (digit: string) => {
@@ -631,10 +763,52 @@ const Pipeline: React.FC = () => {
                         <p className="text-[10px] text-slate-500 mt-2">Keyboard: 0-9, *, #, Backspace, Enter</p>
                       </div>
 
-                      <div className="flex-1 min-w-[260px] rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600 space-y-1.5">
-                        <p><span className="font-medium text-slate-700">No in-page call controls</span> while API mode is disabled.</p>
-                        <p>Use 3CX popup controls (hold/mute/hangup) during the live call.</p>
-                        <p className="text-slate-500">This avoids API failures and keeps calling stable.</p>
+                      <div className="flex-1 min-w-[300px] rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs font-semibold text-slate-700">Email composer</p>
+                          <select
+                            value={emailTemplateId}
+                            onChange={(e) => applyTemplate(e.target.value)}
+                            className="rounded-lg border border-slate-200 px-2 py-1 text-[11px]"
+                          >
+                            {PIPELINE_EMAIL_TEMPLATES.map((t) => (
+                              <option key={t.id} value={t.id}>{t.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <input
+                          value={emailTo}
+                          onChange={(e) => setEmailTo(e.target.value)}
+                          placeholder="To"
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+                        />
+                        <input
+                          value={emailCc}
+                          onChange={(e) => setEmailCc(e.target.value)}
+                          placeholder="CC (optional, comma separated)"
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+                        />
+                        <input
+                          value={emailSubject}
+                          onChange={(e) => setEmailSubject(e.target.value)}
+                          placeholder="Subject"
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+                        />
+                        <textarea
+                          value={emailBody}
+                          onChange={(e) => setEmailBody(e.target.value)}
+                          rows={8}
+                          placeholder="Compose email body..."
+                          className="w-full rounded-lg border border-slate-200 px-2.5 py-2 text-xs leading-relaxed"
+                        />
+                        <p className="text-[10px] text-slate-500">Signature auto-appends using your existing company email signature.</p>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-slate-500">{selectedTemplate?.label || 'Template'}</span>
+                          <Button className="!min-h-0 h-8 text-xs" onClick={() => void sendPipelineEmail()} disabled={emailSending}>
+                            {emailSending ? 'Sending…' : 'Send email'}
+                          </Button>
+                        </div>
+                        {emailMsg && <p className="text-[11px] text-slate-600">{emailMsg}</p>}
                       </div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
