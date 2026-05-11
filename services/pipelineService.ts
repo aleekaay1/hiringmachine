@@ -339,18 +339,26 @@ async function extractTextFromPdf(file: File): Promise<string> {
     const buf = await file.arrayBuffer();
     const task = (pdfjs as any).getDocument({ data: buf });
     const doc = await task.promise;
-    const pagesToRead = Math.min(doc.numPages, 5);
+    const pagesToRead = Math.min(doc.numPages, 8);
     let out = '';
     for (let i = 1; i <= pagesToRead; i += 1) {
       const page = await doc.getPage(i);
       const text = await page.getTextContent();
-      out += `\n${text.items.map((it: any) => String(it.str || '')).join(' ')}`;
+      const chunks: string[] = [];
+      for (const it of text.items as Array<any>) {
+        const part = String(it?.str || '');
+        if (!part) continue;
+        chunks.push(part);
+        if (it?.hasEOL) chunks.push('\n');
+        else chunks.push(' ');
+      }
+      out += `\n${chunks.join('')}`;
     }
     // OCR fallback for scanned PDFs with little/no text layer.
-    if (normalizeExtractText(out).length < 180) {
+    if (normalizeExtractText(out).length < 260) {
       try {
         const worker = await createWorker('eng');
-        const pagesForOcr = Math.min(doc.numPages, 2);
+        const pagesForOcr = Math.min(doc.numPages, 3);
         for (let i = 1; i <= pagesForOcr; i += 1) {
           const page = await doc.getPage(i);
           const viewport = page.getViewport({ scale: 2 });
@@ -589,9 +597,7 @@ export async function bulkUploadPipelineResumes(
       if (upErr) throw upErr;
       const { data: pub } = supabase.storage.from(PIPELINE_BUCKET).getPublicUrl(path);
 
-      const isPdf = (file.type || '').toLowerCase().includes('pdf');
-      const isImage = (file.type || '').toLowerCase().startsWith('image/');
-      const conversionStatus = isPdf || isImage ? 'not_required' : 'pending';
+      const conversionStatus: PipelineResume['conversion_status'] = 'not_required';
 
       emit(index, file.name, 'creating_resume', 78, 'Saving resume metadata...');
       const { data: resume, error: rErr } = await supabase
@@ -610,10 +616,7 @@ export async function bulkUploadPipelineResumes(
         .single();
       if (rErr) throw rErr;
 
-      if (conversionStatus === 'pending') {
-        emit(index, file.name, 'queueing_conversion', 92, 'Queueing document conversion...');
-        void invokePipelineConvertResume({ resume_id: (resume as PipelineResume).id });
-      }
+      emit(index, file.name, 'queueing_conversion', 92, 'Preparing preview...');
       created.push(candidate);
       emit(index, file.name, 'completed', 100, 'Completed.');
     } catch (err) {

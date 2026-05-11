@@ -872,11 +872,6 @@ const Pipeline: React.FC = () => {
                       <option key={r.id} value={r.id}>{r.original_filename}</option>
                     ))}
                   </select>
-                  {selectedResume && (
-                    <span className="text-[11px] rounded-full px-2 py-0.5 bg-slate-100 text-slate-700">
-                      {selectedResume.conversion_status}
-                    </span>
-                  )}
                   <Button variant="outline" className="!min-h-0 h-8 px-2 text-xs" onClick={() => void deleteCurrentCandidate()} disabled={loading}>
                     <Trash2 size={13} className="mr-1" /> Delete
                   </Button>
@@ -914,16 +909,13 @@ const Pipeline: React.FC = () => {
                     }
                     return (
                       <div className="p-4 text-sm text-slate-600 space-y-2">
-                        <p>This document type does not require external converter anymore; showing extracted text preview.</p>
-                        <p>Status: <strong>{selectedResume.conversion_status}</strong></p>
-                        {selectedResume.conversion_error && <p className="text-red-600">{selectedResume.conversion_error}</p>}
+                        <p>Document preview</p>
                         {docPreviewLoading && <p className="text-xs text-slate-500">Extracting text preview...</p>}
                         {docPreviewText && (
                           <pre className="whitespace-pre-wrap rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-700 max-h-[45vh] overflow-auto">
                             {docPreviewText}
                           </pre>
                         )}
-                        <Button onClick={() => void refreshConversion()} variant="outline">Retry optional conversion</Button>
                         <a href={url} target="_blank" rel="noreferrer" className="block text-blue-700 underline">Open source file</a>
                       </div>
                     );
