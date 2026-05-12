@@ -128,6 +128,15 @@ function buildCandidateProfilePdfBase64(row: Record<string, unknown>): { base64:
   addLine(`Current role: ${safeText(aq.currentRole)}`);
   addLine(`Background areas: ${Array.isArray(aq.backgroundAreas) ? aq.backgroundAreas.map((x) => String(x)).join(', ') : 'N/A'}`);
   addLine(`Sales experience: ${safeText(aq.salesExperience)}`);
+  const resumeUrlsPdf = Array.isArray(aq.resumeUrls)
+    ? aq.resumeUrls.map((x) => String(x || '').trim()).filter(Boolean)
+    : [];
+  if (resumeUrlsPdf.length) {
+    addLine(`Resume file URLs: ${resumeUrlsPdf.join('; ')}`);
+  } else {
+    addLine('Resume file URLs: N/A');
+  }
+  addLine(`LinkedIn profile: ${safeText(typeof aq.linkedinProfileUrl === 'string' ? aq.linkedinProfileUrl : '')}`);
   addLine(`What stood out: ${safeText(aq.whatStoodOut)}`);
   addLine(`Why good fit: ${safeText(aq.whyGoodFit)}`);
   addLine(`Position interest: ${safeText(aq.positionInterest)}`);
@@ -255,6 +264,8 @@ Deno.serve(async (req) => {
       const resumeUrls = Array.isArray(aq.resumeUrls)
         ? aq.resumeUrls.map((x) => String(x || '').trim()).filter(Boolean)
         : [];
+      const linkedinUrl =
+        typeof aq.linkedinProfileUrl === 'string' ? aq.linkedinProfileUrl.trim() : '';
       const attachments: Array<{ filename: string; content: string; encoding: 'base64'; contentType?: string }> = [];
       for (const resumeUrl of resumeUrls.slice(0, 3)) {
         const att = await downloadPublicFileAsAttachment(resumeUrl);
@@ -268,6 +279,7 @@ Deno.serve(async (req) => {
   <li>Status: ${notifyRow.status ?? '—'}</li>
 </ul>
 ${resumeUrls.length > 0 ? `<p><strong>Resume links</strong>: ${resumeUrls.map((u) => `<a href="${u}">${u}</a>`).join('<br/>')}</p>` : '<p><strong>Resume links</strong>: —</p>'}
+${linkedinUrl ? `<p><strong>LinkedIn</strong>: <a href="${linkedinUrl}">${linkedinUrl}</a></p>` : '<p><strong>LinkedIn</strong>: —</p>'}
       `.trim();
       const internalHtml = `${buildAssessmentInternalNotificationHtml(notifyRow)}<br/>${summaryHtml}<br/>${buildEmailSignatureHtml()}`;
       const internalRecipients = (Deno.env.get('ASSESSMENT_COMPLETE_NOTIFY_EMAIL')?.trim() || 'leaders@globelife-paz.com');

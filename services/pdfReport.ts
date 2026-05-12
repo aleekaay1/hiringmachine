@@ -1,5 +1,5 @@
 import { jsPDF } from 'jspdf';
-import type { Candidate } from '../types';
+import type { ApplicantQuestionnaire, Candidate } from '../types';
 import { getAssessmentSummary } from './assessmentSummary';
 
 type LineItem = { label: string; value: string };
@@ -135,6 +135,30 @@ export function buildCandidateReportPdf(candidate: Candidate): { doc: jsPDF; fil
     { label: 'Email', value: safeText(candidate.email) },
     { label: 'Phone', value: safeText(candidate.phone) },
   ]);
+
+  const aqCheckin = candidate.applicantQuestionnaire as ApplicantQuestionnaire | undefined;
+  if (aqCheckin && (aqCheckin.occupation || aqCheckin.resumeUrls?.length || aqCheckin.linkedinProfileUrl)) {
+    addHeading('Check-in (reception questionnaire)');
+    addKeyValues([
+      { label: 'Occupation', value: safeText(aqCheckin.occupation) },
+      { label: 'Current role / company', value: safeText(aqCheckin.currentRole) },
+      {
+        label: 'Background areas',
+        value: Array.isArray(aqCheckin.backgroundAreas) && aqCheckin.backgroundAreas.length
+          ? aqCheckin.backgroundAreas.join(', ')
+          : 'N/A',
+      },
+      { label: 'Sales / leadership experience', value: safeText(aqCheckin.salesExperience) },
+      { label: 'LinkedIn profile URL', value: safeText(aqCheckin.linkedinProfileUrl) },
+      {
+        label: 'Resume file URLs',
+        value:
+          aqCheckin.resumeUrls?.length
+            ? aqCheckin.resumeUrls.map((u, i) => `${i + 1}. ${u}`).join('\n')
+            : 'N/A',
+      },
+    ]);
+  }
 
   addHeading('2) Post Live Career Overview Exit Questionnaire');
 

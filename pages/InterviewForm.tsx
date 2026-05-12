@@ -12,6 +12,7 @@ import {
 import type { ApplicantQuestionnaire } from '../types';
 import { RECEPTION_BACKGROUND_AREAS, DEFAULT_ADMIN_DATA, PIPELINE_STAGE_AFTER_CHECK_IN } from '../types';
 import { triggerPostCheckinEmail } from '../services/candidateEmailTrigger';
+import { isValidLinkedInProfileUrl, normalizeLinkedInProfileUrl } from '../services/linkedinUrl';
 
 const RECEPTION_STORAGE_KEY = 'reception_candidate_id';
 
@@ -46,6 +47,7 @@ const InterviewForm: React.FC = () => {
     salesExperience: '',
     somethingAboutYourself: '',
     legallyEntitledCanada: '' as '' | 'yes' | 'no',
+    linkedinProfileUrl: '',
   });
 
   useEffect(() => {
@@ -71,6 +73,7 @@ const InterviewForm: React.FC = () => {
             salesExperience: q.salesExperience || '',
             somethingAboutYourself: q.somethingAboutYourself || '',
             legallyEntitledCanada: (q.legallyEntitledCanada as '' | 'yes' | 'no') || '',
+            linkedinProfileUrl: q.linkedinProfileUrl || '',
           });
         }
       });
@@ -109,6 +112,7 @@ const InterviewForm: React.FC = () => {
           salesExperience: q.salesExperience || '',
           somethingAboutYourself: q.somethingAboutYourself || '',
           legallyEntitledCanada: (q.legallyEntitledCanada as '' | 'yes' | 'no') || '',
+          linkedinProfileUrl: q.linkedinProfileUrl || '',
         });
       } else {
         setPreForm((prev) => ({ ...prev, email: c.email, firstName: c.firstName, lastName: c.lastName, phone: c.phone, city: c.city || '' }));
@@ -139,7 +143,17 @@ const InterviewForm: React.FC = () => {
     if (!preForm.occupation) e.occupation = 'Required';
     if (!preForm.backgroundAreas.length) e.backgroundAreas = 'Select at least one';
     if (!preForm.salesExperience.trim()) e.salesExperience = 'Required';
-    if (!resumeFiles.length) e.resumeFiles = 'Please upload your resume.';
+    const linkedinTrimmed = preForm.linkedinProfileUrl.trim();
+    if (linkedinTrimmed && !isValidLinkedInProfileUrl(linkedinTrimmed)) {
+      e.linkedinProfileUrl =
+        'Please enter a valid LinkedIn profile link (for example linkedin.com/in/your-name).';
+    }
+    const linkedinNormalized = normalizeLinkedInProfileUrl(linkedinTrimmed);
+    const hasNewResumeFiles = resumeFiles.length > 0;
+    const hasExistingResumes = (candidate?.applicantQuestionnaire?.resumeUrls?.length ?? 0) > 0;
+    if (!hasNewResumeFiles && !hasExistingResumes && !linkedinNormalized) {
+      e.resumeOrLinkedin = 'Please upload at least one resume file and/or enter your LinkedIn profile URL.';
+    }
     if (!preForm.legallyEntitledCanada) e.legallyEntitledCanada = 'Required';
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -156,6 +170,7 @@ const InterviewForm: React.FC = () => {
     try {
       setSubmittingPre(true);
       setErrors((prev) => ({ ...prev, _form: '' }));
+      const linkedinNormalized = normalizeLinkedInProfileUrl(preForm.linkedinProfileUrl.trim());
       const questionnaireBase: ApplicantQuestionnaire = {
         occupation: preForm.occupation,
         currentRole: preForm.currentRole.trim(),
@@ -165,6 +180,7 @@ const InterviewForm: React.FC = () => {
         somethingAboutYourself: preForm.somethingAboutYourself.trim(),
         legallyEntitledCanada: preForm.legallyEntitledCanada as 'yes' | 'no',
         resumeUrls: candidate?.applicantQuestionnaire?.resumeUrls || [],
+        linkedinProfileUrl: linkedinNormalized || undefined,
       };
 
       const disq =
@@ -368,20 +384,23 @@ const InterviewForm: React.FC = () => {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Upload your resume <span className="text-red-500">*</span>
+                Resume and/or LinkedIn profile
               </label>
+              <p className="text-xs text-gray-600 mb-2 text-left">
+                Provide <strong>at least one</strong>: upload a resume, paste your public LinkedIn profile URL, or both.
+              </p>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Upload resume (optional if LinkedIn is provided)</label>
               <input
                 type="file"
                 multiple
                 accept=".pdf,.doc,.docx,.rtf,.txt,image/*"
-                required
                 onChange={handleResumeChange}
                 className="block w-full text-sm text-gray-700 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-[#005EB8] file:text-white hover:file:bg-[#004a93]"
               />
               <p className="text-xs text-gray-500 mt-1">
-                If you have already provided a resume previously, uploading again will add additional files to your record.
+                If you already submitted files before, uploading again adds to your record.
               </p>
-              {errors.resumeFiles && <p className="text-xs text-red-600 mt-1">{errors.resumeFiles}</p>}
+              {errors.resumeOrLinkedin && <p className="text-xs text-red-600 mt-1">{errors.resumeOrLinkedin}</p>}
               {resumeFiles.length > 0 && (
                 <ul className="mt-2 text-xs text-gray-600 space-y-1">
                   {resumeFiles.map((file) => (
@@ -389,6 +408,22 @@ const InterviewForm: React.FC = () => {
                   ))}
                 </ul>
               )}
+              <div className="mt-4">
+                <label className="block text-xs font-medium text-gray-600 mb-1" htmlFor="linkedin-profile-url">
+                  LinkedIn profile URL (optional if resume is uploaded)
+                </label>
+                <input
+                  id="linkedin-profile-url"
+                  type="url"
+                  inputMode="url"
+                  autoComplete="url"
+                  placeholder="https://www.linkedin.com/in/your-profile"
+                  value={preForm.linkedinProfileUrl}
+                  onChange={(e) => setPreForm({ ...preForm, linkedinProfileUrl: e.target.value })}
+                  className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-[#005EB8] focus:ring-2 focus:outline-none text-sm text-left"
+                />
+                {errors.linkedinProfileUrl && <p className="text-xs text-red-600 mt-1">{errors.linkedinProfileUrl}</p>}
+              </div>
             </div>
 
             <div>

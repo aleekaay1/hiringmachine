@@ -31,11 +31,12 @@ import {
   type PipelineStage,
   type AdminData,
 } from '../types';
-import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react';
+import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare, ChevronDown, ChevronUp, Linkedin } from 'lucide-react';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import { canAccessSection, getCurrentUserProfile, type AppRole } from '../services/accessControl';
 import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
+import { hasResumeOrLinkedInMaterial } from '../services/linkedinUrl';
 
 const SUGGESTED_TAGS = ['Strong fit', 'Follow up', 'Licensing needed', 'High potential', 'Second interview', 'Offer extended'];
 
@@ -389,8 +390,14 @@ const AdminDashboard: React.FC = () => {
     const review = candidates.filter(c => c.fitCategory === 'Review').length;
     const notAligned = candidates.filter(c => c.fitCategory === 'Not Aligned').length;
     const assessmentComplete = candidates.filter(c => c.status === 'assessment_complete' || !!c.assessment).length;
-    const resumesUploaded = candidates.filter(c => c.applicantQuestionnaire?.resumeUrls?.length).length;
-    const resumesPendingReview = candidates.filter(c => (c.applicantQuestionnaire?.resumeUrls?.length || 0) > 0 && !getAdminData(c).resumeReviewedAt).length;
+    const resumesUploaded = candidates.filter(c =>
+      hasResumeOrLinkedInMaterial(c.applicantQuestionnaire?.resumeUrls, c.applicantQuestionnaire?.linkedinProfileUrl),
+    ).length;
+    const resumesPendingReview = candidates.filter(
+      c =>
+        hasResumeOrLinkedInMaterial(c.applicantQuestionnaire?.resumeUrls, c.applicantQuestionnaire?.linkedinProfileUrl) &&
+        !getAdminData(c).resumeReviewedAt,
+    ).length;
 
     const stageCounts: Record<string, number> = {};
     PIPELINE_STAGES.forEach(s => (stageCounts[s] = 0));
@@ -584,6 +591,7 @@ const AdminDashboard: React.FC = () => {
       'QuestionsAboutOpportunity',
       'ContactPermission',
       'ResumeUrls',
+      'LinkedinProfileUrl',
       'Score',
       'Fit',
       'Interviewed',
@@ -629,6 +637,7 @@ const AdminDashboard: React.FC = () => {
         q ? escapeCsv((q as any).questionsAboutOpportunity) : '',
         q ? (q as any).contactPermission : '',
         q?.resumeUrls?.length ? q.resumeUrls.join('; ') : '',
+        q?.linkedinProfileUrl ? escapeCsv(q.linkedinProfileUrl) : '',
         c.score ?? '',
         c.fitCategory || 'N/A',
         c.postInterview?.interviewCompleted ? 'Yes' : 'No',
@@ -1144,7 +1153,7 @@ const AdminDashboard: React.FC = () => {
                     <div className="flex justify-between"><span>High fit</span><span className="font-semibold">{dashboard.highFit}</span></div>
                     <div className="flex justify-between"><span>Review</span><span className="font-semibold">{dashboard.review}</span></div>
                     <div className="flex justify-between"><span>Not aligned</span><span className="font-semibold">{dashboard.notAligned}</span></div>
-                    <div className="flex justify-between"><span>Resumes pending review</span><span className="font-semibold">{dashboard.resumesPendingReview}</span></div>
+                    <div className="flex justify-between"><span>Resume / LinkedIn pending review</span><span className="font-semibold">{dashboard.resumesPendingReview}</span></div>
                   </div>
                 </div>
               </div>
@@ -1332,7 +1341,7 @@ const AdminDashboard: React.FC = () => {
               )}
             </div>
             <div className="overflow-y-auto flex-grow">
-              <div className="grid grid-cols-[34px,1.1fr,0.8fr,1.15fr,0.9fr,1.15fr,0.8fr,0.6fr,0.7fr] items-center gap-2 px-4 py-2 border-b border-gray-100 bg-[#f8fbff] text-[11px] font-semibold text-gray-500 uppercase tracking-wide sticky top-0 z-10">
+              <div className="grid grid-cols-[34px,1.1fr,0.8fr,1.15fr,0.9fr,1.15fr,0.8fr,0.6fr,0.85fr] items-center gap-2 px-4 py-2 border-b border-gray-100 bg-[#f8fbff] text-[11px] font-semibold text-gray-500 uppercase tracking-wide sticky top-0 z-10">
                 <input type="checkbox" checked={selectedIds.size === filteredCandidates.length && filteredCandidates.length > 0} onChange={selectAll} className="rounded border-gray-300 text-[#005EB8]" />
                 <span>Candidate Name</span>
                 <span>Phone</span>
@@ -1341,7 +1350,7 @@ const AdminDashboard: React.FC = () => {
                 <span>Current Status</span>
                 <span>Date & Time</span>
                 <span>Score</span>
-                <span>Resume</span>
+                <span>Resume / LinkedIn</span>
               </div>
               {filteredCandidates.map(c => {
                 const admin = getAdminData(c);
@@ -1349,7 +1358,7 @@ const AdminDashboard: React.FC = () => {
                 return (
                   <div
                     key={c.id}
-                    className={`grid grid-cols-[34px,1.1fr,0.8fr,1.15fr,0.9fr,1.15fr,0.8fr,0.6fr,0.7fr] items-center gap-2 p-3 border-b border-gray-100 transition-all ${
+                    className={`grid grid-cols-[34px,1.1fr,0.8fr,1.15fr,0.9fr,1.15fr,0.8fr,0.6fr,0.85fr] items-center gap-2 p-3 border-b border-gray-100 transition-all ${
                       selectedCandidate?.id === c.id
                         ? 'bg-gradient-to-r from-[#005EB8]/10 to-white border-l-4 border-l-[#005EB8]'
                         : 'hover:bg-gradient-to-r hover:from-gray-50 hover:to-white'
@@ -1384,18 +1393,31 @@ const AdminDashboard: React.FC = () => {
                     </div>
                     <div className="text-[11px] text-gray-700 truncate">{formatDateTimeCanadaEastern(c.timestamp)}</div>
                     <div className="text-[12px] text-gray-700">{c.score ?? '-'}</div>
-                    <div className="text-[12px] text-gray-700">
+                    <div className="text-[12px] text-gray-700 min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1">
                       {c.applicantQuestionnaire?.resumeUrls?.[0] ? (
                         <a
                           href={c.applicantQuestionnaire.resumeUrls[0]}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-[#005EB8] font-semibold hover:underline"
+                          className="text-[#005EB8] font-semibold hover:underline shrink-0"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          Open
+                          Resume
                         </a>
-                      ) : '-'}
+                      ) : null}
+                      {c.applicantQuestionnaire?.linkedinProfileUrl ? (
+                        <a
+                          href={c.applicantQuestionnaire.linkedinProfileUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-0.5 text-[#005EB8] font-semibold hover:underline shrink-0"
+                          onClick={(e) => e.stopPropagation()}
+                          title={c.applicantQuestionnaire.linkedinProfileUrl}
+                        >
+                          <Linkedin size={14} aria-hidden /> LI
+                        </a>
+                      ) : null}
+                      {!c.applicantQuestionnaire?.resumeUrls?.[0] && !c.applicantQuestionnaire?.linkedinProfileUrl ? '—' : null}
                     </div>
                   </div>
                 );
@@ -1639,10 +1661,20 @@ const AdminDashboard: React.FC = () => {
                           : 'bg-gray-50 text-gray-700 border-gray-200',
                       )}
                       {badge(
-                        selectedCandidate.applicantQuestionnaire?.resumeUrls?.length
-                          ? `Resumes: ${selectedCandidate.applicantQuestionnaire.resumeUrls.length}`
-                          : 'Resumes: 0',
-                        selectedCandidate.applicantQuestionnaire?.resumeUrls?.length
+                        (() => {
+                          const q = selectedCandidate.applicantQuestionnaire;
+                          const n = q?.resumeUrls?.length ?? 0;
+                          const li = q?.linkedinProfileUrl?.trim();
+                          const parts = [
+                            n > 0 ? `Resumes: ${n}` : null,
+                            li ? 'LinkedIn' : null,
+                          ].filter(Boolean);
+                          return parts.length ? parts.join(' · ') : 'No resume / LinkedIn';
+                        })(),
+                        hasResumeOrLinkedInMaterial(
+                          selectedCandidate.applicantQuestionnaire?.resumeUrls,
+                          selectedCandidate.applicantQuestionnaire?.linkedinProfileUrl,
+                        )
                           ? 'bg-blue-50 text-blue-800 border-blue-200'
                           : 'bg-gray-50 text-gray-700 border-gray-200',
                       )}
@@ -1672,13 +1704,17 @@ const AdminDashboard: React.FC = () => {
                   </div>
                 )}
 
-                {/* Resumes - prominent for admin review */}
-                {detailTab === 'profile' && (selectedCandidate.applicantQuestionnaire?.resumeUrls?.length ? (
+                {/* Resumes & LinkedIn */}
+                {detailTab === 'profile' &&
+                  (hasResumeOrLinkedInMaterial(
+                    selectedCandidate.applicantQuestionnaire?.resumeUrls,
+                    selectedCandidate.applicantQuestionnaire?.linkedinProfileUrl,
+                  ) ? (
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 space-y-3">
                     <div className="flex items-center justify-between">
                       <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                         <FileText size={20} className="text-[#005EB8]" />
-                        Resumes
+                        Resume &amp; LinkedIn
                         {getAdminData(selectedCandidate).resumeReviewedAt && (
                           <span className="text-xs font-normal text-green-600 bg-green-50 px-2 py-0.5 rounded">Reviewed</span>
                         )}
@@ -1689,23 +1725,42 @@ const AdminDashboard: React.FC = () => {
                         </Button>
                       )}
                     </div>
-                    <div className="flex flex-wrap gap-3">
-                      {selectedCandidate.applicantQuestionnaire.resumeUrls.map((url, i) => (
+                    {selectedCandidate.applicantQuestionnaire?.linkedinProfileUrl && (
+                      <div>
+                        <p className="text-xs font-medium text-gray-500 mb-1">LinkedIn profile</p>
                         <a
-                          key={i}
-                          href={url}
+                          href={selectedCandidate.applicantQuestionnaire.linkedinProfileUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-[#005EB8] text-[#005EB8] rounded-lg text-sm font-medium hover:bg-blue-50"
+                          className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-[#0a66c2] text-[#0a66c2] rounded-lg text-sm font-medium hover:bg-blue-50"
                         >
-                          <FileText size={16} /> Resume {i + 1}
+                          <Linkedin size={18} aria-hidden />
+                          Open profile
                         </a>
-                      ))}
-                    </div>
+                      </div>
+                    )}
+                    {selectedCandidate.applicantQuestionnaire?.resumeUrls?.length ? (
+                      <div>
+                        <p className="text-xs font-medium text-gray-500 mb-1">Resume files</p>
+                        <div className="flex flex-wrap gap-3">
+                          {selectedCandidate.applicantQuestionnaire!.resumeUrls!.map((url, i) => (
+                            <a
+                              key={i}
+                              href={url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-[#005EB8] text-[#005EB8] rounded-lg text-sm font-medium hover:bg-blue-50"
+                            >
+                              <FileText size={16} /> Resume {i + 1}
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="bg-slate-50 border border-dashed border-slate-200 rounded-xl p-4 text-center text-sm text-gray-500">
-                    No resumes uploaded.
+                    No resume or LinkedIn on file.
                   </div>
                 ))}
 
@@ -1962,6 +2017,37 @@ const AdminDashboard: React.FC = () => {
                           <div className="sm:col-span-2"><p className="text-gray-500">Sales / leadership experience</p><p className="text-gray-800">{(selectedCandidate.applicantQuestionnaire as any).salesExperience || '—'}</p></div>
                           <div className="sm:col-span-2"><p className="text-gray-500">Something about yourself (not on resume)</p><p className="text-gray-800">{(selectedCandidate.applicantQuestionnaire as any).somethingAboutYourself || '—'}</p></div>
                           <div><p className="text-gray-500">Legally entitled to work in Canada</p><p className="font-medium capitalize">{(selectedCandidate.applicantQuestionnaire as any).legallyEntitledCanada}</p></div>
+                          <div className="sm:col-span-2">
+                            <p className="text-gray-500">LinkedIn profile (check-in)</p>
+                            {selectedCandidate.applicantQuestionnaire.linkedinProfileUrl ? (
+                              <a
+                                href={selectedCandidate.applicantQuestionnaire.linkedinProfileUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[#0a66c2] font-medium hover:underline break-all"
+                              >
+                                {selectedCandidate.applicantQuestionnaire.linkedinProfileUrl}
+                              </a>
+                            ) : (
+                              <p className="text-gray-800">—</p>
+                            )}
+                          </div>
+                          <div className="sm:col-span-2">
+                            <p className="text-gray-500">Resume files (check-in)</p>
+                            {selectedCandidate.applicantQuestionnaire.resumeUrls?.length ? (
+                              <ul className="list-disc list-inside text-gray-800 space-y-1">
+                                {selectedCandidate.applicantQuestionnaire.resumeUrls.map((url, i) => (
+                                  <li key={i}>
+                                    <a href={url} target="_blank" rel="noopener noreferrer" className="text-[#005EB8] hover:underline break-all">
+                                      File {i + 1}
+                                    </a>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="text-gray-800">—</p>
+                            )}
+                          </div>
                         </>
                       )}
                       {(selectedCandidate.applicantQuestionnaire as any).whatStoodOut != null && (

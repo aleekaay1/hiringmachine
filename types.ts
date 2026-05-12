@@ -7,6 +7,8 @@ export interface ApplicantQuestionnaire {
   somethingAboutYourself: string;
   legallyEntitledCanada: 'yes' | 'no';
   resumeUrls: string[];
+  /** Normalized public profile URL (https://www.linkedin.com/in/…), optional alongside or instead of resumes */
+  linkedinProfileUrl?: string;
   /** Legacy fields (optional) for older records */
   whatStoodOut?: string;
   whyGoodFit?: string;

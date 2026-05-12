@@ -65,6 +65,9 @@ export function buildAssessmentInternalNotificationHtml(row: AssessmentNotifyCan
   const backgroundAreas = Array.isArray(aq.backgroundAreas)
     ? aq.backgroundAreas.map((x) => String(x)).join(', ')
     : '—';
+  const resumeUrlsJoined = Array.isArray(aq.resumeUrls)
+    ? aq.resumeUrls.map((x) => String(x || '').trim()).filter(Boolean).join('; ')
+    : '';
 
   return `
 <p>A candidate has completed the <strong>Leadership &amp; Career Assessment</strong>. Use the details below for follow-up.</p>
@@ -81,6 +84,8 @@ export function buildAssessmentInternalNotificationHtml(row: AssessmentNotifyCan
   <tr><td><strong>Current role</strong></td><td>${fmt(aq.currentRole as string | undefined)}</td></tr>
   <tr><td><strong>Background areas</strong></td><td>${fmt(backgroundAreas)}</td></tr>
   <tr><td><strong>Sales experience</strong></td><td>${fmt(aq.salesExperience as string | undefined)}</td></tr>
+  <tr><td><strong>LinkedIn (check-in)</strong></td><td>${fmt(aq.linkedinProfileUrl as string | undefined)}</td></tr>
+  <tr><td><strong>Resume file URLs</strong></td><td>${fmt(resumeUrlsJoined || undefined)}</td></tr>
   <tr><td><strong>Competitiveness (1-10)</strong></td><td>${fmtNum(Number(assessment.competitiveness ?? NaN))}</td></tr>
   <tr><td><strong>Money motivation (1-10)</strong></td><td>${fmtNum(Number(assessment.moneyMotivation ?? NaN))}</td></tr>
   <tr><td><strong>Submitted</strong></td><td>${submitted}</td></tr>
