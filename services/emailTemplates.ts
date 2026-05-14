@@ -1,6 +1,12 @@
 import { buildEmailSignatureHtml } from './emailSignatureHtml';
 import { POST_CHECKIN_EMAIL_SUBJECT, POST_CHECKIN_EMAIL_BODY_HTML } from './postCheckinEmailTemplate';
-import { DEFAULT_ASSESSMENT_LOOKUP_URL, ZOOM_MEETING_URL } from './hiringUrls';
+import {
+  DEFAULT_ASSESSMENT_LOOKUP_URL,
+  LIVE_SESSION_RESCHEDULE_CALENDLY_URL,
+  POST_CHECKIN_DEFAULT_SESSION_DATE,
+  POST_CHECKIN_DEFAULT_SESSION_TIME,
+  ZOOM_MEETING_URL,
+} from './hiringUrls';
 
 /** Merge fields for candidate data in email templates */
 export const EMAIL_MERGE_FIELDS = [
@@ -26,7 +32,7 @@ export interface EmailTemplate {
 
 /**
  * Manual stage emails (admin buttons). Check-in is also sent automatically on form submit (Edge Function).
- * Stage 3 → assessment link. Stage 5 → evaluation (manual only).
+ * Optional Vimeo variants for later: `emailVideoEmbeds.ts`, `candidateEmailVimeoPlan.ts` (not merged into live bodies).
  */
 export const EMAIL_TEMPLATES: EmailTemplate[] = [
   {
@@ -38,25 +44,50 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
   },
   {
     id: 'stage3_assessment_link',
-    name: 'Leadership assessment form sent',
-    hint: 'After live career overview attendance.',
+    name: 'Leadership assessment (after session attended)',
+    hint: 'Primary: session attended → assessment link.',
     subject: 'Your Leadership Assessment – next step',
     bodyHtml: `
-<p>Dear {{firstName}},</p>
-<p>Thank you for attending the Live Online Career Session.</p>
-<p>This session was designed to provide a clear and transparent overview of the business, expectations, and long-term opportunity within the Globe Life AIL Division – Paz Organization. Attendance reflects a level of interest and initiative that is recognized and appreciated.</p>
-<p>The next step in the selection process is to complete the <strong>Leadership &amp; Career Assessment</strong>.</p>
-<p>This assessment is designed to evaluate alignment, mindset, and overall fit for a performance-driven, leadership-oriented environment. It is a critical step in determining which candidates will move forward in the hiring process.</p>
-<p>Please use the link below to access the assessment. The same email address used during the check-in process will be required to retrieve the record:</p>
-<p><strong><a href="{{assessmentLookupUrl}}">{{assessmentLookupUrl}}</a></strong></p>
-<p><strong>Important Guidelines:</strong></p>
-<ul>
-<li>Complete the assessment in one sitting</li>
-<li>Set aside uninterrupted time to provide thoughtful and accurate responses</li>
-<li>Ensure all answers reflect personal perspective and professional intent</li>
-</ul>
-<p>Only candidates who successfully complete this step and meet the required standards will be contacted for a final one-on-one hiring interview. During that conversation, alignment, goals, and long-term growth potential within the organization will be further evaluated.</p>
-<p>If there are any issues accessing the assessment, a reply to this email will ensure prompt support.</p>
+<p>Hi {{firstName}},</p>
+<p>Thank you for attending today’s Live Online Career Session.</p>
+<p>The next step in the process is to complete the <strong>Leadership &amp; Career Assessment</strong> using the link below:</p>
+<p><strong>{{Assessment Link}}</strong></p>
+<p>This assessment is designed to help us evaluate overall fit, mindset, professionalism, and leadership potential within our performance-driven environment.</p>
+<p>Please complete it in one sitting and answer thoughtfully and honestly.</p>
+<p>We look forward to reviewing your submission.</p>
+<p>Best regards,</p>
+{{emailSignature}}
+    `.trim(),
+  },
+  {
+    id: 'stage3_assessment_link_post_overview',
+    name: 'Leadership assessment (post overview / CEO follow-up)',
+    hint: 'Alternate after career overview; Alex Paz sign-off in copy.',
+    subject: 'Your next step: Leadership Assessment',
+    bodyHtml: `
+<p>Hi {{firstName}},</p>
+<p>Thank you for attending our live online career session.</p>
+<p>Your next step is to complete the <strong>Leadership &amp; Career Assessment</strong> using the link below:</p>
+<p><strong>{{Assessment Link}}</strong></p>
+<p>We are currently moving forward with candidates who demonstrate responsiveness, professionalism, and consistency throughout the process.</p>
+<p>Please complete the assessment as soon as possible to remain under consideration.</p>
+<p>Best regards,<br/>Alex Paz<br/>CEO &amp; Agency Owner<br/>Globe Life – Paz Organization</p>
+{{emailSignature}}
+    `.trim(),
+  },
+  {
+    id: 'missed_live_session_reschedule',
+    name: 'Missed live session – reschedule (one-time)',
+    hint: 'Did not attend live overview; Calendly reschedule.',
+    subject: 'One-time opportunity to reschedule your Live Online Career Session',
+    bodyHtml: `
+<p>Hi {{firstName}},</p>
+<p>We noticed you were unable to attend the live career session today.</p>
+<p>Because we saw potential in your initial application, we are extending a one-time opportunity to reschedule your session.</p>
+<p>Please use the link below to select a new session time:</p>
+<p><strong><a href="{{calendlyRescheduleUrl}}" target="_blank" rel="noopener noreferrer">{{calendlyRescheduleUrl}}</a></strong></p>
+<p>Please note that punctuality, focus, and responsiveness are important standards within our organization.</p>
+<p>We look forward to seeing you there.</p>
 <p>Best regards,</p>
 {{emailSignature}}
     `.trim(),
@@ -80,6 +111,8 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
     `.trim(),
   },
 ];
+
+export type CrmEmailTemplateId = (typeof EMAIL_TEMPLATES)[number]['id'];
 
 /**
  * Stage 4 – sent after Leadership Assessment submission (automation only; not a manual button).
@@ -119,10 +152,25 @@ export function mergeTemplate(
     '{{candidateName}}': candidateName,
     '{{zoomUrl}}': ZOOM_MEETING_URL,
     '{{assessmentLookupUrl}}': DEFAULT_ASSESSMENT_LOOKUP_URL,
+    '{{Date}}': POST_CHECKIN_DEFAULT_SESSION_DATE,
+    '{{Time}}': POST_CHECKIN_DEFAULT_SESSION_TIME,
+    '{{sessionDate}}': POST_CHECKIN_DEFAULT_SESSION_DATE,
+    '{{sessionTime}}': POST_CHECKIN_DEFAULT_SESSION_TIME,
+    '{{calendlyRescheduleUrl}}': LIVE_SESSION_RESCHEDULE_CALENDLY_URL,
     ...(extras || {}),
   };
   const signature = buildEmailSignatureHtml(options?.siteOrigin);
   map['{{emailSignature}}'] = signature;
+
+  const assessUrl = map['{{assessmentLookupUrl}}'] || '';
+  const zoomUrlVal = map['{{zoomUrl}}'] || '';
+  map['{{First Name}}'] = map['{{firstName}}'];
+  map['{{Assessment Link}}'] = assessUrl
+    ? `<a href="${assessUrl}" target="_blank" rel="noopener noreferrer">${assessUrl}</a>`
+    : '';
+  map['{{Zoom Link}}'] = zoomUrlVal
+    ? `<a href="${zoomUrlVal}" target="_blank" rel="noopener noreferrer">${zoomUrlVal}</a>`
+    : '';
 
   let sub = subject;
   let body = bodyHtml;
