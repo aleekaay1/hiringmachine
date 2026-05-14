@@ -19,6 +19,10 @@ export interface SendEmailParams {
   /** Stored in email_send_logs.trigger_label for auditing. */
   trigger?: string;
   candidateId?: string;
+  /** RFC5322 Message-ID this message is replying to (threading in Gmail / Outlook). */
+  inReplyTo?: string;
+  /** Space-separated list of prior Message-IDs in the thread. */
+  references?: string;
 }
 
 /** Send email via Edge Function. Requires auth token. */
@@ -48,6 +52,8 @@ export async function sendEmail(
       cc: params.cc?.trim() || undefined,
       trigger: params.trigger?.trim() || undefined,
       candidateId: params.candidateId?.trim() || undefined,
+      inReplyTo: params.inReplyTo?.trim() || undefined,
+      references: params.references?.trim() || undefined,
       attachments:
         params.attachments?.map((a) => ({
           filename: a.filename,

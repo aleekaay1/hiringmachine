@@ -114,6 +114,21 @@ export interface PipelineIncomingEmailLog {
   updated_at: string;
 }
 
+/** Row from public.email_send_logs (server-sent / outbox audit). */
+export interface PipelineEmailSendLog {
+  id: string;
+  source: string;
+  trigger_label: string | null;
+  from_email: string;
+  to_email: string;
+  cc_email: string | null;
+  subject: string;
+  candidate_id: string | null;
+  status: string;
+  created_at: string;
+  error_message: string | null;
+}
+
 export interface PipelineCandidateBundle {
   candidate: PipelineCandidate;
   resumes: PipelineResume[];
@@ -812,6 +827,17 @@ export async function listPipelineIncomingEmailLogs(candidateId: string): Promis
     .limit(200);
   if (error) throw error;
   return (data || []) as PipelineIncomingEmailLog[];
+}
+
+export async function listPipelineEmailSendLogs(candidateId: string): Promise<PipelineEmailSendLog[]> {
+  const { data, error } = await supabase
+    .from('email_send_logs')
+    .select('id,source,trigger_label,from_email,to_email,cc_email,subject,candidate_id,status,created_at,error_message')
+    .eq('candidate_id', candidateId)
+    .order('created_at', { ascending: false })
+    .limit(150);
+  if (error) throw error;
+  return (data || []) as PipelineEmailSendLog[];
 }
 
 export async function syncPipelineIncomingEmails(days = 10, limit = 80): Promise<{ synced: number; mapped: number }> {

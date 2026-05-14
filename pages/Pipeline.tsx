@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Layout from '../components/Layout';
+import { CandidateMailbox } from '../components/CandidateMailbox';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import mammoth from 'mammoth';
@@ -13,12 +14,14 @@ import {
   getPipelineResumeViewerKind,
   listPipelineCandidates,
   listPipelineIncomingEmailLogs,
+  listPipelineEmailSendLogs,
   logPipelineCallAction,
   savePipelineEvaluation,
   syncPipelineIncomingEmails,
   triggerPipelineResumeConversion,
   type PipelineCandidate,
   type PipelineCandidateBundle,
+  type PipelineEmailSendLog,
   type PipelineIncomingEmailLog,
   type PipelineCandidateProfile,
   type PipelineUploadProgress,
@@ -29,6 +32,7 @@ import {
 import { buildThreeCxWebclientUrl } from '../services/threeCxService';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { sendEmail } from '../services/emailService';
+import { normalizeMessageIdForHeader, subjectForReply } from '../services/inboundEmailFormat';
 import { appendEmailSignatureToHtml } from '../services/emailSignatureHtml';
 import { ExternalLink, FileUp, Phone, RefreshCw, Search, Trash2, Volume2 } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
@@ -110,6 +114,14 @@ At this stage, we are moving forward with candidates whose current profile is mo
 We wish you success and may reconnect for future roles that match your background.
 
 Best regards,`,
+  },
+  {
+    id: 'inbox_reply',
+    label: 'Inbox / custom reply',
+    subject: '',
+    body: `Hi {{candidateName}},
+
+`,
   },
 ] as const;
 
@@ -236,8 +248,11 @@ const Pipeline: React.FC = () => {
   const [emailSending, setEmailSending] = useState(false);
   const [emailMsg, setEmailMsg] = useState<string | null>(null);
   const [incomingEmailLogs, setIncomingEmailLogs] = useState<PipelineIncomingEmailLog[]>([]);
+  const [emailSendLogs, setEmailSendLogs] = useState<PipelineEmailSendLog[]>([]);
   const [incomingSyncing, setIncomingSyncing] = useState(false);
   const [incomingMsg, setIncomingMsg] = useState<string | null>(null);
+  const [emailInReplyTo, setEmailInReplyTo] = useState<string | null>(null);
+  const [emailReferences, setEmailReferences] = useState<string | null>(null);
   const [profileFullName, setProfileFullName] = useState('');
   const [profileEmail, setProfileEmail] = useState('');
   const [profilePhone, setProfilePhone] = useState('');
@@ -256,6 +271,7 @@ const Pipeline: React.FC = () => {
   const [docPreviewLoading, setDocPreviewLoading] = useState(false);
   const [numPdfPages, setNumPdfPages] = useState<number>(0);
   const toneCtxRef = useRef<AudioContext | null>(null);
+  const emailBodyRef = useRef<HTMLTextAreaElement | null>(null);
 
   const loadCandidates = async () => {
     setError(null);
@@ -310,6 +326,8 @@ const Pipeline: React.FC = () => {
     setEmailTo(String(c.email || '').trim());
     setEmailCc('');
     setEmailMsg(null);
+    setEmailInReplyTo(null);
+    setEmailReferences(null);
     applyTemplate('no_answer_followup');
     const profile = readCandidateProfile(c);
     setProfileFullName(c.full_name || '');
@@ -325,6 +343,9 @@ const Pipeline: React.FC = () => {
     void listPipelineIncomingEmailLogs(c.id)
       .then(setIncomingEmailLogs)
       .catch((e) => setIncomingMsg(e instanceof Error ? e.message : String(e)));
+    void listPipelineEmailSendLogs(c.id)
+      .then(setEmailSendLogs)
+      .catch(() => setEmailSendLogs([]));
   }, [selectedBundle?.candidate.id]);
 
   const selectedResume: PipelineResume | null = useMemo(() => {
@@ -563,11 +584,6 @@ const Pipeline: React.FC = () => {
     () => (selectedBundle?.callLogs || []).filter((x) => x.action === 'email_sent' || x.action === 'email_send_failed'),
     [selectedBundle?.callLogs],
   );
-  const incomingLogs = useMemo(
-    () => [...incomingEmailLogs].sort((a, b) => new Date(b.received_at).getTime() - new Date(a.received_at).getTime()),
-    [incomingEmailLogs],
-  );
-
   const applyTemplate = (templateId: string) => {
     const t = PIPELINE_EMAIL_TEMPLATES.find((x) => x.id === templateId);
     if (!t) return;
@@ -575,6 +591,23 @@ const Pipeline: React.FC = () => {
     setEmailTemplateId(templateId);
     setEmailSubject(t.subject.replaceAll('{{candidateName}}', name));
     setEmailBody(t.body.replaceAll('{{candidateName}}', name));
+    setEmailInReplyTo(null);
+    setEmailReferences(null);
+  };
+
+  const fillComposeFromIncomingReply = (log: PipelineIncomingEmailLog) => {
+    const name = (selectedBundle?.candidate.full_name || '').trim() || 'there';
+    const t = PIPELINE_EMAIL_TEMPLATES.find((x) => x.id === 'inbox_reply');
+    setEmailTemplateId('inbox_reply');
+    setEmailTo(String(log.from_email || '').trim());
+    setEmailCc('');
+    setEmailSubject(subjectForReply(log.subject));
+    setEmailBody((t?.body || `Hi {{candidateName}},\n\n`).replaceAll('{{candidateName}}', name));
+    const mid = normalizeMessageIdForHeader(log.message_id);
+    setEmailInReplyTo(mid);
+    setEmailReferences(mid);
+    setEmailMsg(null);
+    emailBodyRef.current?.focus();
   };
 
   const plainToHtml = (text: string) => text
@@ -667,6 +700,8 @@ const Pipeline: React.FC = () => {
         bodyHtml: html,
         trigger: `pipeline_${emailTemplateId}`,
         candidateId: selectedBundle.candidate.id,
+        inReplyTo: emailInReplyTo?.trim() || undefined,
+        references: emailReferences?.trim() || undefined,
       });
       const { data: u } = await supabase.auth.getUser();
       const actorLabel = String(u.user?.user_metadata?.full_name || u.user?.user_metadata?.name || u.user?.email || '').trim() || undefined;
@@ -690,6 +725,8 @@ const Pipeline: React.FC = () => {
         return;
       }
       setEmailMsg('Email sent successfully.');
+      setEmailInReplyTo(null);
+      setEmailReferences(null);
       await logPipelineCallAction({
         candidateId: selectedBundle.candidate.id,
         resumeId: selectedResume?.id ?? null,
@@ -705,6 +742,12 @@ const Pipeline: React.FC = () => {
         actorLabel,
       });
       await loadSelectedBundle(selectedBundle.candidate.id);
+      try {
+        const out = await listPipelineEmailSendLogs(selectedBundle.candidate.id);
+        setEmailSendLogs(out);
+      } catch {
+        /* ignore */
+      }
     } catch (e) {
       setEmailMsg(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1063,7 +1106,13 @@ const Pipeline: React.FC = () => {
                           placeholder="Subject"
                           className="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
                         />
+                        {emailInReplyTo && (
+                          <p className="text-[10px] text-emerald-800 bg-emerald-50 border border-emerald-100 rounded-lg px-2 py-1">
+                            Replying in thread (In-Reply-To set). Send keeps the conversation linked in Gmail / Outlook.
+                          </p>
+                        )}
                         <textarea
+                          ref={emailBodyRef}
                           value={emailBody}
                           onChange={(e) => setEmailBody(e.target.value)}
                           rows={8}
@@ -1085,6 +1134,17 @@ const Pipeline: React.FC = () => {
                       {callActionMsg && <p className="text-xs text-slate-600">{callActionMsg}</p>}
                     </div>
                   </section>
+
+                  <CandidateMailbox
+                    incomingLogs={incomingEmailLogs}
+                    sendLogs={emailSendLogs}
+                    pipelineEmailLogs={emailLogs}
+                    syncing={incomingSyncing}
+                    syncMessage={incomingMsg}
+                    onSync={() => void syncIncomingEmails()}
+                    onReply={fillComposeFromIncomingReply}
+                    candidateEmail={String(selectedBundle.candidate.email || profileEmail || '').trim()}
+                  />
 
                   <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
                     <section className="rounded-xl border border-slate-200 p-3 space-y-2">
@@ -1154,69 +1214,6 @@ const Pipeline: React.FC = () => {
                           <p className="text-slate-500">Failed</p>
                           <p className="font-semibold text-slate-900">{selectedBundle.callLogs.filter((x) => x.outcome === 'failed').length}</p>
                         </div>
-                      </div>
-                      <div className="rounded-lg border border-slate-200 bg-white p-2 space-y-2">
-                        <p className="text-[11px] font-semibold text-slate-700 uppercase tracking-wide">Email logs</p>
-                        {emailLogs.length === 0 ? (
-                          <p className="text-[11px] text-slate-500">No emails logged yet for this candidate/resume.</p>
-                        ) : (
-                          <div className="max-h-36 overflow-auto space-y-1.5">
-                            {emailLogs.map((log) => {
-                              const req = (log.request_payload || {}) as Record<string, unknown>;
-                              return (
-                                <details key={log.id} className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1.5">
-                                  <summary className="cursor-pointer list-none flex items-center justify-between gap-2 text-[11px] text-slate-700">
-                                    <span className="truncate">{String(req.to || '—')} · {log.action === 'email_sent' ? 'sent' : 'failed'}</span>
-                                    <span className="text-slate-500">{formatDateTimeCanadaEastern(log.created_at)}</span>
-                                  </summary>
-                                  <div className="mt-1 text-[10px] text-slate-600 space-y-0.5">
-                                    <p><strong>To:</strong> {String(req.to || '—')}</p>
-                                    <p><strong>CC:</strong> {String(req.cc || '—')}</p>
-                                    <p><strong>Subject:</strong> {String(req.subject || '—')}</p>
-                                    <p><strong>Template:</strong> {String(req.templateId || '—')}</p>
-                                    <p><strong>When:</strong> {formatDateTimeCanadaEastern(log.created_at)}</p>
-                                  </div>
-                                </details>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                      <div className="rounded-lg border border-slate-200 bg-white p-2 space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-[11px] font-semibold text-slate-700 uppercase tracking-wide">Incoming replies</p>
-                          <Button
-                            variant="outline"
-                            className="!min-h-0 h-7 px-2 text-[11px]"
-                            onClick={() => void syncIncomingEmails()}
-                            disabled={incomingSyncing}
-                          >
-                            {incomingSyncing ? 'Syncing…' : 'Sync inbox'}
-                          </Button>
-                        </div>
-                        {incomingMsg && <p className="text-[11px] text-slate-600">{incomingMsg}</p>}
-                        {incomingLogs.length === 0 ? (
-                          <p className="text-[11px] text-slate-500">No incoming replies matched yet.</p>
-                        ) : (
-                          <div className="max-h-36 overflow-auto space-y-1.5">
-                            {incomingLogs.map((log) => (
-                              <details key={log.id} className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1.5">
-                                <summary className="cursor-pointer list-none flex items-center justify-between gap-2 text-[11px] text-slate-700">
-                                  <span className="truncate">{log.from_email || '—'} · reply</span>
-                                  <span className="text-slate-500">{formatDateTimeCanadaEastern(log.received_at)}</span>
-                                </summary>
-                                <div className="mt-1 text-[10px] text-slate-600 space-y-0.5">
-                                  <p><strong>From:</strong> {log.from_email || '—'}</p>
-                                  <p><strong>To:</strong> {log.to_email || '—'}</p>
-                                  <p><strong>CC:</strong> {log.cc_email || '—'}</p>
-                                  <p><strong>Subject:</strong> {log.subject || '—'}</p>
-                                  {log.snippet && <p><strong>Snippet:</strong> {log.snippet}</p>}
-                                  <p><strong>When:</strong> {formatDateTimeCanadaEastern(log.received_at)}</p>
-                                </div>
-                              </details>
-                            ))}
-                          </div>
-                        )}
                       </div>
                     </section>
                   </div>

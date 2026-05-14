@@ -86,6 +86,8 @@ Deno.serve(async (req) => {
       body?.candidateId != null && String(body.candidateId).trim()
         ? String(body.candidateId).trim()
         : null;
+    const inReplyTo = typeof body?.inReplyTo === 'string' ? body.inReplyTo.trim() : '';
+    const references = typeof body?.references === 'string' ? body.references.trim() : '';
 
     if (!to || !subject) {
       return new Response(JSON.stringify({ error: 'Missing to or subject' }), {
@@ -129,6 +131,8 @@ Deno.serve(async (req) => {
             text: bodyText || (typeof bodyHtml === 'string' ? bodyHtml.replace(/<[^>]*>/g, '') : ''),
             html: typeof bodyHtml === 'string' ? bodyHtml : undefined,
             ...(attachments.length ? { attachments } : {}),
+            ...(inReplyTo ? { inReplyTo } : {}),
+            ...(references ? { references } : {}),
           },
           (err: Error | null) => (err ? reject(err) : resolve())
         );
