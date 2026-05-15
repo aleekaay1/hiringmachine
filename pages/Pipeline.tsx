@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Layout from '../components/Layout';
 import { CandidateMailbox } from '../components/CandidateMailbox';
 import { Button } from '../components/UI';
@@ -16,6 +17,7 @@ import {
   listPipelineIncomingEmailLogs,
   listPipelineEmailSendLogs,
   logPipelineCallAction,
+  savePipelineCallDisposition,
   savePipelineEvaluation,
   syncPipelineIncomingEmails,
   triggerPipelineResumeConversion,
@@ -30,6 +32,12 @@ import {
   updatePipelineCandidateSchedule,
 } from '../services/pipelineService';
 import { buildThreeCxWebclientUrl } from '../services/threeCxService';
+import {
+  PIPELINE_CALL_DISPOSITIONS,
+  PIPELINE_PENDING_CALL_STORAGE_KEY,
+  type PipelineCallDisposition,
+  type PipelinePendingCallSession,
+} from '../services/pipelineCallDispositions';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { sendEmail } from '../services/emailService';
 import { normalizeMessageIdForHeader, subjectForReply } from '../services/inboundEmailFormat';
@@ -181,6 +189,122 @@ function stripRtf(raw: string): string {
     .trim();
 }
 
+function readPendingCallSession(): PipelinePendingCallSession | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(PIPELINE_PENDING_CALL_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PipelinePendingCallSession;
+    if (!parsed?.sessionId || !parsed?.candidateId || !parsed?.dialedNumber || !parsed?.startedAt) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writePendingCallSession(session: PipelinePendingCallSession | null): void {
+  if (typeof window === 'undefined') return;
+  if (!session) {
+    window.localStorage.removeItem(PIPELINE_PENDING_CALL_STORAGE_KEY);
+    return;
+  }
+  window.localStorage.setItem(PIPELINE_PENDING_CALL_STORAGE_KEY, JSON.stringify(session));
+}
+
+type CallDispositionPanelProps = {
+  pendingCall: PipelinePendingCallSession;
+  callDisposition: PipelineCallDisposition | '';
+  onSelectDisposition: (d: PipelineCallDisposition) => void;
+  callDispositionComment: string;
+  onCommentChange: (value: string) => void;
+  callDispositionError: string | null;
+  callDispositionSaving: boolean;
+  dialLogWarning: string | null;
+  onSave: () => void;
+  compact?: boolean;
+};
+
+function CallDispositionPanel({
+  pendingCall,
+  callDisposition,
+  onSelectDisposition,
+  callDispositionComment,
+  onCommentChange,
+  callDispositionError,
+  callDispositionSaving,
+  dialLogWarning,
+  onSave,
+  compact = false,
+}: CallDispositionPanelProps) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="call-disposition-title"
+      className={`rounded-2xl border border-amber-200 bg-white shadow-lg ${compact ? 'p-3 space-y-3' : 'p-5 space-y-4'}`}
+    >
+      <div>
+        <p id="call-disposition-title" className={`font-semibold text-slate-900 ${compact ? 'text-sm' : 'text-base'}`}>
+          Log call disposition
+        </p>
+        <p className={`text-slate-600 mt-1 ${compact ? 'text-[11px]' : 'text-xs'}`}>
+          Required before you can dial again. Complete this for{' '}
+          <span className="font-semibold text-slate-800">{pendingCall.candidateName}</span>
+          {' · '}
+          <span className="font-mono">{pendingCall.dialedNumber}</span>
+        </p>
+        <p className="text-[10px] text-slate-500 mt-1">
+          Started {formatDateTimeCanadaEastern(pendingCall.startedAt)}
+        </p>
+        {dialLogWarning && (
+          <p className="text-[10px] text-amber-900 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1 mt-2">
+            {dialLogWarning}
+          </p>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        {PIPELINE_CALL_DISPOSITIONS.map((d) => (
+          <button
+            key={d}
+            type="button"
+            onClick={() => onSelectDisposition(d)}
+            className={`rounded-xl border px-3 py-2 text-left text-xs font-medium transition ${
+              callDisposition === d
+                ? 'border-[#005EB8] bg-blue-50 text-[#005EB8] ring-2 ring-[#005EB8]/20'
+                : 'border-slate-200 bg-slate-50 text-slate-800 hover:border-slate-300 hover:bg-white'
+            }`}
+          >
+            {d}
+          </button>
+        ))}
+      </div>
+
+      <label className="block text-xs text-slate-600">
+        Comment (optional)
+        <textarea
+          value={callDispositionComment}
+          onChange={(e) => onCommentChange(e.target.value)}
+          rows={compact ? 2 : 3}
+          placeholder="Notes about the conversation, callback time, etc."
+          className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
+        />
+      </label>
+
+      {callDispositionError && (
+        <p className="text-xs text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{callDispositionError}</p>
+      )}
+
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <p className="text-[10px] text-amber-800">Dialer locked until you save.</p>
+        <Button onClick={() => onSave()} disabled={!callDisposition || callDispositionSaving}>
+          {callDispositionSaving ? 'Saving…' : 'Save disposition'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function uploadStageLabel(stage: PipelineUploadProgress['stage']): string {
   switch (stage) {
     case 'starting':
@@ -239,6 +363,12 @@ const Pipeline: React.FC = () => {
 
   const [dialTarget, setDialTarget] = useState('');
   const [callActionMsg, setCallActionMsg] = useState<string | null>(null);
+  const [pendingCall, setPendingCall] = useState<PipelinePendingCallSession | null>(null);
+  const [callDisposition, setCallDisposition] = useState<PipelineCallDisposition | ''>('');
+  const [callDispositionComment, setCallDispositionComment] = useState('');
+  const [callDispositionSaving, setCallDispositionSaving] = useState(false);
+  const [callDispositionError, setCallDispositionError] = useState<string | null>(null);
+  const [dialLogWarning, setDialLogWarning] = useState<string | null>(null);
   const [toneEnabled, setToneEnabled] = useState(true);
   const [emailTemplateId, setEmailTemplateId] = useState<string>('no_answer_followup');
   const [emailTo, setEmailTo] = useState('');
@@ -308,9 +438,15 @@ const Pipeline: React.FC = () => {
 
   useEffect(() => {
     void supabase.auth.getSession().then(({ data }) => {
-      if (data.session) setIsAuthenticated(true);
+      if (data.session) {
+        setIsAuthenticated(true);
+        const restored = readPendingCallSession();
+        if (restored) setPendingCall(restored);
+      }
     });
   }, []);
+
+  const dialerLocked = Boolean(pendingCall);
 
   useEffect(() => {
     if (isAuthenticated) void loadCandidates();
@@ -635,6 +771,10 @@ const Pipeline: React.FC = () => {
 
   const dialViaWebclient = async () => {
     if (!selectedBundle?.candidate.id) return;
+    if (dialerLocked) {
+      setCallActionMsg('Save the call disposition before placing another call.');
+      return;
+    }
     const normalizedDestination = normalizeDialDestination(dialTarget.trim());
     if (!normalizedDestination) {
       setCallActionMsg('Enter a destination number to dial.');
@@ -645,13 +785,32 @@ const Pipeline: React.FC = () => {
       setCallActionMsg('Set VITE_3CX_WEBCLIENT_URL in Vercel and redeploy.');
       return;
     }
+
+    setDialTarget(normalizedDestination || dialTarget);
+    const session: PipelinePendingCallSession = {
+      sessionId: crypto.randomUUID(),
+      candidateId: selectedBundle.candidate.id,
+      candidateName: safeName(selectedBundle.candidate),
+      resumeId: selectedResume?.id ?? null,
+      dialedNumber: normalizedDestination,
+      dialLogId: null,
+      webclientUrl: url,
+      startedAt: new Date().toISOString(),
+    };
+    setPendingCall(session);
+    writePendingCallSession(session);
+    setCallDisposition('');
+    setCallDispositionComment('');
+    setCallDispositionError(null);
+    setDialLogWarning(null);
+    setCallActionMsg('Opened 3CX webclient — log the disposition below (or in the popup).');
+
     window.open(url, '_blank', 'noopener,noreferrer');
-    setCallActionMsg('Opened 3CX webclient dialer with this number.');
+
     try {
-      setDialTarget(normalizedDestination || dialTarget);
       const { data } = await supabase.auth.getUser();
       const actorLabel = String(data.user?.user_metadata?.full_name || data.user?.user_metadata?.name || data.user?.email || '').trim() || undefined;
-      await logPipelineCallAction({
+      const dialLog = await logPipelineCallAction({
         candidateId: selectedBundle.candidate.id,
         resumeId: selectedResume?.id ?? null,
         action: 'dial_webclient_popup',
@@ -661,9 +820,57 @@ const Pipeline: React.FC = () => {
         responsePayload: { mode: 'webclient_popup', url },
         actorLabel,
       });
-      await loadSelectedBundle(selectedBundle.candidate.id);
+      const withLog: PipelinePendingCallSession = { ...session, dialLogId: dialLog.id };
+      setPendingCall(withLog);
+      writePendingCallSession(withLog);
     } catch (e) {
-      setCallActionMsg(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setDialLogWarning(`Dial was logged locally, but the server audit row failed: ${msg}. You can still save the disposition.`);
+      setCallActionMsg('Disposition required — see panel below.');
+    }
+  };
+
+  const saveCallDisposition = async () => {
+    if (!pendingCall) return;
+    if (!callDisposition) {
+      setCallDispositionError('Select a disposition to continue.');
+      return;
+    }
+    setCallDispositionSaving(true);
+    setCallDispositionError(null);
+    try {
+      const { data } = await supabase.auth.getUser();
+      const actorLabel = String(data.user?.user_metadata?.full_name || data.user?.user_metadata?.name || data.user?.email || '').trim() || undefined;
+      await savePipelineCallDisposition({
+        candidateId: pendingCall.candidateId,
+        resumeId: pendingCall.resumeId,
+        dialLogId: pendingCall.dialLogId,
+        disposition: callDisposition,
+        comment: callDispositionComment,
+        dialedNumber: pendingCall.dialedNumber,
+        dialStartedAt: pendingCall.startedAt,
+        threecxMetadata: {
+          mode: 'webclient_popup',
+          url: pendingCall.webclientUrl,
+          session_id: pendingCall.sessionId,
+        },
+        actorLabel,
+      });
+      setPendingCall(null);
+      writePendingCallSession(null);
+      setCallDisposition('');
+      setCallDispositionComment('');
+      setDialLogWarning(null);
+      setCallActionMsg('Call disposition saved. Dialer unlocked.');
+      const refreshId = selectedBundle?.candidate.id || pendingCall.candidateId;
+      if (refreshId) {
+        await loadSelectedBundle(refreshId);
+        await loadCandidates();
+      }
+    } catch (e) {
+      setCallDispositionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCallDispositionSaving(false);
     }
   };
 
@@ -803,6 +1010,7 @@ const Pipeline: React.FC = () => {
   };
 
   const keypadPress = (digit: string) => {
+    if (dialerLocked) return;
     playDialTone();
     setDialTarget((prev) => `${prev}${digit}`);
   };
@@ -823,19 +1031,19 @@ const Pipeline: React.FC = () => {
         keypadPress(event.key);
         return;
       }
-      if (event.key === 'Backspace') {
+      if (event.key === 'Backspace' && !dialerLocked) {
         event.preventDefault();
         setDialTarget((prev) => prev.slice(0, -1));
         return;
       }
-      if (event.key === 'Enter' && selectedBundle?.candidate.id) {
+      if (event.key === 'Enter' && selectedBundle?.candidate.id && !dialerLocked) {
         event.preventDefault();
         void dialViaWebclient();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [selectedBundle?.candidate.id, dialTarget]);
+  }, [selectedBundle?.candidate.id, dialTarget, dialerLocked]);
 
   useEffect(() => () => {
     if (toneCtxRef.current) {
@@ -843,6 +1051,18 @@ const Pipeline: React.FC = () => {
       toneCtxRef.current = null;
     }
   }, []);
+
+  useEffect(() => {
+    if (!pendingCall) return;
+    const blockEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    window.addEventListener('keydown', blockEscape, true);
+    return () => window.removeEventListener('keydown', blockEscape, true);
+  }, [pendingCall]);
 
   const refreshConversion = async () => {
     if (!selectedResume) return;
@@ -1046,31 +1266,52 @@ const Pipeline: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 px-3 py-2 text-[11px] text-slate-600">
-                      Calls are handled by 3CX WebClient popup for stable browser audio. Enter number here, then hit Dial to open it prefilled.
+                    <div className={`rounded-xl border px-3 py-2 text-[11px] ${dialerLocked ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-indigo-100 bg-indigo-50/50 text-slate-600'}`}>
+                      {dialerLocked
+                        ? 'Call in progress — save a disposition below to unlock the dialer for the next call.'
+                        : 'Calls use the 3CX WebClient popup. Enter a number and Dial; you must log a disposition before placing another call.'}
                     </div>
 
+                    {pendingCall && (
+                      <CallDispositionPanel
+                        pendingCall={pendingCall}
+                        callDisposition={callDisposition}
+                        onSelectDisposition={(d) => {
+                          setCallDisposition(d);
+                          setCallDispositionError(null);
+                        }}
+                        callDispositionComment={callDispositionComment}
+                        onCommentChange={setCallDispositionComment}
+                        callDispositionError={callDispositionError}
+                        callDispositionSaving={callDispositionSaving}
+                        dialLogWarning={dialLogWarning}
+                        onSave={() => void saveCallDisposition()}
+                        compact
+                      />
+                    )}
+
                     <div className="flex flex-wrap items-start gap-3">
-                      <div className="w-[220px] rounded-2xl border border-slate-300 bg-gradient-to-b from-slate-100 to-slate-50 p-3 shadow-inner">
+                      <div className={`w-[220px] rounded-2xl border p-3 shadow-inner ${dialerLocked ? 'border-amber-200 bg-amber-50/40 opacity-60 pointer-events-none' : 'border-slate-300 bg-gradient-to-b from-slate-100 to-slate-50'}`}>
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-1">Dialer</p>
                         <input
                           value={dialTarget}
                           onChange={(e) => setDialTarget(e.target.value)}
                           placeholder="10/11 digit number"
-                          className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold tracking-wide text-slate-900 mb-2"
+                          disabled={dialerLocked}
+                          className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold tracking-wide text-slate-900 mb-2 disabled:bg-slate-100"
                         />
                         <div className="text-[10px] text-slate-500 mb-1">Normalized: <span className="font-semibold text-slate-700">{normalizeDialDestination(dialTarget) || '—'}</span></div>
                         <div className="grid grid-cols-3 gap-1.5">
                           {DIAL_PAD.map((k) => (
-                            <button key={k.d} type="button" onClick={() => keypadPress(k.d)} className="rounded-xl border border-slate-300 bg-white py-2 hover:bg-slate-50 transition">
+                            <button key={k.d} type="button" disabled={dialerLocked} onClick={() => keypadPress(k.d)} className="rounded-xl border border-slate-300 bg-white py-2 hover:bg-slate-50 transition disabled:opacity-50">
                               <p className="text-sm font-semibold text-slate-900 leading-tight">{k.d}</p>
                               <p className="text-[9px] text-slate-500 leading-tight min-h-[10px]">{k.s}</p>
                             </button>
                           ))}
                         </div>
                         <div className="grid grid-cols-2 gap-1.5 mt-2">
-                          <button type="button" onClick={() => setDialTarget((prev) => prev.slice(0, -1))} className="rounded-lg border border-slate-300 bg-white py-1.5 text-xs hover:bg-slate-50">Backspace</button>
-                          <Button className="!min-h-0 h-8 text-xs" onClick={() => void dialViaWebclient()}>Dial</Button>
+                          <button type="button" disabled={dialerLocked} onClick={() => setDialTarget((prev) => prev.slice(0, -1))} className="rounded-lg border border-slate-300 bg-white py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50">Backspace</button>
+                          <Button className="!min-h-0 h-8 text-xs" disabled={dialerLocked} onClick={() => void dialViaWebclient()}>Dial</Button>
                         </div>
                         <p className="text-[10px] text-slate-500 mt-2">Keyboard: 0-9, *, #, Backspace, Enter</p>
                       </div>
@@ -1207,14 +1448,27 @@ const Pipeline: React.FC = () => {
                           <p className="font-semibold text-slate-900">{selectedBundle.callLogs.length}</p>
                         </div>
                         <div className="rounded-lg bg-slate-50 border border-slate-100 p-2">
-                          <p className="text-slate-500">Successful</p>
-                          <p className="font-semibold text-slate-900">{selectedBundle.callLogs.filter((x) => x.outcome === 'ok').length}</p>
+                          <p className="text-slate-500">Dispositions</p>
+                          <p className="font-semibold text-slate-900">{(selectedBundle.callRecords ?? []).length}</p>
                         </div>
                         <div className="rounded-lg bg-slate-50 border border-slate-100 p-2">
-                          <p className="text-slate-500">Failed</p>
-                          <p className="font-semibold text-slate-900">{selectedBundle.callLogs.filter((x) => x.outcome === 'failed').length}</p>
+                          <p className="text-slate-500">Dials</p>
+                          <p className="font-semibold text-slate-900">{selectedBundle.callLogs.filter((x) => x.action === 'dial_webclient_popup').length}</p>
                         </div>
                       </div>
+                      {(selectedBundle.callRecords ?? []).length > 0 && (
+                        <div className="max-h-28 overflow-auto space-y-1.5">
+                          {(selectedBundle.callRecords ?? []).slice(0, 8).map((r) => (
+                            <div key={r.id} className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-1.5 text-[10px]">
+                              <p className="font-medium text-slate-800">{r.disposition} · {r.dialed_number}</p>
+                              <p className="text-slate-500 truncate">
+                                {formatDateTimeCanadaEastern(r.disposed_at)}
+                                {r.comment ? ` · ${r.comment}` : ''}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </section>
                   </div>
 
@@ -1274,6 +1528,29 @@ const Pipeline: React.FC = () => {
           </div>
         </div>
       </div>
+      {pendingCall && typeof document !== 'undefined'
+        ? createPortal(
+            <div className="fixed inset-0 z-[200] bg-slate-900/55 backdrop-blur-sm flex items-center justify-center px-4">
+              <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                <CallDispositionPanel
+                  pendingCall={pendingCall}
+                  callDisposition={callDisposition}
+                  onSelectDisposition={(d) => {
+                    setCallDisposition(d);
+                    setCallDispositionError(null);
+                  }}
+                  callDispositionComment={callDispositionComment}
+                  onCommentChange={setCallDispositionComment}
+                  callDispositionError={callDispositionError}
+                  callDispositionSaving={callDispositionSaving}
+                  dialLogWarning={dialLogWarning}
+                  onSave={() => void saveCallDisposition()}
+                />
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
       {uploading && (
         <div className="fixed inset-0 z-[90] bg-slate-900/35 backdrop-blur-sm flex items-center justify-center px-4">
           <div className="w-full max-w-2xl rounded-3xl border border-white/30 bg-white/90 shadow-2xl p-5 space-y-4">

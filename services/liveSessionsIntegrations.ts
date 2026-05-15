@@ -1,3 +1,5 @@
+import { formatDateTimeCanadaEastern } from './dateDisplay';
+
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
@@ -247,7 +249,9 @@ export type CalendlyProbePayload = {
   event_types?: Array<{ uri: string; name: string }>;
   range: { from: string; to: string; lookback_days: number; lookahead_days: number };
   event_name_keywords: string[];
-  require_tue_wed: boolean;
+  require_wednesday_slot: boolean;
+  /** @deprecated */
+  require_tue_wed?: boolean;
   events_total_in_range: number;
   events_matching_live_name: number;
   events_used_for_dashboard: number;
@@ -261,7 +265,9 @@ export type CalendlyProbePayload = {
     toronto_date: string;
     toronto_weekday: number;
     matches_live_name: boolean;
-    matches_tue_wed: boolean;
+    matches_wednesday_slot: boolean;
+    /** @deprecated use matches_wednesday_slot */
+    matches_tue_wed?: boolean;
     used_for_dashboard: boolean;
     invitee_count: number;
     invitee_count_active: number;
@@ -288,7 +294,7 @@ export function logCalendlyProbeToConsole(payload: CalendlyProbePayload): void {
   log.log('Fetch stats:', payload.fetch_stats);
   log.log('Range:', payload.range);
   log.log('Keywords:', payload.event_name_keywords);
-  log.log('Require Tue/Wed:', payload.require_tue_wed);
+  log.log('Require Wed 11:30 slot:', payload.require_wednesday_slot ?? payload.require_tue_wed);
   log.log(
     `Events in range: ${payload.events_total_in_range} · matching live name: ${payload.events_matching_live_name} · used on dashboard: ${payload.events_used_for_dashboard}`,
   );
@@ -304,7 +310,7 @@ export function logCalendlyProbeToConsole(payload: CalendlyProbePayload): void {
       name: e.name,
       start: e.start_time,
       invitees: e.invitee_count_active,
-      tue_wed: e.matches_tue_wed,
+      wed_1130: e.matches_wednesday_slot ?? e.matches_tue_wed,
       dashboard: e.used_for_dashboard,
     })),
   );
@@ -354,7 +360,7 @@ export async function fetchLiveSessionsDashboard(
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     return { ok: false, error: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY' };
   }
-  const url = `${SUPABASE_URL}/functions/v1/integrations-zoom-calendly?calendly_debug=1`;
+  const url = `${SUPABASE_URL}/functions/v1/integrations-zoom-calendly`;
   const res = await fetch(url, {
     method: 'GET',
     headers: {
@@ -380,4 +386,121 @@ export async function fetchLiveSessionsDashboard(
     });
   }
   return { ok: true, data: reconcileLiveSessionsPastUpcoming(payload) };
+}
+
+const TORONTO = 'America/Toronto';
+
+/** YYYY-MM-DD in Eastern for a Zoom/Calendly start. */
+export function torontoSessionDateKey(startMs: number | null, startTimeIso?: string): string {
+  if (startMs != null && Number.isFinite(startMs)) {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: TORONTO,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date(startMs));
+  }
+  const s = String(startTimeIso ?? '').trim();
+  if (!s) return '';
+  const ms = Date.parse(s);
+  if (!Number.isFinite(ms)) return '';
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: TORONTO,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(ms));
+}
+
+export function formatTorontoSessionDateLabel(dateKey: string): string {
+  if (!dateKey) return '—';
+  const [y, m, d] = dateKey.split('-').map(Number);
+  if (!y || !m || !d) return dateKey;
+  const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: TORONTO,
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(dt);
+}
+
+export type LiveSessionScheduleRow = {
+  key: string;
+  dateKey: string;
+  dateLabel: string;
+  isPast: boolean;
+  sessionTimeLabel: string;
+  calendlyName: string | null;
+  scheduledCount: number;
+  attendedCount: number | null;
+  attendanceRatePct: number | null;
+  zoomTopic: string;
+  zoomJoinUrl: string | null;
+  past: PastMeetingRow | null;
+  upcoming: UpcomingMeetingRow | null;
+};
+
+export function buildLiveSessionScheduleRows(
+  payload: LiveSessionsDashboardPayload,
+  nowMs: number = Date.now(),
+): LiveSessionScheduleRow[] {
+  const byDate = new Map<string, LiveSessionScheduleRow>();
+
+  const upsertPast = (row: PastMeetingRow) => {
+    const ms = zoomMeetingStartMs(row.zoom);
+    const dateKey = torontoSessionDateKey(ms, row.zoom.start_time);
+    if (!dateKey) return;
+    const key = `${dateKey}|past`;
+    const existing = byDate.get(dateKey);
+    const sessionTimeLabel = row.zoom.start_time
+      ? formatDateTimeCanadaEastern(ms ?? row.zoom.start_time)
+      : 'Wednesday 11:30 AM ET';
+    byDate.set(dateKey, {
+      key,
+      dateKey,
+      dateLabel: formatTorontoSessionDateLabel(dateKey),
+      isPast: ms == null || ms < nowMs,
+      sessionTimeLabel,
+      calendlyName: row.calendly?.name ?? 'Live Online Career Session',
+      scheduledCount: row.stats?.invited_count ?? row.invitees.length,
+      attendedCount: row.stats?.attended_matched_count ?? row.invitees.filter((i) => i.attended_zoom).length,
+      attendanceRatePct: row.stats?.attendance_rate_pct ?? null,
+      zoomTopic: row.zoom.topic || 'Live Online Career Session',
+      zoomJoinUrl: null,
+      past: row,
+      upcoming: existing?.upcoming ?? null,
+    });
+  };
+
+  const upsertUpcoming = (row: UpcomingMeetingRow) => {
+    const ms = zoomMeetingStartMs(row.zoom);
+    const dateKey = torontoSessionDateKey(ms, row.zoom.start_time);
+    if (!dateKey) return;
+    const existing = byDate.get(dateKey);
+    const sessionTimeLabel = row.zoom.start_time
+      ? formatDateTimeCanadaEastern(ms ?? row.zoom.start_time)
+      : 'Wednesday 11:30 AM ET';
+    byDate.set(dateKey, {
+      key: `${dateKey}|${existing?.past ? 'past' : 'upcoming'}`,
+      dateKey,
+      dateLabel: formatTorontoSessionDateLabel(dateKey),
+      isPast: false,
+      sessionTimeLabel,
+      calendlyName: row.calendly?.name ?? 'Live Online Career Session',
+      scheduledCount: row.invitees.length,
+      attendedCount: null,
+      attendanceRatePct: null,
+      zoomTopic: row.zoom.topic || 'Live Online Career Session',
+      zoomJoinUrl: row.zoom.join_url ?? null,
+      past: existing?.past ?? null,
+      upcoming: row,
+    });
+  };
+
+  for (const row of payload.past_meetings) upsertPast(row);
+  for (const row of payload.upcoming_meetings) upsertUpcoming(row);
+
+  return [...byDate.values()].sort((a, b) => b.dateKey.localeCompare(a.dateKey));
 }

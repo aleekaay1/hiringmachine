@@ -1,9 +1,8 @@
 /**
- * Live Career Overview Sessions — attendance dashboard.
+ * Live Online Career Session — attendance dashboard.
  *
  * Fixed schedule (America/Toronto):
- *   TUESDAY   18:00–19:00  (recurring Zoom meeting A)
- *   WEDNESDAY 11:30–12:30  (recurring Zoom meeting B)
+ *   WEDNESDAY 11:30–12:30  (recurring Zoom + Calendly "Live Online Career Session")
  *
  * Matching strategy (v2 — date-exact):
  *   1. Keep only Zoom meeting occurrences whose start falls inside one of the two windows above.
@@ -41,15 +40,19 @@ const TZ = 'America/Toronto';
 
 // ─── session slot definitions ──────────────────────────────────────────────
 type SlotDef = { weekday: number; startH: number; startM: number; endH: number; endM: number; label: string };
-const SLOTS: SlotDef[] = [
-  { weekday: 2, startH: 18, startM: 0,  endH: 19, endM: 0,  label: 'Tuesday 6 PM ET'     },
-  { weekday: 3, startH: 11, startM: 30, endH: 12, endM: 30, label: 'Wednesday 11:30 AM ET' },
-];
+const WEDNESDAY_LIVE_SLOT: SlotDef = {
+  weekday: 3,
+  startH: 11,
+  startM: 30,
+  endH: 12,
+  endM: 30,
+  label: 'Wednesday 11:30 AM ET',
+};
+const SLOTS: SlotDef[] = [WEDNESDAY_LIVE_SLOT];
 const LIVE_TOPIC_KEYWORD = 'live career overview session';
-const TARGET_MEETINGS = [
-  { id: '87882529100', weekday: 2, slot: SLOTS[0] },
-  { id: '85950683062', weekday: 3, slot: SLOTS[1] },
-] as const;
+const LIVE_ONLINE_CALENDLY_NAME = 'live online career session';
+/** Recurring Zoom PMI for Wednesday Live Online Career Session */
+const TARGET_MEETINGS = [{ id: '85950683062', weekday: 3, slot: WEDNESDAY_LIVE_SLOT }] as const;
 
 /** Keywords in the Zoom meeting topic that identify it as a live overview session PMI room. */
 const PMI_TOPIC_KEYWORDS = ['personal meeting room', 'alex paz', 'career overview', 'career session', 'live overview'];
@@ -84,7 +87,7 @@ function inferSlot(dt: DateTime | null, topic: string, toleranceMin: number): Sl
   // PMI topic fallback: accept on Tue/Wed only when reasonably close to slot start.
   // This avoids picking unrelated PMI occurrences on the same day.
   if (isKnownPmiTopic(topic)) {
-    const slot = dt.weekday === 2 ? SLOTS[0] : dt.weekday === 3 ? SLOTS[1] : null;
+    const slot = dt.weekday === 3 ? WEDNESDAY_LIVE_SLOT : null;
     if (!slot) return null;
     const slotStart = slot.startH * 60 + slot.startM;
     const dtMin = dt.hour * 60 + dt.minute;
@@ -492,17 +495,19 @@ function calendlyEventNameKeywords(): string[] {
   if (raw) {
     return raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   }
-  return [
-    'live online career session',
-    'live career overview session',
-    'live career overview',
-    'career overview session',
-  ];
+  return [LIVE_ONLINE_CALENDLY_NAME];
 }
 
 function calendlyEventMatchesLiveSession(eventName: string): boolean {
   const n = String(eventName ?? '').toLowerCase();
+  if (n.includes(LIVE_ONLINE_CALENDLY_NAME)) return true;
   return calendlyEventNameKeywords().some((k) => n.includes(k));
+}
+
+/** Wednesday 11:30 AM ET window (with slot tolerance). */
+function isWednesdayLiveSessionSlot(dt: DateTime, toleranceMin: number): boolean {
+  if (!dt.isValid || dt.weekday !== 3) return false;
+  return slotForDt(dt, toleranceMin) !== null;
 }
 
 function mapCalendlyInviteeRow(
@@ -586,7 +591,7 @@ type CalendlyProbeEventRow = {
   toronto_date: string;
   toronto_weekday: number;
   matches_live_name: boolean;
-  matches_tue_wed: boolean;
+  matches_wednesday_slot: boolean;
   used_for_dashboard: boolean;
   invitee_count: number;
   invitee_count_active: number;
@@ -601,7 +606,8 @@ async function buildCalendlyProbePayload(
   const nowMs = Date.now();
   const from = new Date(nowMs - lookbackDays * 86400_000);
   const to = new Date(nowMs + lookaheadDays * 86400_000);
-  const requireTueWed = (Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '1').trim() !== '0';
+  const requireWednesdaySlot = (Deno.env.get('CALENDLY_REQUIRE_WEDNESDAY_SLOT') ?? Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '1').trim() !== '0';
+  const slotToleranceMin = Number(Deno.env.get('INTEGRATION_SLOT_TOLERANCE_MINUTES') ?? '45');
 
   const bundle = await calendlyFetchAllScheduledEvents(token, from, to);
   const allCalEvents = bundle.events;
@@ -612,8 +618,8 @@ async function buildCalendlyProbePayload(
     const dt = DateTime.fromISO(ev.start_time, { zone: TZ });
     const name = String(ev.name ?? '');
     const matchesLive = calendlyEventMatchesLiveSession(name);
-    const matchesTueWed = dt.weekday === 2 || dt.weekday === 3;
-    const usedForDashboard = matchesLive && (!requireTueWed || matchesTueWed);
+    const matchesWednesdaySlot = isWednesdayLiveSessionSlot(dt, slotToleranceMin);
+    const usedForDashboard = matchesLive && (!requireWednesdaySlot || matchesWednesdaySlot);
 
     let invitees: CalInvitee[] = [];
     if (matchesLive) {
@@ -634,7 +640,7 @@ async function buildCalendlyProbePayload(
       toronto_date: dt.isValid ? isoDate(dt) : '',
       toronto_weekday: dt.weekday,
       matches_live_name: matchesLive,
-      matches_tue_wed: matchesTueWed,
+      matches_wednesday_slot: matchesWednesdaySlot,
       used_for_dashboard: usedForDashboard,
       invitee_count: invitees.length,
       invitee_count_active: active.length,
@@ -662,7 +668,7 @@ async function buildCalendlyProbePayload(
     event_types: bundle.event_types,
     range: { from: from.toISOString(), to: to.toISOString(), lookback_days: lookbackDays, lookahead_days: lookaheadDays },
     event_name_keywords: calendlyEventNameKeywords(),
-    require_tue_wed: requireTueWed,
+    require_wednesday_slot: requireWednesdaySlot,
     events_total_in_range: allCalEvents.length,
     events_matching_live_name: matchingLive.length,
     events_used_for_dashboard: used.length,
@@ -825,23 +831,24 @@ Deno.serve(async (req) => {
         organization_uri: bundle.organizationUri,
         event_types: bundle.event_types,
       };
-      const requireTueWed = (Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '1').trim() !== '0';
+      const requireWednesdaySlot =
+        (Deno.env.get('CALENDLY_REQUIRE_WEDNESDAY_SLOT') ?? Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '1').trim() !== '0';
 
       for (const ev of allCalEvents) {
         if (!ev.start_time) continue;
         const dt = DateTime.fromISO(ev.start_time, { zone: TZ });
         const name = String(ev.name ?? '');
         const isLiveName = calendlyEventMatchesLiveSession(name);
-        const isTueOrWed = dt.weekday === 2 || dt.weekday === 3;
+        const isWednesdaySlot = isWednesdayLiveSessionSlot(dt, slotToleranceMin);
         if (!isLiveName) {
           if (reqUrl.searchParams.get('calendly_debug') === '1') {
             calendlyFilterLog.push({ name, start_time: ev.start_time, reason: 'name_no_match' });
           }
           continue;
         }
-        if (requireTueWed && !isTueOrWed) {
+        if (requireWednesdaySlot && !isWednesdaySlot) {
           if (reqUrl.searchParams.get('calendly_debug') === '1') {
-            calendlyFilterLog.push({ name, start_time: ev.start_time, reason: 'not_tue_wed' });
+            calendlyFilterLog.push({ name, start_time: ev.start_time, reason: 'not_wednesday_1130' });
           }
           continue;
         }
@@ -890,7 +897,7 @@ Deno.serve(async (req) => {
         if (calStart?.isValid) return calStart.hour * 60 + calStart.minute;
         const dt0 = DateTime.fromISO(`${dateKey}T00:00:00`, { zone: TZ });
         if (!dt0.isValid) return null;
-        const slot = slotForDt(dt0.set({ hour: 18, minute: 0 }), slotToleranceMin) || (dt0.weekday === 2 ? SLOTS[0] : dt0.weekday === 3 ? SLOTS[1] : null);
+        const slot = slotForDt(dt0.set({ hour: 11, minute: 30 }), slotToleranceMin) || (dt0.weekday === 3 ? WEDNESDAY_LIVE_SLOT : null);
         return slot ? slot.startH * 60 + slot.startM : null;
       })();
 
@@ -1089,7 +1096,8 @@ Deno.serve(async (req) => {
         ? {
             calendly_debug: {
               event_name_keywords: calendlyEventNameKeywords(),
-              require_tue_wed: (Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '1').trim() !== '0',
+              require_wednesday_slot:
+                (Deno.env.get('CALENDLY_REQUIRE_WEDNESDAY_SLOT') ?? Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '1').trim() !== '0',
               ...(calendlyFetchMeta ?? {}),
               events_matched_by_date: [...calEventsByDate.entries()].map(([date, ev]) => ({
                 date,

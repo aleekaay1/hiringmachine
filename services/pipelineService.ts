@@ -1,6 +1,10 @@
 import { supabase } from './supabaseClient';
 import mammoth from 'mammoth';
 import { createWorker } from 'tesseract.js';
+import {
+  journeyStageForCallDisposition,
+  type PipelineCallDisposition,
+} from './pipelineCallDispositions';
 
 const PIPELINE_BUCKET = 'pipeline-resumes';
 
@@ -97,6 +101,22 @@ export interface PipelineCallLog {
   created_at: string;
 }
 
+export interface PipelineCallRecord {
+  id: string;
+  candidate_id: string;
+  resume_id: string | null;
+  dial_log_id: string | null;
+  recruiter_user_id: string | null;
+  recruiter_label: string | null;
+  disposition: string;
+  comment: string | null;
+  dialed_number: string;
+  dial_started_at: string;
+  disposed_at: string;
+  threecx_metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface PipelineIncomingEmailLog {
   id: string;
   provider: string;
@@ -135,6 +155,7 @@ export interface PipelineCandidateBundle {
   notes: PipelineNote[];
   evaluations: PipelineEvaluation[];
   callLogs: PipelineCallLog[];
+  callRecords: PipelineCallRecord[];
 }
 
 export type PipelineUploadStage =
@@ -495,34 +516,49 @@ export async function getPipelineCandidateBundle(candidateId: string): Promise<P
   if (cErr) throw cErr;
   if (!candidate) return null;
 
-  const [{ data: resumes, error: rErr }, { data: notes, error: nErr }, { data: evaluations, error: eErr }, { data: callLogs, error: lErr }] =
-    await Promise.all([
-      supabase
-        .from('pipeline_resumes')
-        .select('*')
-        .eq('candidate_id', candidateId)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('pipeline_notes')
-        .select('*')
-        .eq('candidate_id', candidateId)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('pipeline_evaluations')
-        .select('*')
-        .eq('candidate_id', candidateId)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('pipeline_call_logs')
-        .select('*')
-        .eq('candidate_id', candidateId)
-        .order('created_at', { ascending: false }),
-    ]);
+  const [
+    { data: resumes, error: rErr },
+    { data: notes, error: nErr },
+    { data: evaluations, error: eErr },
+    { data: callLogs, error: lErr },
+    { data: callRecords, error: crErr },
+  ] = await Promise.all([
+    supabase
+      .from('pipeline_resumes')
+      .select('*')
+      .eq('candidate_id', candidateId)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('pipeline_notes')
+      .select('*')
+      .eq('candidate_id', candidateId)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('pipeline_evaluations')
+      .select('*')
+      .eq('candidate_id', candidateId)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('pipeline_call_logs')
+      .select('*')
+      .eq('candidate_id', candidateId)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('pipeline_call_records')
+      .select('*')
+      .eq('candidate_id', candidateId)
+      .order('created_at', { ascending: false }),
+  ]);
 
   if (rErr) throw rErr;
   if (nErr) throw nErr;
   if (eErr) throw eErr;
   if (lErr) throw lErr;
+  if (crErr) {
+    const msg = String(crErr.message || '');
+    const missingTable = crErr.code === '42P01' || msg.includes('pipeline_call_records');
+    if (!missingTable) throw crErr;
+  }
 
   return {
     candidate: candidate as PipelineCandidate,
@@ -530,6 +566,7 @@ export async function getPipelineCandidateBundle(candidateId: string): Promise<P
     notes: (notes || []) as PipelineNote[],
     evaluations: (evaluations || []) as PipelineEvaluation[],
     callLogs: (callLogs || []) as PipelineCallLog[],
+    callRecords: crErr ? [] : ((callRecords || []) as PipelineCallRecord[]),
   };
 }
 
@@ -782,6 +819,71 @@ export async function updatePipelineCandidateProfile(input: {
     })
     .eq('id', input.candidateId);
   if (error) throw error;
+}
+
+export async function savePipelineCallDisposition(input: {
+  candidateId: string;
+  resumeId?: string | null;
+  dialLogId?: string | null;
+  disposition: PipelineCallDisposition;
+  comment?: string | null;
+  dialedNumber: string;
+  dialStartedAt: string;
+  threecxMetadata?: Record<string, unknown> | null;
+  actorLabel?: string | null;
+  updateJourneyStage?: boolean;
+}): Promise<PipelineCallRecord> {
+  const { data: auth } = await supabase.auth.getUser();
+  const disposedAt = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('pipeline_call_records')
+    .insert({
+      candidate_id: input.candidateId,
+      resume_id: input.resumeId ?? null,
+      dial_log_id: input.dialLogId ?? null,
+      recruiter_user_id: auth.user?.id ?? null,
+      recruiter_label: input.actorLabel ?? null,
+      disposition: input.disposition,
+      comment: input.comment?.trim() || null,
+      dialed_number: input.dialedNumber,
+      dial_started_at: input.dialStartedAt,
+      disposed_at: disposedAt,
+      threecx_metadata: input.threecxMetadata ?? {},
+    })
+    .select('*')
+    .single();
+  if (error) throw error;
+
+  const journeyStage = journeyStageForCallDisposition(input.disposition);
+  const status =
+    input.disposition === 'Not interested' || input.disposition === 'Do not call'
+      ? 'closed'
+      : 'in_progress';
+
+  if (input.updateJourneyStage !== false) {
+    const { error: upErr } = await supabase
+      .from('pipeline_candidates')
+      .update({ journey_stage: journeyStage, status })
+      .eq('id', input.candidateId);
+    if (upErr) throw upErr;
+  }
+
+  await logPipelineCallAction({
+    candidateId: input.candidateId,
+    resumeId: input.resumeId ?? null,
+    action: 'call_disposition_saved',
+    outcome: 'ok',
+    requestPayload: {
+      disposition: input.disposition,
+      dialed_number: input.dialedNumber,
+      dial_log_id: input.dialLogId ?? null,
+      comment: input.comment?.trim() || null,
+    },
+    responsePayload: { call_record_id: data.id },
+    actorLabel: input.actorLabel ?? null,
+  });
+
+  return data as PipelineCallRecord;
 }
 
 export async function logPipelineCallAction(input: {
