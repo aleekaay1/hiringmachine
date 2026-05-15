@@ -1,23 +1,20 @@
 /**
- * Parse WebinarGeek custom_field values shaped like resume uploads: `{inviter}_{candidateName}`.
- * Only `cooper` and `rms` count as inviters — no legacy UTM/referrer fields, no "unattributed" bucket.
+ * Parse WebinarGeek `custom_field` resume tags: `cooper_{candidateName}` / `rms_{candidateName}`.
+ * UI filters group by **candidate name** (after prefix), not by cooper/rms.
  */
 
 export const INVITER_FILE_PREFIXES = ['cooper', 'rms'] as const;
 export type InviterFilePrefix = (typeof INVITER_FILE_PREFIXES)[number];
 
 export type ParsedInviterAttribution = {
-  /** Lowercase slug from filename prefix, e.g. cooper | rms */
+  /** cooper | rms when tag uses known prefix */
   inviterSlug: string | null;
-  /** Human label for the inviter chip, e.g. Cooper | RMS */
-  inviterDisplay: string;
-  /** Candidate / invitee label from filename tail (underscores → spaces) */
+  /** Candidate name from filename (after cooper_/rms_) */
   inviteeLabel: string | null;
-  /** Raw custom_field string */
   raw: string;
 };
 
-export type InviterWatchStats = {
+export type WatchStats = {
   scheduled: number;
   watchedYes: number;
   full: number;
@@ -25,23 +22,16 @@ export type InviterWatchStats = {
   notYet: number;
 };
 
-export type InviterProfile = InviterWatchStats & {
-  slug: string;
+/** One filter card per candidate name parsed from custom_field. */
+export type CandidateNameProfile = WatchStats & {
+  /** Normalized key for filter matching */
+  key: string;
   displayName: string;
 };
 
 type AnyRow = Record<string, unknown>;
 
 const INVITER_SLUG_RE = /^[a-z]{2,20}$/;
-
-function slugToDisplay(slug: string): string {
-  const s = slug.trim().toLowerCase();
-  if (!s) return '';
-  if (s === 'rms') return 'RMS';
-  if (s === 'cooper') return 'Cooper';
-  if (s.length <= 3) return s.toUpperCase();
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
 
 function isKnownInviterPrefix(prefix: string): prefix is InviterFilePrefix {
   const p = prefix.trim().toLowerCase();
@@ -50,7 +40,7 @@ function isKnownInviterPrefix(prefix: string): prefix is InviterFilePrefix {
 
 const RESUME_EXT_RE = /\.(pdf|docx?|rtf|txt|png|jpe?g|webp)$/i;
 
-/** `john_smith` → `John Smith`; strips resume extension if present. */
+/** `john_smith` → `John Smith`; strips resume extension and junk characters. */
 export function formatInviteeNameFromFileTail(tail: string): string {
   const cleaned = String(tail ?? '')
     .trim()
@@ -72,9 +62,12 @@ export function formatInviteeNameFromFileTail(tail: string): string {
     .join(' ');
 }
 
+export function normalizeNameKey(displayName: string): string {
+  return displayName.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
 /**
- * Parse only `custom_field` values: `cooper_*`, `rms_*`, or bare `cooper` / `rms`.
- * Does not treat random strings, emails, or UTM values as inviters.
+ * Parse `custom_field` only: strips `cooper_` / `rms_` prefix; returns candidate name in inviteeLabel.
  */
 export function parseInviterCustomField(raw: string | null | undefined): ParsedInviterAttribution | null {
   const s = String(raw ?? '').trim();
@@ -82,55 +75,65 @@ export function parseInviterCustomField(raw: string | null | undefined): ParsedI
 
   const lower = s.toLowerCase();
   if (isKnownInviterPrefix(lower)) {
-    return {
-      inviterSlug: lower,
-      inviterDisplay: slugToDisplay(lower),
-      inviteeLabel: null,
-      raw: s,
-    };
+    return { inviterSlug: lower, inviteeLabel: null, raw: s };
   }
 
   const idx = s.indexOf('_');
   if (idx <= 0) {
-    return { inviterSlug: null, inviterDisplay: '', inviteeLabel: null, raw: s };
+    return { inviterSlug: null, inviteeLabel: null, raw: s };
   }
 
   const prefix = s.slice(0, idx).trim().toLowerCase();
   if (!INVITER_SLUG_RE.test(prefix) || !isKnownInviterPrefix(prefix)) {
-    return { inviterSlug: null, inviterDisplay: '', inviteeLabel: null, raw: s };
+    return { inviterSlug: null, inviteeLabel: null, raw: s };
   }
 
   const tail = s.slice(idx + 1).trim();
   const inviteeLabel = tail ? formatInviteeNameFromFileTail(tail) || null : null;
 
-  return {
-    inviterSlug: prefix,
-    inviterDisplay: slugToDisplay(prefix),
-    inviteeLabel,
-    raw: s,
-  };
+  return { inviterSlug: prefix, inviteeLabel, raw: s };
 }
 
-/** Inviter = cooper | rms from custom_field only (never legacy referrer/UTM fields). */
 export function getInviterAttributionFromRow(row: AnyRow): ParsedInviterAttribution {
   const customRaw = String(row.custom_field ?? '').trim();
   const parsed = parseInviterCustomField(customRaw);
   if (parsed) return parsed;
-  return { inviterSlug: null, inviterDisplay: '', inviteeLabel: null, raw: customRaw };
+  return { inviterSlug: null, inviteeLabel: null, raw: customRaw };
 }
 
-export function inviterSlugFromRow(row: AnyRow): InviterFilePrefix | null {
+/** Normalized name key for filtering (null if no `cooper_*` / `rms_*` name in custom_field). */
+export function nameKeyFromRow(row: AnyRow): string | null {
+  const label = getInviterAttributionFromRow(row).inviteeLabel;
+  if (!label) return null;
+  return normalizeNameKey(label);
+}
+
+export function rowMatchesNameKey(row: AnyRow, key: string): boolean {
+  const k = nameKeyFromRow(row);
+  return k !== null && k === key;
+}
+
+/** Name from custom_field tag (after cooper_/rms_). */
+export function fileTagNameFromRow(row: AnyRow): string {
+  const label = getInviterAttributionFromRow(row).inviteeLabel;
+  return label || '—';
+}
+
+/** cooper | rms | — (for optional caller column, not used as filters). */
+export function callerSlugFromRow(row: AnyRow): InviterFilePrefix | null {
   const slug = getInviterAttributionFromRow(row).inviterSlug;
   if (slug && isKnownInviterPrefix(slug)) return slug;
   return null;
 }
 
-export function inviterDisplayFromRow(row: AnyRow): string {
-  const slug = inviterSlugFromRow(row);
-  return slug ? slugToDisplay(slug) : '—';
+export function callerDisplayFromRow(row: AnyRow): string {
+  const slug = callerSlugFromRow(row);
+  if (slug === 'rms') return 'RMS';
+  if (slug === 'cooper') return 'Cooper';
+  return '—';
 }
 
-/** Candidate name from `cooper_*` / `rms_*` tail, else WebinarGeek registration name. */
+/** Candidate name: file tag first, else WebinarGeek registration name. */
 export function candidateDisplayNameFromRow(row: AnyRow): string {
   const a = getInviterAttributionFromRow(row);
   if (a.inviteeLabel) return a.inviteeLabel;
@@ -152,26 +155,26 @@ export function watchBucketFromSeconds(seconds: number): WatchBucket {
   return 'not_yet';
 }
 
-export function emptyInviterStats(): InviterWatchStats {
+export function emptyWatchStats(): WatchStats {
   return { scheduled: 0, watchedYes: 0, full: 0, half: 0, notYet: 0 };
 }
 
-/** Stats for Cooper and RMS only (rows without `cooper_*` / `rms_*` custom_field are excluded). */
-export function buildInviterProfiles(
+/** One profile per unique candidate name from `cooper_*` / `rms_*` custom_field tags. */
+export function buildCandidateNameProfiles(
   rows: AnyRow[],
   watchSeconds: (row: AnyRow) => number,
-): InviterProfile[] {
-  const map = new Map<string, InviterProfile>();
-
-  for (const prefix of INVITER_FILE_PREFIXES) {
-    map.set(prefix, { slug: prefix, displayName: slugToDisplay(prefix), ...emptyInviterStats() });
-  }
+): CandidateNameProfile[] {
+  const map = new Map<string, CandidateNameProfile>();
 
   for (const row of rows) {
-    const slug = inviterSlugFromRow(row);
-    if (!slug) continue;
+    const key = nameKeyFromRow(row);
+    if (!key) continue;
+    const displayName = getInviterAttributionFromRow(row).inviteeLabel!;
 
-    const p = map.get(slug)!;
+    if (!map.has(key)) {
+      map.set(key, { key, displayName, ...emptyWatchStats() });
+    }
+    const p = map.get(key)!;
     p.scheduled += 1;
     if (row.watched === true) p.watchedYes += 1;
     const bucket = watchBucketFromSeconds(watchSeconds(row));
@@ -180,17 +183,15 @@ export function buildInviterProfiles(
     else p.notYet += 1;
   }
 
-  return INVITER_FILE_PREFIXES.map((prefix) => map.get(prefix)!);
+  return [...map.values()].sort((a, b) => {
+    if (b.scheduled !== a.scheduled) return b.scheduled - a.scheduled;
+    return a.displayName.localeCompare(b.displayName);
+  });
 }
 
-export function inviterInitials(displayName: string): string {
+export function profileInitials(displayName: string): string {
   const parts = displayName.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return '?';
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-}
-
-/** Rows that belong to a known inviter (for filter + counts). */
-export function rowMatchesInviterSlug(row: AnyRow, slug: string): boolean {
-  return inviterSlugFromRow(row) === slug;
 }

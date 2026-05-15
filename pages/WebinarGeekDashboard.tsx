@@ -5,14 +5,13 @@ import { supabase } from '../services/supabaseClient';
 import { fetchWebinarGeekDashboard, syncWebinarGeekCandidates } from '../services/webinarGeekIntegrations';
 import { ChevronLeft, ChevronRight, Download, MessageSquare, RefreshCw, Search, UserCircle2, X } from 'lucide-react';
 import {
-  buildInviterProfiles,
-  getInviterAttributionFromRow,
-  inviterDisplayFromRow,
-  inviterInitials,
-  inviterSlugFromRow,
-  rowMatchesInviterSlug,
+  buildCandidateNameProfiles,
+  callerDisplayFromRow,
   candidateDisplayNameFromRow,
-  inviteeLabelFromRow,
+  fileTagNameFromRow,
+  getInviterAttributionFromRow,
+  profileInitials,
+  rowMatchesNameKey,
 } from '../services/webinarGeekInviters';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import type { AdminNote } from '../types';
@@ -287,8 +286,8 @@ const WebinarGeekDashboard: React.FC = () => {
   const [weekAnchorYmd, setWeekAnchorYmd] = useState(() => torontoYmdFromDate());
   /** Click legend to filter table; click same legend again to clear (null). */
   const [watchToneFilter, setWatchToneFilter] = useState<WatchToneFilter | null>(null);
-  /** null = all inviters; slug from filename prefix (cooper, rms); `_unattributed` = no known prefix */
-  const [selectedInviterSlug, setSelectedInviterSlug] = useState<string | null>(null);
+  /** null = all; otherwise filter by normalized name from custom_field (after cooper_/rms_). */
+  const [selectedNameKey, setSelectedNameKey] = useState<string | null>(null);
   const [selectedRow, setSelectedRow] = useState<AnyRow | null>(null);
   const [wgNotesBySubId, setWgNotesBySubId] = useState<Record<string, AdminNote[]>>({});
   const [wgNotesLoading, setWgNotesLoading] = useState(false);
@@ -348,16 +347,16 @@ const WebinarGeekDashboard: React.FC = () => {
     return rowsInViewMonth;
   }, [scopeMode, rowsInViewWeek, rowsInViewMonth, selectedDayYmd]);
 
-  const inviterProfiles = useMemo(
-    () => buildInviterProfiles(rowsForScope, watchSecondsFromRow),
+  const nameProfiles = useMemo(
+    () => buildCandidateNameProfiles(rowsForScope, watchSecondsFromRow),
     [rowsForScope],
   );
 
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return rowsForScope.filter((row) => {
-      if (selectedInviterSlug) {
-        if (!rowMatchesInviterSlug(row, selectedInviterSlug)) return false;
+      if (selectedNameKey) {
+        if (!rowMatchesNameKey(row, selectedNameKey)) return false;
       }
       if (watchToneFilter && !rowMatchesWatchToneFilter(row, watchToneFilter)) return false;
       if (!q) return true;
@@ -366,7 +365,8 @@ const WebinarGeekDashboard: React.FC = () => {
       const fileName = inviteeLabelFromRow(row).toLowerCase();
       const emailText = String(row.email ?? '').toLowerCase();
       const phoneText = getPhoneDisplay(row).toLowerCase();
-      const inviter = inviterDisplayFromRow(row).toLowerCase();
+      const fileTag = fileTagNameFromRow(row).toLowerCase();
+      const caller = callerDisplayFromRow(row).toLowerCase();
       const rawField = String(getInviterAttributionFromRow(row).raw ?? '').toLowerCase();
       const sid = subscriptionKey(row);
       const notesHay = (wgNotesBySubId[sid] ?? [])
@@ -379,12 +379,13 @@ const WebinarGeekDashboard: React.FC = () => {
         || fileName.includes(q)
         || emailText.includes(q)
         || phoneText.includes(q)
-        || inviter.includes(q)
+        || fileTag.includes(q)
+        || caller.includes(q)
         || rawField.includes(q)
         || notesHay.includes(q)
       );
     });
-  }, [rowsForScope, searchQuery, watchToneFilter, wgNotesBySubId, selectedInviterSlug]);
+  }, [rowsForScope, searchQuery, watchToneFilter, wgNotesBySubId, selectedNameKey]);
 
   const toggleWatchToneFilter = useCallback((tone: WatchToneFilter) => {
     setWatchToneFilter((prev) => (prev === tone ? null : tone));
@@ -666,7 +667,8 @@ const WebinarGeekDashboard: React.FC = () => {
       'registration_last_name',
       'email',
       'phone',
-      'invited_by',
+      'name_from_file',
+      'caller',
       'registration',
       'watch_minutes',
       'watched',
@@ -677,7 +679,8 @@ const WebinarGeekDashboard: React.FC = () => {
       const last = csvScalar(String(row.surname ?? '').trim());
       const email = csvScalar(String(row.email ?? '').trim());
       const phone = csvScalar(getPhoneDisplay(row));
-      const invited = csvScalar(inviterDisplayFromRow(row) || '0');
+      const fileTag = csvScalar(fileTagNameFromRow(row) || '0');
+      const caller = csvScalar(callerDisplayFromRow(row) || '0');
       const regMs = asUnixMs(row.created_at);
       const registration =
         regMs != null ? new Date(regMs).toISOString().slice(0, 16).replace('T', ' ') : '0';
@@ -690,7 +693,8 @@ const WebinarGeekDashboard: React.FC = () => {
         last,
         email,
         phone,
-        invited,
+        fileTag,
+        caller,
         registration,
         String(mins),
         watched,
@@ -794,51 +798,51 @@ const WebinarGeekDashboard: React.FC = () => {
           </div>
         )}
 
-        {subscriptionCache !== null && (
+        {subscriptionCache !== null && nameProfiles.length > 0 && (
           <section className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <UserCircle2 size={18} className="text-[#005EB8] shrink-0" aria-hidden />
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-slate-900">Inviters · Cooper & RMS</p>
+                  <p className="text-sm font-semibold text-slate-900">Filter by name (custom field)</p>
                   <p className="text-[11px] text-slate-500">
-                    Only <span className="font-mono">cooper_*</span> and <span className="font-mono">rms_*</span> in custom field.
-                    Name = candidate text after that prefix. No other inviter labels.
+                    Names come from <span className="font-mono">cooper_*</span> / <span className="font-mono">rms_*</span> tags
+                    (prefix stripped). Click a person to filter the table.
                   </p>
                 </div>
               </div>
-              {selectedInviterSlug && (
+              {selectedNameKey && (
                 <button
                   type="button"
-                  onClick={() => setSelectedInviterSlug(null)}
+                  onClick={() => setSelectedNameKey(null)}
                   className="text-[11px] font-medium text-[#005EB8] hover:underline shrink-0"
                 >
-                  Clear inviter filter
+                  Clear name filter
                 </button>
               )}
             </div>
             <div className="flex gap-2.5 overflow-x-auto pb-1 -mx-1 px-1 snap-x snap-mandatory">
-              <InviterProfileCard
-                displayName="All (Cooper + RMS)"
-                initials="∑"
-                scheduled={inviterProfiles.reduce((s, p) => s + p.scheduled, 0)}
-                full={inviterProfiles.reduce((s, p) => s + p.full, 0)}
-                half={inviterProfiles.reduce((s, p) => s + p.half, 0)}
-                notYet={inviterProfiles.reduce((s, p) => s + p.notYet, 0)}
-                active={selectedInviterSlug === null}
-                onSelect={() => setSelectedInviterSlug(null)}
+              <NameProfileCard
+                displayName="All names"
+                initials="All"
+                scheduled={nameProfiles.reduce((s, p) => s + p.scheduled, 0)}
+                full={nameProfiles.reduce((s, p) => s + p.full, 0)}
+                half={nameProfiles.reduce((s, p) => s + p.half, 0)}
+                notYet={nameProfiles.reduce((s, p) => s + p.notYet, 0)}
+                active={selectedNameKey === null}
+                onSelect={() => setSelectedNameKey(null)}
               />
-              {inviterProfiles.map((p) => (
-                <InviterProfileCard
-                  key={p.slug}
+              {nameProfiles.map((p) => (
+                <NameProfileCard
+                  key={p.key}
                   displayName={p.displayName}
-                  initials={inviterInitials(p.displayName)}
+                  initials={profileInitials(p.displayName)}
                   scheduled={p.scheduled}
                   full={p.full}
                   half={p.half}
                   notYet={p.notYet}
-                  active={selectedInviterSlug === p.slug}
-                  onSelect={() => setSelectedInviterSlug((prev) => (prev === p.slug ? null : p.slug))}
+                  active={selectedNameKey === p.key}
+                  onSelect={() => setSelectedNameKey((prev) => (prev === p.key ? null : p.key))}
                 />
               ))}
             </div>
@@ -918,7 +922,7 @@ const WebinarGeekDashboard: React.FC = () => {
               <input
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Name, email, phone, inviter, or notes"
+                placeholder="Name, email, phone, file tag, or notes"
                 className="w-full pl-9 pr-3 py-2 text-sm rounded-xl border border-slate-200 bg-slate-50/50 focus:outline-none focus:ring-2 focus:ring-slate-300/80"
               />
             </label>
@@ -1058,11 +1062,11 @@ const WebinarGeekDashboard: React.FC = () => {
               {watchToneFilter === 'low' && (
                 <span className="text-rose-800 font-semibold"> · Little / none only</span>
               )}
-              {selectedInviterSlug && (
+              {selectedNameKey && (
                 <span className="text-[#005EB8] font-semibold">
                   {' '}
                   ·{' '}
-                  {inviterProfiles.find((p) => p.slug === selectedInviterSlug)?.displayName ?? selectedInviterSlug}
+                  {nameProfiles.find((p) => p.key === selectedNameKey)?.displayName ?? selectedNameKey}
                 </span>
               )}
             </p>
@@ -1118,7 +1122,8 @@ const WebinarGeekDashboard: React.FC = () => {
                   <th className="px-3 py-2 font-medium">Name</th>
                   <th className="px-3 py-2 font-medium">Email</th>
                   <th className="px-3 py-2 font-medium">Phone</th>
-                  <th className="px-3 py-2 font-medium">Invited by</th>
+                  <th className="px-3 py-2 font-medium">File tag name</th>
+                  <th className="px-3 py-2 font-medium">Caller</th>
                   <th className="px-3 py-2 font-medium">Scheduled</th>
                   <th className="px-3 py-2 font-medium min-w-[9rem]">Status / notes</th>
                   <th className="px-3 py-2 font-medium">Registered</th>
@@ -1129,7 +1134,7 @@ const WebinarGeekDashboard: React.FC = () => {
               <tbody>
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-3 py-8 text-center text-slate-500">
+                    <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
                       No rows
                     </td>
                   </tr>
@@ -1158,7 +1163,8 @@ const WebinarGeekDashboard: React.FC = () => {
                         </td>
                         <td className="px-3 py-2 text-slate-700">{String(row.email || '0')}</td>
                         <td className="px-3 py-2 text-slate-700 tabular-nums">{getPhoneDisplay(row)}</td>
-                        <td className="px-3 py-2 text-slate-700">{inviterDisplayFromRow(row)}</td>
+                        <td className="px-3 py-2 text-slate-700">{fileTagNameFromRow(row)}</td>
+                        <td className="px-3 py-2 text-slate-600">{callerDisplayFromRow(row)}</td>
                         <td className="px-3 py-2 text-slate-600 tabular-nums">
                           {scheduledMs ? formatDateTimeCanadaEastern(scheduledMs) : '0'}
                         </td>
@@ -1206,7 +1212,8 @@ const WebinarGeekDashboard: React.FC = () => {
                 />
                 <Detail label="Email" value={String(selectedRow.email || '0')} />
                 <Detail label="Phone" value={getPhoneDisplay(selectedRow)} />
-                <Detail label="Invited by" value={inviterDisplayFromRow(selectedRow)} />
+                <Detail label="Name (file tag)" value={fileTagNameFromRow(selectedRow)} />
+                <Detail label="Caller" value={callerDisplayFromRow(selectedRow)} />
                 <Detail
                   label="Filename tag"
                   value={(() => {
@@ -1285,7 +1292,7 @@ const Detail = ({ label, value }: { label: string; value: string }) => (
   </div>
 );
 
-type InviterProfileCardProps = {
+type NameProfileCardProps = {
   displayName: string;
   initials: string;
   scheduled: number;
@@ -1296,7 +1303,7 @@ type InviterProfileCardProps = {
   onSelect: () => void;
 };
 
-const InviterProfileCard: React.FC<InviterProfileCardProps> = ({
+const NameProfileCard: React.FC<NameProfileCardProps> = ({
   displayName,
   initials,
   scheduled,
