@@ -10,6 +10,7 @@ import {
   inviterDisplayFromRow,
   inviterInitials,
   inviterSlugFromRow,
+  rowMatchesInviterSlug,
   candidateDisplayNameFromRow,
   inviteeLabelFromRow,
 } from '../services/webinarGeekInviters';
@@ -356,8 +357,7 @@ const WebinarGeekDashboard: React.FC = () => {
     const q = searchQuery.trim().toLowerCase();
     return rowsForScope.filter((row) => {
       if (selectedInviterSlug) {
-        const slug = inviterSlugFromRow(row) ?? '_unattributed';
-        if (slug !== selectedInviterSlug) return false;
+        if (!rowMatchesInviterSlug(row, selectedInviterSlug)) return false;
       }
       if (watchToneFilter && !rowMatchesWatchToneFilter(row, watchToneFilter)) return false;
       if (!q) return true;
@@ -794,16 +794,16 @@ const WebinarGeekDashboard: React.FC = () => {
           </div>
         )}
 
-        {subscriptionCache !== null && inviterProfiles.length > 0 && (
+        {subscriptionCache !== null && (
           <section className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <UserCircle2 size={18} className="text-[#005EB8] shrink-0" aria-hidden />
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-slate-900">Inviters · caller analytics</p>
+                  <p className="text-sm font-semibold text-slate-900">Inviters · Cooper & RMS</p>
                   <p className="text-[11px] text-slate-500">
-                    Name column uses the part after <span className="font-mono">cooper_</span> /{' '}
-                    <span className="font-mono">rms_</span> from the resume filename. Click a profile to filter by inviter.
+                    Only <span className="font-mono">cooper_*</span> and <span className="font-mono">rms_*</span> in custom field.
+                    Name = candidate text after that prefix. No other inviter labels.
                   </p>
                 </div>
               </div>
@@ -819,12 +819,12 @@ const WebinarGeekDashboard: React.FC = () => {
             </div>
             <div className="flex gap-2.5 overflow-x-auto pb-1 -mx-1 px-1 snap-x snap-mandatory">
               <InviterProfileCard
-                displayName="All inviters"
-                initials="All"
-                scheduled={rowsForScope.length}
-                full={overviewForUi.full}
-                half={overviewForUi.half}
-                notYet={overviewForUi.low}
+                displayName="All (Cooper + RMS)"
+                initials="∑"
+                scheduled={inviterProfiles.reduce((s, p) => s + p.scheduled, 0)}
+                full={inviterProfiles.reduce((s, p) => s + p.full, 0)}
+                half={inviterProfiles.reduce((s, p) => s + p.half, 0)}
+                notYet={inviterProfiles.reduce((s, p) => s + p.notYet, 0)}
                 active={selectedInviterSlug === null}
                 onSelect={() => setSelectedInviterSlug(null)}
               />
@@ -1062,8 +1062,7 @@ const WebinarGeekDashboard: React.FC = () => {
                 <span className="text-[#005EB8] font-semibold">
                   {' '}
                   ·{' '}
-                  {inviterProfiles.find((p) => p.slug === selectedInviterSlug)?.displayName
-                    ?? (selectedInviterSlug === '_unattributed' ? 'Other' : selectedInviterSlug)}
+                  {inviterProfiles.find((p) => p.slug === selectedInviterSlug)?.displayName ?? selectedInviterSlug}
                 </span>
               )}
             </p>

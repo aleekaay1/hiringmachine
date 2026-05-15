@@ -1,6 +1,6 @@
 /**
  * Parse WebinarGeek custom_field values shaped like resume uploads: `{inviter}_{candidateName}`.
- * Known team prefixes: cooper, rms (extend INVITER_FILE_PREFIXES as you add callers).
+ * Only `cooper` and `rms` count as inviters — no legacy UTM/referrer fields, no "unattributed" bucket.
  */
 
 export const INVITER_FILE_PREFIXES = ['cooper', 'rms'] as const;
@@ -13,7 +13,7 @@ export type ParsedInviterAttribution = {
   inviterDisplay: string;
   /** Candidate / invitee label from filename tail (underscores → spaces) */
   inviteeLabel: string | null;
-  /** Raw attribution string used for parsing */
+  /** Raw custom_field string */
   raw: string;
 };
 
@@ -32,16 +32,20 @@ export type InviterProfile = InviterWatchStats & {
 
 type AnyRow = Record<string, unknown>;
 
+const INVITER_SLUG_RE = /^[a-z]{2,20}$/;
+
 function slugToDisplay(slug: string): string {
   const s = slug.trim().toLowerCase();
-  if (!s) return 'Unknown';
+  if (!s) return '';
   if (s === 'rms') return 'RMS';
+  if (s === 'cooper') return 'Cooper';
   if (s.length <= 3) return s.toUpperCase();
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 function isKnownInviterPrefix(prefix: string): prefix is InviterFilePrefix {
-  return (INVITER_FILE_PREFIXES as readonly string[]).includes(prefix.toLowerCase());
+  const p = prefix.trim().toLowerCase();
+  return INVITER_SLUG_RE.test(p) && (INVITER_FILE_PREFIXES as readonly string[]).includes(p);
 }
 
 const RESUME_EXT_RE = /\.(pdf|docx?|rtf|txt|png|jpe?g|webp)$/i;
@@ -51,6 +55,7 @@ export function formatInviteeNameFromFileTail(tail: string): string {
   const cleaned = String(tail ?? '')
     .trim()
     .replace(RESUME_EXT_RE, '')
+    .replace(/[^a-zA-Z0-9\s'-]/g, ' ')
     .replace(/_/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -68,100 +73,64 @@ export function formatInviteeNameFromFileTail(tail: string): string {
 }
 
 /**
- * Split `cooper_john_smith` → inviter `cooper`, candidate name `John Smith` (everything after first `_`).
+ * Parse only `custom_field` values: `cooper_*`, `rms_*`, or bare `cooper` / `rms`.
+ * Does not treat random strings, emails, or UTM values as inviters.
  */
 export function parseInviterCustomField(raw: string | null | undefined): ParsedInviterAttribution | null {
   const s = String(raw ?? '').trim();
   if (!s || s.toLowerCase() === 'registration_page') return null;
 
-  const idx = s.indexOf('_');
-  if (idx <= 0) {
-    return { inviterSlug: null, inviterDisplay: s, inviteeLabel: null, raw: s };
-  }
-
-  const prefix = s.slice(0, idx).trim().toLowerCase();
-  const tail = s.slice(idx + 1).trim();
-  const inviteeLabel = tail ? formatInviteeNameFromFileTail(tail) || null : null;
-
-  if (isKnownInviterPrefix(prefix)) {
+  const lower = s.toLowerCase();
+  if (isKnownInviterPrefix(lower)) {
     return {
-      inviterSlug: prefix,
-      inviterDisplay: slugToDisplay(prefix),
-      inviteeLabel,
+      inviterSlug: lower,
+      inviterDisplay: slugToDisplay(lower),
+      inviteeLabel: null,
       raw: s,
     };
   }
 
-  return { inviterSlug: null, inviterDisplay: s, inviteeLabel, raw: s };
+  const idx = s.indexOf('_');
+  if (idx <= 0) {
+    return { inviterSlug: null, inviterDisplay: '', inviteeLabel: null, raw: s };
+  }
+
+  const prefix = s.slice(0, idx).trim().toLowerCase();
+  if (!INVITER_SLUG_RE.test(prefix) || !isKnownInviterPrefix(prefix)) {
+    return { inviterSlug: null, inviterDisplay: '', inviteeLabel: null, raw: s };
+  }
+
+  const tail = s.slice(idx + 1).trim();
+  const inviteeLabel = tail ? formatInviteeNameFromFileTail(tail) || null : null;
+
+  return {
+    inviterSlug: prefix,
+    inviterDisplay: slugToDisplay(prefix),
+    inviteeLabel,
+    raw: s,
+  };
 }
 
-/** Prefer custom_field `cooper_*` / `rms_*`; fall back to other attribution fields with the same pattern. */
+/** Inviter = cooper | rms from custom_field only (never legacy referrer/UTM fields). */
 export function getInviterAttributionFromRow(row: AnyRow): ParsedInviterAttribution {
   const customRaw = String(row.custom_field ?? '').trim();
-  const fromCustom = parseInviterCustomField(customRaw);
-  if (fromCustom?.inviterSlug) return fromCustom;
-
-  const legacy = pickLegacyInviterRaw(row);
-  if (legacy && legacy !== customRaw) {
-    const parsed = parseInviterCustomField(legacy);
-    if (parsed?.inviterSlug) return parsed;
-    if (parsed?.inviteeLabel) return parsed;
-  }
-
-  if (fromCustom?.inviteeLabel) {
-    return { ...fromCustom, inviterDisplay: fromCustom.inviterDisplay || '—' };
-  }
-
-  if (legacy) {
-    return { inviterSlug: null, inviterDisplay: legacy, inviteeLabel: null, raw: legacy };
-  }
-
-  return { inviterSlug: null, inviterDisplay: '', inviteeLabel: null, raw: '' };
+  const parsed = parseInviterCustomField(customRaw);
+  if (parsed) return parsed;
+  return { inviterSlug: null, inviterDisplay: '', inviteeLabel: null, raw: customRaw };
 }
 
-function pickLegacyInviterRaw(row: AnyRow): string {
-  const extraFields = row.extra_fields && typeof row.extra_fields === 'object'
-    ? (row.extra_fields as AnyRow)
-    : null;
-  const options = [
-    row.inviter_name,
-    row.invited_by,
-    row.invited_by_name,
-    row.inviter_signal,
-    row.utm_source,
-    row.utm_term,
-    row.utm_content,
-    row.registration_page_name,
-    row.referrer_name,
-    row.affiliate_name,
-  ];
-  for (const option of options) {
-    const s = String(option ?? '').trim();
-    if (s && s.toLowerCase() !== 'registration_page') return s;
-  }
-  const source = String(row.registration_source ?? '').trim();
-  if (source && source.toLowerCase() !== 'registration_page') return source;
-  if (extraFields) {
-    for (const v of Object.values(extraFields)) {
-      const s = String(v ?? '').trim();
-      if (s && s.toLowerCase() !== 'registration_page') return s;
-    }
-  }
-  const custom = String(row.custom_field ?? '').trim();
-  if (custom && custom.toLowerCase() !== 'registration_page') return custom;
-  return '';
-}
-
-export function inviterSlugFromRow(row: AnyRow): string | null {
-  return getInviterAttributionFromRow(row).inviterSlug;
+export function inviterSlugFromRow(row: AnyRow): InviterFilePrefix | null {
+  const slug = getInviterAttributionFromRow(row).inviterSlug;
+  if (slug && isKnownInviterPrefix(slug)) return slug;
+  return null;
 }
 
 export function inviterDisplayFromRow(row: AnyRow): string {
-  const a = getInviterAttributionFromRow(row);
-  return a.inviterDisplay || '—';
+  const slug = inviterSlugFromRow(row);
+  return slug ? slugToDisplay(slug) : '—';
 }
 
-/** Candidate name from resume filename tail (`cooper_*` / `rms_*`), else WebinarGeek registration name. */
+/** Candidate name from `cooper_*` / `rms_*` tail, else WebinarGeek registration name. */
 export function candidateDisplayNameFromRow(row: AnyRow): string {
   const a = getInviterAttributionFromRow(row);
   if (a.inviteeLabel) return a.inviteeLabel;
@@ -187,21 +156,21 @@ export function emptyInviterStats(): InviterWatchStats {
   return { scheduled: 0, watchedYes: 0, full: 0, half: 0, notYet: 0 };
 }
 
-/** Aggregate inviter profiles from subscription rows (recomputed on every fetch / scope change). */
+/** Stats for Cooper and RMS only (rows without `cooper_*` / `rms_*` custom_field are excluded). */
 export function buildInviterProfiles(
   rows: AnyRow[],
   watchSeconds: (row: AnyRow) => number,
 ): InviterProfile[] {
   const map = new Map<string, InviterProfile>();
 
-  for (const row of rows) {
-    const attr = getInviterAttributionFromRow(row);
-    const slug = attr.inviterSlug ?? '_unattributed';
-    const displayName = attr.inviterSlug ? attr.inviterDisplay : 'Other / unattributed';
+  for (const prefix of INVITER_FILE_PREFIXES) {
+    map.set(prefix, { slug: prefix, displayName: slugToDisplay(prefix), ...emptyInviterStats() });
+  }
 
-    if (!map.has(slug)) {
-      map.set(slug, { slug, displayName, ...emptyInviterStats() });
-    }
+  for (const row of rows) {
+    const slug = inviterSlugFromRow(row);
+    if (!slug) continue;
+
     const p = map.get(slug)!;
     p.scheduled += 1;
     if (row.watched === true) p.watchedYes += 1;
@@ -211,10 +180,7 @@ export function buildInviterProfiles(
     else p.notYet += 1;
   }
 
-  return [...map.values()].sort((a, b) => {
-    if (b.scheduled !== a.scheduled) return b.scheduled - a.scheduled;
-    return a.displayName.localeCompare(b.displayName);
-  });
+  return INVITER_FILE_PREFIXES.map((prefix) => map.get(prefix)!);
 }
 
 export function inviterInitials(displayName: string): string {
@@ -222,4 +188,9 @@ export function inviterInitials(displayName: string): string {
   if (parts.length === 0) return '?';
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+}
+
+/** Rows that belong to a known inviter (for filter + counts). */
+export function rowMatchesInviterSlug(row: AnyRow, slug: string): boolean {
+  return inviterSlugFromRow(row) === slug;
 }
