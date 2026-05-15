@@ -4,6 +4,7 @@ import IntegrationStatusLights from '../components/IntegrationStatusLights';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import {
+  fetchCalendlyProbe,
   fetchLiveSessionsDashboard,
   zoomMeetingStartMs,
   type LiveSessionsDashboardPayload,
@@ -51,6 +52,8 @@ const LiveSessionsDashboard: React.FC = () => {
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
+  const [calProbeLoading, setCalProbeLoading] = useState(false);
+  const [calProbeNote, setCalProbeNote] = useState<string | null>(null);
 
   const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
     const { data: s } = await supabase.auth.getSession();
@@ -89,6 +92,27 @@ const LiveSessionsDashboard: React.FC = () => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) { setAuthError('Invalid email or password.'); return; }
     setIsAuthenticated(true);
+  };
+
+  const handleCalendlyProbe = async () => {
+    setCalProbeNote(null);
+    setFetchError(null);
+    const token = await getFreshAccessToken();
+    if (!token) {
+      setFetchError('Not signed in.');
+      return;
+    }
+    setCalProbeLoading(true);
+    const result = await fetchCalendlyProbe(token);
+    setCalProbeLoading(false);
+    if (!result.ok) {
+      setFetchError(result.error);
+      return;
+    }
+    const p = result.data;
+    setCalProbeNote(
+      `Calendly probe: ${p.events_matching_live_name} live-named events (${p.events_used_for_dashboard} used on dashboard). Open DevTools → Console for full tables.`,
+    );
   };
 
   const handleSyncPipeline = async () => {
@@ -154,6 +178,17 @@ const LiveSessionsDashboard: React.FC = () => {
               <RefreshCw size={15} className={`mr-1.5 inline ${loading ? 'animate-spin' : ''}`} /> Refresh
             </Button>
             <Button
+              type="button"
+              variant="outline"
+              className="text-sm"
+              onClick={() => void handleCalendlyProbe()}
+              disabled={loading || calProbeLoading}
+              title="Fetch all Calendly events in range and log invitees to the browser console"
+            >
+              <Wifi size={15} className={`mr-1.5 inline ${calProbeLoading ? 'animate-pulse' : ''}`} />
+              Probe Calendly
+            </Button>
+            <Button
               type="button" variant="outline"
               className="text-sm" onClick={() => void handleSyncPipeline()} disabled={loading || syncLoading || !data}
             >
@@ -166,6 +201,7 @@ const LiveSessionsDashboard: React.FC = () => {
         {fetchError  && <Alert tone="red">{fetchError}</Alert>}
         {syncError   && <Alert tone="red">{syncError}</Alert>}
         {syncSummary && <Alert tone="green">{syncSummary}</Alert>}
+        {calProbeNote && <Alert tone="green">{calProbeNote}</Alert>}
 
         {/* Summary stats */}
         {data && (

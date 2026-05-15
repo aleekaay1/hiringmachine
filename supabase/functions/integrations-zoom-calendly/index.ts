@@ -347,18 +347,30 @@ async function calendlyListEvents(token: string, userUri: string, from: Date, to
   return all;
 }
 
-async function calendlyInviteesForEvent(token: string, eventUri: string): Promise<CalInvitee[]> {
-  const uuid = eventUri.replace(/\/$/, '').split('/').pop() ?? '';
-  const body = (await calendlyGet(token, `/scheduled_events/${encodeURIComponent(uuid)}/invitees?count=100`)) as {
-    collection?: Array<{
-      uri?: string; event?: string; email?: string; name?: string; status?: string;
-      no_show?: boolean; canceled?: boolean; timezone?: string;
-      text_reminder_number?: string | null; cancel_url?: string;
-      reschedule_url?: string; created_at?: string; updated_at?: string;
-      questions_and_answers?: Array<{ question?: string; answer?: string }>;
-    }>;
-  };
-  return (body.collection ?? []).map((r) => ({
+function calendlyEventNameKeywords(): string[] {
+  const raw = Deno.env.get('CALENDLY_EVENT_NAME_KEYWORDS')?.trim();
+  if (raw) {
+    return raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  }
+  return ['live career overview session', 'live online career session'];
+}
+
+function calendlyEventMatchesLiveSession(eventName: string): boolean {
+  const n = String(eventName ?? '').toLowerCase();
+  return calendlyEventNameKeywords().some((k) => n.includes(k));
+}
+
+function mapCalendlyInviteeRow(
+  r: {
+    uri?: string; event?: string; email?: string; name?: string; status?: string;
+    no_show?: boolean; canceled?: boolean; timezone?: string;
+    text_reminder_number?: string | null; cancel_url?: string;
+    reschedule_url?: string; created_at?: string; updated_at?: string;
+    questions_and_answers?: Array<{ question?: string; answer?: string }>;
+  },
+  eventUri: string,
+): CalInvitee {
+  return {
     uri: String(r.uri ?? ''),
     event_uri: String(r.event ?? eventUri),
     email: (r.email ?? '').trim().toLowerCase(),
@@ -379,7 +391,147 @@ async function calendlyInviteesForEvent(token: string, eventUri: string): Promis
     questions_and_answers: (r.questions_and_answers ?? [])
       .map((q) => ({ question: String(q.question ?? '').trim(), answer: String(q.answer ?? '').trim() }))
       .filter((q) => q.question || q.answer),
-  }));
+  };
+}
+
+async function calendlyInviteesForEvent(token: string, eventUri: string): Promise<CalInvitee[]> {
+  const uuid = eventUri.replace(/\/$/, '').split('/').pop() ?? '';
+  const all: CalInvitee[] = [];
+  let nextPath: string | null = `/scheduled_events/${encodeURIComponent(uuid)}/invitees?count=100`;
+  let safety = 0;
+  while (nextPath && safety < 50) {
+    safety++;
+    const body = (await calendlyGet(token, nextPath)) as {
+      collection?: Array<{
+        uri?: string; event?: string; email?: string; name?: string; status?: string;
+        no_show?: boolean; canceled?: boolean; timezone?: string;
+        text_reminder_number?: string | null; cancel_url?: string;
+        reschedule_url?: string; created_at?: string; updated_at?: string;
+        questions_and_answers?: Array<{ question?: string; answer?: string }>;
+      }>;
+      pagination?: { next_page?: string | null; next_page_token?: string | null };
+    };
+    for (const r of body.collection ?? []) {
+      all.push(mapCalendlyInviteeRow(r, eventUri));
+    }
+    const pag = body.pagination;
+    if (pag?.next_page) {
+      try {
+        const u = new URL(pag.next_page);
+        nextPath = u.pathname + u.search;
+      } catch {
+        nextPath = null;
+      }
+    } else if (pag?.next_page_token) {
+      nextPath =
+        `/scheduled_events/${encodeURIComponent(uuid)}/invitees?count=100&page_token=${encodeURIComponent(pag.next_page_token)}`;
+    } else {
+      nextPath = null;
+    }
+  }
+  return all;
+}
+
+type CalendlyProbeEventRow = {
+  uri: string;
+  name: string;
+  start_time: string;
+  end_time: string;
+  status: string;
+  toronto_date: string;
+  toronto_weekday: number;
+  matches_live_name: boolean;
+  matches_tue_wed: boolean;
+  used_for_dashboard: boolean;
+  invitee_count: number;
+  invitee_count_active: number;
+  invitees_sample: Array<{ email: string; name: string; status: string; canceled: boolean; no_show: boolean }>;
+};
+
+async function buildCalendlyProbePayload(
+  token: string,
+  lookbackDays: number,
+  lookaheadDays: number,
+): Promise<Record<string, unknown>> {
+  const nowMs = Date.now();
+  const from = new Date(nowMs - lookbackDays * 86400_000);
+  const to = new Date(nowMs + lookaheadDays * 86400_000);
+  const requireTueWed = (Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '1').trim() !== '0';
+
+  const calUserRaw = (await calendlyGet(token, '/users/me')) as {
+    resource?: { uri?: string; name?: string; email?: string; scheduling_url?: string };
+  };
+  const calUserUri = calUserRaw.resource?.uri;
+  if (!calUserUri) throw new Error('Calendly /users/me did not return resource.uri');
+
+  const allCalEvents = await calendlyListEvents(token, calUserUri, from, to);
+  console.log('[calendly_probe] scheduled_events in range:', allCalEvents.length);
+
+  const events: CalendlyProbeEventRow[] = [];
+  for (const ev of allCalEvents) {
+    if (!ev.start_time || !ev.uri) continue;
+    const dt = DateTime.fromISO(ev.start_time, { zone: TZ });
+    const name = String(ev.name ?? '');
+    const matchesLive = calendlyEventMatchesLiveSession(name);
+    const matchesTueWed = dt.weekday === 2 || dt.weekday === 3;
+    const usedForDashboard = matchesLive && (!requireTueWed || matchesTueWed);
+
+    let invitees: CalInvitee[] = [];
+    if (matchesLive) {
+      try {
+        invitees = await calendlyInviteesForEvent(token, ev.uri);
+      } catch (e) {
+        console.warn('[calendly_probe] invitees failed', ev.uri, e instanceof Error ? e.message : String(e));
+      }
+    }
+    const active = invitees.filter((i) => !i.canceled && i.status !== 'canceled');
+
+    events.push({
+      uri: ev.uri,
+      name,
+      start_time: ev.start_time,
+      end_time: String(ev.end_time ?? ''),
+      status: String(ev.status ?? ''),
+      toronto_date: dt.isValid ? isoDate(dt) : '',
+      toronto_weekday: dt.weekday,
+      matches_live_name: matchesLive,
+      matches_tue_wed: matchesTueWed,
+      used_for_dashboard: usedForDashboard,
+      invitee_count: invitees.length,
+      invitee_count_active: active.length,
+      invitees_sample: active.slice(0, 8).map((i) => ({
+        email: i.email,
+        name: i.name,
+        status: i.status,
+        canceled: i.canceled,
+        no_show: i.no_show,
+      })),
+    });
+  }
+
+  const matchingLive = events.filter((e) => e.matches_live_name);
+  const used = events.filter((e) => e.used_for_dashboard);
+  console.log('[calendly_probe] matching live name:', matchingLive.length, 'used for dashboard:', used.length);
+
+  return {
+    ok: true,
+    calendly_probe: true,
+    generated_at: new Date().toISOString(),
+    calendly_user: {
+      name: calUserRaw.resource?.name,
+      email: calUserRaw.resource?.email,
+      uri: calUserUri,
+      scheduling_url: calUserRaw.resource?.scheduling_url,
+    },
+    range: { from: from.toISOString(), to: to.toISOString(), lookback_days: lookbackDays, lookahead_days: lookaheadDays },
+    event_name_keywords: calendlyEventNameKeywords(),
+    require_tue_wed: requireTueWed,
+    events_total_in_range: allCalEvents.length,
+    events_matching_live_name: matchingLive.length,
+    events_used_for_dashboard: used.length,
+    events,
+    unique_event_type_names: [...new Set(allCalEvents.map((e) => String(e.name ?? '').trim()).filter(Boolean))].sort(),
+  };
 }
 
 // ─── Snapshot persistence ──────────────────────────────────────────────────
@@ -453,6 +605,18 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ ok: true, health: true, zoom_ok, zoom_error, calendly_configured: !!calTok, calendly_ok, calendly_error }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
+    const lookbackDaysProbe = Math.max(14, Math.min(365, Number(Deno.env.get('ZOOM_LOOKBACK_DAYS') ?? '90')));
+    const lookaheadDaysProbe = Math.max(7, Math.min(180, Number(Deno.env.get('ZOOM_LOOKAHEAD_DAYS') ?? '60')));
+
+    if (reqUrl.searchParams.get('calendly_probe') === '1') {
+      const calTok = Deno.env.get('CALENDLY_API_TOKEN')?.trim();
+      if (!calTok) {
+        return new Response(JSON.stringify({ ok: false, error: 'CALENDLY_API_TOKEN not set' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      const probe = await buildCalendlyProbePayload(calTok, lookbackDaysProbe, lookaheadDaysProbe);
+      return new Response(JSON.stringify(probe), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
     // Config
     const zoomHostEmail = Deno.env.get('ZOOM_HOST_USER_EMAIL')?.trim();
     if (!zoomHostEmail) return new Response(JSON.stringify({ error: 'Missing ZOOM_HOST_USER_EMAIL' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -509,6 +673,7 @@ Deno.serve(async (req) => {
     let calEventsByDate = new Map<string, CalEvent>(); // key: YYYY-MM-DD (Toronto)
     let calInviteesCache = new Map<string, CalInvitee[]>(); // key: event uri
     let calUser: { name?: string; email?: string } | null = null;
+    const calendlyFilterLog: Array<{ name: string; start_time: string; reason: string }> = [];
 
     if (calendlyEnabled && calendlyToken) {
       const calUserRaw = (await calendlyGet(calendlyToken, '/users/me')) as { resource?: { uri?: string; name?: string; email?: string } };
@@ -519,18 +684,36 @@ Deno.serve(async (req) => {
       const from = new Date(nowMs - lookbackDays * 86400_000);
       const to   = new Date(nowMs + lookaheadDays * 86400_000);
       const allCalEvents = await calendlyListEvents(calendlyToken, calUserUri, from, to);
+      const requireTueWed = (Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '1').trim() !== '0';
 
-      // Only keep likely live-overview Calendly events on Tue/Wed.
       for (const ev of allCalEvents) {
         if (!ev.start_time) continue;
         const dt = DateTime.fromISO(ev.start_time, { zone: TZ });
-        const name = String(ev.name ?? '').toLowerCase();
-        const isLiveName = name.includes('live career overview session') || name.includes('live online career session');
+        const name = String(ev.name ?? '');
+        const isLiveName = calendlyEventMatchesLiveSession(name);
         const isTueOrWed = dt.weekday === 2 || dt.weekday === 3;
-        if (!isLiveName || !isTueOrWed) continue;
+        if (!isLiveName) {
+          if (reqUrl.searchParams.get('calendly_debug') === '1') {
+            calendlyFilterLog.push({ name, start_time: ev.start_time, reason: 'name_no_match' });
+          }
+          continue;
+        }
+        if (requireTueWed && !isTueOrWed) {
+          if (reqUrl.searchParams.get('calendly_debug') === '1') {
+            calendlyFilterLog.push({ name, start_time: ev.start_time, reason: 'not_tue_wed' });
+          }
+          continue;
+        }
         const date = isoDate(dt);
         if (!calEventsByDate.has(date)) calEventsByDate.set(date, ev);
       }
+
+      console.log(
+        '[integrations-zoom-calendly] Calendly events in range:',
+        allCalEvents.length,
+        'matched for dashboard:',
+        calEventsByDate.size,
+      );
 
       // Pre-load invitees for all matched Calendly events
       await Promise.all([...calEventsByDate.values()].map(async (ev) => {
@@ -749,6 +932,7 @@ Deno.serve(async (req) => {
     }));
 
     const generatedAt = new Date().toISOString();
+    const includeCalDebug = reqUrl.searchParams.get('calendly_debug') === '1';
     const responsePayload = {
       ok: true,
       generated_at: generatedAt,
@@ -759,6 +943,22 @@ Deno.serve(async (req) => {
       past_meetings: combinedPast,
       upcoming_meetings: combinedUpcoming,
       calendly_events_in_range: calEventsByDate.size,
+      ...(includeCalDebug && calendlyEnabled && calendlyToken
+        ? {
+            calendly_debug: {
+              event_name_keywords: calendlyEventNameKeywords(),
+              require_tue_wed: (Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '1').trim() !== '0',
+              events_matched_by_date: [...calEventsByDate.entries()].map(([date, ev]) => ({
+                date,
+                name: ev.name,
+                start_time: ev.start_time,
+                uri: ev.uri,
+                invitee_count: ev.uri ? (calInviteesCache.get(ev.uri) ?? []).length : 0,
+              })),
+              skipped_samples: calendlyFilterLog.slice(0, 30),
+            },
+          }
+        : {}),
     };
 
     const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.trim() ?? '';

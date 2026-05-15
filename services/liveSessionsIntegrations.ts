@@ -231,13 +231,96 @@ export async function fetchIntegrationHealth(
   return { ok: true, data: json as unknown as IntegrationHealthPayload };
 }
 
+export type CalendlyProbePayload = {
+  ok: boolean;
+  calendly_probe: boolean;
+  generated_at: string;
+  calendly_user: { name?: string; email?: string; uri?: string; scheduling_url?: string };
+  range: { from: string; to: string; lookback_days: number; lookahead_days: number };
+  event_name_keywords: string[];
+  require_tue_wed: boolean;
+  events_total_in_range: number;
+  events_matching_live_name: number;
+  events_used_for_dashboard: number;
+  unique_event_type_names: string[];
+  events: Array<{
+    uri: string;
+    name: string;
+    start_time: string;
+    end_time: string;
+    status: string;
+    toronto_date: string;
+    toronto_weekday: number;
+    matches_live_name: boolean;
+    matches_tue_wed: boolean;
+    used_for_dashboard: boolean;
+    invitee_count: number;
+    invitee_count_active: number;
+    invitees_sample: Array<{ email: string; name: string; status: string; canceled: boolean; no_show: boolean }>;
+  }>;
+};
+
+/** Log Calendly probe payload to the browser console (tables + summary). */
+export function logCalendlyProbeToConsole(payload: CalendlyProbePayload): void {
+  console.group('[Live sessions] Calendly probe');
+  console.log('User:', payload.calendly_user);
+  console.log('Range:', payload.range);
+  console.log('Keywords:', payload.event_name_keywords);
+  console.log('Require Tue/Wed:', payload.require_tue_wed);
+  console.log(
+    `Events in range: ${payload.events_total_in_range} · matching live name: ${payload.events_matching_live_name} · used on dashboard: ${payload.events_used_for_dashboard}`,
+  );
+  console.log('Unique Calendly event type names:', payload.unique_event_type_names);
+  const liveRows = payload.events.filter((e) => e.matches_live_name);
+  console.table(
+    liveRows.map((e) => ({
+      date: e.toronto_date,
+      name: e.name,
+      start: e.start_time,
+      invitees: e.invitee_count_active,
+      tue_wed: e.matches_tue_wed,
+      dashboard: e.used_for_dashboard,
+    })),
+  );
+  for (const e of liveRows.slice(0, 12)) {
+    if (e.invitees_sample.length > 0) {
+      console.log(`Invitees sample — ${e.name} (${e.start_time}):`, e.invitees_sample);
+    }
+  }
+  console.groupEnd();
+}
+
+export async function fetchCalendlyProbe(
+  accessToken: string,
+): Promise<{ ok: true; data: CalendlyProbePayload } | { ok: false; error: string }> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return { ok: false, error: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY' };
+  }
+  const url = `${SUPABASE_URL}/functions/v1/integrations-zoom-calendly?calendly_probe=1`;
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      apikey: SUPABASE_ANON_KEY,
+    },
+  });
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) {
+    const err = (json.error as string) || res.statusText || 'Request failed';
+    return { ok: false, error: err };
+  }
+  const data = json as unknown as CalendlyProbePayload;
+  logCalendlyProbeToConsole(data);
+  return { ok: true, data };
+}
+
 export async function fetchLiveSessionsDashboard(
   accessToken: string
 ): Promise<{ ok: true; data: LiveSessionsDashboardPayload } | { ok: false; error: string }> {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     return { ok: false, error: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY' };
   }
-  const url = `${SUPABASE_URL}/functions/v1/integrations-zoom-calendly`;
+  const url = `${SUPABASE_URL}/functions/v1/integrations-zoom-calendly?calendly_debug=1`;
   const res = await fetch(url, {
     method: 'GET',
     headers: {
@@ -251,6 +334,14 @@ export async function fetchLiveSessionsDashboard(
     const hint = typeof json.hint === 'string' ? ` ${json.hint}` : '';
     return { ok: false, error: `${err}${hint}` };
   }
-  const payload = json as unknown as LiveSessionsDashboardPayload;
-  return { ok: true, data: reconcileLiveSessionsPastUpcoming(payload) };
+  const payload = json as unknown as LiveSessionsDashboardPayload & {
+    calendly_debug?: Record<string, unknown>;
+  };
+  if (payload.calendly_debug) {
+    console.group('[Live sessions] Calendly debug (dashboard fetch)');
+    console.log(payload.calendly_debug);
+    console.groupEnd();
+  }
+  const { calendly_debug: _dbg, ...rest } = payload;
+  return { ok: true, data: reconcileLiveSessionsPastUpcoming(rest) };
 }

@@ -47,6 +47,15 @@ Do **not** put Zoom secrets in `.env` or `VITE_*` — only in Supabase Edge Func
 |---------------------|-------------------------|
 | `CALENDLY_API_TOKEN` | Calendly → **Integrations** → **API & Webhooks** → **Personal access tokens** → **Generate new token** (copy once; Calendly may not show it again). If unset, the dashboard shows Zoom data only (`calendly_configured: false` in the API response). |
 
+Optional Calendly tuning:
+
+| Name | Value |
+|------|--------|
+| `CALENDLY_EVENT_NAME_KEYWORDS` | Comma-separated substrings matched against event **name** (default: `live career overview session,live online career session`) |
+| `CALENDLY_REQUIRE_TUE_WED` | `1` (default) — only Tue/Wed events pair to Zoom; set `0` to match live-named events on any weekday |
+
+**Debug:** On the Live sessions page, click **Probe Calendly** (logs full event + invitee sample to the browser console). Normal **Refresh** also logs a `calendly_debug` summary when Calendly is connected. Edge URL: `GET .../integrations-zoom-calendly?calendly_probe=1` |
+
 The token is tied to **your Calendly user**; scheduled events and invitees are loaded for that user’s calendar.
 
 ### Where meeting rows come from (past vs upcoming)
