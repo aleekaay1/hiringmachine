@@ -10,6 +10,7 @@ import {
   inviterDisplayFromRow,
   inviterInitials,
   inviterSlugFromRow,
+  candidateDisplayNameFromRow,
   inviteeLabelFromRow,
 } from '../services/webinarGeekInviters';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
@@ -360,7 +361,8 @@ const WebinarGeekDashboard: React.FC = () => {
       }
       if (watchToneFilter && !rowMatchesWatchToneFilter(row, watchToneFilter)) return false;
       if (!q) return true;
-      const name = `${String(row.firstname ?? '').trim()} ${String(row.surname ?? '').trim()}`.toLowerCase();
+      const name = candidateDisplayNameFromRow(row).toLowerCase();
+      const wgName = `${String(row.firstname ?? '').trim()} ${String(row.surname ?? '').trim()}`.toLowerCase();
       const fileName = inviteeLabelFromRow(row).toLowerCase();
       const emailText = String(row.email ?? '').toLowerCase();
       const phoneText = getPhoneDisplay(row).toLowerCase();
@@ -373,6 +375,7 @@ const WebinarGeekDashboard: React.FC = () => {
         .toLowerCase();
       return (
         name.includes(q)
+        || wgName.includes(q)
         || fileName.includes(q)
         || emailText.includes(q)
         || phoneText.includes(q)
@@ -658,8 +661,9 @@ const WebinarGeekDashboard: React.FC = () => {
   const handleCsvExport = useCallback(() => {
     const headers = [
       'subscription_id',
-      'first_name',
-      'last_name',
+      'candidate_name',
+      'registration_first_name',
+      'registration_last_name',
       'email',
       'phone',
       'invited_by',
@@ -668,6 +672,7 @@ const WebinarGeekDashboard: React.FC = () => {
       'watched',
     ];
     const rows = filteredRows.map((row) => {
+      const candidateName = csvScalar(candidateDisplayNameFromRow(row) || '');
       const first = csvScalar(String(row.firstname ?? '').trim());
       const last = csvScalar(String(row.surname ?? '').trim());
       const email = csvScalar(String(row.email ?? '').trim());
@@ -680,6 +685,7 @@ const WebinarGeekDashboard: React.FC = () => {
       const watched = row.watched === true ? 'Yes' : 'No';
       return [
         String(row.id ?? '0'),
+        candidateName,
         first,
         last,
         email,
@@ -796,8 +802,8 @@ const WebinarGeekDashboard: React.FC = () => {
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-slate-900">Inviters · caller analytics</p>
                   <p className="text-[11px] text-slate-500">
-                    Resume filename prefix (<span className="font-mono">cooper_name</span>,{' '}
-                    <span className="font-mono">rms_name</span>). Click a profile to filter registrations.
+                    Name column uses the part after <span className="font-mono">cooper_</span> /{' '}
+                    <span className="font-mono">rms_</span> from the resume filename. Click a profile to filter by inviter.
                   </p>
                 </div>
               </div>
@@ -1130,7 +1136,8 @@ const WebinarGeekDashboard: React.FC = () => {
                   </tr>
                 ) : (
                   filteredRows.map((row) => {
-                    const name = `${String(row.firstname || '').trim()} ${String(row.surname || '').trim()}`.trim() || '0';
+                    const name = candidateDisplayNameFromRow(row) || '0';
+                    const wgName = `${String(row.firstname || '').trim()} ${String(row.surname || '').trim()}`.trim();
                     const durationSec = Number(row.watch_duration || 0);
                     const regMs = asUnixMs(row.created_at);
                     const scheduledMs = asUnixMs((row.broadcast as AnyRow | undefined)?.date);
@@ -1142,7 +1149,14 @@ const WebinarGeekDashboard: React.FC = () => {
                         className={`border-b border-slate-100/90 cursor-pointer ${tone}`}
                         onClick={() => setSelectedRow(row)}
                       >
-                        <td className="px-3 py-2 font-medium text-slate-900">{name}</td>
+                        <td className="px-3 py-2 font-medium text-slate-900">
+                          <span>{name}</span>
+                          {wgName && wgName.toLowerCase() !== name.toLowerCase() && (
+                            <span className="block text-[10px] font-normal text-slate-500 truncate" title="WebinarGeek registration name">
+                              Reg: {wgName}
+                            </span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-slate-700">{String(row.email || '0')}</td>
                         <td className="px-3 py-2 text-slate-700 tabular-nums">{getPhoneDisplay(row)}</td>
                         <td className="px-3 py-2 text-slate-700">{inviterDisplayFromRow(row)}</td>
@@ -1186,15 +1200,19 @@ const WebinarGeekDashboard: React.FC = () => {
                 </button>
               </div>
               <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm shrink-0">
-                <Detail label="Name" value={`${String(selectedRow.firstname || '').trim()} ${String(selectedRow.surname || '').trim()}`.trim() || '0'} />
+                <Detail label="Name (from file)" value={candidateDisplayNameFromRow(selectedRow) || '0'} />
+                <Detail
+                  label="Registration name"
+                  value={`${String(selectedRow.firstname || '').trim()} ${String(selectedRow.surname || '').trim()}`.trim() || '0'}
+                />
                 <Detail label="Email" value={String(selectedRow.email || '0')} />
                 <Detail label="Phone" value={getPhoneDisplay(selectedRow)} />
                 <Detail label="Invited by" value={inviterDisplayFromRow(selectedRow)} />
                 <Detail
-                  label="File / invitee label"
+                  label="Filename tag"
                   value={(() => {
                     const a = getInviterAttributionFromRow(selectedRow);
-                    return a.inviteeLabel || '—';
+                    return a.raw || '—';
                   })()}
                 />
                 <Detail

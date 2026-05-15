@@ -44,7 +44,32 @@ function isKnownInviterPrefix(prefix: string): prefix is InviterFilePrefix {
   return (INVITER_FILE_PREFIXES as readonly string[]).includes(prefix.toLowerCase());
 }
 
-/** Split `cooper_john_smith` → inviter cooper, invitee "john smith". */
+const RESUME_EXT_RE = /\.(pdf|docx?|rtf|txt|png|jpe?g|webp)$/i;
+
+/** `john_smith` → `John Smith`; strips resume extension if present. */
+export function formatInviteeNameFromFileTail(tail: string): string {
+  const cleaned = String(tail ?? '')
+    .trim()
+    .replace(RESUME_EXT_RE, '')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return '';
+  return cleaned
+    .split(' ')
+    .map((w) => {
+      const t = w.trim();
+      if (!t) return '';
+      if (t.length <= 2) return t.toUpperCase();
+      return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+    })
+    .filter(Boolean)
+    .join(' ');
+}
+
+/**
+ * Split `cooper_john_smith` → inviter `cooper`, candidate name `John Smith` (everything after first `_`).
+ */
 export function parseInviterCustomField(raw: string | null | undefined): ParsedInviterAttribution | null {
   const s = String(raw ?? '').trim();
   if (!s || s.toLowerCase() === 'registration_page') return null;
@@ -56,7 +81,7 @@ export function parseInviterCustomField(raw: string | null | undefined): ParsedI
 
   const prefix = s.slice(0, idx).trim().toLowerCase();
   const tail = s.slice(idx + 1).trim();
-  const inviteeLabel = tail ? tail.replace(/_/g, ' ').replace(/\s+/g, ' ').trim() : null;
+  const inviteeLabel = tail ? formatInviteeNameFromFileTail(tail) || null : null;
 
   if (isKnownInviterPrefix(prefix)) {
     return {
@@ -70,15 +95,24 @@ export function parseInviterCustomField(raw: string | null | undefined): ParsedI
   return { inviterSlug: null, inviterDisplay: s, inviteeLabel, raw: s };
 }
 
-/** Prefer custom_field filename pattern; fall back to legacy inviter fields. */
+/** Prefer custom_field `cooper_*` / `rms_*`; fall back to other attribution fields with the same pattern. */
 export function getInviterAttributionFromRow(row: AnyRow): ParsedInviterAttribution {
-  const fromCustom = parseInviterCustomField(String(row.custom_field ?? ''));
+  const customRaw = String(row.custom_field ?? '').trim();
+  const fromCustom = parseInviterCustomField(customRaw);
   if (fromCustom?.inviterSlug) return fromCustom;
 
   const legacy = pickLegacyInviterRaw(row);
-  if (legacy) {
+  if (legacy && legacy !== customRaw) {
     const parsed = parseInviterCustomField(legacy);
-    if (parsed) return parsed;
+    if (parsed?.inviterSlug) return parsed;
+    if (parsed?.inviteeLabel) return parsed;
+  }
+
+  if (fromCustom?.inviteeLabel) {
+    return { ...fromCustom, inviterDisplay: fromCustom.inviterDisplay || '—' };
+  }
+
+  if (legacy) {
     return { inviterSlug: null, inviterDisplay: legacy, inviteeLabel: null, raw: legacy };
   }
 
@@ -127,11 +161,16 @@ export function inviterDisplayFromRow(row: AnyRow): string {
   return a.inviterDisplay || '—';
 }
 
-export function inviteeLabelFromRow(row: AnyRow): string {
+/** Candidate name from resume filename tail (`cooper_*` / `rms_*`), else WebinarGeek registration name. */
+export function candidateDisplayNameFromRow(row: AnyRow): string {
   const a = getInviterAttributionFromRow(row);
   if (a.inviteeLabel) return a.inviteeLabel;
-  const name = `${String(row.firstname ?? '').trim()} ${String(row.surname ?? '').trim()}`.trim();
-  return name;
+  const wg = `${String(row.firstname ?? '').trim()} ${String(row.surname ?? '').trim()}`.trim();
+  return wg;
+}
+
+export function inviteeLabelFromRow(row: AnyRow): string {
+  return candidateDisplayNameFromRow(row);
 }
 
 export type WatchBucket = 'full' | 'half' | 'not_yet';
