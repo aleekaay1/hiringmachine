@@ -60,6 +60,7 @@ function toCsvCell(value: unknown): string {
 }
 
 const CallsAnalytics: React.FC = () => {
+  const [authChecked, setAuthChecked] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [email, setEmail] = useState('admin@globelife-paz.com');
   const [password, setPassword] = useState('');
@@ -233,6 +234,7 @@ const CallsAnalytics: React.FC = () => {
   useEffect(() => {
     void supabase.auth.getSession().then(({ data: s }) => {
       if (s.session) setIsAuthenticated(true);
+      setAuthChecked(true);
     });
   }, []);
 
@@ -240,9 +242,17 @@ const CallsAnalytics: React.FC = () => {
     setSelectedDayYmd(null);
   }, [monthAnchorYmd]);
 
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-[#e8f2fc] via-[#f0f6ff] to-[#e6eef8] flex items-center justify-center">
+        <p className="text-sm text-slate-500">Loading…</p>
+      </div>
+    );
+  }
+
   if (!isAuthenticated) {
     return (
-      <motionlessLogin
+      <CallsAnalyticsLogin
         email={email}
         password={password}
         authError={authError}
@@ -265,7 +275,7 @@ const CallsAnalytics: React.FC = () => {
   return (
     <Layout isAdmin>
       <div className="min-h-screen bg-gradient-to-br from-[#e8f2fc] via-[#f0f6ff] to-[#e6eef8]">
-        <motionlessPage
+        <CallsAnalyticsPage
           scopeTitle={scopeTitle}
           lastFetchAt={lastFetchAt}
           lastFetchRange={lastFetchRange}
@@ -299,7 +309,7 @@ const CallsAnalytics: React.FC = () => {
   );
 };
 
-function motionlessLogin(props: {
+function CallsAnalyticsLogin(props: {
   email: string;
   password: string;
   authError: string | null;
@@ -308,13 +318,13 @@ function motionlessLogin(props: {
   onSubmit: (e: React.FormEvent) => void;
 }) {
   return (
-    <motionlessLoginShell>
-      <motionlessLoginCard {...props} />
-    </motionlessLoginShell>
+    <CallsAnalyticsLoginShell>
+      <CallsAnalyticsLoginCard {...props} />
+    </CallsAnalyticsLoginShell>
   );
 }
 
-function motionlessLoginShell({ children }: { children: React.ReactNode }) {
+function CallsAnalyticsLoginShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#e8f2fc] via-[#f0f6ff] to-[#e6eef8] flex items-center justify-center p-4">
       {children}
@@ -322,7 +332,7 @@ function motionlessLoginShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function motionlessLoginCard(props: {
+function CallsAnalyticsLoginCard(props: {
   email: string;
   password: string;
   authError: string | null;
@@ -386,12 +396,12 @@ type PageProps = {
   onCsv: () => void;
 };
 
-function motionlessPage(p: PageProps) {
+function CallsAnalyticsPage(p: PageProps) {
   return (
     <div className="w-full max-w-6xl mx-auto p-5 space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className={`${glassCard} px-5 py-4 flex-1 min-w-[16rem]`}>
-          <motionlessPageHeader lastFetchAt={p.lastFetchAt} lastFetchRange={p.lastFetchRange} />
+          <CallsAnalyticsPageHeader lastFetchAt={p.lastFetchAt} lastFetchRange={p.lastFetchRange} />
         </div>
         <div className="flex flex-wrap gap-2">
           <Button type="button" onClick={p.onFetch} disabled={p.loading}>
@@ -410,11 +420,11 @@ function motionlessPage(p: PageProps) {
       </header>
 
       {p.subscriptionCache !== null && (
-        <motionlessSummaryTiles summary={p.summary} scopeTitle={p.scopeTitle} />
+        <SummaryTiles summary={p.summary} scopeTitle={p.scopeTitle} />
       )}
 
       {p.subscriptionCache !== null && p.recruiterProfiles.length > 0 && (
-        <motionlessRecruiterSection
+        <RecruiterSection
           profiles={p.recruiterProfiles}
           selectedKey={p.selectedRecruiterKey}
           onSelect={p.onSelectRecruiter}
@@ -461,7 +471,7 @@ function motionlessPage(p: PageProps) {
       )}
 
       <div className={`${glassCard} overflow-hidden`}>
-        <motionlessTableHeader
+        <BookingsTableHeader
           count={p.filteredRows.length}
           recruiterName={
             p.selectedRecruiterKey
@@ -475,7 +485,7 @@ function motionlessPage(p: PageProps) {
   );
 }
 
-function motionlessPageHeader({
+function CallsAnalyticsPageHeader({
   lastFetchAt,
   lastFetchRange,
 }: {
@@ -483,11 +493,11 @@ function motionlessPageHeader({
   lastFetchRange: string | null;
 }) {
   return (
-    <motionlessPageHeaderInner lastFetchAt={lastFetchAt} lastFetchRange={lastFetchRange} />
+    <CallsAnalyticsPageHeaderInner lastFetchAt={lastFetchAt} lastFetchRange={lastFetchRange} />
   );
 }
 
-function motionlessPageHeaderInner({
+function CallsAnalyticsPageHeaderInner({
   lastFetchAt,
   lastFetchRange,
 }: {
@@ -514,7 +524,7 @@ function motionlessPageHeaderInner({
   );
 }
 
-function motionlessSummaryTiles({
+function SummaryTiles({
   summary,
   scopeTitle,
 }: {
@@ -532,13 +542,13 @@ function motionlessSummaryTiles({
           sub: `${summary.watched} yes`,
         },
       ].map((t) => (
-        <motionlessSummaryTile key={t.label} {...t} />
+        <SummaryTile key={t.label} {...t} />
       ))}
     </div>
   );
 }
 
-function motionlessSummaryTile({
+function SummaryTile({
   label,
   value,
   sub,
@@ -556,7 +566,7 @@ function motionlessSummaryTile({
   );
 }
 
-function motionlessRecruiterSection({
+function RecruiterSection({
   profiles,
   selectedKey,
   onSelect,
@@ -569,7 +579,7 @@ function motionlessRecruiterSection({
     <div className={`${glassCard} p-4 space-y-3`}>
       <div className="flex items-center gap-2">
         <Users size={18} className="text-[#005EB8]" />
-        <motionlessRecruiterSectionCopy />
+        <RecruiterSectionCopy />
       </div>
       <div className="flex gap-2.5 overflow-x-auto pb-1 snap-x">
         <RecruiterChip
@@ -596,7 +606,7 @@ function motionlessRecruiterSection({
   );
 }
 
-function motionlessRecruiterSectionCopy() {
+function RecruiterSectionCopy() {
   return (
     <div>
       <p className="text-sm font-semibold text-slate-800">Recruiters</p>
@@ -607,13 +617,7 @@ function motionlessRecruiterSectionCopy() {
   );
 }
 
-function motionlessEmptyFetchCard() {
-  return (
-    <motionlessEmptyFetchCardInner />
-  );
-}
-
-function motionlessEmptyFetchCardInner() {
+function EmptyFetchCard() {
   return (
     <div className={`${glassCard} px-4 py-8 text-center text-sm text-slate-600`}>
       Press <strong>Fetch data</strong> to load recruiter booking analytics.
@@ -716,12 +720,12 @@ function CalendarNav({
       >
         <ChevronRight className="h-5 w-5" />
       </button>
-      <motionlessScopeToggle scopeMode={scopeMode} setScopeMode={setScopeMode} setSelectedDayYmd={setSelectedDayYmd} selectedDayYmd={selectedDayYmd} />
+      <ScopeModeToggleWrapper scopeMode={scopeMode} setScopeMode={setScopeMode} setSelectedDayYmd={setSelectedDayYmd} selectedDayYmd={selectedDayYmd} />
     </div>
   );
 }
 
-function motionlessScopeToggle({
+function ScopeModeToggleWrapper({
   scopeMode,
   setScopeMode,
   setSelectedDayYmd,
@@ -733,7 +737,7 @@ function motionlessScopeToggle({
   selectedDayYmd: string | null;
 }) {
   return (
-    <motionlessScopeToggleInner
+    <ScopeModeToggleInner
       scopeMode={scopeMode}
       setScopeMode={setScopeMode}
       setSelectedDayYmd={setSelectedDayYmd}
@@ -742,7 +746,7 @@ function motionlessScopeToggle({
   );
 }
 
-function motionlessScopeToggleInner({
+function ScopeModeToggleInner({
   scopeMode,
   setScopeMode,
   setSelectedDayYmd,
@@ -754,7 +758,7 @@ function motionlessScopeToggleInner({
   selectedDayYmd: string | null;
 }) {
   return (
-    <motionlessScopeToggleButtons
+    <ScopeModeToggle
       scopeMode={scopeMode}
       setScopeMode={setScopeMode}
       setSelectedDayYmd={setSelectedDayYmd}
@@ -763,7 +767,7 @@ function motionlessScopeToggleInner({
   );
 }
 
-function motionlessScopeToggleButtons({
+function ScopeModeToggle({
   scopeMode,
   setScopeMode,
   setSelectedDayYmd,
@@ -820,13 +824,13 @@ function CalendarGrid({
     <>
       <div className="grid grid-cols-7 gap-1.5 text-center text-[10px] font-medium uppercase tracking-wide text-slate-500 mb-1.5">
         {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
-          <motionlessWeekday key={d} label={d} />
+          <WeekdayLabel key={d} label={d} />
         ))}
       </div>
       <div className="grid grid-cols-7 gap-1.5">
         {calendarCells.map((day, idx) => {
           if (day == null) {
-            return <motionlessCalendarEmpty key={`e-${idx}`} />;
+            return <CalendarEmptyCell key={`e-${idx}`} />;
           }
           const ymd = `${viewYear}-${String(viewMonth0 + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
           const counts = dayCounts.get(ymd);
@@ -860,19 +864,15 @@ function CalendarGrid({
   );
 }
 
-function motionlessWeekday({ label }: { label: string }) {
-  return <motionlessWeekdayInner label={label} />;
-}
-
-function motionlessWeekdayInner({ label }: { label: string }) {
+function WeekdayLabel({ label }: { label: string }) {
   return <div className="py-1">{label}</div>;
 }
 
-function motionlessCalendarEmpty() {
+function CalendarEmptyCell() {
   return <div className="min-h-[64px] rounded-xl bg-white/20" />;
 }
 
-function motionlessTableHeader({
+function BookingsTableHeader({
   count,
   recruiterName,
 }: {
