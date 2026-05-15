@@ -3,7 +3,15 @@ import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import { fetchWebinarGeekDashboard, syncWebinarGeekCandidates } from '../services/webinarGeekIntegrations';
-import { ChevronLeft, ChevronRight, Download, MessageSquare, RefreshCw, Search, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, MessageSquare, RefreshCw, Search, UserCircle2, X } from 'lucide-react';
+import {
+  buildInviterProfiles,
+  getInviterAttributionFromRow,
+  inviterDisplayFromRow,
+  inviterInitials,
+  inviterSlugFromRow,
+  inviteeLabelFromRow,
+} from '../services/webinarGeekInviters';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import type { AdminNote } from '../types';
 import {
@@ -166,38 +174,9 @@ function ymdToShortLabel(ymd: string): string {
   return shortCalendarDayLabel(y, m - 1, d);
 }
 
-/** Prefer WebinarGeek custom_field (inviter name), then other attribution fields. */
-function getInvitedByDisplay(row: AnyRow): string {
-  const custom = String(row.custom_field ?? '').trim();
-  if (custom && custom.toLowerCase() !== 'registration_page') return custom;
-  const extraFields = row.extra_fields && typeof row.extra_fields === 'object'
-    ? row.extra_fields as AnyRow
-    : null;
-  const options = [
-    row.inviter_name,
-    row.invited_by,
-    row.invited_by_name,
-    row.inviter_signal,
-    row.utm_source,
-    row.utm_term,
-    row.utm_content,
-    row.registration_page_name,
-    row.referrer_name,
-    row.affiliate_name,
-  ];
-  for (const option of options) {
-    const s = String(option ?? '').trim();
-    if (s && s.toLowerCase() !== 'registration_page') return s;
-  }
-  const source = String(row.registration_source ?? '').trim();
-  if (source && source.toLowerCase() !== 'registration_page') return source;
-  if (extraFields) {
-    for (const v of Object.values(extraFields)) {
-      const s = String(v ?? '').trim();
-      if (s && s.toLowerCase() !== 'registration_page') return s;
-    }
-  }
-  return '';
+function watchSecondsFromRow(row: AnyRow): number {
+  const sec = Number(row.watch_duration || 0);
+  return Number.isFinite(sec) && sec > 0 ? sec : 0;
 }
 
 /** CSV / Excel: no em-dash mojibake — use 0 when missing. */
@@ -273,11 +252,6 @@ function normalizeBroadcastSchedules(data: DashboardData | null): BroadcastSched
   return mapped;
 }
 
-function getInviterName(row: AnyRow): string {
-  const v = getInvitedByDisplay(row);
-  return v || '0';
-}
-
 function getPhoneDisplay(row: AnyRow): string {
   const phone = String(row.phone ?? row.telephone ?? row.mobile ?? '').trim();
   return phone || '0';
@@ -311,6 +285,8 @@ const WebinarGeekDashboard: React.FC = () => {
   const [weekAnchorYmd, setWeekAnchorYmd] = useState(() => torontoYmdFromDate());
   /** Click legend to filter table; click same legend again to clear (null). */
   const [watchToneFilter, setWatchToneFilter] = useState<WatchToneFilter | null>(null);
+  /** null = all inviters; slug from filename prefix (cooper, rms); `_unattributed` = no known prefix */
+  const [selectedInviterSlug, setSelectedInviterSlug] = useState<string | null>(null);
   const [selectedRow, setSelectedRow] = useState<AnyRow | null>(null);
   const [wgNotesBySubId, setWgNotesBySubId] = useState<Record<string, AdminNote[]>>({});
   const [wgNotesLoading, setWgNotesLoading] = useState(false);
@@ -370,23 +346,42 @@ const WebinarGeekDashboard: React.FC = () => {
     return rowsInViewMonth;
   }, [scopeMode, rowsInViewWeek, rowsInViewMonth, selectedDayYmd]);
 
+  const inviterProfiles = useMemo(
+    () => buildInviterProfiles(rowsForScope, watchSecondsFromRow),
+    [rowsForScope],
+  );
+
   const filteredRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return rowsForScope.filter((row) => {
+      if (selectedInviterSlug) {
+        const slug = inviterSlugFromRow(row) ?? '_unattributed';
+        if (slug !== selectedInviterSlug) return false;
+      }
       if (watchToneFilter && !rowMatchesWatchToneFilter(row, watchToneFilter)) return false;
       if (!q) return true;
       const name = `${String(row.firstname ?? '').trim()} ${String(row.surname ?? '').trim()}`.toLowerCase();
+      const fileName = inviteeLabelFromRow(row).toLowerCase();
       const emailText = String(row.email ?? '').toLowerCase();
       const phoneText = getPhoneDisplay(row).toLowerCase();
-      const inviter = getInviterName(row).toLowerCase();
+      const inviter = inviterDisplayFromRow(row).toLowerCase();
+      const rawField = String(getInviterAttributionFromRow(row).raw ?? '').toLowerCase();
       const sid = subscriptionKey(row);
       const notesHay = (wgNotesBySubId[sid] ?? [])
         .map((n) => `${n.text} ${n.authorEmail ?? ''}`)
         .join(' ')
         .toLowerCase();
-      return name.includes(q) || emailText.includes(q) || phoneText.includes(q) || inviter.includes(q) || notesHay.includes(q);
+      return (
+        name.includes(q)
+        || fileName.includes(q)
+        || emailText.includes(q)
+        || phoneText.includes(q)
+        || inviter.includes(q)
+        || rawField.includes(q)
+        || notesHay.includes(q)
+      );
     });
-  }, [rowsForScope, searchQuery, watchToneFilter, wgNotesBySubId]);
+  }, [rowsForScope, searchQuery, watchToneFilter, wgNotesBySubId, selectedInviterSlug]);
 
   const toggleWatchToneFilter = useCallback((tone: WatchToneFilter) => {
     setWatchToneFilter((prev) => (prev === tone ? null : tone));
@@ -677,7 +672,7 @@ const WebinarGeekDashboard: React.FC = () => {
       const last = csvScalar(String(row.surname ?? '').trim());
       const email = csvScalar(String(row.email ?? '').trim());
       const phone = csvScalar(getPhoneDisplay(row));
-      const invited = csvScalar(getInvitedByDisplay(row) || '0');
+      const invited = csvScalar(inviterDisplayFromRow(row) || '0');
       const regMs = asUnixMs(row.created_at);
       const registration =
         regMs != null ? new Date(regMs).toISOString().slice(0, 16).replace('T', ' ') : '0';
@@ -791,6 +786,57 @@ const WebinarGeekDashboard: React.FC = () => {
               ))}
             </div>
           </div>
+        )}
+
+        {subscriptionCache !== null && inviterProfiles.length > 0 && (
+          <section className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <UserCircle2 size={18} className="text-[#005EB8] shrink-0" aria-hidden />
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-slate-900">Inviters · caller analytics</p>
+                  <p className="text-[11px] text-slate-500">
+                    Resume filename prefix (<span className="font-mono">cooper_name</span>,{' '}
+                    <span className="font-mono">rms_name</span>). Click a profile to filter registrations.
+                  </p>
+                </div>
+              </div>
+              {selectedInviterSlug && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedInviterSlug(null)}
+                  className="text-[11px] font-medium text-[#005EB8] hover:underline shrink-0"
+                >
+                  Clear inviter filter
+                </button>
+              )}
+            </div>
+            <div className="flex gap-2.5 overflow-x-auto pb-1 -mx-1 px-1 snap-x snap-mandatory">
+              <InviterProfileCard
+                displayName="All inviters"
+                initials="All"
+                scheduled={rowsForScope.length}
+                full={overviewForUi.full}
+                half={overviewForUi.half}
+                notYet={overviewForUi.low}
+                active={selectedInviterSlug === null}
+                onSelect={() => setSelectedInviterSlug(null)}
+              />
+              {inviterProfiles.map((p) => (
+                <InviterProfileCard
+                  key={p.slug}
+                  displayName={p.displayName}
+                  initials={inviterInitials(p.displayName)}
+                  scheduled={p.scheduled}
+                  full={p.full}
+                  half={p.half}
+                  notYet={p.notYet}
+                  active={selectedInviterSlug === p.slug}
+                  onSelect={() => setSelectedInviterSlug((prev) => (prev === p.slug ? null : p.slug))}
+                />
+              ))}
+            </div>
+          </section>
         )}
 
         {subscriptionCache === null && !loading && (
@@ -1006,6 +1052,14 @@ const WebinarGeekDashboard: React.FC = () => {
               {watchToneFilter === 'low' && (
                 <span className="text-rose-800 font-semibold"> · Little / none only</span>
               )}
+              {selectedInviterSlug && (
+                <span className="text-[#005EB8] font-semibold">
+                  {' '}
+                  ·{' '}
+                  {inviterProfiles.find((p) => p.slug === selectedInviterSlug)?.displayName
+                    ?? (selectedInviterSlug === '_unattributed' ? 'Other' : selectedInviterSlug)}
+                </span>
+              )}
             </p>
             <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-600">
               <button
@@ -1091,7 +1145,7 @@ const WebinarGeekDashboard: React.FC = () => {
                         <td className="px-3 py-2 font-medium text-slate-900">{name}</td>
                         <td className="px-3 py-2 text-slate-700">{String(row.email || '0')}</td>
                         <td className="px-3 py-2 text-slate-700 tabular-nums">{getPhoneDisplay(row)}</td>
-                        <td className="px-3 py-2 text-slate-700">{getInviterName(row)}</td>
+                        <td className="px-3 py-2 text-slate-700">{inviterDisplayFromRow(row)}</td>
                         <td className="px-3 py-2 text-slate-600 tabular-nums">
                           {scheduledMs ? formatDateTimeCanadaEastern(scheduledMs) : '0'}
                         </td>
@@ -1135,7 +1189,14 @@ const WebinarGeekDashboard: React.FC = () => {
                 <Detail label="Name" value={`${String(selectedRow.firstname || '').trim()} ${String(selectedRow.surname || '').trim()}`.trim() || '0'} />
                 <Detail label="Email" value={String(selectedRow.email || '0')} />
                 <Detail label="Phone" value={getPhoneDisplay(selectedRow)} />
-                <Detail label="Invited by" value={getInviterName(selectedRow)} />
+                <Detail label="Invited by" value={inviterDisplayFromRow(selectedRow)} />
+                <Detail
+                  label="File / invitee label"
+                  value={(() => {
+                    const a = getInviterAttributionFromRow(selectedRow);
+                    return a.inviteeLabel || '—';
+                  })()}
+                />
                 <Detail
                   label="Scheduled"
                   value={(() => {
@@ -1205,6 +1266,66 @@ const Detail = ({ label, value }: { label: string; value: string }) => (
     <p className="text-xs text-[#60728c]">{label}</p>
     <p className="text-sm text-[#0B1B34]">{value?.trim() ? value : '0'}</p>
   </div>
+);
+
+type InviterProfileCardProps = {
+  displayName: string;
+  initials: string;
+  scheduled: number;
+  full: number;
+  half: number;
+  notYet: number;
+  active: boolean;
+  onSelect: () => void;
+};
+
+const InviterProfileCard: React.FC<InviterProfileCardProps> = ({
+  displayName,
+  initials,
+  scheduled,
+  full,
+  half,
+  notYet,
+  active,
+  onSelect,
+}) => (
+  <button
+    type="button"
+    onClick={onSelect}
+    className={`snap-start shrink-0 w-[min(100%,11.5rem)] rounded-2xl border px-3 py-2.5 text-left transition ${
+      active
+        ? 'border-[#005EB8] bg-[#005EB8]/5 shadow-md ring-1 ring-[#005EB8]/30'
+        : 'border-slate-200 bg-slate-50/80 hover:border-slate-300 hover:bg-white'
+    }`}
+  >
+    <div className="flex items-center gap-2.5 mb-2">
+      <span
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
+          active ? 'bg-[#005EB8] text-white' : 'bg-slate-200 text-slate-700'
+        }`}
+      >
+        {initials}
+      </span>
+      <div className="min-w-0">
+        <p className="text-xs font-semibold text-slate-900 truncate">{displayName}</p>
+        <p className="text-[10px] text-slate-500 tabular-nums">{scheduled} scheduled</p>
+      </div>
+    </div>
+    <div className="grid grid-cols-3 gap-1 text-center">
+      <div className="rounded-lg bg-emerald-50 border border-emerald-100/80 px-1 py-1">
+        <p className="text-[9px] uppercase tracking-wide text-emerald-800 font-medium">Full</p>
+        <p className="text-sm font-bold text-emerald-900 tabular-nums">{full}</p>
+      </div>
+      <div className="rounded-lg bg-sky-50 border border-sky-100/80 px-1 py-1">
+        <p className="text-[9px] uppercase tracking-wide text-sky-800 font-medium">Half+</p>
+        <p className="text-sm font-bold text-sky-900 tabular-nums">{half}</p>
+      </div>
+      <div className="rounded-lg bg-rose-50 border border-rose-100/80 px-1 py-1">
+        <p className="text-[9px] uppercase tracking-wide text-rose-800 font-medium">Not yet</p>
+        <p className="text-sm font-bold text-rose-900 tabular-nums">{notYet}</p>
+      </div>
+    </div>
+  </button>
 );
 
 export default WebinarGeekDashboard;
