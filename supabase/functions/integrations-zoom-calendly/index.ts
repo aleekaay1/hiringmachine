@@ -2,7 +2,7 @@
  * Live Online Career Session — attendance dashboard.
  *
  * Fixed schedule (America/Toronto):
- *   WEDNESDAY 11:30–12:30  (recurring Zoom + Calendly "Live Online Career Session")
+ *   WEDNESDAY 11:30–12:00  (30-min webinar; Zoom + Calendly "Live Online Career Session")
  *
  * Matching strategy (v2 — date-exact):
  *   1. Keep only Zoom meeting occurrences whose start falls inside one of the two windows above.
@@ -45,8 +45,8 @@ const WEDNESDAY_LIVE_SLOT: SlotDef = {
   startH: 11,
   startM: 30,
   endH: 12,
-  endM: 30,
-  label: 'Wednesday 11:30 AM ET',
+  endM: 0,
+  label: 'Wednesday 11:30 AM ET (30 min)',
 };
 const SLOTS: SlotDef[] = [WEDNESDAY_LIVE_SLOT];
 const LIVE_TOPIC_KEYWORD = 'live career overview session';

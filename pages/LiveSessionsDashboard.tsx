@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Layout from '../components/Layout';
-import IntegrationStatusLights from '../components/IntegrationStatusLights';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import {
@@ -200,12 +199,11 @@ const LiveSessionsDashboard: React.FC = () => {
             <div>
               <h1 className="text-lg font-extrabold text-[#0B1B34]">Live Online Career Session</h1>
               <p className="text-xs text-[#73839b]">
-                Every Wednesday {MIDDLE_DOT} 11:30 AM{EM_DASH}12:30 PM Eastern {MIDDLE_DOT} Calendly + Zoom
+                30-minute webinar {MIDDLE_DOT} Wednesdays 11:30 AM Eastern
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <IntegrationStatusLights />
             <Button type="button" variant="outline" className="text-sm" onClick={() => void load()} disabled={loading}>
               <RefreshCw size={15} className={`mr-1.5 inline ${loading ? 'animate-spin' : ''}`} />
               Refresh
@@ -226,11 +224,6 @@ const LiveSessionsDashboard: React.FC = () => {
         {fetchError && <Alert tone="red">{fetchError}</Alert>}
         {syncError && <Alert tone="red">{syncError}</Alert>}
         {syncSummary && <Alert tone="green">{syncSummary}</Alert>}
-        {!data?.calendly_configured && data && (
-          <Alert tone="amber">
-            Calendly is not connected on the server. Invitee names and phones stay empty until CALENDLY_API_TOKEN is set and integrations-zoom-calendly is redeployed.
-          </Alert>
-        )}
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <StatCard label="Wednesday sessions" value={totals.sessionDates} />
@@ -241,23 +234,18 @@ const LiveSessionsDashboard: React.FC = () => {
 
         {data && (
           <p className="text-[11px] text-[#9ba8ba]">
-            Last refreshed {formatDateTimeCanadaEastern(data.generated_at)} {MIDDLE_DOT} Zoom host{' '}
-            {data.zoom_user?.email ?? EM_DASH}
-            {data.calendly_user?.email ? ` ${MIDDLE_DOT} Calendly ${data.calendly_user.email}` : ''}
+            Updated {formatDateTimeCanadaEastern(data.generated_at)}
           </p>
         )}
 
         <section className="rounded-2xl border border-[#d6e6f9] bg-white shadow-sm overflow-hidden">
           <div className="px-4 py-3 border-b border-[#e5edf9] bg-[#f8fbff]">
             <h2 className="text-sm font-bold text-[#0B1B34]">Sessions by date</h2>
-            <p className="text-[11px] text-[#7a8fa8] mt-0.5">
-              Click a row for full invitee list: name, email, phone, and Zoom attendance (past sessions).
-            </p>
           </div>
-          {loading && <p className="p-6 text-sm text-[#7a8fa8]">Loading Calendly + Zoom...</p>}
+          {loading && <p className="p-6 text-sm text-[#7a8fa8]">Loading sessions…</p>}
           {!loading && sessions.length === 0 && (
             <p className="p-6 text-sm text-[#7a8fa8]">
-              No Wednesday 11:30 AM sessions in range. Redeploy integrations-zoom-calendly after pulling latest code.
+              No Wednesday sessions found in this date range.
             </p>
           )}
           {!loading && sessions.length > 0 && (
@@ -302,8 +290,6 @@ function SessionTableRow({
   onToggle: () => void;
 }) {
   const invitees = inviteesForSession(session);
-  const calOk = Boolean(session.past?.calendly || session.upcoming?.calendly);
-  const zoomOk = Boolean(session.past?.zoom || session.upcoming?.zoom);
 
   return (
     <>
@@ -329,42 +315,21 @@ function SessionTableRow({
           >
             {session.isPast ? 'Past' : 'Upcoming'}
           </span>
-          {!calOk && <span className="ml-1 text-[10px] text-amber-700">no Calendly</span>}
-          {calOk && !zoomOk && <span className="ml-1 text-[10px] text-amber-700">no Zoom</span>}
         </td>
       </tr>
       {expanded && (
         <tr className="bg-[#f8fbff]">
           <td colSpan={6} className="px-4 py-4">
             <div className="space-y-3">
-              <div className="flex flex-wrap gap-3 text-xs text-[#5a6f8a]">
-                <span>
-                  <strong className="text-[#0B1B34]">Calendly:</strong> {session.calendlyName ?? EM_DASH}
-                </span>
-                <span>
-                  <strong className="text-[#0B1B34]">Zoom:</strong> {session.zoomTopic}
-                </span>
-                {session.attendanceRatePct != null && (
-                  <span>
-                    <strong className="text-[#0B1B34]">Attendance:</strong> {session.attendanceRatePct}%
-                  </span>
-                )}
-                {session.zoomJoinUrl && (
-                  <a
-                    href={session.zoomJoinUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-[#005EB8] underline"
-                  >
-                    Zoom join link
-                  </a>
-                )}
-              </div>
+              {session.isPast && session.attendanceRatePct != null && (
+                <p className="text-xs text-[#5a6f8a]">
+                  Attendance: <strong className="text-[#0B1B34]">{session.attendanceRatePct}%</strong>
+                  {' '}({session.attendedCount ?? 0} of {session.scheduledCount})
+                </p>
+              )}
 
               {invitees.length === 0 ? (
-                <p className="text-sm text-[#9bafc9]">
-                  No active invitees for this Wednesday session.
-                </p>
+                <p className="text-sm text-[#9bafc9]">No registrations for this session.</p>
               ) : (
                 <div className="overflow-x-auto rounded-xl border border-[#e0eaf8] bg-white">
                   <table className="w-full text-xs">

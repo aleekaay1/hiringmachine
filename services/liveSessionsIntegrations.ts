@@ -374,17 +374,7 @@ export async function fetchLiveSessionsDashboard(
     const hint = typeof json.hint === 'string' ? ` ${json.hint}` : '';
     return { ok: false, error: `${err}${hint}` };
   }
-  const payload = json as unknown as LiveSessionsDashboardPayload & {
-    calendly_debug?: Record<string, unknown>;
-  };
-  if (payload.calendly_debug || payload.calendly_fetch) {
-    console.warn('[Live sessions] Calendly (dashboard fetch)', {
-      configured: payload.calendly_configured,
-      events_matched_dates: payload.calendly_events_in_range,
-      fetch: payload.calendly_fetch,
-      debug: payload.calendly_debug,
-    });
-  }
+  const payload = json as unknown as LiveSessionsDashboardPayload;
   return { ok: true, data: reconcileLiveSessionsPastUpcoming(payload) };
 }
 
