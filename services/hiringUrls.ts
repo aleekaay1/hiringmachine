@@ -2,6 +2,17 @@
 
 export const ZOOM_MEETING_URL = 'https://us02web.zoom.us/j/6478311787';
 
+/** Reschedule link for missed live career session emails. */
+export const LIVE_SESSION_RESCHEDULE_CALENDLY_URL =
+  'https://calendly.com/alex_paz/live-online-career-session';
+
+/**
+ * Default session line items for post–check-in invite (merge + Edge env override).
+ * Set `PUBLIC_LIVE_SESSION_DISPLAY_DATE` / `PUBLIC_LIVE_SESSION_DISPLAY_TIME` on Supabase for automated sends.
+ */
+export const POST_CHECKIN_DEFAULT_SESSION_DATE = 'See your calendar invite for the date';
+export const POST_CHECKIN_DEFAULT_SESSION_TIME = 'Eastern Time (ET)';
+
 /** Public assessment lookup page. Override per send via merge extras if needed. */
 export const DEFAULT_ASSESSMENT_LOOKUP_URL = 'https://paz-talent-journey.vercel.app/assessment-lookup';
 
