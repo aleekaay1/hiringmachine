@@ -597,8 +597,8 @@ const WebinarGeekDashboard: React.FC = () => {
       'phone',
       'name_from_file',
       'team',
-      'hr_scheduled',
-      'webinar_session',
+      'scheduled_on',
+      'scheduled_for',
       'watch_minutes',
       'watched',
     ];
@@ -1036,8 +1036,8 @@ const WebinarGeekDashboard: React.FC = () => {
                   <th className="px-3 py-2 font-medium">Phone</th>
                   <th className="px-3 py-2 font-medium">File tag name</th>
                   <th className="px-3 py-2 font-medium">Team</th>
-                  <th className="px-3 py-2 font-medium">HR scheduled</th>
-                  <th className="px-3 py-2 font-medium">Webinar session</th>
+                  <th className="px-3 py-2 font-medium">Scheduled on</th>
+                  <th className="px-3 py-2 font-medium">Scheduled for</th>
                   <th className="px-3 py-2 font-medium min-w-[9rem]">Status / notes</th>
                   <th className="px-3 py-2 font-medium">Watched</th>
                   <th className="px-3 py-2 font-medium">Watch (min)</th>
@@ -1122,14 +1122,14 @@ const WebinarGeekDashboard: React.FC = () => {
                   })()}
                 />
                 <Detail
-                  label="HR scheduled"
+                  label="Scheduled on"
                   value={(() => {
                     const t = hrScheduledMsFromRow(selectedRow);
                     return t ? formatDateTimeCanadaEastern(t) : '—';
                   })()}
                 />
                 <Detail
-                  label="Webinar session"
+                  label="Scheduled for"
                   value={(() => {
                     const t = webinarSessionMsFromRow(selectedRow);
                     return t ? formatDateTimeCanadaEastern(t) : '—';

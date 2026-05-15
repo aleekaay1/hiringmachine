@@ -196,8 +196,8 @@ const CallsAnalytics: React.FC = () => {
       'team',
       'candidate_name',
       'email',
-      'hr_scheduled',
-      'webinar_session',
+      'scheduled_on',
+      'scheduled_for',
       'watched',
       'watch_minutes',
     ];
@@ -450,7 +450,7 @@ function CallsAnalyticsPage(p: PageProps) {
           weekWindow={p.weekWindow}
           monthWindow={p.monthWindow}
         />
-        <p className="text-[10px] text-slate-500 mb-2">Day counts = when HR scheduled the invite</p>
+        <p className="text-[10px] text-slate-500 mb-2">Day counts = scheduled on date</p>
         <CalendarGrid
           calendarCells={p.calendarCells}
           viewYear={p.viewYear}
@@ -611,7 +611,7 @@ function RecruiterSectionCopy() {
     <div>
       <p className="text-sm font-semibold text-slate-800">Recruiters</p>
       <p className="text-[11px] text-slate-500">
-        Bookings by who scheduled (custom field). Filter calendar & table by HR scheduled date.
+        Bookings by recruiter (custom field). Calendar and table filter by scheduled on date.
       </p>
     </div>
   );
@@ -897,8 +897,8 @@ function BookingsTable({ rows }: { rows: AnyRow[] }) {
             <th className="px-3 py-2">Team</th>
             <th className="px-3 py-2">Candidate</th>
             <th className="px-3 py-2">Email</th>
-            <th className="px-3 py-2">HR scheduled</th>
-            <th className="px-3 py-2">Webinar session</th>
+            <th className="px-3 py-2">Scheduled on</th>
+            <th className="px-3 py-2">Scheduled for</th>
             <th className="px-3 py-2">Watched</th>
           </tr>
         </thead>
