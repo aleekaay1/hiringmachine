@@ -22,12 +22,45 @@ export type RecruiterBookingProfile = {
   displayName: string;
   team: string;
   bookings: number;
+  /** Marked watched on WebinarGeek */
   watchedYes: number;
   full: number;
   half: number;
   notYet: number;
   lastHrScheduledMs: number | null;
 };
+
+export type RecruiterLeaderboardEntry = RecruiterBookingProfile & {
+  rank: number;
+  /** Half+ or little / none (not full watch) */
+  watchedLess: number;
+  showedPct: number;
+  fullPct: number;
+};
+
+export function pctRounded(part: number, whole: number): number {
+  if (!whole || whole <= 0) return 0;
+  return Math.round((100 * part) / whole);
+}
+
+/** Rank recruiters: most bookings first, then full watches, then showed. */
+export function buildRecruiterLeaderboard(
+  profiles: RecruiterBookingProfile[],
+): RecruiterLeaderboardEntry[] {
+  const sorted = [...profiles].sort((a, b) => {
+    if (b.bookings !== a.bookings) return b.bookings - a.bookings;
+    if (b.full !== a.full) return b.full - a.full;
+    if (b.watchedYes !== a.watchedYes) return b.watchedYes - a.watchedYes;
+    return a.displayName.localeCompare(b.displayName);
+  });
+  return sorted.map((p, i) => ({
+    ...p,
+    rank: i + 1,
+    watchedLess: p.half + p.notYet,
+    showedPct: pctRounded(p.watchedYes, p.bookings),
+    fullPct: pctRounded(p.full, p.bookings),
+  }));
+}
 
 /** Calendar / scope on WebinarGeek page — webinar session date. */
 export function fmtWebinarSessionDateKey(row: AnyRow): string {

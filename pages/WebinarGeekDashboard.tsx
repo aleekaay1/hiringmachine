@@ -24,6 +24,12 @@ import {
   insertWebinarGeekHrNote,
   latestWebinarGeekNote,
 } from '../services/webinarGeekHrNotes';
+import {
+  broadcastsFromDashboardData,
+  loadWebinarGeekDashboardCache,
+  saveWebinarGeekDashboardCache,
+  subscriptionsFromDashboardData,
+} from '../services/webinarGeekDashboardCache';
 
 type AnyRow = Record<string, unknown>;
 type DashboardData = Record<string, unknown>;
@@ -276,6 +282,8 @@ const WebinarGeekDashboard: React.FC = () => {
   const [broadcastCache, setBroadcastCache] = useState<BroadcastSchedule[]>([]);
   const [lastFetchAt, setLastFetchAt] = useState<string | null>(null);
   const [lastFetchRange, setLastFetchRange] = useState<string | null>(null);
+  const [dataFromDatabase, setDataFromDatabase] = useState(false);
+  const [cacheNotice, setCacheNotice] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   /** First day of the month being viewed (YYYY-MM-01), Toronto wall month via local month arithmetic. */
@@ -553,12 +561,30 @@ const WebinarGeekDashboard: React.FC = () => {
       setError(result.error);
       return;
     }
-    const rows = normalizeSubscriptions(result.data);
+    const rows = subscriptionsFromDashboardData(result.data);
+    const rawBroadcasts = broadcastsFromDashboardData(result.data);
     const schedules = normalizeBroadcastSchedules(result.data);
+    const fetchedAt = new Date().toISOString();
     setSubscriptionCache(rows);
     setBroadcastCache(schedules);
-    setLastFetchAt(new Date().toISOString());
+    setLastFetchAt(fetchedAt);
     setLastFetchRange(label);
+    setDataFromDatabase(false);
+
+    const saved = await saveWebinarGeekDashboardCache({
+      subscriptions: rows,
+      broadcasts: rawBroadcasts,
+      fetchSince: since,
+      fetchUntil: until,
+      fetchLabel: label,
+    });
+    if (saved.tableMissing) {
+      setCacheNotice('Snapshot table missing. Run supabase/sql/paste_webinar_geek_dashboard_cache.sql in Supabase.');
+    } else if (!saved.ok && saved.error) {
+      setCacheNotice(`Saved locally but database save failed: ${saved.error}`);
+    } else {
+      setCacheNotice(null);
+    }
   }, [withAuthRetry]);
 
   const runSync = useCallback(async () => {
@@ -654,6 +680,29 @@ const WebinarGeekDashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
+    void (async () => {
+      const { data, error, tableMissing } = await loadWebinarGeekDashboardCache();
+      if (tableMissing) {
+        setCacheNotice('Run supabase/sql/paste_webinar_geek_dashboard_cache.sql to save snapshots in Supabase.');
+        return;
+      }
+      if (error) {
+        setCacheNotice(error);
+        return;
+      }
+      if (!data) return;
+      setSubscriptionCache(data.subscriptions);
+      setBroadcastCache(
+        normalizeBroadcastSchedules({ broadcasts: { broadcasts: data.broadcasts } } as DashboardData),
+      );
+      setLastFetchAt(data.fetchedAt);
+      setLastFetchRange(data.fetchLabel);
+      setDataFromDatabase(true);
+    })();
+  }, [isAuthenticated]);
+
+  useEffect(() => {
     setSelectedDayYmd(null);
   }, [monthAnchorYmd]);
 
@@ -693,7 +742,11 @@ const WebinarGeekDashboard: React.FC = () => {
             <h1 className="text-lg font-semibold text-[#0B1B34] tracking-tight">WebinarGeek</h1>
             {lastFetchAt && (
               <p className="text-[11px] text-slate-500 mt-0.5">
-                Loaded {new Date(lastFetchAt).toLocaleString()} · range {lastFetchRange}
+                {dataFromDatabase ? 'Saved in database' : 'Fetched from WebinarGeek'}
+                {' · '}
+                {new Date(lastFetchAt).toLocaleString()}
+                {lastFetchRange ? ` · range ${lastFetchRange}` : ''}
+                {subscriptionCache != null ? ` · ${subscriptionCache.length} rows` : ''}
               </p>
             )}
           </div>
@@ -949,7 +1002,17 @@ const WebinarGeekDashboard: React.FC = () => {
           </div>
         </div>
 
-        {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">{error}</div>}
+        {cacheNotice && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-950">{cacheNotice}</div>
+        )}
+        {error && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
+            {error}
+            {subscriptionCache != null && (
+              <span className="block mt-1 text-xs text-red-700/90">Showing last saved data from database.</span>
+            )}
+          </div>
+        )}
         {wgNotesError && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-950">{wgNotesError}</div>
         )}

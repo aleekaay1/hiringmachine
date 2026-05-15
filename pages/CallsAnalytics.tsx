@@ -1,8 +1,13 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import { fetchWebinarGeekDashboard } from '../services/webinarGeekIntegrations';
+import {
+  loadWebinarGeekDashboardCache,
+  saveWebinarGeekDashboardCache,
+  subscriptionsFromDashboardData,
+} from '../services/webinarGeekDashboardCache';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import {
   fetchWindowBoundsWide,
@@ -17,10 +22,12 @@ import {
 } from '../services/webinarGeekDates';
 import {
   buildRecruiterBookingProfiles,
+  buildRecruiterLeaderboard,
   dayBookingCountsByHrDate,
   fmtHrScheduledDateKey,
   profileInitials,
   rowMatchesNameKey,
+  type RecruiterLeaderboardEntry,
 } from '../services/webinarGeekRecruiterAnalytics';
 import {
   candidateDisplayNameFromRow,
@@ -29,19 +36,13 @@ import {
   recruiterTeamFromRow,
   webinarSessionMsFromRow,
 } from '../services/webinarGeekInviters';
-import { BarChart3, ChevronLeft, ChevronRight, Download, RefreshCw, Users } from 'lucide-react';
+import { BarChart3, ChevronLeft, ChevronRight, Download, RefreshCw, Trophy, Users } from 'lucide-react';
 
 type AnyRow = Record<string, unknown>;
 type ScopeMode = 'month' | 'week' | 'day';
 
 const glassCard =
   'rounded-2xl border border-white/40 bg-white/55 backdrop-blur-xl shadow-[0_8px_32px_rgba(15,40,80,0.08)]';
-
-function normalizeSubscriptions(data: Record<string, unknown> | null): AnyRow[] {
-  const payload = data?.subscriptions as Record<string, unknown> | undefined;
-  const rows = payload?.subscriptions;
-  return Array.isArray(rows) ? (rows as AnyRow[]) : [];
-}
 
 function watchSecondsFromRow(row: AnyRow): number {
   const sec = Number(row.watch_duration || 0);
@@ -71,6 +72,8 @@ const CallsAnalytics: React.FC = () => {
   const [subscriptionCache, setSubscriptionCache] = useState<AnyRow[] | null>(null);
   const [lastFetchAt, setLastFetchAt] = useState<string | null>(null);
   const [lastFetchRange, setLastFetchRange] = useState<string | null>(null);
+  const [dataFromDatabase, setDataFromDatabase] = useState(false);
+  const [cacheNotice, setCacheNotice] = useState<string | null>(null);
 
   const [monthAnchorYmd, setMonthAnchorYmd] = useState(torontoMonthStartToday);
   const [selectedDayYmd, setSelectedDayYmd] = useState<string | null>(null);
@@ -117,15 +120,20 @@ const CallsAnalytics: React.FC = () => {
     [rowsForScope],
   );
 
+  const leaderboard = useMemo(
+    () => buildRecruiterLeaderboard(recruiterProfiles),
+    [recruiterProfiles],
+  );
+
   const filteredRows = useMemo(() => {
     if (!selectedRecruiterKey) return rowsForScope;
     return rowsForScope.filter((row) => rowMatchesNameKey(row, selectedRecruiterKey));
   }, [rowsForScope, selectedRecruiterKey]);
 
   const scopeTitle = useMemo(() => {
-    if (scopeMode === 'week') return `Week · ${weekWindow.title}`;
-    if (scopeMode === 'day' && selectedDayYmd) return `Day · ${ymdToShortLabel(selectedDayYmd)}`;
-    return `Month · ${monthWindow.title}`;
+    if (scopeMode === 'week') return `Week Â· ${weekWindow.title}`;
+    if (scopeMode === 'day' && selectedDayYmd) return `Day Â· ${ymdToShortLabel(selectedDayYmd)}`;
+    return `Month Â· ${monthWindow.title}`;
   }, [scopeMode, weekWindow.title, selectedDayYmd, monthWindow.title]);
 
   const [viewYear, viewMonth0] = useMemo(() => {
@@ -148,9 +156,10 @@ const CallsAnalytics: React.FC = () => {
   const summary = useMemo(() => {
     const bookings = rowsForScope.length;
     const recruiters = recruiterProfiles.length;
-    const watched = rowsForScope.filter((r) => r.watched === true).length;
-    return { bookings, recruiters, watched };
-  }, [rowsForScope, recruiterProfiles.length]);
+    const showed = rowsForScope.filter((r) => r.watched === true).length;
+    const full = recruiterProfiles.reduce((s, p) => s + p.full, 0);
+    return { bookings, recruiters, showed, full };
+  }, [rowsForScope, recruiterProfiles]);
 
   const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
     const { data: s } = await supabase.auth.getSession();
@@ -181,12 +190,28 @@ const CallsAnalytics: React.FC = () => {
     });
     setLoading(false);
     if (!result.ok) {
-      setError(result.error);
+      setError('error' in result ? result.error : 'Fetch failed');
       return;
     }
-    setSubscriptionCache(normalizeSubscriptions(result.data));
+    const rows = subscriptionsFromDashboardData(result.data);
+    setSubscriptionCache(rows);
     setLastFetchAt(new Date().toISOString());
     setLastFetchRange(label);
+    setDataFromDatabase(false);
+
+    const saved = await saveWebinarGeekDashboardCache({
+      subscriptions: rows,
+      fetchSince: since,
+      fetchUntil: until,
+      fetchLabel: label,
+    });
+    if (saved.tableMissing) {
+      setCacheNotice('Snapshot table missing. Run supabase/sql/paste_webinar_geek_dashboard_cache.sql in Supabase.');
+    } else if (!saved.ok && saved.error) {
+      setCacheNotice(`Saved locally but database save failed: ${saved.error}`);
+    } else {
+      setCacheNotice(null);
+    }
   }, [getFreshAccessToken]);
 
   const handleCsvExport = useCallback(() => {
@@ -226,7 +251,7 @@ const CallsAnalytics: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `recruiter-webinar-analytics-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `recruiter-analytics-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }, [filteredRows]);
@@ -239,13 +264,33 @@ const CallsAnalytics: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
+    void (async () => {
+      const { data, error, tableMissing } = await loadWebinarGeekDashboardCache();
+      if (tableMissing) {
+        setCacheNotice('Run supabase/sql/paste_webinar_geek_dashboard_cache.sql to save snapshots in Supabase.');
+        return;
+      }
+      if (error) {
+        setCacheNotice(error);
+        return;
+      }
+      if (!data) return;
+      setSubscriptionCache(data.subscriptions);
+      setLastFetchAt(data.fetchedAt);
+      setLastFetchRange(data.fetchLabel);
+      setDataFromDatabase(true);
+    })();
+  }, [isAuthenticated]);
+
+  useEffect(() => {
     setSelectedDayYmd(null);
   }, [monthAnchorYmd]);
 
   if (!authChecked) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#e8f2fc] via-[#f0f6ff] to-[#e6eef8] flex items-center justify-center">
-        <p className="text-sm text-slate-500">Loading…</p>
+        <p className="text-sm text-slate-500">Loadingâ€¦</p>
       </div>
     );
   }
@@ -279,10 +324,13 @@ const CallsAnalytics: React.FC = () => {
           scopeTitle={scopeTitle}
           lastFetchAt={lastFetchAt}
           lastFetchRange={lastFetchRange}
+          dataFromDatabase={dataFromDatabase}
+          cacheNotice={cacheNotice}
           loading={loading}
           error={error}
           summary={summary}
           recruiterProfiles={recruiterProfiles}
+          leaderboard={leaderboard}
           selectedRecruiterKey={selectedRecruiterKey}
           onSelectRecruiter={setSelectedRecruiterKey}
           subscriptionCache={subscriptionCache}
@@ -342,7 +390,7 @@ function CallsAnalyticsLoginCard(props: {
 }) {
   return (
     <div className={`${glassCard} w-full max-w-sm p-8`}>
-      <h2 className="text-xl font-semibold text-slate-800 mb-1 text-center">Calls Analytics</h2>
+      <h2 className="text-xl font-semibold text-slate-800 mb-1 text-center">Recruiter Analytics</h2>
       <p className="text-sm text-slate-500 text-center mb-6">Staff sign-in</p>
       <form onSubmit={props.onSubmit} className="space-y-4">
         <input
@@ -370,10 +418,13 @@ type PageProps = {
   scopeTitle: string;
   lastFetchAt: string | null;
   lastFetchRange: string | null;
+  dataFromDatabase: boolean;
+  cacheNotice: string | null;
   loading: boolean;
   error: string | null;
-  summary: { bookings: number; recruiters: number; watched: number };
+  summary: { bookings: number; recruiters: number; showed: number; full: number };
   recruiterProfiles: ReturnType<typeof buildRecruiterBookingProfiles>;
+  leaderboard: RecruiterLeaderboardEntry[];
   selectedRecruiterKey: string | null;
   onSelectRecruiter: React.Dispatch<React.SetStateAction<string | null>>;
   subscriptionCache: AnyRow[] | null;
@@ -401,13 +452,17 @@ function CallsAnalyticsPage(p: PageProps) {
     <div className="w-full max-w-6xl mx-auto p-5 space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className={`${glassCard} px-5 py-4 flex-1 min-w-[16rem]`}>
-          <CallsAnalyticsPageHeader lastFetchAt={p.lastFetchAt} lastFetchRange={p.lastFetchRange} />
+          <CallsAnalyticsPageHeader
+            lastFetchAt={p.lastFetchAt}
+            lastFetchRange={p.lastFetchRange}
+            dataFromDatabase={p.dataFromDatabase}
+          />
         </div>
         <div className="flex flex-wrap gap-2">
           <Button type="button" onClick={p.onFetch} disabled={p.loading}>
             {p.loading ? (
               <>
-                <RefreshCw size={15} className="mr-1 animate-spin" /> Fetching…
+                <RefreshCw size={15} className="mr-1 animate-spin" /> Fetchingâ€¦
               </>
             ) : (
               'Fetch data'
@@ -421,6 +476,24 @@ function CallsAnalyticsPage(p: PageProps) {
 
       {p.subscriptionCache !== null && (
         <SummaryTiles summary={p.summary} scopeTitle={p.scopeTitle} />
+      )}
+
+      {p.subscriptionCache !== null && p.leaderboard.length > 0 && (
+        <RecruiterLeaderboardPanel
+          entries={p.leaderboard}
+          scopeTitle={p.scopeTitle}
+          scopeMode={p.scopeMode}
+          selectedKey={p.selectedRecruiterKey}
+          onSelect={p.onSelectRecruiter}
+        />
+      )}
+
+      {p.subscriptionCache !== null && p.leaderboard.length > 0 && (
+        <RecruiterStatsTable
+          entries={p.leaderboard}
+          selectedKey={p.selectedRecruiterKey}
+          onSelect={p.onSelectRecruiter}
+        />
       )}
 
       {p.subscriptionCache !== null && p.recruiterProfiles.length > 0 && (
@@ -464,9 +537,18 @@ function CallsAnalyticsPage(p: PageProps) {
         />
       </div>
 
+      {p.cacheNotice && (
+        <div className="rounded-xl border border-amber-200/80 bg-amber-50/80 backdrop-blur px-4 py-2 text-sm text-amber-950">
+          {p.cacheNotice}
+        </div>
+      )}
+
       {p.error && (
         <div className="rounded-xl border border-red-200/80 bg-red-50/80 backdrop-blur px-4 py-2 text-sm text-red-800">
           {p.error}
+          {p.subscriptionCache != null && (
+            <span className="block mt-1 text-xs text-red-700/90">Showing last saved data from database.</span>
+          )}
         </div>
       )}
 
@@ -488,21 +570,29 @@ function CallsAnalyticsPage(p: PageProps) {
 function CallsAnalyticsPageHeader({
   lastFetchAt,
   lastFetchRange,
+  dataFromDatabase,
 }: {
   lastFetchAt: string | null;
   lastFetchRange: string | null;
+  dataFromDatabase: boolean;
 }) {
   return (
-    <CallsAnalyticsPageHeaderInner lastFetchAt={lastFetchAt} lastFetchRange={lastFetchRange} />
+    <CallsAnalyticsPageHeaderInner
+      lastFetchAt={lastFetchAt}
+      lastFetchRange={lastFetchRange}
+      dataFromDatabase={dataFromDatabase}
+    />
   );
 }
 
 function CallsAnalyticsPageHeaderInner({
   lastFetchAt,
   lastFetchRange,
+  dataFromDatabase,
 }: {
   lastFetchAt: string | null;
   lastFetchRange: string | null;
+  dataFromDatabase: boolean;
 }) {
   return (
     <div className="flex items-center gap-3">
@@ -511,12 +601,13 @@ function CallsAnalyticsPageHeaderInner({
       </span>
       <div>
         <p className="text-[10px] font-semibold uppercase tracking-widest text-[#005EB8]/80">
-          Recruiter webinar analytics
+          Webinar bookings & watch rates
         </p>
-        <h1 className="text-xl font-semibold text-slate-800 tracking-tight">Calls Analytics</h1>
+        <h1 className="text-xl font-semibold text-slate-800 tracking-tight">Recruiter Analytics</h1>
         {lastFetchAt && (
           <p className="text-[11px] text-slate-500 mt-0.5">
-            Loaded {new Date(lastFetchAt).toLocaleString()} · {lastFetchRange}
+            {dataFromDatabase ? 'Saved in database' : 'Fetched from WebinarGeek'} ·{' '}
+            {new Date(lastFetchAt).toLocaleString()} · {lastFetchRange}
           </p>
         )}
       </div>
@@ -528,21 +619,26 @@ function SummaryTiles({
   summary,
   scopeTitle,
 }: {
-  summary: { bookings: number; recruiters: number; watched: number };
+  summary: { bookings: number; recruiters: number; showed: number; full: number };
   scopeTitle: string;
 }) {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
       {[
         { label: 'Bookings in scope', value: summary.bookings, sub: scopeTitle },
         { label: 'Active recruiters', value: summary.recruiters, sub: 'with file tags' },
         {
-          label: 'Watched',
-          value: pct(summary.watched, summary.bookings || 1),
-          sub: `${summary.watched} yes`,
+          label: 'Showed',
+          value: pct(summary.showed, summary.bookings || 1),
+          sub: `${summary.showed} marked`,
+        },
+        {
+          label: 'Full watch',
+          value: pct(summary.full, summary.bookings || 1),
+          sub: `${summary.full} full`,
         },
       ].map((t) => (
-        <SummaryTile key={t.label} {...t} />
+        <SummaryTile key={t.label} label={t.label} value={t.value} sub={t.sub} />
       ))}
     </div>
   );
@@ -609,10 +705,184 @@ function RecruiterSection({
 function RecruiterSectionCopy() {
   return (
     <div>
-      <p className="text-sm font-semibold text-slate-800">Recruiters</p>
-      <p className="text-[11px] text-slate-500">
-        Bookings by recruiter (custom field). Calendar and table filter by scheduled on date.
-      </p>
+      <p className="text-sm font-semibold text-slate-800">Filter by recruiter</p>
+      <p className="text-[11px] text-slate-500">Tap a recruiter to filter the booking log below.</p>
+    </div>
+  );
+}
+
+function rankBadgeClass(rank: number): string {
+  if (rank === 1) return 'bg-amber-100 text-amber-950 border-amber-300/80';
+  if (rank === 2) return 'bg-slate-200 text-slate-800 border-slate-300/80';
+  if (rank === 3) return 'bg-orange-100 text-orange-950 border-orange-300/80';
+  return 'bg-white/70 text-slate-600 border-white/60';
+}
+
+function RecruiterLeaderboardPanel({
+  entries,
+  scopeTitle,
+  scopeMode,
+  selectedKey,
+  onSelect,
+}: {
+  entries: RecruiterLeaderboardEntry[];
+  scopeTitle: string;
+  scopeMode: ScopeMode;
+  selectedKey: string | null;
+  onSelect: React.Dispatch<React.SetStateAction<string | null>>;
+}) {
+  return (
+    <LeaderboardPanelShell scopeTitle={scopeTitle} scopeMode={scopeMode}>
+      <LeaderboardList entries={entries} selectedKey={selectedKey} onSelect={onSelect} />
+    </LeaderboardPanelShell>
+  );
+}
+
+function LeaderboardPanelShell({
+  scopeTitle,
+  scopeMode,
+  children,
+}: {
+  scopeTitle: string;
+  scopeMode: ScopeMode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={`${glassCard} p-4 space-y-3`}>
+      <div className="flex items-center gap-2">
+        <Trophy size={18} className="text-amber-600 shrink-0" />
+        <div>
+          <p className="text-sm font-semibold text-slate-800">Leaderboard</p>
+          <p className="text-[11px] text-slate-500">
+            {scopeMode === 'day' ? scopeTitle : scopeTitle} · ranked by bookings
+          </p>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function LeaderboardList({
+  entries,
+  selectedKey,
+  onSelect,
+}: {
+  entries: RecruiterLeaderboardEntry[];
+  selectedKey: string | null;
+  onSelect: React.Dispatch<React.SetStateAction<string | null>>;
+}) {
+  return (
+    <div className="space-y-2 max-h-[min(420px,50vh)] overflow-y-auto pr-1">
+      {entries.map((e) => (
+        <LeaderboardRow
+          key={e.key}
+          entry={e}
+          active={selectedKey === e.key}
+          onSelect={() => onSelect((prev) => (prev === e.key ? null : e.key))}
+        />
+      ))}
+    </div>
+  );
+}
+
+function LeaderboardRow({
+  entry,
+  active,
+  onSelect,
+}: {
+  entry: RecruiterLeaderboardEntry;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`w-full flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition ${
+        active
+          ? 'border-[#005EB8]/50 bg-[#005EB8]/8 ring-1 ring-[#005EB8]/25'
+          : 'border-white/50 bg-white/40 hover:bg-white/65'
+      }`}
+    >
+      <span
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold border ${rankBadgeClass(entry.rank)}`}
+      >
+        {entry.rank}
+      </span>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-slate-800 truncate">{entry.displayName}</p>
+        <p className="text-[10px] text-slate-500 tabular-nums">
+          {entry.bookings} booked Â· {entry.watchedYes} showed Â· {entry.full} full Â· {entry.watchedLess} less
+        </p>
+      </div>
+      <div className="shrink-0 text-right tabular-nums">
+        <p className="text-xs font-semibold text-emerald-800">{entry.showedPct}% showed</p>
+        <p className="text-[10px] text-slate-500">{entry.fullPct}% full</p>
+      </div>
+    </button>
+  );
+}
+
+function RecruiterStatsTable({
+  entries,
+  selectedKey,
+  onSelect,
+}: {
+  entries: RecruiterLeaderboardEntry[];
+  selectedKey: string | null;
+  onSelect: React.Dispatch<React.SetStateAction<string | null>>;
+}) {
+  return (
+    <div className={`${glassCard} overflow-hidden`}>
+      <div className="px-4 py-2.5 border-b border-white/50 bg-white/30">
+        <p className="text-sm font-semibold text-slate-800">Recruiter detail</p>
+        <p className="text-[11px] text-slate-500">Showed = marked watched Â· Less = not full watch</p>
+      </div>
+      <div className="overflow-auto max-h-[min(50vh,480px)]">
+        <table className="min-w-full text-xs text-slate-800">
+          <thead className="sticky top-0 z-10 border-b border-white/50 bg-white/75 backdrop-blur">
+            <tr className="text-left text-[10px] uppercase tracking-wide text-slate-500">
+              <th className="px-3 py-2 w-10">#</th>
+              <th className="px-3 py-2">Recruiter</th>
+              <th className="px-3 py-2">Team</th>
+              <th className="px-3 py-2 text-right">Booked</th>
+              <th className="px-3 py-2 text-right">Showed</th>
+              <th className="px-3 py-2 text-right">Full</th>
+              <th className="px-3 py-2 text-right">Less</th>
+              <th className="px-3 py-2 text-right">Showed %</th>
+              <th className="px-3 py-2 text-right">Full %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((e) => (
+              <tr
+                key={e.key}
+                onClick={() => onSelect((prev) => (prev === e.key ? null : e.key))}
+                className={`border-b border-white/30 cursor-pointer transition ${
+                  selectedKey === e.key ? 'bg-[#005EB8]/10' : 'hover:bg-white/45'
+                }`}
+              >
+                <td className="px-3 py-2">
+                  <span
+                    className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold border ${rankBadgeClass(e.rank)}`}
+                  >
+                    {e.rank}
+                  </span>
+                </td>
+                <td className="px-3 py-2 font-medium">{e.displayName}</td>
+                <td className="px-3 py-2 text-slate-600">{e.team}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{e.bookings}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{e.watchedYes}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-emerald-800">{e.full}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-slate-600">{e.watchedLess}</td>
+                <td className="px-3 py-2 text-right tabular-nums font-medium">{e.showedPct}%</td>
+                <td className="px-3 py-2 text-right tabular-nums font-medium">{e.fullPct}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -661,7 +931,7 @@ function RecruiterChip({
         <p className="text-xs font-semibold text-slate-800 truncate">{name}</p>
       </div>
       <p className="text-[10px] text-slate-500 tabular-nums pl-10">{bookings} bookings</p>
-      {team && team !== '—' && <p className="text-[9px] text-slate-400 pl-10">{team}</p>}
+      {team && team !== 'â€”' && <p className="text-[9px] text-slate-400 pl-10">{team}</p>}
     </button>
   );
 }
@@ -882,7 +1152,7 @@ function BookingsTableHeader({
   return (
     <div className="px-4 py-2.5 border-b border-white/50 bg-white/30 text-xs text-slate-600">
       {count} booking{count === 1 ? '' : 's'}
-      {recruiterName && <span className="text-[#005EB8] font-medium"> · {recruiterName}</span>}
+      {recruiterName && <span className="text-[#005EB8] font-medium"> Â· {recruiterName}</span>}
     </div>
   );
 }
@@ -917,13 +1187,13 @@ function BookingsTable({ rows }: { rows: AnyRow[] }) {
                 <tr key={String(row.id)} className="border-b border-white/30 hover:bg-white/40">
                   <td className="px-3 py-2 font-medium">{recruiterNameFromRow(row)}</td>
                   <td className="px-3 py-2 text-slate-600">{recruiterTeamFromRow(row)}</td>
-                  <td className="px-3 py-2">{candidateDisplayNameFromRow(row) || '—'}</td>
-                  <td className="px-3 py-2 text-slate-600">{String(row.email || '—')}</td>
+                  <td className="px-3 py-2">{candidateDisplayNameFromRow(row) || 'â€”'}</td>
+                  <td className="px-3 py-2 text-slate-600">{String(row.email || 'â€”')}</td>
                   <td className="px-3 py-2 tabular-nums text-slate-600">
-                    {hrMs ? formatDateTimeCanadaEastern(hrMs) : '—'}
+                    {hrMs ? formatDateTimeCanadaEastern(hrMs) : 'â€”'}
                   </td>
                   <td className="px-3 py-2 tabular-nums text-slate-600">
-                    {sessionMs ? formatDateTimeCanadaEastern(sessionMs) : '—'}
+                    {sessionMs ? formatDateTimeCanadaEastern(sessionMs) : 'â€”'}
                   </td>
                   <td className="px-3 py-2">{row.watched === true ? 'Yes' : 'No'}</td>
                 </tr>
