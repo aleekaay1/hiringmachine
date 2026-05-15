@@ -131,9 +131,9 @@ const CallsAnalytics: React.FC = () => {
   }, [rowsForScope, selectedRecruiterKey]);
 
   const scopeTitle = useMemo(() => {
-    if (scopeMode === 'week') return `Week Â· ${weekWindow.title}`;
-    if (scopeMode === 'day' && selectedDayYmd) return `Day Â· ${ymdToShortLabel(selectedDayYmd)}`;
-    return `Month Â· ${monthWindow.title}`;
+    if (scopeMode === 'week') return `Week · ${weekWindow.title}`;
+    if (scopeMode === 'day' && selectedDayYmd) return `Day · ${ymdToShortLabel(selectedDayYmd)}`;
+    return `Month · ${monthWindow.title}`;
   }, [scopeMode, weekWindow.title, selectedDayYmd, monthWindow.title]);
 
   const [viewYear, viewMonth0] = useMemo(() => {
@@ -290,7 +290,7 @@ const CallsAnalytics: React.FC = () => {
   if (!authChecked) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#e8f2fc] via-[#f0f6ff] to-[#e6eef8] flex items-center justify-center">
-        <p className="text-sm text-slate-500">Loadingâ€¦</p>
+        <p className="text-sm text-slate-500">Loading...</p>
       </div>
     );
   }
@@ -462,7 +462,7 @@ function CallsAnalyticsPage(p: PageProps) {
           <Button type="button" onClick={p.onFetch} disabled={p.loading}>
             {p.loading ? (
               <>
-                <RefreshCw size={15} className="mr-1 animate-spin" /> Fetchingâ€¦
+                <RefreshCw size={15} className="mr-1 animate-spin" /> Fetching...
               </>
             ) : (
               'Fetch data'
@@ -813,7 +813,7 @@ function LeaderboardRow({
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-slate-800 truncate">{entry.displayName}</p>
         <p className="text-[10px] text-slate-500 tabular-nums">
-          {entry.bookings} booked Â· {entry.watchedYes} showed Â· {entry.full} full Â· {entry.watchedLess} less
+          {entry.bookings} booked · {entry.watchedYes} showed · {entry.full} full · {entry.watchedLess} less
         </p>
       </div>
       <div className="shrink-0 text-right tabular-nums">
@@ -837,7 +837,7 @@ function RecruiterStatsTable({
     <div className={`${glassCard} overflow-hidden`}>
       <div className="px-4 py-2.5 border-b border-white/50 bg-white/30">
         <p className="text-sm font-semibold text-slate-800">Recruiter detail</p>
-        <p className="text-[11px] text-slate-500">Showed = marked watched Â· Less = not full watch</p>
+        <p className="text-[11px] text-slate-500">Showed = marked watched · Less = not full watch</p>
       </div>
       <div className="overflow-auto max-h-[min(50vh,480px)]">
         <table className="min-w-full text-xs text-slate-800">
@@ -845,7 +845,7 @@ function RecruiterStatsTable({
             <tr className="text-left text-[10px] uppercase tracking-wide text-slate-500">
               <th className="px-3 py-2 w-10">#</th>
               <th className="px-3 py-2">Recruiter</th>
-              <th className="px-3 py-2">Team</th>
+              <th className="px-3 py-2">Data file</th>
               <th className="px-3 py-2 text-right">Booked</th>
               <th className="px-3 py-2 text-right">Showed</th>
               <th className="px-3 py-2 text-right">Full</th>
@@ -931,7 +931,7 @@ function RecruiterChip({
         <p className="text-xs font-semibold text-slate-800 truncate">{name}</p>
       </div>
       <p className="text-[10px] text-slate-500 tabular-nums pl-10">{bookings} bookings</p>
-      {team && team !== 'â€”' && <p className="text-[9px] text-slate-400 pl-10">{team}</p>}
+      {team && team !== '—' && <p className="text-[9px] text-slate-400 pl-10">{team}</p>}
     </button>
   );
 }
@@ -1152,7 +1152,7 @@ function BookingsTableHeader({
   return (
     <div className="px-4 py-2.5 border-b border-white/50 bg-white/30 text-xs text-slate-600">
       {count} booking{count === 1 ? '' : 's'}
-      {recruiterName && <span className="text-[#005EB8] font-medium"> Â· {recruiterName}</span>}
+      {recruiterName && <span className="text-[#005EB8] font-medium"> · {recruiterName}</span>}
     </div>
   );
 }
@@ -1187,13 +1187,13 @@ function BookingsTable({ rows }: { rows: AnyRow[] }) {
                 <tr key={String(row.id)} className="border-b border-white/30 hover:bg-white/40">
                   <td className="px-3 py-2 font-medium">{recruiterNameFromRow(row)}</td>
                   <td className="px-3 py-2 text-slate-600">{recruiterTeamFromRow(row)}</td>
-                  <td className="px-3 py-2">{candidateDisplayNameFromRow(row) || 'â€”'}</td>
-                  <td className="px-3 py-2 text-slate-600">{String(row.email || 'â€”')}</td>
+                  <td className="px-3 py-2">{candidateDisplayNameFromRow(row) || '—'}</td>
+                  <td className="px-3 py-2 text-slate-600">{String(row.email || '—')}</td>
                   <td className="px-3 py-2 tabular-nums text-slate-600">
-                    {hrMs ? formatDateTimeCanadaEastern(hrMs) : 'â€”'}
+                    {hrMs ? formatDateTimeCanadaEastern(hrMs) : '—'}
                   </td>
                   <td className="px-3 py-2 tabular-nums text-slate-600">
-                    {sessionMs ? formatDateTimeCanadaEastern(sessionMs) : 'â€”'}
+                    {sessionMs ? formatDateTimeCanadaEastern(sessionMs) : '—'}
                   </td>
                   <td className="px-3 py-2">{row.watched === true ? 'Yes' : 'No'}</td>
                 </tr>
