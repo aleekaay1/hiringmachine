@@ -127,22 +127,54 @@ export function callerSlugFromRow(row: AnyRow): InviterFilePrefix | null {
 }
 
 export function callerDisplayFromRow(row: AnyRow): string {
+  return recruiterTeamFromRow(row);
+}
+
+/** Cooper / RMS channel from file prefix. */
+export function recruiterTeamFromRow(row: AnyRow): string {
   const slug = callerSlugFromRow(row);
   if (slug === 'rms') return 'RMS';
   if (slug === 'cooper') return 'Cooper';
   return '—';
 }
 
-/** Candidate name: file tag first, else WebinarGeek registration name. */
-export function candidateDisplayNameFromRow(row: AnyRow): string {
-  const a = getInviterAttributionFromRow(row);
-  if (a.inviteeLabel) return a.inviteeLabel;
-  const wg = `${String(row.firstname ?? '').trim()} ${String(row.surname ?? '').trim()}`.trim();
-  return wg;
+/** Recruiter name from custom_field (after cooper_/rms_). */
+export function recruiterNameFromRow(row: AnyRow): string {
+  return fileTagNameFromRow(row);
 }
 
+function unixMsFromField(value: unknown): number | null {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n > 1e12 ? n : n * 1000;
+}
+
+/** When HR scheduled / invited (subscription created_at). */
+export function hrScheduledMsFromRow(row: AnyRow): number | null {
+  return unixMsFromField(row.created_at);
+}
+
+/** When the webinar session runs (broadcast date). */
+export function webinarSessionMsFromRow(row: AnyRow): number | null {
+  const broadcast = row.broadcast && typeof row.broadcast === 'object' ? (row.broadcast as AnyRow) : null;
+  return unixMsFromField(broadcast?.date);
+}
+
+/** Person who registered (WebinarGeek first + last name). */
+export function registrationDisplayNameFromRow(row: AnyRow): string {
+  return `${String(row.firstname ?? '').trim()} ${String(row.surname ?? '').trim()}`.trim();
+}
+
+/** Table "Name" column: registrant only; falls back to file tag if WG name missing. */
+export function candidateDisplayNameFromRow(row: AnyRow): string {
+  const reg = registrationDisplayNameFromRow(row);
+  if (reg) return reg;
+  return fileTagNameFromRow(row) === '—' ? '' : fileTagNameFromRow(row);
+}
+
+/** Alias for file-tag search / filters (not the registrant). */
 export function inviteeLabelFromRow(row: AnyRow): string {
-  return candidateDisplayNameFromRow(row);
+  return fileTagNameFromRow(row);
 }
 
 export type WatchBucket = 'full' | 'half' | 'not_yet';
@@ -159,7 +191,15 @@ export function emptyWatchStats(): WatchStats {
   return { scheduled: 0, watchedYes: 0, full: 0, half: 0, notYet: 0 };
 }
 
-/** One profile per unique candidate name from `cooper_*` / `rms_*` custom_field tags. */
+/** One profile per recruiter name from `cooper_*` / `rms_*` custom_field tags. */
+export function buildRecruiterFilterProfiles(
+  rows: AnyRow[],
+  watchSeconds: (row: AnyRow) => number,
+): CandidateNameProfile[] {
+  return buildCandidateNameProfiles(rows, watchSeconds);
+}
+
+/** @deprecated Use buildRecruiterFilterProfiles */
 export function buildCandidateNameProfiles(
   rows: AnyRow[],
   watchSeconds: (row: AnyRow) => number,

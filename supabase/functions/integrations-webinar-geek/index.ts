@@ -72,14 +72,31 @@ async function wgGet(path: string, params?: Record<string, string | number | boo
   return wgRequest(`${path}${suffix}`, { method: 'GET' });
 }
 
-function subscriptionRowEventMs(row: Record<string, unknown>): number | null {
+function unixMsFromField(value: unknown): number | null {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n > 1e12 ? n : n * 1000;
+}
+
+function subscriptionRowHrScheduledMs(row: Record<string, unknown>): number | null {
+  return unixMsFromField(row.created_at);
+}
+
+function subscriptionRowWebinarSessionMs(row: Record<string, unknown>): number | null {
   const broadcast = row.broadcast && typeof row.broadcast === 'object' ? row.broadcast as Record<string, unknown> : null;
-  const candidates = [broadcast?.date, row.created_at, row.watched_true_set_at];
+  return unixMsFromField(broadcast?.date);
+}
+
+/** Legacy: latest known event time (watch / session). */
+function subscriptionRowEventMs(row: Record<string, unknown>): number | null {
+  const candidates = [
+    subscriptionRowWebinarSessionMs(row),
+    subscriptionRowHrScheduledMs(row),
+    unixMsFromField(row.watched_true_set_at),
+  ];
   let best: number | null = null;
-  for (const v of candidates) {
-    const n = Number(v);
-    if (!Number.isFinite(n) || n <= 0) continue;
-    const ms = n > 1e12 ? n : n * 1000;
+  for (const ms of candidates) {
+    if (ms == null) continue;
     if (best == null || ms > best) best = ms;
   }
   return best;
@@ -97,12 +114,21 @@ function parseYmdToUtcEndMs(ymd: string): number | null {
   return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 23, 59, 59, 999);
 }
 
-function rowInWindow(row: Record<string, unknown>, sinceMs: number | null, untilMs: number | null): boolean {
-  const ms = subscriptionRowEventMs(row);
-  if (ms == null) return sinceMs == null && untilMs == null;
+function msInWindow(ms: number, sinceMs: number | null, untilMs: number | null): boolean {
   if (sinceMs != null && ms < sinceMs) return false;
   if (untilMs != null && ms > untilMs) return false;
   return true;
+}
+
+/** Include row if HR scheduled or webinar session falls in the fetch window. */
+function rowInWindow(row: Record<string, unknown>, sinceMs: number | null, untilMs: number | null): boolean {
+  if (sinceMs == null && untilMs == null) return true;
+  const times = [
+    subscriptionRowHrScheduledMs(row),
+    subscriptionRowWebinarSessionMs(row),
+  ].filter((n): n is number => n != null);
+  if (times.length === 0) return false;
+  return times.some((ms) => msInWindow(ms, sinceMs, untilMs));
 }
 
 /** Default list excludes people who have not confirmed email (WG docs). Prefer primary row on id clash (watch stats). */

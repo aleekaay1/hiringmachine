@@ -14,6 +14,7 @@ import AssessmentRoomForm from './pages/AssessmentRoomForm';
 import CheckStatus from './pages/CheckStatus';
 import LiveSessionsDashboard from './pages/LiveSessionsDashboard';
 import WebinarGeekDashboard from './pages/WebinarGeekDashboard';
+import CallsAnalytics from './pages/CallsAnalytics';
 import HRDashboard from './pages/HRDashboard';
 import EmailLog from './pages/EmailLog';
 import Pipeline from './pages/Pipeline';
@@ -37,6 +38,7 @@ const App: React.FC = () => {
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="/live-sessions" element={<LiveSessionsDashboard />} />
         <Route path="/webinar-geek" element={<WebinarGeekDashboard />} />
+        <Route path="/calls-analytics" element={<CallsAnalytics />} />
         <Route path="/hr-dashboard" element={<HRDashboard />} />
         <Route path="/pipeline" element={<Pipeline />} />
         <Route path="/superdashboard" element={<SuperDashboard />} />

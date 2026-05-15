@@ -1,0 +1,117 @@
+import {
+  eventMsToTorontoYmd,
+  asUnixMs,
+} from './webinarGeekDates';
+import {
+  getInviterAttributionFromRow,
+  hrScheduledMsFromRow,
+  nameKeyFromRow,
+  normalizeNameKey,
+  profileInitials,
+  recruiterTeamFromRow,
+  rowMatchesNameKey,
+  watchBucketFromSeconds,
+} from './webinarGeekInviters';
+
+export { profileInitials, rowMatchesNameKey, normalizeNameKey };
+
+type AnyRow = Record<string, unknown>;
+
+export type RecruiterBookingProfile = {
+  key: string;
+  displayName: string;
+  team: string;
+  bookings: number;
+  watchedYes: number;
+  full: number;
+  half: number;
+  notYet: number;
+  lastHrScheduledMs: number | null;
+};
+
+/** Calendar / scope on WebinarGeek page — webinar session date. */
+export function fmtWebinarSessionDateKey(row: AnyRow): string {
+  const broadcast = row.broadcast && typeof row.broadcast === 'object' ? (row.broadcast as AnyRow) : null;
+  const ms =
+    asUnixMs(broadcast?.date) ??
+    hrScheduledMsFromRow(row) ??
+    asUnixMs(row.watched_true_set_at);
+  if (!ms) return 'unknown';
+  return eventMsToTorontoYmd(ms);
+}
+
+/** Recruiter analytics — when the invite was created (HR scheduled). */
+export function fmtHrScheduledDateKey(row: AnyRow): string {
+  const ms =
+    hrScheduledMsFromRow(row) ??
+    asUnixMs((row.broadcast as AnyRow | undefined)?.date) ??
+    asUnixMs(row.watched_true_set_at);
+  if (!ms) return 'unknown';
+  return eventMsToTorontoYmd(ms);
+}
+
+export function buildRecruiterBookingProfiles(
+  rows: AnyRow[],
+  watchSeconds: (row: AnyRow) => number,
+): RecruiterBookingProfile[] {
+  const map = new Map<string, RecruiterBookingProfile & { teams: Set<string> }>();
+
+  for (const row of rows) {
+    const key = nameKeyFromRow(row);
+    if (!key) continue;
+    const displayName = getInviterAttributionFromRow(row).inviteeLabel!;
+    const team = recruiterTeamFromRow(row);
+    const hrMs = hrScheduledMsFromRow(row);
+
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        displayName,
+        team: team,
+        bookings: 0,
+        watchedYes: 0,
+        full: 0,
+        half: 0,
+        notYet: 0,
+        lastHrScheduledMs: null,
+        teams: new Set(team !== '—' ? [team] : []),
+      });
+    }
+    const p = map.get(key)!;
+    if (team !== '—') p.teams.add(team);
+    p.bookings += 1;
+    if (row.watched === true) p.watchedYes += 1;
+    const bucket = watchBucketFromSeconds(watchSeconds(row));
+    if (bucket === 'full') p.full += 1;
+    else if (bucket === 'half') p.half += 1;
+    else p.notYet += 1;
+    if (hrMs != null && (p.lastHrScheduledMs == null || hrMs > p.lastHrScheduledMs)) {
+      p.lastHrScheduledMs = hrMs;
+    }
+  }
+
+  return [...map.values()]
+    .map(({ teams, ...rest }) => ({
+      ...rest,
+      team: teams.size > 1 ? 'Mixed' : rest.team,
+    }))
+    .sort((a, b) => {
+      if (b.bookings !== a.bookings) return b.bookings - a.bookings;
+      return a.displayName.localeCompare(b.displayName);
+    });
+}
+
+export function dayBookingCountsByHrDate(
+  rows: AnyRow[],
+): Map<string, { bookings: number; watched: number }> {
+  const map = new Map<string, { bookings: number; watched: number }>();
+  for (const row of rows) {
+    const key = fmtHrScheduledDateKey(row);
+    if (key === 'unknown') continue;
+    if (!map.has(key)) map.set(key, { bookings: 0, watched: 0 });
+    const e = map.get(key)!;
+    e.bookings += 1;
+    if (row.watched === true) e.watched += 1;
+  }
+  return map;
+}

@@ -5,14 +5,18 @@ import { supabase } from '../services/supabaseClient';
 import { fetchWebinarGeekDashboard, syncWebinarGeekCandidates } from '../services/webinarGeekIntegrations';
 import { ChevronLeft, ChevronRight, Download, MessageSquare, RefreshCw, Search, UserCircle2, X } from 'lucide-react';
 import {
-  buildCandidateNameProfiles,
-  callerDisplayFromRow,
+  buildRecruiterFilterProfiles,
   candidateDisplayNameFromRow,
   fileTagNameFromRow,
   getInviterAttributionFromRow,
+  hrScheduledMsFromRow,
+  inviteeLabelFromRow,
   profileInitials,
+  recruiterTeamFromRow,
   rowMatchesNameKey,
+  webinarSessionMsFromRow,
 } from '../services/webinarGeekInviters';
+import { fmtWebinarSessionDateKey } from '../services/webinarGeekRecruiterAnalytics';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import type { AdminNote } from '../types';
 import {
@@ -145,13 +149,9 @@ function eventMsToTorontoYmd(ms: number): string {
   return `${y}-${mo}-${da}`;
 }
 
+/** Month/week/day scope + calendar: webinar session date (unchanged). */
 function fmtDateKey(row: AnyRow): string {
-  const ms =
-    asUnixMs((row.broadcast as AnyRow | undefined)?.date) ??
-    asUnixMs(row.created_at) ??
-    asUnixMs(row.watched_true_set_at);
-  if (!ms) return 'unknown';
-  return eventMsToTorontoYmd(ms);
+  return fmtWebinarSessionDateKey(row);
 }
 
 /** Whole minutes from watch_duration seconds (0 if none). */
@@ -348,7 +348,7 @@ const WebinarGeekDashboard: React.FC = () => {
   }, [scopeMode, rowsInViewWeek, rowsInViewMonth, selectedDayYmd]);
 
   const nameProfiles = useMemo(
-    () => buildCandidateNameProfiles(rowsForScope, watchSecondsFromRow),
+    () => buildRecruiterFilterProfiles(rowsForScope, watchSecondsFromRow),
     [rowsForScope],
   );
 
@@ -366,7 +366,7 @@ const WebinarGeekDashboard: React.FC = () => {
       const emailText = String(row.email ?? '').toLowerCase();
       const phoneText = getPhoneDisplay(row).toLowerCase();
       const fileTag = fileTagNameFromRow(row).toLowerCase();
-      const caller = callerDisplayFromRow(row).toLowerCase();
+      const team = recruiterTeamFromRow(row).toLowerCase();
       const rawField = String(getInviterAttributionFromRow(row).raw ?? '').toLowerCase();
       const sid = subscriptionKey(row);
       const notesHay = (wgNotesBySubId[sid] ?? [])
@@ -380,7 +380,7 @@ const WebinarGeekDashboard: React.FC = () => {
         || emailText.includes(q)
         || phoneText.includes(q)
         || fileTag.includes(q)
-        || caller.includes(q)
+        || team.includes(q)
         || rawField.includes(q)
         || notesHay.includes(q)
       );
@@ -464,78 +464,6 @@ const WebinarGeekDashboard: React.FC = () => {
   useEffect(() => {
     setNewWgNote('');
   }, [selectedRow?.id]);
-
-  const monthOverview = useMemo(() => {
-    const rows = rowsInViewMonth;
-    const n = rows.length;
-    let watched = 0;
-    let full = 0;
-    let half = 0;
-    let low = 0;
-    for (const r of rows) {
-      if (r.watched === true) watched += 1;
-      const sec = Number(r.watch_duration || 0);
-      const b = watchBucket(sec);
-      if (b === 'full') full += 1;
-      else if (b === 'half') half += 1;
-      else low += 1;
-    }
-    return { n, watched, full, half, low, ymd: null as string | null };
-  }, [rowsInViewMonth]);
-
-  const selectedDayOverview = useMemo(() => {
-    if (!selectedDayYmd) return null;
-    const rows = rowsInViewMonth.filter((r) => fmtDateKey(r) === selectedDayYmd);
-    const n = rows.length;
-    let watched = 0;
-    let full = 0;
-    let half = 0;
-    let low = 0;
-    for (const r of rows) {
-      if (r.watched === true) watched += 1;
-      const sec = Number(r.watch_duration || 0);
-      const b = watchBucket(sec);
-      if (b === 'full') full += 1;
-      else if (b === 'half') half += 1;
-      else low += 1;
-    }
-    return { n, watched, full, half, low, ymd: selectedDayYmd };
-  }, [rowsInViewMonth, selectedDayYmd]);
-
-  const selectedWeekOverview = useMemo(() => {
-    const rows = rowsInViewWeek;
-    const n = rows.length;
-    let watched = 0;
-    let full = 0;
-    let half = 0;
-    let low = 0;
-    for (const r of rows) {
-      if (r.watched === true) watched += 1;
-      const sec = Number(r.watch_duration || 0);
-      const b = watchBucket(sec);
-      if (b === 'full') full += 1;
-      else if (b === 'half') half += 1;
-      else low += 1;
-    }
-    return { n, watched, full, half, low, ymd: null as string | null };
-  }, [rowsInViewWeek]);
-
-  const overviewForUi = scopeMode === 'day'
-    ? (selectedDayOverview ?? monthOverview)
-    : (scopeMode === 'week' ? selectedWeekOverview : monthOverview);
-
-  const statTiles = useMemo(() => {
-    const { n, watched, full, half, low } = overviewForUi;
-    const fullOfWatched = watched > 0 ? Math.round((100 * full) / watched) : 0;
-    return [
-      { k: 'Registrations', v: String(n), sub: 'in scope' },
-      { k: 'Watched', v: pct(watched, n), sub: `${watched} marked yes` },
-      { k: 'Full watch', v: pct(full, n), sub: `${full} rows` },
-      { k: 'Half+', v: pct(half, n), sub: `${half} rows` },
-      { k: 'Little / none', v: pct(low, n), sub: `${low} rows` },
-      { k: 'Full of watched', v: `${fullOfWatched}%`, sub: watched ? `${full} / ${watched}` : '—' },
-    ];
-  }, [overviewForUi]);
 
   const [viewYear, viewMonth0] = useMemo(() => {
     const [y, m] = monthAnchorYmd.split('-').map(Number);
@@ -668,8 +596,9 @@ const WebinarGeekDashboard: React.FC = () => {
       'email',
       'phone',
       'name_from_file',
-      'caller',
-      'registration',
+      'team',
+      'hr_scheduled',
+      'webinar_session',
       'watch_minutes',
       'watched',
     ];
@@ -680,10 +609,13 @@ const WebinarGeekDashboard: React.FC = () => {
       const email = csvScalar(String(row.email ?? '').trim());
       const phone = csvScalar(getPhoneDisplay(row));
       const fileTag = csvScalar(fileTagNameFromRow(row) || '0');
-      const caller = csvScalar(callerDisplayFromRow(row) || '0');
-      const regMs = asUnixMs(row.created_at);
-      const registration =
-        regMs != null ? new Date(regMs).toISOString().slice(0, 16).replace('T', ' ') : '0';
+      const team = csvScalar(recruiterTeamFromRow(row) || '0');
+      const hrMs = hrScheduledMsFromRow(row);
+      const hrScheduled =
+        hrMs != null ? new Date(hrMs).toISOString().slice(0, 16).replace('T', ' ') : '0';
+      const sessionMs = webinarSessionMsFromRow(row);
+      const webinarSession =
+        sessionMs != null ? new Date(sessionMs).toISOString().slice(0, 16).replace('T', ' ') : '0';
       const mins = watchMinutes(row.watch_duration);
       const watched = row.watched === true ? 'Yes' : 'No';
       return [
@@ -694,8 +626,9 @@ const WebinarGeekDashboard: React.FC = () => {
         email,
         phone,
         fileTag,
-        caller,
-        registration,
+        team,
+        hrScheduled,
+        webinarSession,
         String(mins),
         watched,
       ];
@@ -783,31 +716,16 @@ const WebinarGeekDashboard: React.FC = () => {
           </div>
         </div>
 
-        {subscriptionCache !== null && (
-          <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-3">{scopeTitle}</p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
-              {statTiles.map((c) => (
-                <div key={c.k} className="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-2">
-                  <p className="text-[10px] text-slate-500 font-medium">{c.k}</p>
-                  <p className="text-lg font-semibold text-slate-900 tabular-nums">{c.v}</p>
-                  <p className="text-[10px] text-slate-400">{c.sub}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
         {subscriptionCache !== null && nameProfiles.length > 0 && (
           <section className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <UserCircle2 size={18} className="text-[#005EB8] shrink-0" aria-hidden />
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-slate-900">Filter by name (custom field)</p>
+                  <p className="text-sm font-semibold text-slate-900">Filter by recruiter</p>
                   <p className="text-[11px] text-slate-500">
-                    Names come from <span className="font-mono">cooper_*</span> / <span className="font-mono">rms_*</span> tags
-                    (prefix stripped). Click a person to filter the table.
+                    Recruiters from <span className="font-mono">cooper_*</span> / <span className="font-mono">rms_*</span> file tags.
+                    HR can see each recruiter&apos;s invitees; recruiters can filter to their own bookings.
                   </p>
                 </div>
               </div>
@@ -817,30 +735,24 @@ const WebinarGeekDashboard: React.FC = () => {
                   onClick={() => setSelectedNameKey(null)}
                   className="text-[11px] font-medium text-[#005EB8] hover:underline shrink-0"
                 >
-                  Clear name filter
+                  Clear recruiter filter
                 </button>
               )}
             </div>
             <div className="flex gap-2.5 overflow-x-auto pb-1 -mx-1 px-1 snap-x snap-mandatory">
-              <NameProfileCard
-                displayName="All names"
+              <RecruiterFilterChip
+                displayName="All recruiters"
                 initials="All"
-                scheduled={nameProfiles.reduce((s, p) => s + p.scheduled, 0)}
-                full={nameProfiles.reduce((s, p) => s + p.full, 0)}
-                half={nameProfiles.reduce((s, p) => s + p.half, 0)}
-                notYet={nameProfiles.reduce((s, p) => s + p.notYet, 0)}
+                count={nameProfiles.reduce((s, p) => s + p.scheduled, 0)}
                 active={selectedNameKey === null}
                 onSelect={() => setSelectedNameKey(null)}
               />
               {nameProfiles.map((p) => (
-                <NameProfileCard
+                <RecruiterFilterChip
                   key={p.key}
                   displayName={p.displayName}
                   initials={profileInitials(p.displayName)}
-                  scheduled={p.scheduled}
-                  full={p.full}
-                  half={p.half}
-                  notYet={p.notYet}
+                  count={p.scheduled}
                   active={selectedNameKey === p.key}
                   onSelect={() => setSelectedNameKey((prev) => (prev === p.key ? null : p.key))}
                 />
@@ -1123,10 +1035,10 @@ const WebinarGeekDashboard: React.FC = () => {
                   <th className="px-3 py-2 font-medium">Email</th>
                   <th className="px-3 py-2 font-medium">Phone</th>
                   <th className="px-3 py-2 font-medium">File tag name</th>
-                  <th className="px-3 py-2 font-medium">Caller</th>
-                  <th className="px-3 py-2 font-medium">Scheduled</th>
+                  <th className="px-3 py-2 font-medium">Team</th>
+                  <th className="px-3 py-2 font-medium">HR scheduled</th>
+                  <th className="px-3 py-2 font-medium">Webinar session</th>
                   <th className="px-3 py-2 font-medium min-w-[9rem]">Status / notes</th>
-                  <th className="px-3 py-2 font-medium">Registered</th>
                   <th className="px-3 py-2 font-medium">Watched</th>
                   <th className="px-3 py-2 font-medium">Watch (min)</th>
                 </tr>
@@ -1140,11 +1052,10 @@ const WebinarGeekDashboard: React.FC = () => {
                   </tr>
                 ) : (
                   filteredRows.map((row) => {
-                    const name = candidateDisplayNameFromRow(row) || '0';
-                    const wgName = `${String(row.firstname || '').trim()} ${String(row.surname || '').trim()}`.trim();
+                    const name = candidateDisplayNameFromRow(row) || '—';
                     const durationSec = Number(row.watch_duration || 0);
-                    const regMs = asUnixMs(row.created_at);
-                    const scheduledMs = asUnixMs((row.broadcast as AnyRow | undefined)?.date);
+                    const hrMs = hrScheduledMsFromRow(row);
+                    const sessionMs = webinarSessionMsFromRow(row);
                     const tone = watchRowToneClass(durationSec);
                     const latest = latestWebinarGeekNote(wgNotesBySubId[subscriptionKey(row)]);
                     return (
@@ -1153,20 +1064,16 @@ const WebinarGeekDashboard: React.FC = () => {
                         className={`border-b border-slate-100/90 cursor-pointer ${tone}`}
                         onClick={() => setSelectedRow(row)}
                       >
-                        <td className="px-3 py-2 font-medium text-slate-900">
-                          <span>{name}</span>
-                          {wgName && wgName.toLowerCase() !== name.toLowerCase() && (
-                            <span className="block text-[10px] font-normal text-slate-500 truncate" title="WebinarGeek registration name">
-                              Reg: {wgName}
-                            </span>
-                          )}
-                        </td>
+                        <td className="px-3 py-2 font-medium text-slate-900">{name}</td>
                         <td className="px-3 py-2 text-slate-700">{String(row.email || '0')}</td>
                         <td className="px-3 py-2 text-slate-700 tabular-nums">{getPhoneDisplay(row)}</td>
                         <td className="px-3 py-2 text-slate-700">{fileTagNameFromRow(row)}</td>
-                        <td className="px-3 py-2 text-slate-600">{callerDisplayFromRow(row)}</td>
+                        <td className="px-3 py-2 text-slate-600">{recruiterTeamFromRow(row)}</td>
                         <td className="px-3 py-2 text-slate-600 tabular-nums">
-                          {scheduledMs ? formatDateTimeCanadaEastern(scheduledMs) : '0'}
+                          {hrMs ? formatDateTimeCanadaEastern(hrMs) : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-slate-600 tabular-nums">
+                          {sessionMs ? formatDateTimeCanadaEastern(sessionMs) : '—'}
                         </td>
                         <td className="px-3 py-2 text-slate-700 align-top max-w-[14rem]">
                           {latest ? (
@@ -1180,9 +1087,6 @@ const WebinarGeekDashboard: React.FC = () => {
                           ) : (
                             <span className="text-slate-400">—</span>
                           )}
-                        </td>
-                        <td className="px-3 py-2 text-slate-600 tabular-nums">
-                          {regMs ? formatDateTimeCanadaEastern(regMs) : '0'}
                         </td>
                         <td className="px-3 py-2">{row.watched === true ? 'Yes' : 'No'}</td>
                         <td className="px-3 py-2 tabular-nums">{watchMinutes(row.watch_duration)}</td>
@@ -1205,15 +1109,11 @@ const WebinarGeekDashboard: React.FC = () => {
                 </button>
               </div>
               <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm shrink-0">
-                <Detail label="Name (from file)" value={candidateDisplayNameFromRow(selectedRow) || '0'} />
-                <Detail
-                  label="Registration name"
-                  value={`${String(selectedRow.firstname || '').trim()} ${String(selectedRow.surname || '').trim()}`.trim() || '0'}
-                />
+                <Detail label="Name" value={candidateDisplayNameFromRow(selectedRow) || '—'} />
                 <Detail label="Email" value={String(selectedRow.email || '0')} />
                 <Detail label="Phone" value={getPhoneDisplay(selectedRow)} />
                 <Detail label="Name (file tag)" value={fileTagNameFromRow(selectedRow)} />
-                <Detail label="Caller" value={callerDisplayFromRow(selectedRow)} />
+                <Detail label="Team" value={recruiterTeamFromRow(selectedRow)} />
                 <Detail
                   label="Filename tag"
                   value={(() => {
@@ -1222,17 +1122,17 @@ const WebinarGeekDashboard: React.FC = () => {
                   })()}
                 />
                 <Detail
-                  label="Scheduled"
+                  label="HR scheduled"
                   value={(() => {
-                    const t = asUnixMs((selectedRow.broadcast as AnyRow | undefined)?.date);
-                    return t ? formatDateTimeCanadaEastern(t) : '0';
+                    const t = hrScheduledMsFromRow(selectedRow);
+                    return t ? formatDateTimeCanadaEastern(t) : '—';
                   })()}
                 />
                 <Detail
-                  label="Registered"
+                  label="Webinar session"
                   value={(() => {
-                    const t = asUnixMs(selectedRow.created_at);
-                    return t ? formatDateTimeCanadaEastern(t) : '0';
+                    const t = webinarSessionMsFromRow(selectedRow);
+                    return t ? formatDateTimeCanadaEastern(t) : '—';
                   })()}
                 />
                 <Detail label="Watched" value={selectedRow.watched === true ? 'Yes' : 'No'} />
@@ -1292,37 +1192,31 @@ const Detail = ({ label, value }: { label: string; value: string }) => (
   </div>
 );
 
-type NameProfileCardProps = {
+type RecruiterFilterChipProps = {
   displayName: string;
   initials: string;
-  scheduled: number;
-  full: number;
-  half: number;
-  notYet: number;
+  count: number;
   active: boolean;
   onSelect: () => void;
 };
 
-const NameProfileCard: React.FC<NameProfileCardProps> = ({
+const RecruiterFilterChip: React.FC<RecruiterFilterChipProps> = ({
   displayName,
   initials,
-  scheduled,
-  full,
-  half,
-  notYet,
+  count,
   active,
   onSelect,
 }) => (
   <button
     type="button"
     onClick={onSelect}
-    className={`snap-start shrink-0 w-[min(100%,11.5rem)] rounded-2xl border px-3 py-2.5 text-left transition ${
+    className={`snap-start shrink-0 w-[min(100%,11rem)] rounded-2xl border px-3 py-2.5 text-left transition ${
       active
         ? 'border-[#005EB8] bg-[#005EB8]/5 shadow-md ring-1 ring-[#005EB8]/30'
         : 'border-slate-200 bg-slate-50/80 hover:border-slate-300 hover:bg-white'
     }`}
   >
-    <div className="flex items-center gap-2.5 mb-2">
+    <div className="flex items-center gap-2.5">
       <span
         className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
           active ? 'bg-[#005EB8] text-white' : 'bg-slate-200 text-slate-700'
@@ -1332,21 +1226,7 @@ const NameProfileCard: React.FC<NameProfileCardProps> = ({
       </span>
       <div className="min-w-0">
         <p className="text-xs font-semibold text-slate-900 truncate">{displayName}</p>
-        <p className="text-[10px] text-slate-500 tabular-nums">{scheduled} scheduled</p>
-      </div>
-    </div>
-    <div className="grid grid-cols-3 gap-1 text-center">
-      <div className="rounded-lg bg-emerald-50 border border-emerald-100/80 px-1 py-1">
-        <p className="text-[9px] uppercase tracking-wide text-emerald-800 font-medium">Full</p>
-        <p className="text-sm font-bold text-emerald-900 tabular-nums">{full}</p>
-      </div>
-      <div className="rounded-lg bg-sky-50 border border-sky-100/80 px-1 py-1">
-        <p className="text-[9px] uppercase tracking-wide text-sky-800 font-medium">Half+</p>
-        <p className="text-sm font-bold text-sky-900 tabular-nums">{half}</p>
-      </div>
-      <div className="rounded-lg bg-rose-50 border border-rose-100/80 px-1 py-1">
-        <p className="text-[9px] uppercase tracking-wide text-rose-800 font-medium">Not yet</p>
-        <p className="text-sm font-bold text-rose-900 tabular-nums">{notYet}</p>
+        <p className="text-[10px] text-slate-500 tabular-nums">{count} invite{count === 1 ? '' : 's'}</p>
       </div>
     </div>
   </button>
