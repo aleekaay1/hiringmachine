@@ -23,11 +23,14 @@ import {
 import {
   buildRecruiterBookingProfiles,
   buildRecruiterLeaderboard,
+  buildRecruiterWeeklyTargetLeaderboard,
   dayBookingCountsByHrDate,
   fmtHrScheduledDateKey,
   profileInitials,
+  RECRUITER_WEEKLY_WEBINAR_TARGET,
   rowMatchesNameKey,
   type RecruiterLeaderboardEntry,
+  type RecruiterWeeklyTargetEntry,
 } from '../services/webinarGeekRecruiterAnalytics';
 import {
   candidateDisplayNameFromRow,
@@ -36,7 +39,9 @@ import {
   recruiterTeamFromRow,
   webinarSessionMsFromRow,
 } from '../services/webinarGeekInviters';
-import { BarChart3, ChevronLeft, ChevronRight, Download, RefreshCw, Trophy, Users } from 'lucide-react';
+import { BarChart3, ChevronLeft, ChevronRight, Download, RefreshCw, Target, Trophy, Users } from 'lucide-react';
+
+type LeaderboardTab = 'performance' | 'weeklyTarget';
 
 type AnyRow = Record<string, unknown>;
 type ScopeMode = 'month' | 'week' | 'day';
@@ -80,6 +85,7 @@ const CallsAnalytics: React.FC = () => {
   const [scopeMode, setScopeMode] = useState<ScopeMode>('month');
   const [weekAnchorYmd, setWeekAnchorYmd] = useState(() => torontoYmdFromDate());
   const [selectedRecruiterKey, setSelectedRecruiterKey] = useState<string | null>(null);
+  const [leaderboardTab, setLeaderboardTab] = useState<LeaderboardTab>('performance');
 
   const monthWindow = useMemo(() => monthBoundsFromFirstYmd(monthAnchorYmd), [monthAnchorYmd]);
   const weekWindow = useMemo(() => fridayWeekBoundsFromYmd(weekAnchorYmd), [weekAnchorYmd]);
@@ -123,6 +129,16 @@ const CallsAnalytics: React.FC = () => {
   const leaderboard = useMemo(
     () => buildRecruiterLeaderboard(recruiterProfiles),
     [recruiterProfiles],
+  );
+
+  const weeklyRecruiterProfiles = useMemo(
+    () => buildRecruiterBookingProfiles(rowsInViewWeek, watchSecondsFromRow),
+    [rowsInViewWeek],
+  );
+
+  const weeklyTargetLeaderboard = useMemo(
+    () => buildRecruiterWeeklyTargetLeaderboard(weeklyRecruiterProfiles),
+    [weeklyRecruiterProfiles],
   );
 
   const filteredRows = useMemo(() => {
@@ -287,6 +303,12 @@ const CallsAnalytics: React.FC = () => {
     setSelectedDayYmd(null);
   }, [monthAnchorYmd]);
 
+  useEffect(() => {
+    if (leaderboardTab === 'weeklyTarget' && scopeMode !== 'week') {
+      setScopeMode('week');
+    }
+  }, [leaderboardTab, scopeMode]);
+
   if (!authChecked) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#e8f2fc] via-[#f0f6ff] to-[#e6eef8] flex items-center justify-center">
@@ -331,6 +353,9 @@ const CallsAnalytics: React.FC = () => {
           summary={summary}
           recruiterProfiles={recruiterProfiles}
           leaderboard={leaderboard}
+          leaderboardTab={leaderboardTab}
+          onLeaderboardTab={setLeaderboardTab}
+          weeklyTargetLeaderboard={weeklyTargetLeaderboard}
           selectedRecruiterKey={selectedRecruiterKey}
           onSelectRecruiter={setSelectedRecruiterKey}
           subscriptionCache={subscriptionCache}
@@ -425,6 +450,9 @@ type PageProps = {
   summary: { bookings: number; recruiters: number; showed: number; full: number };
   recruiterProfiles: ReturnType<typeof buildRecruiterBookingProfiles>;
   leaderboard: RecruiterLeaderboardEntry[];
+  leaderboardTab: LeaderboardTab;
+  onLeaderboardTab: React.Dispatch<React.SetStateAction<LeaderboardTab>>;
+  weeklyTargetLeaderboard: RecruiterWeeklyTargetEntry[];
   selectedRecruiterKey: string | null;
   onSelectRecruiter: React.Dispatch<React.SetStateAction<string | null>>;
   subscriptionCache: AnyRow[] | null;
@@ -478,23 +506,31 @@ function CallsAnalyticsPage(p: PageProps) {
         <SummaryTiles summary={p.summary} scopeTitle={p.scopeTitle} />
       )}
 
-      {p.subscriptionCache !== null && p.leaderboard.length > 0 && (
-        <RecruiterLeaderboardPanel
-          entries={p.leaderboard}
-          scopeTitle={p.scopeTitle}
-          scopeMode={p.scopeMode}
-          selectedKey={p.selectedRecruiterKey}
-          onSelect={p.onSelectRecruiter}
-        />
-      )}
+      {p.subscriptionCache !== null &&
+        (p.leaderboard.length > 0 || p.weeklyTargetLeaderboard.length > 0) && (
+          <RecruiterLeaderboardPanel
+            tab={p.leaderboardTab}
+            onTab={p.onLeaderboardTab}
+            performanceEntries={p.leaderboard}
+            targetEntries={p.weeklyTargetLeaderboard}
+            scopeTitle={p.scopeTitle}
+            weekTitle={p.weekWindow.title}
+            scopeMode={p.scopeMode}
+            selectedKey={p.selectedRecruiterKey}
+            onSelect={p.onSelectRecruiter}
+          />
+        )}
 
-      {p.subscriptionCache !== null && p.leaderboard.length > 0 && (
-        <RecruiterStatsTable
-          entries={p.leaderboard}
-          selectedKey={p.selectedRecruiterKey}
-          onSelect={p.onSelectRecruiter}
-        />
-      )}
+      {p.subscriptionCache !== null &&
+        (p.leaderboard.length > 0 || p.weeklyTargetLeaderboard.length > 0) && (
+          <RecruiterStatsTable
+            tab={p.leaderboardTab}
+            performanceEntries={p.leaderboard}
+            targetEntries={p.weeklyTargetLeaderboard}
+            selectedKey={p.selectedRecruiterKey}
+            onSelect={p.onSelectRecruiter}
+          />
+        )}
 
       {p.subscriptionCache !== null && p.recruiterProfiles.length > 0 && (
         <RecruiterSection
@@ -719,22 +755,225 @@ function rankBadgeClass(rank: number): string {
 }
 
 function RecruiterLeaderboardPanel({
-  entries,
+  tab,
+  onTab,
+  performanceEntries,
+  targetEntries,
   scopeTitle,
+  weekTitle,
   scopeMode,
   selectedKey,
   onSelect,
 }: {
-  entries: RecruiterLeaderboardEntry[];
+  tab: LeaderboardTab;
+  onTab: React.Dispatch<React.SetStateAction<LeaderboardTab>>;
+  performanceEntries: RecruiterLeaderboardEntry[];
+  targetEntries: RecruiterWeeklyTargetEntry[];
   scopeTitle: string;
+  weekTitle: string;
   scopeMode: ScopeMode;
   selectedKey: string | null;
   onSelect: React.Dispatch<React.SetStateAction<string | null>>;
 }) {
+  const isTarget = tab === 'weeklyTarget';
+
   return (
-    <LeaderboardPanelShell scopeTitle={scopeTitle} scopeMode={scopeMode}>
-      <LeaderboardList entries={entries} selectedKey={selectedKey} onSelect={onSelect} />
-    </LeaderboardPanelShell>
+    <div className={`${glassCard} p-4 space-y-4`}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          {isTarget ? (
+            <Target size={18} className="text-[#005EB8] shrink-0" />
+          ) : (
+            <Trophy size={18} className="text-amber-600 shrink-0" />
+          )}
+          <div>
+            <p className="text-sm font-semibold text-slate-800">
+              {isTarget ? 'Weekly target race' : 'Leaderboard'}
+            </p>
+            <p className="text-[11px] text-slate-500">
+              {isTarget
+                ? `Week · ${weekTitle} · ${RECRUITER_WEEKLY_WEBINAR_TARGET} scheduled-on target`
+                : `${scopeMode === 'day' ? scopeTitle : scopeTitle} · ranked by bookings`}
+            </p>
+          </div>
+        </div>
+        <LeaderboardTabBar tab={tab} onTab={onTab} />
+      </div>
+      {isTarget ? (
+        <>
+          <WeeklyTargetRaceTrack
+            entries={targetEntries}
+            weekTitle={weekTitle}
+            selectedKey={selectedKey}
+            onSelect={onSelect}
+          />
+          <TargetLeaderboardList
+            entries={targetEntries}
+            selectedKey={selectedKey}
+            onSelect={onSelect}
+          />
+        </>
+      ) : (
+        <LeaderboardList
+          entries={performanceEntries}
+          selectedKey={selectedKey}
+          onSelect={onSelect}
+        />
+      )}
+    </div>
+  );
+}
+
+function targetBarTone(pct: number, hit: boolean): string {
+  if (hit) return 'bg-emerald-500';
+  if (pct >= 80) return 'bg-amber-500';
+  if (pct >= 50) return 'bg-[#005EB8]';
+  return 'bg-slate-400';
+}
+
+function LeaderboardTabBar({
+  tab,
+  onTab,
+}: {
+  tab: LeaderboardTab;
+  onTab: React.Dispatch<React.SetStateAction<LeaderboardTab>>;
+}) {
+  const tabClass = (active: boolean) =>
+    `flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+      active
+        ? 'bg-[#005EB8] text-white shadow-sm'
+        : 'text-slate-600 hover:bg-white/70 hover:text-slate-800'
+    }`;
+
+  return (
+    <div className="inline-flex rounded-xl border border-white/60 bg-white/50 p-1 gap-0.5 shrink-0">
+      <button type="button" className={tabClass(tab === 'performance')} onClick={() => onTab('performance')}>
+        <Trophy size={14} /> Performance
+      </button>
+      <button type="button" className={tabClass(tab === 'weeklyTarget')} onClick={() => onTab('weeklyTarget')}>
+        <Target size={14} /> Weekly target
+      </button>
+    </div>
+  );
+}
+
+function WeeklyTargetRaceTrack({
+  entries,
+  weekTitle,
+  selectedKey,
+  onSelect,
+}: {
+  entries: RecruiterWeeklyTargetEntry[];
+  weekTitle: string;
+  selectedKey: string | null;
+  onSelect: React.Dispatch<React.SetStateAction<string | null>>;
+}) {
+  const target = RECRUITER_WEEKLY_WEBINAR_TARGET;
+
+  return (
+    <div className="rounded-xl border border-white/50 bg-white/35 p-3 space-y-3">
+      <p className="text-[11px] font-medium text-slate-600">
+        Race to {target} scheduled this week · {weekTitle}
+      </p>
+      <div className="space-y-2.5 max-h-[min(360px,45vh)] overflow-y-auto pr-1">
+        {entries.map((e) => {
+          const fillPct = Math.min(100, (e.bookings / target) * 100);
+          const active = selectedKey === e.key;
+          return (
+            <button
+              key={e.key}
+              type="button"
+              onClick={() => onSelect((prev) => (prev === e.key ? null : e.key))}
+              className={`w-full text-left rounded-lg border px-2.5 py-2 transition ${
+                active
+                  ? 'border-[#005EB8]/45 bg-[#005EB8]/8 ring-1 ring-[#005EB8]/20'
+                  : 'border-white/40 bg-white/30 hover:bg-white/55'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-1.5">
+                <span
+                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold border ${rankBadgeClass(e.rank)}`}
+                >
+                  {e.rank}
+                </span>
+                <span className="text-xs font-semibold text-slate-800 truncate flex-1">{e.displayName}</span>
+                <span className="text-[10px] tabular-nums text-slate-600 shrink-0">
+                  {e.bookings}/{target}
+                </span>
+                <span
+                  className={`text-[10px] font-bold tabular-nums shrink-0 ${
+                    e.hitTarget ? 'text-emerald-700' : 'text-slate-700'
+                  }`}
+                >
+                  {e.targetPct}%
+                </span>
+              </div>
+              <div className="relative h-2.5 rounded-full bg-slate-200/80 overflow-hidden">
+                <div
+                  className={`absolute inset-y-0 left-0 rounded-full transition-all ${targetBarTone(e.targetPct, e.hitTarget)}`}
+                  style={{ width: `${fillPct}%` }}
+                />
+                <div
+                  className="absolute top-0 bottom-0 w-0.5 bg-slate-700/70 z-10"
+                  style={{ left: '100%', transform: 'translateX(-1px)' }}
+                  title={`Target: ${target}`}
+                />
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TargetLeaderboardList({
+  entries,
+  selectedKey,
+  onSelect,
+}: {
+  entries: RecruiterWeeklyTargetEntry[];
+  selectedKey: string | null;
+  onSelect: React.Dispatch<React.SetStateAction<string | null>>;
+}) {
+  const target = RECRUITER_WEEKLY_WEBINAR_TARGET;
+
+  return (
+    <div className="space-y-2 max-h-[min(280px,35vh)] overflow-y-auto pr-1 border-t border-white/40 pt-3">
+      <p className="text-[10px] uppercase tracking-wide text-slate-500 font-semibold px-0.5">
+        Ranked by % of weekly target
+      </p>
+      {entries.map((e) => (
+        <button
+          key={e.key}
+          type="button"
+          onClick={() => onSelect((prev) => (prev === e.key ? null : e.key))}
+          className={`w-full flex items-center gap-3 rounded-xl border px-3 py-2 text-left transition ${
+            selectedKey === e.key
+              ? 'border-[#005EB8]/50 bg-[#005EB8]/8 ring-1 ring-[#005EB8]/25'
+              : 'border-white/50 bg-white/40 hover:bg-white/65'
+          }`}
+        >
+          <span
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold border ${rankBadgeClass(e.rank)}`}
+          >
+            {e.rank}
+          </span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-slate-800 truncate">{e.displayName}</p>
+            <p className="text-[10px] text-slate-500 tabular-nums">
+              {e.bookings} of {target} scheduled · {e.remaining} to go
+            </p>
+          </div>
+          <div className="shrink-0 text-right tabular-nums">
+            <p className={`text-xs font-bold ${e.hitTarget ? 'text-emerald-700' : 'text-slate-800'}`}>
+              {e.targetPct}%
+            </p>
+            {e.hitTarget && <p className="text-[9px] text-emerald-600 font-medium">Target hit</p>}
+          </div>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -825,19 +1064,30 @@ function LeaderboardRow({
 }
 
 function RecruiterStatsTable({
-  entries,
+  tab,
+  performanceEntries,
+  targetEntries,
   selectedKey,
   onSelect,
 }: {
-  entries: RecruiterLeaderboardEntry[];
+  tab: LeaderboardTab;
+  performanceEntries: RecruiterLeaderboardEntry[];
+  targetEntries: RecruiterWeeklyTargetEntry[];
   selectedKey: string | null;
   onSelect: React.Dispatch<React.SetStateAction<string | null>>;
 }) {
+  const isTarget = tab === 'weeklyTarget';
+  const target = RECRUITER_WEEKLY_WEBINAR_TARGET;
+
   return (
     <div className={`${glassCard} overflow-hidden`}>
       <div className="px-4 py-2.5 border-b border-white/50 bg-white/30">
         <p className="text-sm font-semibold text-slate-800">Recruiter detail</p>
-        <p className="text-[11px] text-slate-500">Showed = marked watched · Less = not full watch</p>
+        <p className="text-[11px] text-slate-500">
+          {isTarget
+            ? `${target} scheduled-on webinars per week · target % = booked ÷ ${target}`
+            : 'Showed = marked watched · Less = not full watch'}
+        </p>
       </div>
       <div className="overflow-auto max-h-[min(50vh,480px)]">
         <table className="min-w-full text-xs text-slate-800">
@@ -847,39 +1097,79 @@ function RecruiterStatsTable({
               <th className="px-3 py-2">Recruiter</th>
               <th className="px-3 py-2">Data file</th>
               <th className="px-3 py-2 text-right">Booked</th>
-              <th className="px-3 py-2 text-right">Showed</th>
-              <th className="px-3 py-2 text-right">Full</th>
-              <th className="px-3 py-2 text-right">Less</th>
-              <th className="px-3 py-2 text-right">Showed %</th>
-              <th className="px-3 py-2 text-right">Full %</th>
+              {isTarget ? (
+                <>
+                  <th className="px-3 py-2 text-right">Target</th>
+                  <th className="px-3 py-2 text-right">Target %</th>
+                  <th className="px-3 py-2 text-right">To go</th>
+                </>
+              ) : (
+                <>
+                  <th className="px-3 py-2 text-right">Showed</th>
+                  <th className="px-3 py-2 text-right">Full</th>
+                  <th className="px-3 py-2 text-right">Less</th>
+                  <th className="px-3 py-2 text-right">Showed %</th>
+                  <th className="px-3 py-2 text-right">Full %</th>
+                </>
+              )}
             </tr>
           </thead>
           <tbody>
-            {entries.map((e) => (
-              <tr
-                key={e.key}
-                onClick={() => onSelect((prev) => (prev === e.key ? null : e.key))}
-                className={`border-b border-white/30 cursor-pointer transition ${
-                  selectedKey === e.key ? 'bg-[#005EB8]/10' : 'hover:bg-white/45'
-                }`}
-              >
-                <td className="px-3 py-2">
-                  <span
-                    className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold border ${rankBadgeClass(e.rank)}`}
+            {isTarget
+              ? targetEntries.map((e) => (
+                  <tr
+                    key={e.key}
+                    onClick={() => onSelect((prev) => (prev === e.key ? null : e.key))}
+                    className={`border-b border-white/30 cursor-pointer transition ${
+                      selectedKey === e.key ? 'bg-[#005EB8]/10' : 'hover:bg-white/45'
+                    }`}
                   >
-                    {e.rank}
-                  </span>
-                </td>
-                <td className="px-3 py-2 font-medium">{e.displayName}</td>
-                <td className="px-3 py-2 text-slate-600">{e.team}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{e.bookings}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{e.watchedYes}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-emerald-800">{e.full}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-slate-600">{e.watchedLess}</td>
-                <td className="px-3 py-2 text-right tabular-nums font-medium">{e.showedPct}%</td>
-                <td className="px-3 py-2 text-right tabular-nums font-medium">{e.fullPct}%</td>
-              </tr>
-            ))}
+                    <td className="px-3 py-2">
+                      <span
+                        className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold border ${rankBadgeClass(e.rank)}`}
+                      >
+                        {e.rank}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 font-medium">{e.displayName}</td>
+                    <td className="px-3 py-2 text-slate-600">{e.team}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{e.bookings}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{target}</td>
+                    <td
+                      className={`px-3 py-2 text-right tabular-nums font-semibold ${
+                        e.hitTarget ? 'text-emerald-700' : ''
+                      }`}
+                    >
+                      {e.targetPct}%
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-600">{e.remaining}</td>
+                  </tr>
+                ))
+              : performanceEntries.map((e) => (
+                  <tr
+                    key={e.key}
+                    onClick={() => onSelect((prev) => (prev === e.key ? null : e.key))}
+                    className={`border-b border-white/30 cursor-pointer transition ${
+                      selectedKey === e.key ? 'bg-[#005EB8]/10' : 'hover:bg-white/45'
+                    }`}
+                  >
+                    <td className="px-3 py-2">
+                      <span
+                        className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold border ${rankBadgeClass(e.rank)}`}
+                      >
+                        {e.rank}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 font-medium">{e.displayName}</td>
+                    <td className="px-3 py-2 text-slate-600">{e.team}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{e.bookings}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{e.watchedYes}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-emerald-800">{e.full}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-600">{e.watchedLess}</td>
+                    <td className="px-3 py-2 text-right tabular-nums font-medium">{e.showedPct}%</td>
+                    <td className="px-3 py-2 text-right tabular-nums font-medium">{e.fullPct}%</td>
+                  </tr>
+                ))}
           </tbody>
         </table>
       </div>

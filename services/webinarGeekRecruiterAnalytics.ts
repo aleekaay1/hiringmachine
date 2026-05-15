@@ -38,6 +38,39 @@ export type RecruiterLeaderboardEntry = RecruiterBookingProfile & {
   fullPct: number;
 };
 
+/** Weekly scheduled-on target per recruiter (Friday–Thursday week). */
+export const RECRUITER_WEEKLY_WEBINAR_TARGET = 30;
+
+export type RecruiterWeeklyTargetEntry = RecruiterBookingProfile & {
+  rank: number;
+  target: number;
+  /** Bookings as % of weekly target (can exceed 100). */
+  targetPct: number;
+  remaining: number;
+  hitTarget: boolean;
+};
+
+export function buildRecruiterWeeklyTargetLeaderboard(
+  profiles: RecruiterBookingProfile[],
+  target: number = RECRUITER_WEEKLY_WEBINAR_TARGET,
+): RecruiterWeeklyTargetEntry[] {
+  const sorted = [...profiles].sort((a, b) => {
+    const pctA = target > 0 ? a.bookings / target : 0;
+    const pctB = target > 0 ? b.bookings / target : 0;
+    if (pctB !== pctA) return pctB - pctA;
+    if (b.bookings !== a.bookings) return b.bookings - a.bookings;
+    return a.displayName.localeCompare(b.displayName);
+  });
+  return sorted.map((p, i) => ({
+    ...p,
+    rank: i + 1,
+    target,
+    targetPct: pctRounded(p.bookings, target),
+    remaining: Math.max(0, target - p.bookings),
+    hitTarget: p.bookings >= target,
+  }));
+}
+
 export function pctRounded(part: number, whole: number): number {
   if (!whole || whole <= 0) return 0;
   return Math.round((100 * part) / whole);
