@@ -269,6 +269,16 @@ export type CalendlyProbePayload = {
   }>;
 };
 
+export function isCalendlyProbePayload(json: unknown): json is CalendlyProbePayload {
+  if (!json || typeof json !== 'object') return false;
+  const o = json as Record<string, unknown>;
+  return (
+    o.calendly_probe === true &&
+    Array.isArray(o.events) &&
+    typeof o.events_total_in_range === 'number'
+  );
+}
+
 /** Log Calendly probe payload to the browser console (tables + summary). */
 export function logCalendlyProbeToConsole(payload: CalendlyProbePayload): void {
   const log = typeof console !== 'undefined' ? console : { log: () => {}, table: () => {}, group: () => {}, groupEnd: () => {} };
@@ -286,7 +296,8 @@ export function logCalendlyProbeToConsole(payload: CalendlyProbePayload): void {
     log.log('Event types on account:', payload.event_types.map((t) => t.name));
   }
   log.log('Unique scheduled event names:', payload.unique_event_type_names);
-  const liveRows = payload.events.filter((e) => e.matches_live_name);
+  const events = Array.isArray(payload.events) ? payload.events : [];
+  const liveRows = events.filter((e) => e.matches_live_name);
   log.table(
     liveRows.map((e) => ({
       date: e.toronto_date,
@@ -325,15 +336,16 @@ export async function fetchCalendlyProbe(
     console.error('[Live sessions] Calendly probe failed', res.status, err, json);
     return { ok: false, error: `${err} (HTTP ${res.status})` };
   }
-  if (json.calendly_probe !== true) {
-    const hint =
-      'Server returned dashboard data instead of probe — deploy the latest integrations-zoom-calendly Edge Function.';
+  if (!isCalendlyProbePayload(json)) {
+    const hasDashboard = Array.isArray(json.past_meetings);
+    const hint = hasDashboard
+      ? 'Server returned the dashboard payload, not Calendly probe. Deploy integrations-zoom-calendly (see scripts/deploy-supabase-functions.ps1).'
+      : 'Invalid Calendly probe response from server. Deploy integrations-zoom-calendly.';
     console.error('[Live sessions] Calendly probe', hint, json);
     return { ok: false, error: hint };
   }
-  const data = json as unknown as CalendlyProbePayload;
-  logCalendlyProbeToConsole(data);
-  return { ok: true, data };
+  logCalendlyProbeToConsole(json);
+  return { ok: true, data: json };
 }
 
 export async function fetchLiveSessionsDashboard(

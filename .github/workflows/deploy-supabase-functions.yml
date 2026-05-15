@@ -1,0 +1,43 @@
+name: Deploy Supabase Edge Functions
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.90.0
+
+      - name: Deploy all functions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          set -e
+          PROJECT_REF=hlfufjrjztuknioydlut
+          FUNCTIONS=(
+            integrations-zoom-calendly
+            sync-live-session-pipeline
+            integrations-webinar-geek
+            send-email
+            send-candidate-email
+            send-assessment-email
+            send-leadership-assessment-reminders
+            upload-resume
+            hr-dashboard-data
+            hr-rollup-jobs
+            hr-automation-runner
+            email-inbox-sync
+            threecx-call-control
+            pipeline-convert-resume
+          )
+          for fn in "${FUNCTIONS[@]}"; do
+            if [ -f "supabase/functions/$fn/index.ts" ]; then
+              echo "Deploying $fn ..."
+              supabase functions deploy "$fn" --project-ref "$PROJECT_REF"
+            fi
+          done
