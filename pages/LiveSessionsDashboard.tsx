@@ -7,6 +7,7 @@ import {
   fetchCalendlyProbe,
   fetchLiveSessionsDashboard,
   zoomMeetingStartMs,
+  type CalendlyProbePayload,
   type LiveSessionsDashboardPayload,
   type PastMeetingRow,
   type UpcomingMeetingRow,
@@ -54,6 +55,8 @@ const LiveSessionsDashboard: React.FC = () => {
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
   const [calProbeLoading, setCalProbeLoading] = useState(false);
   const [calProbeNote, setCalProbeNote] = useState<string | null>(null);
+  const [calDiag, setCalDiag] = useState<CalendlyProbePayload | null>(null);
+  const [calDiagError, setCalDiagError] = useState<string | null>(null);
 
   const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
     const { data: s } = await supabase.auth.getSession();
@@ -71,10 +74,28 @@ const LiveSessionsDashboard: React.FC = () => {
     check();
   }, []);
 
+  const runCalendlyProbe = useCallback(async (token: string) => {
+    setCalDiagError(null);
+    setCalProbeLoading(true);
+    const probe = await fetchCalendlyProbe(token);
+    setCalProbeLoading(false);
+    if (!probe.ok) {
+      setCalDiag(null);
+      setCalDiagError(probe.error);
+      return null;
+    }
+    setCalDiag(probe.data);
+    setCalProbeNote(
+      `Calendly: ${probe.data.events_total_in_range} events in range, ${probe.data.events_matching_live_name} match live session name, ${probe.data.events_used_for_dashboard} paired to Zoom.`,
+    );
+    return probe.data;
+  }, []);
+
   const load = useCallback(async () => {
     setFetchError(null);
     setSyncSummary(null);
     setSyncError(null);
+    setCalDiagError(null);
     const token = await getFreshAccessToken();
     if (!token) { setFetchError('Not signed in.'); return; }
     setLoading(true);
@@ -82,7 +103,13 @@ const LiveSessionsDashboard: React.FC = () => {
     setLoading(false);
     if (result.ok === false) { setData(null); setFetchError(result.error); return; }
     setData(result.data);
-  }, [getFreshAccessToken]);
+    if (result.data.calendly_configured) {
+      void runCalendlyProbe(token);
+    } else {
+      setCalDiag(null);
+      setCalProbeNote('Calendly token not visible to Edge Function — check CALENDLY_API_TOKEN secret and redeploy.');
+    }
+  }, [getFreshAccessToken, runCalendlyProbe]);
 
   useEffect(() => { if (isAuthenticated) void load(); }, [isAuthenticated, load]);
 
@@ -95,24 +122,13 @@ const LiveSessionsDashboard: React.FC = () => {
   };
 
   const handleCalendlyProbe = async () => {
-    setCalProbeNote(null);
     setFetchError(null);
     const token = await getFreshAccessToken();
     if (!token) {
       setFetchError('Not signed in.');
       return;
     }
-    setCalProbeLoading(true);
-    const result = await fetchCalendlyProbe(token);
-    setCalProbeLoading(false);
-    if (!result.ok) {
-      setFetchError(result.error);
-      return;
-    }
-    const p = result.data;
-    setCalProbeNote(
-      `Calendly probe: ${p.events_matching_live_name} live-named events (${p.events_used_for_dashboard} used on dashboard). Open DevTools → Console for full tables.`,
-    );
+    await runCalendlyProbe(token);
   };
 
   const handleSyncPipeline = async () => {
@@ -202,6 +218,11 @@ const LiveSessionsDashboard: React.FC = () => {
         {syncError   && <Alert tone="red">{syncError}</Alert>}
         {syncSummary && <Alert tone="green">{syncSummary}</Alert>}
         {calProbeNote && <Alert tone="green">{calProbeNote}</Alert>}
+        {calDiagError && <Alert tone="red">{calDiagError}</Alert>}
+
+        {(calDiag || data?.calendly_fetch) && (
+          <CalendlyDiagnosticsPanel probe={calDiag} dashboardFetch={data?.calendly_fetch} configured={!!data?.calendly_configured} />
+        )}
 
         {/* Summary stats */}
         {data && (
@@ -410,8 +431,15 @@ function UpcomingSessionCard({ row, calendlyConfigured, expanded, onToggle }: {
       {expanded && (
         <div className="border-t border-[#e5edf9] px-5 py-5">
           {!calendlyConfigured && <p className="text-sm text-[#9bafc9]">Calendly not connected.</p>}
-          {calendlyConfigured && row.invitees.length === 0 && (
-            <p className="text-sm text-[#9bafc9]">No registrations yet for this session.</p>
+          {calendlyConfigured && !row.calendly && (
+            <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+              No Calendly event matched this Zoom date — check Calendly diagnostics above (event name must include &quot;Live Online Career Session&quot;).
+            </p>
+          )}
+          {calendlyConfigured && row.calendly && row.invitees.length === 0 && (
+            <p className="text-sm text-[#9bafc9]">
+              Calendly event matched ({row.calendly.name ?? 'session'}) but no active invitees yet.
+            </p>
           )}
           {calendlyConfigured && row.invitees.length > 0 && (
             <div>
@@ -527,6 +555,86 @@ function SectionHeading({ icon, label }: { icon: React.ReactNode; label: string 
     <h2 className="text-xs font-bold uppercase tracking-widest text-[#7a8fa8] flex items-center gap-2">
       {icon} {label}
     </h2>
+  );
+}
+
+function CalendlyDiagnosticsPanel({
+  probe,
+  dashboardFetch,
+  configured,
+}: {
+  probe: CalendlyProbePayload | null;
+  dashboardFetch?: LiveSessionsDashboardPayload['calendly_fetch'];
+  configured: boolean;
+}) {
+  const stats = probe?.fetch_stats ?? dashboardFetch?.fetch_stats;
+  const eventTypes = probe?.event_types ?? dashboardFetch?.event_types ?? [];
+  const liveEvents = probe?.events.filter((e) => e.matches_live_name) ?? [];
+
+  return (
+    <div className="rounded-2xl border border-[#d6e6f9] bg-[#f8fbff] px-4 py-4 space-y-3 text-sm">
+      <p className="font-bold text-[#0B1B34]">Calendly diagnostics</p>
+      {!configured && (
+        <p className="text-amber-800">Edge Function reports Calendly not configured (no token).</p>
+      )}
+      {stats && (
+        <p className="text-[#5a6f8a]">
+          API fetch: <strong>{stats.user_scope_count}</strong> user-scoped +{' '}
+          <strong>{stats.organization_scope_count}</strong> org-scoped →{' '}
+          <strong>{stats.deduped_count}</strong> unique events
+          {probe?.organization_uri ? ' (team org connected)' : ''}.
+        </p>
+      )}
+      {probe && (
+        <p className="text-[#5a6f8a]">
+          Live session name match: <strong>{probe.events_matching_live_name}</strong> · paired to Zoom:{' '}
+          <strong>{probe.events_used_for_dashboard}</strong>
+        </p>
+      )}
+      {eventTypes.length > 0 && (
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-wide text-[#7a8fa8] mb-1">Event types on account</p>
+          <ul className="list-disc pl-5 text-[#5a6f8a] space-y-0.5 max-h-28 overflow-y-auto">
+            {eventTypes.map((t) => (
+              <li key={t.uri || t.name}>{t.name}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {liveEvents.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-xs">
+            <thead>
+              <tr className="text-left text-[#7a8fa8]">
+                <th className="pr-3 py-1">Date</th>
+                <th className="pr-3 py-1">Event</th>
+                <th className="pr-3 py-1 text-right">Invitees</th>
+              </tr>
+            </thead>
+            <tbody>
+              {liveEvents.slice(0, 15).map((e) => (
+                <tr key={e.uri} className="border-t border-[#e5edf9]">
+                  <td className="pr-3 py-1.5 tabular-nums">{e.toronto_date}</td>
+                  <td className="pr-3 py-1.5">{e.name}</td>
+                  <td className="pr-3 py-1.5 text-right tabular-nums font-semibold">{e.invitee_count_active}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {probe && liveEvents.length === 0 && stats && stats.deduped_count > 0 && (
+        <p className="text-amber-800">
+          Calendly returned events but none matched the live session name. Event types on your account are listed above — adjust{' '}
+          <code className="text-xs">CALENDLY_EVENT_NAME_KEYWORDS</code> in Supabase if needed.
+        </p>
+      )}
+      {probe && stats?.deduped_count === 0 && (
+        <p className="text-amber-800">
+          Zero scheduled events returned. Confirm the PAT is for the calendar that owns &quot;Live Online Career Session&quot; bookings.
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -301,7 +301,14 @@ function zoomMeetingKey(m: ZoomRawMeeting): string {
 }
 
 // ─── Calendly helpers ──────────────────────────────────────────────────────
-type CalEvent = { uri?: string; name?: string; start_time?: string; end_time?: string; status?: string };
+type CalEvent = {
+  uri?: string;
+  name?: string;
+  event_type?: string;
+  start_time?: string;
+  end_time?: string;
+  status?: string;
+};
 type CalInvitee = {
   uri: string; event_uri: string; email: string; name: string;
   status: string; no_show: boolean; canceled: boolean;
@@ -317,12 +324,20 @@ async function calendlyGet(token: string, path: string): Promise<unknown> {
   return res.json();
 }
 
-async function calendlyListEvents(token: string, userUri: string, from: Date, to: Date): Promise<CalEvent[]> {
+async function calendlyListScheduledEventsPaged(
+  token: string,
+  scope: 'user' | 'organization',
+  scopeUri: string,
+  from: Date,
+  to: Date,
+): Promise<CalEvent[]> {
   const all: CalEvent[] = [];
-  let nextPath: string | null =
-    `/scheduled_events?user=${encodeURIComponent(userUri)}` +
-    `&min_start_time=${encodeURIComponent(from.toISOString())}` +
+  const scopeKey = scope === 'organization' ? 'organization' : 'user';
+  const baseQuery =
+    `min_start_time=${encodeURIComponent(from.toISOString())}` +
     `&max_start_time=${encodeURIComponent(to.toISOString())}&count=100`;
+  let nextPath: string | null =
+    `/scheduled_events?${scopeKey}=${encodeURIComponent(scopeUri)}&${baseQuery}`;
   let safety = 0;
   while (nextPath && safety < 50) {
     safety++;
@@ -333,13 +348,16 @@ async function calendlyListEvents(token: string, userUri: string, from: Date, to
     all.push(...(body.collection ?? []));
     const pag = body.pagination;
     if (pag?.next_page) {
-      try { const u = new URL(pag.next_page); nextPath = u.pathname + u.search; }
-      catch { nextPath = null; }
+      try {
+        const u = new URL(pag.next_page);
+        nextPath = u.pathname + u.search;
+      } catch {
+        nextPath = null;
+      }
     } else if (pag?.next_page_token) {
       nextPath =
-        `/scheduled_events?user=${encodeURIComponent(userUri)}` +
-        `&min_start_time=${encodeURIComponent(from.toISOString())}` +
-        `&max_start_time=${encodeURIComponent(to.toISOString())}&count=100&page_token=${encodeURIComponent(pag.next_page_token)}`;
+        `/scheduled_events?${scopeKey}=${encodeURIComponent(scopeUri)}&${baseQuery}` +
+        `&page_token=${encodeURIComponent(pag.next_page_token)}`;
     } else {
       nextPath = null;
     }
@@ -347,12 +365,139 @@ async function calendlyListEvents(token: string, userUri: string, from: Date, to
   return all;
 }
 
+async function calendlyResolveEventName(
+  token: string,
+  ev: CalEvent,
+  cache: Map<string, string>,
+): Promise<string> {
+  const direct = String(ev.name ?? '').trim();
+  if (direct) return direct;
+  const et = String(ev.event_type ?? '').trim();
+  if (!et) return '';
+  if (cache.has(et)) return cache.get(et) ?? '';
+  try {
+    const uuid = et.replace(/\/$/, '').split('/').pop() ?? '';
+    const body = (await calendlyGet(token, `/event_types/${encodeURIComponent(uuid)}`)) as {
+      resource?: { name?: string };
+    };
+    const n = String(body.resource?.name ?? '').trim();
+    cache.set(et, n);
+    return n;
+  } catch (e) {
+    console.warn('[calendly] event_type name lookup failed', et, e instanceof Error ? e.message : String(e));
+    return '';
+  }
+}
+
+type CalendlyFetchBundle = {
+  events: CalEvent[];
+  userUri: string;
+  organizationUri: string | null;
+  fetch_stats: { user_scope_count: number; organization_scope_count: number; deduped_count: number };
+  event_types: Array<{ uri: string; name: string }>;
+  calendly_user: { name?: string; email?: string; uri?: string; scheduling_url?: string };
+};
+
+/** User + organization scheduled events (team Calendly often only returns org scope). */
+async function calendlyFetchAllScheduledEvents(
+  token: string,
+  from: Date,
+  to: Date,
+): Promise<CalendlyFetchBundle> {
+  const calUserRaw = (await calendlyGet(token, '/users/me')) as {
+    resource?: {
+      uri?: string;
+      name?: string;
+      email?: string;
+      scheduling_url?: string;
+      current_organization?: string;
+    };
+  };
+  const userUri = calUserRaw.resource?.uri;
+  if (!userUri) throw new Error('Calendly /users/me did not return resource.uri');
+  const organizationUri = calUserRaw.resource?.current_organization?.trim() || null;
+
+  const byUri = new Map<string, CalEvent>();
+  let userScopeCount = 0;
+  let orgScopeCount = 0;
+
+  for (const ev of await calendlyListScheduledEventsPaged(token, 'user', userUri, from, to)) {
+    if (!ev.uri) continue;
+    byUri.set(ev.uri, ev);
+    userScopeCount++;
+  }
+  if (organizationUri) {
+    for (const ev of await calendlyListScheduledEventsPaged(token, 'organization', organizationUri, from, to)) {
+      if (!ev.uri) continue;
+      byUri.set(ev.uri, ev);
+      orgScopeCount++;
+    }
+  }
+
+  const nameCache = new Map<string, string>();
+  const events: CalEvent[] = [];
+  for (const ev of byUri.values()) {
+    const resolvedName = await calendlyResolveEventName(token, ev, nameCache);
+    events.push({ ...ev, name: resolvedName || ev.name });
+  }
+
+  const eventTypes: Array<{ uri: string; name: string }> = [];
+  try {
+    const typesPath = organizationUri
+      ? `/event_types?organization=${encodeURIComponent(organizationUri)}&count=100`
+      : `/event_types?user=${encodeURIComponent(userUri)}&count=100`;
+    const typesBody = (await calendlyGet(token, typesPath)) as {
+      collection?: Array<{ uri?: string; name?: string }>;
+    };
+    for (const t of typesBody.collection ?? []) {
+      const name = String(t.name ?? '').trim();
+      if (name) eventTypes.push({ uri: String(t.uri ?? ''), name });
+    }
+  } catch (e) {
+    console.warn('[calendly] event_types list failed', e instanceof Error ? e.message : String(e));
+  }
+
+  console.log(
+    '[calendly] scheduled_events — user:',
+    userScopeCount,
+    'org:',
+    orgScopeCount,
+    'deduped:',
+    events.length,
+    'event_types:',
+    eventTypes.length,
+  );
+
+  return {
+    events,
+    userUri,
+    organizationUri,
+    fetch_stats: {
+      user_scope_count: userScopeCount,
+      organization_scope_count: orgScopeCount,
+      deduped_count: events.length,
+    },
+    event_types: eventTypes,
+    calendly_user: {
+      name: calUserRaw.resource?.name,
+      email: calUserRaw.resource?.email,
+      uri: userUri,
+      scheduling_url: calUserRaw.resource?.scheduling_url,
+    },
+  };
+}
+
 function calendlyEventNameKeywords(): string[] {
   const raw = Deno.env.get('CALENDLY_EVENT_NAME_KEYWORDS')?.trim();
   if (raw) {
     return raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   }
-  return ['live career overview session', 'live online career session'];
+  return [
+    'live online career session',
+    'live career overview session',
+    'live career overview',
+    'career overview session',
+  ];
 }
 
 function calendlyEventMatchesLiveSession(eventName: string): boolean {
@@ -458,14 +603,8 @@ async function buildCalendlyProbePayload(
   const to = new Date(nowMs + lookaheadDays * 86400_000);
   const requireTueWed = (Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '1').trim() !== '0';
 
-  const calUserRaw = (await calendlyGet(token, '/users/me')) as {
-    resource?: { uri?: string; name?: string; email?: string; scheduling_url?: string };
-  };
-  const calUserUri = calUserRaw.resource?.uri;
-  if (!calUserUri) throw new Error('Calendly /users/me did not return resource.uri');
-
-  const allCalEvents = await calendlyListEvents(token, calUserUri, from, to);
-  console.log('[calendly_probe] scheduled_events in range:', allCalEvents.length);
+  const bundle = await calendlyFetchAllScheduledEvents(token, from, to);
+  const allCalEvents = bundle.events;
 
   const events: CalendlyProbeEventRow[] = [];
   for (const ev of allCalEvents) {
@@ -517,12 +656,10 @@ async function buildCalendlyProbePayload(
     ok: true,
     calendly_probe: true,
     generated_at: new Date().toISOString(),
-    calendly_user: {
-      name: calUserRaw.resource?.name,
-      email: calUserRaw.resource?.email,
-      uri: calUserUri,
-      scheduling_url: calUserRaw.resource?.scheduling_url,
-    },
+    calendly_user: bundle.calendly_user,
+    organization_uri: bundle.organizationUri,
+    fetch_stats: bundle.fetch_stats,
+    event_types: bundle.event_types,
     range: { from: from.toISOString(), to: to.toISOString(), lookback_days: lookbackDays, lookahead_days: lookaheadDays },
     event_name_keywords: calendlyEventNameKeywords(),
     require_tue_wed: requireTueWed,
@@ -675,15 +812,19 @@ Deno.serve(async (req) => {
     let calUser: { name?: string; email?: string } | null = null;
     const calendlyFilterLog: Array<{ name: string; start_time: string; reason: string }> = [];
 
-    if (calendlyEnabled && calendlyToken) {
-      const calUserRaw = (await calendlyGet(calendlyToken, '/users/me')) as { resource?: { uri?: string; name?: string; email?: string } };
-      calUser = { name: calUserRaw.resource?.name, email: calUserRaw.resource?.email };
-      const calUserUri = calUserRaw.resource?.uri;
-      if (!calUserUri) throw new Error('Calendly /users/me did not return resource.uri');
+    let calendlyFetchMeta: Record<string, unknown> | null = null;
 
+    if (calendlyEnabled && calendlyToken) {
       const from = new Date(nowMs - lookbackDays * 86400_000);
       const to   = new Date(nowMs + lookaheadDays * 86400_000);
-      const allCalEvents = await calendlyListEvents(calendlyToken, calUserUri, from, to);
+      const bundle = await calendlyFetchAllScheduledEvents(calendlyToken, from, to);
+      calUser = { name: bundle.calendly_user.name, email: bundle.calendly_user.email };
+      const allCalEvents = bundle.events;
+      calendlyFetchMeta = {
+        fetch_stats: bundle.fetch_stats,
+        organization_uri: bundle.organizationUri,
+        event_types: bundle.event_types,
+      };
       const requireTueWed = (Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '1').trim() !== '0';
 
       for (const ev of allCalEvents) {
@@ -943,11 +1084,13 @@ Deno.serve(async (req) => {
       past_meetings: combinedPast,
       upcoming_meetings: combinedUpcoming,
       calendly_events_in_range: calEventsByDate.size,
+      ...(calendlyFetchMeta ? { calendly_fetch: calendlyFetchMeta } : {}),
       ...(includeCalDebug && calendlyEnabled && calendlyToken
         ? {
             calendly_debug: {
               event_name_keywords: calendlyEventNameKeywords(),
               require_tue_wed: (Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '1').trim() !== '0',
+              ...(calendlyFetchMeta ?? {}),
               events_matched_by_date: [...calEventsByDate.entries()].map(([date, ev]) => ({
                 date,
                 name: ev.name,

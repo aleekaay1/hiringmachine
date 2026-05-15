@@ -189,6 +189,12 @@ export interface LiveSessionsDashboardPayload {
   past_meetings: PastMeetingRow[];
   upcoming_meetings: UpcomingMeetingRow[];
   calendly_events_in_range: number;
+  calendly_fetch?: {
+    fetch_stats: { user_scope_count: number; organization_scope_count: number; deduped_count: number };
+    organization_uri: string | null;
+    event_types: Array<{ uri: string; name: string }>;
+  };
+  calendly_debug?: Record<string, unknown>;
   match_tolerance_minutes?: number;
   archive?: {
     enabled: boolean;
@@ -236,6 +242,9 @@ export type CalendlyProbePayload = {
   calendly_probe: boolean;
   generated_at: string;
   calendly_user: { name?: string; email?: string; uri?: string; scheduling_url?: string };
+  organization_uri?: string | null;
+  fetch_stats?: { user_scope_count: number; organization_scope_count: number; deduped_count: number };
+  event_types?: Array<{ uri: string; name: string }>;
   range: { from: string; to: string; lookback_days: number; lookahead_days: number };
   event_name_keywords: string[];
   require_tue_wed: boolean;
@@ -262,17 +271,23 @@ export type CalendlyProbePayload = {
 
 /** Log Calendly probe payload to the browser console (tables + summary). */
 export function logCalendlyProbeToConsole(payload: CalendlyProbePayload): void {
-  console.group('[Live sessions] Calendly probe');
-  console.log('User:', payload.calendly_user);
-  console.log('Range:', payload.range);
-  console.log('Keywords:', payload.event_name_keywords);
-  console.log('Require Tue/Wed:', payload.require_tue_wed);
-  console.log(
+  const log = typeof console !== 'undefined' ? console : { log: () => {}, table: () => {}, group: () => {}, groupEnd: () => {} };
+  log.group('[Live sessions] Calendly probe');
+  log.log('User:', payload.calendly_user);
+  log.log('Organization URI:', payload.organization_uri ?? '(none)');
+  log.log('Fetch stats:', payload.fetch_stats);
+  log.log('Range:', payload.range);
+  log.log('Keywords:', payload.event_name_keywords);
+  log.log('Require Tue/Wed:', payload.require_tue_wed);
+  log.log(
     `Events in range: ${payload.events_total_in_range} · matching live name: ${payload.events_matching_live_name} · used on dashboard: ${payload.events_used_for_dashboard}`,
   );
-  console.log('Unique Calendly event type names:', payload.unique_event_type_names);
+  if (payload.event_types?.length) {
+    log.log('Event types on account:', payload.event_types.map((t) => t.name));
+  }
+  log.log('Unique scheduled event names:', payload.unique_event_type_names);
   const liveRows = payload.events.filter((e) => e.matches_live_name);
-  console.table(
+  log.table(
     liveRows.map((e) => ({
       date: e.toronto_date,
       name: e.name,
@@ -284,10 +299,10 @@ export function logCalendlyProbeToConsole(payload: CalendlyProbePayload): void {
   );
   for (const e of liveRows.slice(0, 12)) {
     if (e.invitees_sample.length > 0) {
-      console.log(`Invitees sample — ${e.name} (${e.start_time}):`, e.invitees_sample);
+      log.log(`Invitees sample — ${e.name} (${e.start_time}):`, e.invitees_sample);
     }
   }
-  console.groupEnd();
+  log.groupEnd();
 }
 
 export async function fetchCalendlyProbe(
@@ -307,7 +322,14 @@ export async function fetchCalendlyProbe(
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
     const err = (json.error as string) || res.statusText || 'Request failed';
-    return { ok: false, error: err };
+    console.error('[Live sessions] Calendly probe failed', res.status, err, json);
+    return { ok: false, error: `${err} (HTTP ${res.status})` };
+  }
+  if (json.calendly_probe !== true) {
+    const hint =
+      'Server returned dashboard data instead of probe — deploy the latest integrations-zoom-calendly Edge Function.';
+    console.error('[Live sessions] Calendly probe', hint, json);
+    return { ok: false, error: hint };
   }
   const data = json as unknown as CalendlyProbePayload;
   logCalendlyProbeToConsole(data);
@@ -337,11 +359,13 @@ export async function fetchLiveSessionsDashboard(
   const payload = json as unknown as LiveSessionsDashboardPayload & {
     calendly_debug?: Record<string, unknown>;
   };
-  if (payload.calendly_debug) {
-    console.group('[Live sessions] Calendly debug (dashboard fetch)');
-    console.log(payload.calendly_debug);
-    console.groupEnd();
+  if (payload.calendly_debug || payload.calendly_fetch) {
+    console.warn('[Live sessions] Calendly (dashboard fetch)', {
+      configured: payload.calendly_configured,
+      events_matched_dates: payload.calendly_events_in_range,
+      fetch: payload.calendly_fetch,
+      debug: payload.calendly_debug,
+    });
   }
-  const { calendly_debug: _dbg, ...rest } = payload;
-  return { ok: true, data: reconcileLiveSessionsPastUpcoming(rest) };
+  return { ok: true, data: reconcileLiveSessionsPastUpcoming(payload) };
 }
