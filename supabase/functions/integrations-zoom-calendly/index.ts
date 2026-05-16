@@ -119,15 +119,31 @@ function zoomTopicMatchesLiveSession(topic: string): boolean {
   return ZOOM_TOPIC_KEYWORDS.some((k) => t.includes(k));
 }
 
-function isTargetLiveMeeting(m: ZoomRawMeeting, dt: DateTime | null): SlotDef | null {
+/**
+ * True when this Zoom row is our Wednesday live session PMI (85950683062) or a matching topic.
+ * PMI topics are often "Personal Meeting Room" — do not require live-session keywords on topic.
+ */
+function isTargetLiveMeeting(m: ZoomRawMeeting, dt: DateTime | null, toleranceMin = 20): SlotDef | null {
   if (!dt?.isValid) return null;
   const id = meetingIdOf(m);
   const topic = String(m.topic ?? '');
   const target = TARGET_MEETINGS.find((t) => t.id === id);
-  if (!target) return null;
-  if (dt.weekday !== target.weekday) return null;
-  if (!zoomTopicMatchesLiveSession(topic)) return null;
-  return target.slot;
+  if (!target || dt.weekday !== target.weekday) return null;
+
+  const tol = Math.max(toleranceMin, 45);
+  const inSlot = slotForDt(dt, tol) !== null || calendlySlotDistanceMinutes(dt) <= tol;
+  if (inSlot) return target.slot;
+
+  if (zoomTopicMatchesLiveSession(topic)) return target.slot;
+
+  if (isKnownPmiTopic(topic)) {
+    const slotStart = target.slot.startH * 60 + target.slot.startM;
+    const dtMin = dt.hour * 60 + dt.minute;
+    const distance = Math.abs(dtMin - slotStart);
+    const maxDist = Number(Deno.env.get('PMI_FALLBACK_MAX_MINUTES_FROM_SLOT') ?? '180');
+    if (distance <= Math.max(30, Math.min(480, maxDist))) return target.slot;
+  }
+  return null;
 }
 
 function calendlySlotDistanceMinutes(dt: DateTime): number {
@@ -295,6 +311,86 @@ async function zoomParticipants(token: string, uuid: string): Promise<ZoomPartic
       return [];
     }
   }
+}
+
+/** Past occurrences of a recurring PMI (needs meeting:read:list_past_instances:admin). */
+async function zoomPastInstancesForMeetingId(token: string, meetingId: string): Promise<ZoomRawMeeting[]> {
+  const all: ZoomRawMeeting[] = [];
+  let nextPageToken = '';
+  let safety = 0;
+  const base = `/past_meetings/${encodeURIComponent(meetingId)}/instances`;
+  do {
+    safety++;
+    const qs = `page_size=100${nextPageToken ? `&next_page_token=${encodeURIComponent(nextPageToken)}` : ''}`;
+    try {
+      const body = (await zoomGet(token, `${base}?${qs}`)) as {
+        meetings?: ZoomRawMeeting[];
+        next_page_token?: string;
+      };
+      for (const m of body.meetings ?? []) all.push(m);
+      nextPageToken = String(body.next_page_token ?? '').trim();
+    } catch (e) {
+      console.warn(
+        `[zoom] past instances failed for meeting ${meetingId}:`,
+        e instanceof Error ? e.message : String(e),
+      );
+      break;
+    }
+  } while (nextPageToken && safety < 15);
+  return all;
+}
+
+function pickZoomInstanceForTorontoDate(
+  instances: ZoomRawMeeting[],
+  dateKey: string,
+  targetMinutes: number | null,
+): ZoomRawMeeting | null {
+  const onDate = instances.filter((m) => {
+    const ms = parseZoomStartMs(m);
+    if (!Number.isFinite(ms)) return false;
+    const dt = DateTime.fromMillis(ms, { zone: TZ });
+    return dt.isValid && isoDate(dt) === dateKey;
+  });
+  if (onDate.length === 0) return null;
+  if (onDate.length === 1) return onDate[0];
+  if (targetMinutes == null) {
+    onDate.sort((a, b) => parseZoomStartMs(b) - parseZoomStartMs(a));
+    return onDate[0];
+  }
+  let best = onDate[0];
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (const m of onDate) {
+    const ms = parseZoomStartMs(m);
+    const dt = Number.isFinite(ms) ? DateTime.fromMillis(ms, { zone: TZ }) : null;
+    if (!dt?.isValid) continue;
+    const dist = Math.abs(dt.hour * 60 + dt.minute - targetMinutes);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = m;
+    }
+  }
+  return best;
+}
+
+async function zoomParticipantsForSession(
+  token: string,
+  meeting: ZoomRawMeeting,
+  dateKey: string,
+  targetMinutes: number | null,
+): Promise<ZoomParticipant[]> {
+  const uuid = String(meeting.uuid ?? '').trim();
+  if (uuid) {
+    const primary = await zoomParticipants(token, uuid);
+    if (primary.length > 0) return primary;
+  }
+  const meetingId = meetingIdOf(meeting);
+  if (!meetingId) return [];
+  const instances = await zoomPastInstancesForMeetingId(token, meetingId);
+  const alt = pickZoomInstanceForTorontoDate(instances, dateKey, targetMinutes);
+  const altUuid = String(alt?.uuid ?? '').trim();
+  if (!altUuid || altUuid === uuid) return [];
+  console.log(`[zoom] retry participants via past instance uuid for ${dateKey}:`, altUuid);
+  return zoomParticipants(token, altUuid);
 }
 
 // ─── Zoom time parsing ─────────────────────────────────────────────────────
@@ -855,12 +951,12 @@ Deno.serve(async (req) => {
       if (ms < nowMs) {
         if (dt?.isValid && minPastDate.isValid && dt < minPastDate) continue;
         // Past: keep only configured recurring live meetings.
-        const slot = isTargetLiveMeeting(m, dt);
+        const slot = isTargetLiveMeeting(m, dt, slotToleranceMin);
         if (slot) pastMeetingCandidates.push(m);
       }
       else {
         // Upcoming: keep only configured recurring live meetings.
-        const slot = isTargetLiveMeeting(m, dt);
+        const slot = isTargetLiveMeeting(m, dt, slotToleranceMin);
         if (slot) upcomingMeetings.push(m);
       }
     }
@@ -953,6 +1049,32 @@ Deno.serve(async (req) => {
       candidatesByDate.set(dateKey, list);
     }
 
+    // Calendly dates with no Zoom row in /users/meetings — resolve PMI past instance by meeting id.
+    const pastInstancesCache = new Map<string, ZoomRawMeeting[]>();
+    if (calendlyEnabled) {
+      for (const [dateKey, calEv] of calEventsByDate.entries()) {
+        if (!calEv.start_time || candidatesByDate.has(dateKey)) continue;
+        const calStart = DateTime.fromISO(calEv.start_time, { zone: TZ });
+        if (!calStart.isValid || calStart.toMillis() >= nowMs) continue;
+        const targetMinutes = calStart.hour * 60 + calStart.minute;
+        for (const target of TARGET_MEETINGS) {
+          let instances = pastInstancesCache.get(target.id);
+          if (!instances) {
+            instances = await zoomPastInstancesForMeetingId(zoomToken, target.id);
+            pastInstancesCache.set(target.id, instances);
+          }
+          const picked = pickZoomInstanceForTorontoDate(instances, dateKey, targetMinutes);
+          if (picked) {
+            const list = candidatesByDate.get(dateKey) ?? [];
+            list.push(picked);
+            candidatesByDate.set(dateKey, list);
+            console.log(`[zoom] past instance for ${dateKey} from PMI ${target.id}:`, picked.uuid);
+            break;
+          }
+        }
+      }
+    }
+
     const selectedPastMeetings: ZoomRawMeeting[] = [];
     for (const [dateKey, list] of candidatesByDate.entries()) {
       if (list.length === 1) {
@@ -1001,11 +1123,23 @@ Deno.serve(async (req) => {
       const duration = Number(m.duration ?? 0);
       const host     = String((m as { host_email?: string }).host_email || zoomHostEmail);
       const startDt  = Number.isFinite(startMs) ? DateTime.fromMillis(startMs, { zone: TZ }) : null;
-      const slot     = isTargetLiveMeeting(m, startDt);
+      const slot     = isTargetLiveMeeting(m, startDt, slotToleranceMin);
       const dateKey  = startDt ? isoDate(startDt) : '';
+      const calEvForParticipants = calEventsByDate.get(dateKey) ?? null;
+      const calStartForParticipants = calEvForParticipants?.start_time
+        ? DateTime.fromISO(calEvForParticipants.start_time, { zone: TZ })
+        : null;
+      const targetMinutesForParticipants = calStartForParticipants?.isValid
+        ? calStartForParticipants.hour * 60 + calStartForParticipants.minute
+        : (startDt?.isValid ? startDt.hour * 60 + startDt.minute : null);
 
       // Zoom participants (who actually joined)
-      const participants = uuid ? await zoomParticipants(zoomToken, uuid) : [];
+      const participants = await zoomParticipantsForSession(
+        zoomToken,
+        m,
+        dateKey,
+        targetMinutesForParticipants,
+      );
 
       // Build fast lookup structures
       // Email map: normalized email → participant row
@@ -1123,7 +1257,7 @@ Deno.serve(async (req) => {
       const startMs  = parseZoomStartMs(m);
       const topic    = String(m.topic ?? '');
       const startDt  = Number.isFinite(startMs) ? DateTime.fromMillis(startMs, { zone: TZ }) : null;
-      const slot     = isTargetLiveMeeting(m, startDt);
+      const slot     = isTargetLiveMeeting(m, startDt, slotToleranceMin);
       const dateKey  = startDt ? isoDate(startDt) : '';
       const calEv    = calEventsByDate.get(dateKey) ?? null;
       const invitees = activeCalendlyInvitees(calInviteesCache, calEv?.uri)
@@ -1181,7 +1315,104 @@ Deno.serve(async (req) => {
         };
 
         if (calMs < nowMs) {
-          if (zoomPastDates.has(dateKey)) continue;
+          if (zoomPastDates.has(dateKey)) {
+            const existing = combinedPast.find((r) => {
+              const calDt = r.calendly?.start_time
+                ? DateTime.fromISO(r.calendly.start_time, { zone: TZ })
+                : null;
+              if (calDt?.isValid && isoDate(calDt) === dateKey) return true;
+              const ms = r.zoom.start_at_ms;
+              const zoomDt = typeof ms === 'number' && Number.isFinite(ms)
+                ? DateTime.fromMillis(ms, { zone: TZ })
+                : null;
+              return zoomDt?.isValid ? isoDate(zoomDt) === dateKey : false;
+            });
+            const needsZoomAttendance = Boolean(
+              existing &&
+              rawInvitees.length > 0 &&
+              (existing.invitees.length === 0 || (existing.stats?.zoom_participant_count ?? 0) === 0),
+            );
+            if (needsZoomAttendance && existing) {
+              const targetMinutes = calStart.hour * 60 + calStart.minute;
+              let zoomMeeting: ZoomRawMeeting | null = null;
+              for (const target of TARGET_MEETINGS) {
+                let instances = pastInstancesCache.get(target.id);
+                if (!instances) {
+                  instances = await zoomPastInstancesForMeetingId(zoomToken, target.id);
+                  pastInstancesCache.set(target.id, instances);
+                }
+                zoomMeeting = pickZoomInstanceForTorontoDate(instances, dateKey, targetMinutes);
+                if (zoomMeeting) break;
+              }
+              const participants = zoomMeeting
+                ? await zoomParticipantsForSession(zoomToken, zoomMeeting, dateKey, targetMinutes)
+                : [];
+              const participantByEmail = new Map<string, ZoomParticipant>();
+              for (const p of participants) {
+                const e = (p.user_email ?? '').trim().toLowerCase();
+                if (e) participantByEmail.set(e, p);
+              }
+              const participantNames = participants
+                .filter((p) => p.name)
+                .map((p) => ({ norm: normName(p.name ?? ''), raw: p }));
+              const findParticipant = (invitee: CalInvitee): ZoomParticipant | null => {
+                if (invitee.email && participantByEmail.has(invitee.email)) {
+                  return participantByEmail.get(invitee.email)!;
+                }
+                if (invitee.name) {
+                  for (const { norm, raw } of participantNames) {
+                    if (samePersonByName(invitee.name, raw.name ?? '') || normName(invitee.name) === norm) {
+                      return raw;
+                    }
+                  }
+                }
+                return null;
+              };
+              const inviteesWithAttendance = rawInvitees.map((i) => {
+                const match = findParticipant(i);
+                return {
+                  email: i.email,
+                  name: i.name,
+                  status: i.status,
+                  no_show: i.no_show,
+                  attended_zoom: match !== null,
+                  match_method: match ? (participantByEmail.has(i.email) ? 'email' : 'name') : null,
+                  join_time: match?.join_time ?? null,
+                  leave_time: match?.leave_time ?? null,
+                  phone_number: i.phone_number ?? null,
+                  timezone: i.timezone ?? null,
+                  invitee_uri: i.uri,
+                  event_uri: i.event_uri,
+                };
+              });
+              const attended = inviteesWithAttendance.filter((i) => i.attended_zoom);
+              existing.invitees = inviteesWithAttendance;
+              existing.calendly = calMeta;
+              existing.participants = participants.map((p) => ({
+                name: p.name,
+                email: (p.user_email ?? '').trim().toLowerCase(),
+                join_time: p.join_time,
+                leave_time: p.leave_time,
+              }));
+              existing.stats = {
+                invited_count: rawInvitees.length,
+                attended_matched_count: attended.length,
+                no_show_or_absent_count: inviteesWithAttendance.length - attended.length,
+                zoom_participant_count: participants.length,
+                attendance_rate_pct: rawInvitees.length > 0
+                  ? Math.round((attended.length / rawInvitees.length) * 100)
+                  : null,
+              };
+              if (zoomMeeting) {
+                existing.zoom.uuid = String(zoomMeeting.uuid ?? existing.zoom.uuid);
+                existing.zoom.topic = String(zoomMeeting.topic ?? existing.zoom.topic);
+                existing.zoom.start_time = String(zoomMeeting.start_time ?? existing.zoom.start_time);
+                existing.zoom.start_at_ms = parseZoomStartMs(zoomMeeting);
+                existing.zoom.meeting_id = zoomMeeting.id;
+              }
+            }
+            continue;
+          }
           if (minPastDate.isValid && calStart < minPastDate) continue;
           combinedPast.push({
             source: 'past' as const,

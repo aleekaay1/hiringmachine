@@ -379,10 +379,21 @@ function SessionTableRow({
         <tr className="bg-[#f8fbff]">
           <td colSpan={5} className="px-4 py-4">
             <div className="space-y-3">
+              <p className="text-xs text-[#5a6f8a]">
+                <span className={`inline-block rounded px-1.5 py-0.5 mr-1 ${CAL_HEAD}`}>
+                  {session.scheduledCount} scheduled — Calendly
+                </span>
+                {session.isPast && (
+                  <span className={`inline-block rounded px-1.5 py-0.5 ${ZOOM_HEAD}`}>
+                    {session.past?.stats?.zoom_participant_count ?? 0} Zoom joiners
+                    {session.past?.zoom?.uuid ? '' : ' (Zoom occurrence not linked)'}
+                  </span>
+                )}
+              </p>
               {session.isPast && session.attendanceRatePct != null && (
                 <p className="text-xs text-[#5a6f8a]">
                   Attendance: <strong className="text-[#0B1B34]">{session.attendanceRatePct}%</strong>
-                  {' '}({session.attendedCount ?? 0} of {session.scheduledCount})
+                  {' '}({session.attendedCount ?? 0} of {session.scheduledCount} matched)
                 </p>
               )}
 
