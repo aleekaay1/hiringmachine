@@ -19,6 +19,10 @@ import { ChevronDown, ChevronRight, RefreshCw, Users, Video } from 'lucide-react
 
 const EM_DASH = '\u2014';
 const MIDDLE_DOT = '\u00B7';
+const CAL_CELL = 'bg-blue-50 text-blue-950 border-blue-100';
+const CAL_HEAD = 'bg-blue-100/90 text-blue-900';
+const ZOOM_CELL = 'bg-green-50 text-green-950 border-green-100';
+const ZOOM_HEAD = 'bg-green-100/90 text-green-900';
 
 type InviteeRow = {
   name: string;
@@ -95,17 +99,19 @@ const LiveSessionsDashboard: React.FC = () => {
     });
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (sync: boolean) => {
     setFetchError(null);
-    setSyncSummary(null);
-    setSyncError(null);
+    if (sync) {
+      setSyncSummary(null);
+      setSyncError(null);
+    }
     const token = await getFreshAccessToken();
     if (!token) {
       setFetchError('Not signed in.');
       return;
     }
     setLoading(true);
-    const result = await fetchLiveSessionsDashboard(token);
+    const result = await fetchLiveSessionsDashboard(token, sync ? { sync: true } : { readCache: true });
     setLoading(false);
     if (!result.ok) {
       setData(null);
@@ -116,7 +122,7 @@ const LiveSessionsDashboard: React.FC = () => {
   }, [getFreshAccessToken]);
 
   useEffect(() => {
-    if (isAuthenticated) void load();
+    if (isAuthenticated) void load(false);
   }, [isAuthenticated, load]);
 
   const sessions = useMemo(
@@ -124,7 +130,10 @@ const LiveSessionsDashboard: React.FC = () => {
     [data],
   );
 
-  const upcomingSessions = useMemo(() => sessions.filter((s) => !s.isPast), [sessions]);
+  const upcomingSessions = useMemo(
+    () => sessions.filter((s) => !s.isPast).sort((a, b) => a.dateKey.localeCompare(b.dateKey)),
+    [sessions],
+  );
   const pastSessions = useMemo(() => sessions.filter((s) => s.isPast), [sessions]);
 
   const totals = useMemo(() => {
@@ -216,9 +225,9 @@ const LiveSessionsDashboard: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <Button type="button" variant="outline" className="text-sm" onClick={() => void load()} disabled={loading}>
+            <Button type="button" variant="outline" className="text-sm" onClick={() => void load(true)} disabled={loading}>
               <RefreshCw size={15} className={`mr-1.5 inline ${loading ? 'animate-spin' : ''}`} />
-              Refresh
+              Sync Calendly + Zoom
             </Button>
             <Button
               type="button"
@@ -244,53 +253,101 @@ const LiveSessionsDashboard: React.FC = () => {
           <StatCard label="Confirmed attended (past)" value={totals.attended} highlight />
         </div>
 
-        {data && (
-          <p className="text-[11px] text-[#9ba8ba]">
-            Updated {formatDateTimeCanadaEastern(data.generated_at)}
-          </p>
-        )}
+        <div className="flex flex-wrap items-center gap-3 text-[11px]">
+          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${CAL_HEAD}`}>
+            <span className="h-2 w-2 rounded-full bg-blue-500" /> Calendly (registrations)
+          </span>
+          <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${ZOOM_HEAD}`}>
+            <span className="h-2 w-2 rounded-full bg-green-600" /> Zoom (attendance)
+          </span>
+          {data && (
+            <span className="text-[#9ba8ba]">
+              {data.from_cache ? 'Showing saved data' : 'Synced live'}
+              {MIDDLE_DOT} {formatDateTimeCanadaEastern(data.generated_at)}
+            </span>
+          )}
+        </div>
 
-        <section className="rounded-2xl border border-[#d6e6f9] bg-white shadow-sm overflow-hidden">
-          <div className="px-4 py-3 border-b border-[#e5edf9] bg-[#f8fbff]">
-            <h2 className="text-sm font-bold text-[#0B1B34]">Sessions by date</h2>
-          </div>
-          {loading && <p className="p-6 text-sm text-[#7a8fa8]">Loading sessions…</p>}
-          {!loading && sessions.length === 0 && (
-            <p className="p-6 text-sm text-[#7a8fa8]">
-              No Wednesday sessions found in this date range.
-            </p>
-          )}
-          {!loading && sessions.length > 0 && (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-[10px] uppercase tracking-wide text-[#7a8fa8] border-b border-[#e5edf9]">
-                    <th className="px-4 py-2.5 w-8" />
-                    <th className="px-2 py-2.5">Date</th>
-                    <th className="px-2 py-2.5">Session time (ET)</th>
-                    <th className="px-2 py-2.5 text-right">Scheduled</th>
-                    <th className="px-2 py-2.5 text-right">Attended</th>
-                    <th className="px-4 py-2.5">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sessions.map((session) => (
-                    <SessionTableRow
-                      key={session.key}
-                      session={session}
-                      expanded={expandedKey === session.key}
-                      onToggle={() => setExpandedKey((k) => (k === session.key ? null : session.key))}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
+        <SessionsBlock
+          title="Upcoming sessions"
+          subtitle="Scheduled on Calendly (blue)."
+          sessions={upcomingSessions}
+          loading={loading}
+          emptyText="No upcoming Wednesday sessions in Calendly yet."
+          expandedKey={expandedKey}
+          onToggle={(key) => setExpandedKey((k) => (k === key ? null : key))}
+        />
+
+        <SessionsBlock
+          title="Past sessions"
+          subtitle="Calendly registrations (blue) + Zoom attendance (green)."
+          sessions={pastSessions}
+          loading={loading}
+          emptyText="No past sessions yet. Click Sync Calendly + Zoom."
+          expandedKey={expandedKey}
+          onToggle={(key) => setExpandedKey((k) => (k === key ? null : key))}
+        />
+
       </div>
     </Layout>
   );
 };
+
+function SessionsBlock({
+  title,
+  subtitle,
+  sessions,
+  loading,
+  emptyText,
+  expandedKey,
+  onToggle,
+}: {
+  title: string;
+  subtitle: string;
+  sessions: LiveSessionScheduleRow[];
+  loading: boolean;
+  emptyText: string;
+  expandedKey: string | null;
+  onToggle: (key: string) => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-[#d6e6f9] bg-white shadow-sm overflow-hidden">
+      <div className="px-4 py-3 border-b border-[#e5edf9] bg-[#f8fbff]">
+        <h2 className="text-sm font-bold text-[#0B1B34]">{title}</h2>
+        <p className="text-[11px] text-[#7a8fa8] mt-0.5">{subtitle}</p>
+      </div>
+      {loading && <p className="p-6 text-sm text-[#7a8fa8]">Loading…</p>}
+      {!loading && sessions.length === 0 && (
+        <p className="p-6 text-sm text-[#7a8fa8]">{emptyText}</p>
+      )}
+      {!loading && sessions.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-wide text-[#7a8fa8] border-b border-[#e5edf9]">
+                <th className="px-4 py-2.5 w-8" />
+                <th className="px-2 py-2.5">Date</th>
+                <th className="px-2 py-2.5">Session time (ET)</th>
+                <th className={`px-2 py-2.5 text-right ${CAL_HEAD}`}>Scheduled</th>
+                <th className={`px-2 py-2.5 text-right ${ZOOM_HEAD}`}>Attended</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sessions.map((session) => (
+                <SessionTableRow
+                  key={session.key}
+                  session={session}
+                  expanded={expandedKey === session.key}
+                  onToggle={() => onToggle(session.key)}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
 
 function SessionTableRow({
   session,
@@ -313,25 +370,14 @@ function SessionTableRow({
         </td>
         <td className="px-2 py-3 font-semibold text-[#0B1B34] whitespace-nowrap">{session.dateLabel}</td>
         <td className="px-2 py-3 text-[#5a6f8a] text-xs whitespace-nowrap">{session.sessionTimeLabel}</td>
-        <td className="px-2 py-3 text-right font-bold text-[#0B1B34]">{session.scheduledCount}</td>
-        <td className="px-2 py-3 text-right font-semibold text-[#005EB8]">
+        <td className={`px-2 py-3 text-right font-bold ${CAL_CELL}`}>{session.scheduledCount}</td>
+        <td className={`px-2 py-3 text-right font-semibold ${session.isPast ? ZOOM_CELL : 'text-[#9ba8ba]'}`}>
           {session.isPast ? (session.attendedCount ?? 0) : EM_DASH}
-        </td>
-        <td className="px-4 py-3">
-          <span
-            className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full border ${
-              session.isPast
-                ? 'bg-slate-50 text-slate-600 border-slate-200'
-                : 'bg-blue-50 text-blue-700 border-blue-200'
-            }`}
-          >
-            {session.isPast ? 'Past' : 'Upcoming'}
-          </span>
         </td>
       </tr>
       {expanded && (
         <tr className="bg-[#f8fbff]">
-          <td colSpan={6} className="px-4 py-4">
+          <td colSpan={5} className="px-4 py-4">
             <div className="space-y-3">
               {session.isPast && session.attendanceRatePct != null && (
                 <p className="text-xs text-[#5a6f8a]">
@@ -346,35 +392,35 @@ function SessionTableRow({
                 <div className="overflow-x-auto rounded-xl border border-[#e0eaf8] bg-white">
                   <table className="w-full text-xs">
                     <thead>
-                      <tr className="text-left text-[10px] uppercase tracking-wide text-[#7a8fa8] bg-[#f3f7fc] border-b border-[#e0eaf8]">
-                        <th className="px-3 py-2">Name</th>
-                        <th className="px-3 py-2">Email</th>
-                        <th className="px-3 py-2">Phone</th>
-                        <th className="px-3 py-2">Status</th>
-                        {session.isPast && <th className="px-3 py-2">Zoom</th>}
-                        {session.isPast && <th className="px-3 py-2">Join / leave</th>}
+                      <tr className="text-left text-[10px] uppercase tracking-wide border-b border-[#e0eaf8]">
+                        <th className={`px-3 py-2 ${CAL_HEAD}`}>Name</th>
+                        <th className={`px-3 py-2 ${CAL_HEAD}`}>Email</th>
+                        <th className={`px-3 py-2 ${CAL_HEAD}`}>Phone</th>
+                        <th className={`px-3 py-2 ${CAL_HEAD}`}>Status</th>
+                        {session.isPast && <th className={`px-3 py-2 ${ZOOM_HEAD}`}>Attended</th>}
+                        {session.isPast && <th className={`px-3 py-2 ${ZOOM_HEAD}`}>Join / leave</th>}
                       </tr>
                     </thead>
                     <tbody>
                       {invitees.map((inv) => (
                         <tr key={`${inv.email}-${inv.name}`} className="border-b border-[#eef3fa] last:border-0">
-                          <td className="px-3 py-2 font-medium text-[#0B1B34]">{inv.name}</td>
-                          <td className="px-3 py-2 text-[#5a6f8a]">{inv.email}</td>
-                          <td className="px-3 py-2 text-[#5a6f8a] whitespace-nowrap">{inv.phone}</td>
-                          <td className="px-3 py-2 capitalize text-[#5a6f8a]">{inv.status}</td>
+                          <td className={`px-3 py-2 font-medium ${CAL_CELL}`}>{inv.name}</td>
+                          <td className={`px-3 py-2 ${CAL_CELL}`}>{inv.email}</td>
+                          <td className={`px-3 py-2 whitespace-nowrap ${CAL_CELL}`}>{inv.phone}</td>
+                          <td className={`px-3 py-2 capitalize ${CAL_CELL}`}>{inv.status}</td>
                           {session.isPast && (
-                            <td className="px-3 py-2">
+                            <td className={`px-3 py-2 ${ZOOM_CELL}`}>
                               {inv.attended === true && (
-                                <span className="text-green-700 font-semibold">Attended</span>
+                                <span className="font-semibold">Attended</span>
                               )}
                               {inv.attended === false && (
-                                <span className="text-red-600 font-semibold">No-show</span>
+                                <span className="font-semibold">No-show</span>
                               )}
                               {inv.attended == null && <span>{EM_DASH}</span>}
                             </td>
                           )}
                           {session.isPast && (
-                            <td className="px-3 py-2 text-[#7a8fa8] whitespace-nowrap">
+                            <td className={`px-3 py-2 whitespace-nowrap ${ZOOM_CELL}`}>
                               {inv.joinTime
                                 ? `${new Date(inv.joinTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${
                                     inv.leaveTime

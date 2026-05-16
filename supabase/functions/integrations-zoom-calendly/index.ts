@@ -27,6 +27,12 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { DateTime } from 'npm:luxon@3.5.0';
+import {
+  createServiceRoleClient,
+  loadLiveSessionsRegistryPayload,
+  persistLiveSessionsRegistry,
+  reclassifySessionsByStart,
+} from '../_shared/liveSessionsRegistry.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -786,6 +792,29 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify(probe), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
+    const syncLive = reqUrl.searchParams.get('sync') === '1';
+    const readCacheOnly = reqUrl.searchParams.get('read_cache') === '1' && !syncLive;
+    const serviceRoleEarly = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.trim() ?? '';
+
+    if (readCacheOnly && serviceRoleEarly) {
+      const adminCache = createServiceRoleClient(supabaseUrl, serviceRoleEarly);
+      const cached = await loadLiveSessionsRegistryPayload(adminCache);
+      if (cached) {
+        return new Response(JSON.stringify({
+          ok: true,
+          generated_at: cached.generated_at,
+          from_cache: true,
+          calendly_configured: true,
+          zoom_user: { id: '', email: Deno.env.get('ZOOM_HOST_USER_EMAIL')?.trim() ?? '' },
+          calendly_user: null,
+          past_meetings: cached.past_meetings,
+          upcoming_meetings: cached.upcoming_meetings,
+          calendly_events_in_range: cached.past_meetings.length + cached.upcoming_meetings.length,
+          registry: { ok: true, from_cache: true },
+        }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+    }
+
     // Config
     const zoomHostEmail = Deno.env.get('ZOOM_HOST_USER_EMAIL')?.trim();
     if (!zoomHostEmail) return new Response(JSON.stringify({ error: 'Missing ZOOM_HOST_USER_EMAIL' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -1225,17 +1254,24 @@ Deno.serve(async (req) => {
       combinedUpcoming.sort((a, b) => (a.zoom.start_at_ms ?? 0) - (b.zoom.start_at_ms ?? 0));
     }
 
+    const { pastMeetings: finalPast, upcomingMeetings: finalUpcoming } = reclassifySessionsByStart(
+      combinedPast,
+      combinedUpcoming,
+      nowMs,
+    );
+
     const generatedAt = new Date().toISOString();
     const includeCalDebug = reqUrl.searchParams.get('calendly_debug') === '1';
     const responsePayload = {
       ok: true,
       generated_at: generatedAt,
+      from_cache: false,
       calendly_configured: calendlyEnabled,
       zoom_user: { id: zoomUserId, email: zoomHostEmail },
       calendly_user: calUser,
       slot_tolerance_minutes: slotToleranceMin,
-      past_meetings: combinedPast,
-      upcoming_meetings: combinedUpcoming,
+      past_meetings: finalPast,
+      upcoming_meetings: finalUpcoming,
       calendly_events_in_range: calEventsByDate.size,
       ...(calendlyFetchMeta ? { calendly_fetch: calendlyFetchMeta } : {}),
       ...(includeCalDebug && calendlyEnabled && calendlyToken
@@ -1259,14 +1295,30 @@ Deno.serve(async (req) => {
     };
 
     const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.trim() ?? '';
+    let registryResult: { ok: boolean; sessions: number; registrants: number; error?: string } = {
+      ok: false,
+      sessions: 0,
+      registrants: 0,
+      error: 'missing_service_role',
+    };
+    if (serviceRole) {
+      const admin = createServiceRoleClient(supabaseUrl, serviceRole);
+      registryResult = await persistLiveSessionsRegistry(admin, {
+        pastMeetings: finalPast,
+        upcomingMeetings: finalUpcoming,
+        syncedAt: generatedAt,
+        nowMs,
+      });
+    }
+
     const archiveResult = await persistSnapshot({
       supabaseUrl, serviceRole, generatedAtIso: generatedAt,
-      payloadForHash: { zoom_user: responsePayload.zoom_user, past_meetings: combinedPast, upcoming_meetings: combinedUpcoming },
+      payloadForHash: { zoom_user: responsePayload.zoom_user, past_meetings: finalPast, upcoming_meetings: finalUpcoming },
       payloadFull: responsePayload,
       invitees: [...calInviteesCache.values()].flat(),
     });
 
-    return new Response(JSON.stringify({ ...responsePayload, archive: archiveResult }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ ...responsePayload, archive: archiveResult, registry: registryResult }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (e) {
     console.error('integrations-zoom-calendly', e);
     return new Response(JSON.stringify({ error: e instanceof Error ? e.message : 'Integration error' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

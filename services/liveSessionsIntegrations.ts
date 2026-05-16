@@ -123,7 +123,19 @@ function meetingRowKey(zoom: ZoomMeetingCore): string {
   return `${zoom.uuid}|${zoom.start_time}`;
 }
 
-/** Moves rows whose `start_time` parses to a future instant out of `past_meetings` into `upcoming_meetings`. */
+function rowSessionStartMs(row: {
+  zoom: ZoomMeetingCore;
+  calendly?: { start_time?: string } | null;
+}): number | null {
+  const cal = row.calendly?.start_time;
+  if (cal) {
+    const p = Date.parse(cal);
+    if (Number.isFinite(p)) return p;
+  }
+  return zoomMeetingStartMs(row.zoom);
+}
+
+/** Moves rows whose session start is in the future out of `past_meetings` into `upcoming_meetings`. */
 export function reconcileLiveSessionsPastUpcoming(
   payload: LiveSessionsDashboardPayload,
   nowMs: number = Date.now()
@@ -131,7 +143,7 @@ export function reconcileLiveSessionsPastUpcoming(
   const misplaced: PastMeetingRow[] = [];
   const pastOk: PastMeetingRow[] = [];
   for (const row of payload.past_meetings) {
-    const ms = zoomMeetingStartMs(row.zoom);
+    const ms = rowSessionStartMs(row);
     if (ms != null && ms >= nowMs) misplaced.push(row);
     else pastOk.push(row);
   }
@@ -151,19 +163,23 @@ export function reconcileLiveSessionsPastUpcoming(
         name: i.name,
         status: i.status,
         no_show: i.no_show,
+        phone_number: i.phone_number ?? null,
+        timezone: i.timezone ?? null,
+        invitee_uri: i.invitee_uri,
+        event_uri: i.event_uri,
       })),
     });
   }
 
   const upcoming = [...payload.upcoming_meetings, ...added].sort((a, b) => {
-    const ma = zoomMeetingStartMs(a.zoom) ?? 0;
-    const mb = zoomMeetingStartMs(b.zoom) ?? 0;
+    const ma = rowSessionStartMs(a) ?? 0;
+    const mb = rowSessionStartMs(b) ?? 0;
     return ma - mb;
   });
 
   const pastSorted = [...pastOk].sort((a, b) => {
-    const mb = zoomMeetingStartMs(b.zoom) ?? 0;
-    const ma = zoomMeetingStartMs(a.zoom) ?? 0;
+    const mb = rowSessionStartMs(b) ?? 0;
+    const ma = rowSessionStartMs(a) ?? 0;
     return mb - ma;
   });
 
@@ -177,6 +193,7 @@ export function reconcileLiveSessionsPastUpcoming(
 export interface LiveSessionsDashboardPayload {
   ok: boolean;
   generated_at: string;
+  from_cache?: boolean;
   calendly_configured: boolean;
   zoom_user: { id: string; email: string };
   calendly_user: { name?: string; email?: string } | null;
@@ -203,6 +220,13 @@ export interface LiveSessionsDashboardPayload {
     wroteSnapshot: boolean;
     snapshotHash?: string;
     note?: string;
+  };
+  registry?: {
+    ok: boolean;
+    sessions?: number;
+    registrants?: number;
+    from_cache?: boolean;
+    error?: string;
   };
 }
 
@@ -355,12 +379,17 @@ export async function fetchCalendlyProbe(
 }
 
 export async function fetchLiveSessionsDashboard(
-  accessToken: string
+  accessToken: string,
+  options?: { sync?: boolean; readCache?: boolean },
 ): Promise<{ ok: true; data: LiveSessionsDashboardPayload } | { ok: false; error: string }> {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     return { ok: false, error: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY' };
   }
-  const url = `${SUPABASE_URL}/functions/v1/integrations-zoom-calendly`;
+  const params = new URLSearchParams();
+  if (options?.sync) params.set('sync', '1');
+  else if (options?.readCache !== false) params.set('read_cache', '1');
+  const qs = params.toString();
+  const url = `${SUPABASE_URL}/functions/v1/integrations-zoom-calendly${qs ? `?${qs}` : ''}`;
   const res = await fetch(url, {
     method: 'GET',
     headers: {
@@ -474,7 +503,13 @@ export function buildLiveSessionScheduleRows(
       key,
       dateKey,
       dateLabel: formatTorontoSessionDateLabel(dateKey),
-      isPast: ms == null || ms < nowMs,
+      isPast: (() => {
+        if (calStart) {
+          const p = Date.parse(calStart);
+          if (Number.isFinite(p)) return p < nowMs;
+        }
+        return ms == null || ms < nowMs;
+      })(),
       sessionTimeLabel,
       calendlyName: row.calendly?.name ?? existing?.calendlyName ?? 'Live Online Career Session',
       scheduledCount: countUniqueInvitees(row, existing?.upcoming ?? null),
@@ -499,11 +534,20 @@ export function buildLiveSessionScheduleRows(
       : row.zoom.start_time
         ? formatDateTimeCanadaEastern(ms ?? row.zoom.start_time)
         : 'Wednesday 11:30 AM ET';
+    const isPast =
+      Boolean(existing?.past) ||
+      (() => {
+        if (calStart) {
+          const p = Date.parse(calStart);
+          if (Number.isFinite(p)) return p < nowMs;
+        }
+        return ms != null && ms < nowMs;
+      })();
     byDate.set(dateKey, {
-      key: `${dateKey}|${existing?.past ? 'past' : 'upcoming'}`,
+      key: `${dateKey}|${isPast ? 'past' : 'upcoming'}`,
       dateKey,
       dateLabel: formatTorontoSessionDateLabel(dateKey),
-      isPast: startMs == null ? false : startMs < nowMs,
+      isPast,
       sessionTimeLabel,
       calendlyName: row.calendly?.name ?? existing?.calendlyName ?? 'Live Online Career Session',
       scheduledCount: countUniqueInvitees(existing?.past ?? null, row),
