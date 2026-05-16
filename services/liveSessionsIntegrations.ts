@@ -432,29 +432,52 @@ export type LiveSessionScheduleRow = {
   upcoming: UpcomingMeetingRow | null;
 };
 
+function countUniqueInvitees(past: PastMeetingRow | null, upcoming: UpcomingMeetingRow | null): number {
+  const emails = new Set<string>();
+  for (const i of past?.invitees ?? []) {
+    const e = String(i.email ?? '').trim().toLowerCase();
+    if (e) emails.add(e);
+  }
+  for (const i of upcoming?.invitees ?? []) {
+    const e = String(i.email ?? '').trim().toLowerCase();
+    if (e) emails.add(e);
+  }
+  if (emails.size > 0) return emails.size;
+  return (past?.invitees.length ?? 0) + (upcoming?.invitees.length ?? 0);
+}
+
 export function buildLiveSessionScheduleRows(
   payload: LiveSessionsDashboardPayload,
   nowMs: number = Date.now(),
 ): LiveSessionScheduleRow[] {
   const byDate = new Map<string, LiveSessionScheduleRow>();
 
+  const sessionStartMs = (past: PastMeetingRow | null, upcoming: UpcomingMeetingRow | null): number | null => {
+    const z = past?.zoom ?? upcoming?.zoom;
+    if (!z) return null;
+    return zoomMeetingStartMs(z);
+  };
+
   const upsertPast = (row: PastMeetingRow) => {
-    const ms = zoomMeetingStartMs(row.zoom);
-    const dateKey = torontoSessionDateKey(ms, row.zoom.start_time);
+    const calStart = row.calendly?.start_time ?? null;
+    const ms = zoomMeetingStartMs(row.zoom) ?? (calStart ? Date.parse(calStart) : null);
+    const dateKey = torontoSessionDateKey(Number.isFinite(ms as number) ? (ms as number) : null, calStart ?? row.zoom.start_time);
     if (!dateKey) return;
     const key = `${dateKey}|past`;
     const existing = byDate.get(dateKey);
-    const sessionTimeLabel = row.zoom.start_time
-      ? formatDateTimeCanadaEastern(ms ?? row.zoom.start_time)
-      : 'Wednesday 11:30 AM ET';
+    const sessionTimeLabel = row.calendly?.start_time
+      ? formatDateTimeCanadaEastern(row.calendly.start_time)
+      : row.zoom.start_time
+        ? formatDateTimeCanadaEastern(ms ?? row.zoom.start_time)
+        : 'Wednesday 11:30 AM ET';
     byDate.set(dateKey, {
       key,
       dateKey,
       dateLabel: formatTorontoSessionDateLabel(dateKey),
       isPast: ms == null || ms < nowMs,
       sessionTimeLabel,
-      calendlyName: row.calendly?.name ?? 'Live Online Career Session',
-      scheduledCount: row.stats?.invited_count ?? row.invitees.length,
+      calendlyName: row.calendly?.name ?? existing?.calendlyName ?? 'Live Online Career Session',
+      scheduledCount: countUniqueInvitees(row, existing?.upcoming ?? null),
       attendedCount: row.stats?.attended_matched_count ?? row.invitees.filter((i) => i.attended_zoom).length,
       attendanceRatePct: row.stats?.attendance_rate_pct ?? null,
       zoomTopic: row.zoom.topic || 'Live Online Career Session',
@@ -465,25 +488,29 @@ export function buildLiveSessionScheduleRows(
   };
 
   const upsertUpcoming = (row: UpcomingMeetingRow) => {
-    const ms = zoomMeetingStartMs(row.zoom);
-    const dateKey = torontoSessionDateKey(ms, row.zoom.start_time);
+    const calStart = row.calendly?.start_time ?? null;
+    const ms = zoomMeetingStartMs(row.zoom) ?? (calStart ? Date.parse(calStart) : null);
+    const dateKey = torontoSessionDateKey(Number.isFinite(ms as number) ? (ms as number) : null, calStart ?? row.zoom.start_time);
     if (!dateKey) return;
     const existing = byDate.get(dateKey);
-    const sessionTimeLabel = row.zoom.start_time
-      ? formatDateTimeCanadaEastern(ms ?? row.zoom.start_time)
-      : 'Wednesday 11:30 AM ET';
+    const startMs = sessionStartMs(existing?.past ?? null, row) ?? ms;
+    const sessionTimeLabel = row.calendly?.start_time
+      ? formatDateTimeCanadaEastern(row.calendly.start_time)
+      : row.zoom.start_time
+        ? formatDateTimeCanadaEastern(ms ?? row.zoom.start_time)
+        : 'Wednesday 11:30 AM ET';
     byDate.set(dateKey, {
       key: `${dateKey}|${existing?.past ? 'past' : 'upcoming'}`,
       dateKey,
       dateLabel: formatTorontoSessionDateLabel(dateKey),
-      isPast: false,
+      isPast: startMs == null ? false : startMs < nowMs,
       sessionTimeLabel,
-      calendlyName: row.calendly?.name ?? 'Live Online Career Session',
-      scheduledCount: row.invitees.length,
-      attendedCount: null,
-      attendanceRatePct: null,
-      zoomTopic: row.zoom.topic || 'Live Online Career Session',
-      zoomJoinUrl: row.zoom.join_url ?? null,
+      calendlyName: row.calendly?.name ?? existing?.calendlyName ?? 'Live Online Career Session',
+      scheduledCount: countUniqueInvitees(existing?.past ?? null, row),
+      attendedCount: existing?.attendedCount ?? null,
+      attendanceRatePct: existing?.attendanceRatePct ?? null,
+      zoomTopic: row.zoom.topic || existing?.zoomTopic || 'Live Online Career Session',
+      zoomJoinUrl: row.zoom.join_url ?? existing?.zoomJoinUrl ?? null,
       past: existing?.past ?? null,
       upcoming: row,
     });

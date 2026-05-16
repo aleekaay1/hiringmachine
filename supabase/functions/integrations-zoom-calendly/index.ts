@@ -51,6 +51,12 @@ const WEDNESDAY_LIVE_SLOT: SlotDef = {
 const SLOTS: SlotDef[] = [WEDNESDAY_LIVE_SLOT];
 const LIVE_TOPIC_KEYWORD = 'live career overview session';
 const LIVE_ONLINE_CALENDLY_NAME = 'live online career session';
+const ZOOM_TOPIC_KEYWORDS = [
+  LIVE_TOPIC_KEYWORD,
+  LIVE_ONLINE_CALENDLY_NAME,
+  'live career session',
+  'career overview session',
+];
 /** Recurring Zoom PMI for Wednesday Live Online Career Session */
 const TARGET_MEETINGS = [{ id: '85950683062', weekday: 3, slot: WEDNESDAY_LIVE_SLOT }] as const;
 
@@ -102,15 +108,34 @@ function meetingIdOf(m: ZoomRawMeeting): string {
   return String((m as { id?: string | number }).id ?? '').replace(/\D/g, '');
 }
 
+function zoomTopicMatchesLiveSession(topic: string): boolean {
+  const t = topic.toLowerCase();
+  return ZOOM_TOPIC_KEYWORDS.some((k) => t.includes(k));
+}
+
 function isTargetLiveMeeting(m: ZoomRawMeeting, dt: DateTime | null): SlotDef | null {
   if (!dt?.isValid) return null;
   const id = meetingIdOf(m);
-  const topic = String(m.topic ?? '').toLowerCase();
+  const topic = String(m.topic ?? '');
   const target = TARGET_MEETINGS.find((t) => t.id === id);
   if (!target) return null;
   if (dt.weekday !== target.weekday) return null;
-  if (!topic.includes(LIVE_TOPIC_KEYWORD)) return null;
+  if (!zoomTopicMatchesLiveSession(topic)) return null;
   return target.slot;
+}
+
+function calendlySlotDistanceMinutes(dt: DateTime): number {
+  const slotStart = WEDNESDAY_LIVE_SLOT.startH * 60 + WEDNESDAY_LIVE_SLOT.startM;
+  return Math.abs(dt.hour * 60 + dt.minute - slotStart);
+}
+
+function activeCalendlyInvitees(cache: Map<string, CalInvitee[]>, evUri: string | undefined | null): CalInvitee[] {
+  if (!evUri) return [];
+  return (cache.get(evUri) ?? []).filter((i) => {
+    if (i.canceled) return false;
+    const s = String(i.status ?? '').toLowerCase();
+    return s !== 'canceled' && s !== 'cancelled';
+  });
 }
 
 // ─── Name-based attendance matching ────────────────────────────────────────
@@ -507,7 +532,8 @@ function calendlyEventMatchesLiveSession(eventName: string): boolean {
 /** Wednesday 11:30 AM ET window (with slot tolerance). */
 function isWednesdayLiveSessionSlot(dt: DateTime, toleranceMin: number): boolean {
   if (!dt.isValid || dt.weekday !== 3) return false;
-  return slotForDt(dt, toleranceMin) !== null;
+  const tol = Math.max(toleranceMin, 45);
+  return slotForDt(dt, tol) !== null || calendlySlotDistanceMinutes(dt) <= tol;
 }
 
 function mapCalendlyInviteeRow(
@@ -853,7 +879,15 @@ Deno.serve(async (req) => {
           continue;
         }
         const date = isoDate(dt);
-        if (!calEventsByDate.has(date)) calEventsByDate.set(date, ev);
+        const existing = calEventsByDate.get(date);
+        if (!existing) {
+          calEventsByDate.set(date, ev);
+        } else {
+          const existingDt = DateTime.fromISO(existing.start_time, { zone: TZ });
+          if (calendlySlotDistanceMinutes(dt) < calendlySlotDistanceMinutes(existingDt)) {
+            calEventsByDate.set(date, ev);
+          }
+        }
       }
 
       console.log(
@@ -866,8 +900,13 @@ Deno.serve(async (req) => {
       // Pre-load invitees for all matched Calendly events
       await Promise.all([...calEventsByDate.values()].map(async (ev) => {
         if (!ev.uri) return;
-        const invitees = await calendlyInviteesForEvent(calendlyToken, ev.uri);
-        calInviteesCache.set(ev.uri, invitees);
+        try {
+          const invitees = await calendlyInviteesForEvent(calendlyToken, ev.uri);
+          calInviteesCache.set(ev.uri, invitees);
+        } catch (e) {
+          console.warn('[calendly] invitees failed', ev.uri, e instanceof Error ? e.message : String(e));
+          calInviteesCache.set(ev.uri, []);
+        }
       }));
     }
 
@@ -953,8 +992,7 @@ Deno.serve(async (req) => {
 
       // Match Calendly event for this exact date
       const calEv = calEventsByDate.get(dateKey) ?? null;
-      const rawInvitees = (calEv?.uri ? (calInviteesCache.get(calEv.uri) ?? []) : [])
-        .filter((i) => !i.canceled && i.status !== 'canceled');
+      const rawInvitees = activeCalendlyInvitees(calInviteesCache, calEv?.uri);
 
       /**
        * Find the best Zoom participant match for a Calendly invitee.
@@ -1059,8 +1097,7 @@ Deno.serve(async (req) => {
       const slot     = isTargetLiveMeeting(m, startDt);
       const dateKey  = startDt ? isoDate(startDt) : '';
       const calEv    = calEventsByDate.get(dateKey) ?? null;
-      const invitees = (calEv?.uri ? (calInviteesCache.get(calEv.uri) ?? []) : [])
-        .filter((i) => !i.canceled && i.status !== 'canceled')
+      const invitees = activeCalendlyInvitees(calInviteesCache, calEv?.uri)
         .map((i) => ({ email: i.email, name: i.name, status: i.status, no_show: i.no_show, phone_number: i.phone_number ?? null, timezone: i.timezone ?? null, invitee_uri: i.uri, event_uri: i.event_uri }));
 
       return {
@@ -1078,6 +1115,115 @@ Deno.serve(async (req) => {
         invitees,
       };
     }));
+
+    // Calendly-first: add sessions for matched Calendly dates that have no Zoom row (registrations still show).
+    if (calendlyEnabled && calendlyToken) {
+      const zoomPastDates = new Set(
+        combinedPast.map((r) => {
+          const ms = r.zoom.start_at_ms;
+          const dt = typeof ms === 'number' && Number.isFinite(ms)
+            ? DateTime.fromMillis(ms, { zone: TZ })
+            : null;
+          return dt?.isValid ? isoDate(dt) : '';
+        }).filter(Boolean),
+      );
+      const zoomUpDates = new Set(
+        combinedUpcoming.map((r) => {
+          const ms = r.zoom.start_at_ms;
+          const dt = typeof ms === 'number' && Number.isFinite(ms)
+            ? DateTime.fromMillis(ms, { zone: TZ })
+            : null;
+          return dt?.isValid ? isoDate(dt) : '';
+        }).filter(Boolean),
+      );
+
+      for (const [dateKey, calEv] of calEventsByDate.entries()) {
+        if (!calEv.start_time || !calEv.uri) continue;
+        const calStart = DateTime.fromISO(calEv.start_time, { zone: TZ });
+        if (!calStart.isValid) continue;
+        const calMs = calStart.toMillis();
+        const rawInvitees = activeCalendlyInvitees(calInviteesCache, calEv.uri);
+        const calMeta = {
+          name: calEv.name,
+          start_time: calEv.start_time,
+          end_time: calEv.end_time,
+          status: calEv.status,
+          uri: calEv.uri,
+        };
+
+        if (calMs < nowMs) {
+          if (zoomPastDates.has(dateKey)) continue;
+          if (minPastDate.isValid && calStart < minPastDate) continue;
+          combinedPast.push({
+            source: 'past' as const,
+            session_type: WEDNESDAY_LIVE_SLOT.label,
+            zoom: {
+              uuid: '',
+              topic: calEv.name ?? 'Live Online Career Session',
+              start_time: calEv.start_time,
+              start_at_ms: calMs,
+              duration_minutes: 30,
+              host_email: zoomHostEmail,
+            },
+            calendly: calMeta,
+            participants: [],
+            invitees: rawInvitees.map((i) => ({
+              email: i.email,
+              name: i.name,
+              status: i.status,
+              no_show: i.no_show,
+              attended_zoom: false,
+              match_method: null,
+              join_time: null,
+              leave_time: null,
+              phone_number: i.phone_number ?? null,
+              timezone: i.timezone ?? null,
+              invitee_uri: i.uri,
+              event_uri: i.event_uri,
+            })),
+            walkin_emails: [],
+            stats: {
+              invited_count: rawInvitees.length,
+              attended_matched_count: 0,
+              no_show_or_absent_count: rawInvitees.length,
+              zoom_participant_count: 0,
+              attendance_rate_pct: rawInvitees.length > 0 ? 0 : null,
+            },
+          });
+          zoomPastDates.add(dateKey);
+        } else {
+          if (zoomUpDates.has(dateKey)) continue;
+          combinedUpcoming.push({
+            source: 'scheduled' as const,
+            session_type: WEDNESDAY_LIVE_SLOT.label,
+            zoom: {
+              uuid: '',
+              topic: calEv.name ?? 'Live Online Career Session',
+              start_time: calEv.start_time,
+              start_at_ms: calMs,
+              duration_minutes: 30,
+              host_email: zoomHostEmail,
+              join_url: '',
+            },
+            calendly: calMeta,
+            invitees: rawInvitees.map((i) => ({
+              email: i.email,
+              name: i.name,
+              status: i.status,
+              no_show: i.no_show,
+              phone_number: i.phone_number ?? null,
+              timezone: i.timezone ?? null,
+              invitee_uri: i.uri,
+              event_uri: i.event_uri,
+            })),
+          });
+          zoomUpDates.add(dateKey);
+        }
+      }
+
+      combinedPast.sort((a, b) => (b.zoom.start_at_ms ?? 0) - (a.zoom.start_at_ms ?? 0));
+      combinedUpcoming.sort((a, b) => (a.zoom.start_at_ms ?? 0) - (b.zoom.start_at_ms ?? 0));
+    }
 
     const generatedAt = new Date().toISOString();
     const includeCalDebug = reqUrl.searchParams.get('calendly_debug') === '1';

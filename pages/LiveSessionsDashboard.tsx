@@ -30,30 +30,42 @@ type InviteeRow = {
   leaveTime: string | null;
 };
 
+function mapPastInvitee(i: PastMeetingInvitee): InviteeRow {
+  return {
+    name: i.name || EM_DASH,
+    email: i.email || EM_DASH,
+    phone: i.phone_number || EM_DASH,
+    status: i.status || (i.attended_zoom ? 'attended' : 'invited'),
+    attended: i.attended_zoom,
+    joinTime: i.join_time ?? null,
+    leaveTime: i.leave_time ?? null,
+  };
+}
+
+function mapUpcomingInvitee(i: UpcomingMeetingInvitee): InviteeRow {
+  return {
+    name: i.name || EM_DASH,
+    email: i.email || EM_DASH,
+    phone: i.phone_number || EM_DASH,
+    status: i.status || 'active',
+    attended: null,
+    joinTime: null,
+    leaveTime: null,
+  };
+}
+
 function inviteesForSession(row: LiveSessionScheduleRow): InviteeRow[] {
-  if (row.past) {
-    return row.past.invitees.map((i: PastMeetingInvitee) => ({
-      name: i.name || EM_DASH,
-      email: i.email || EM_DASH,
-      phone: i.phone_number || EM_DASH,
-      status: i.status || (i.attended_zoom ? 'attended' : 'invited'),
-      attended: i.attended_zoom,
-      joinTime: i.join_time ?? null,
-      leaveTime: i.leave_time ?? null,
-    }));
-  }
-  if (row.upcoming) {
-    return row.upcoming.invitees.map((i: UpcomingMeetingInvitee) => ({
-      name: i.name || EM_DASH,
-      email: i.email || EM_DASH,
-      phone: i.phone_number || EM_DASH,
-      status: i.status || 'active',
-      attended: null,
-      joinTime: null,
-      leaveTime: null,
-    }));
-  }
-  return [];
+  const seen = new Set<string>();
+  const out: InviteeRow[] = [];
+  const add = (inv: InviteeRow) => {
+    const key = inv.email !== EM_DASH ? inv.email.toLowerCase() : inv.name.toLowerCase();
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    out.push(inv);
+  };
+  for (const i of row.past?.invitees ?? []) add(mapPastInvitee(i));
+  for (const i of row.upcoming?.invitees ?? []) add(mapUpcomingInvitee(i));
+  return out;
 }
 
 const LiveSessionsDashboard: React.FC = () => {
