@@ -1244,12 +1244,12 @@ const Pipeline: React.FC = () => {
   return (
     <Layout isAdmin>
       <div className="w-full max-w-[1500px] mx-auto p-4 space-y-4">
-        <div className="rounded-3xl border border-[#c8ddf4] bg-white p-4 shadow-[0_20px_55px_-34px_rgba(11,27,52,0.45)] flex flex-wrap items-center justify-between gap-3">
+        <div className="rounded-3xl border border-[#c8ddf4] bg-gradient-to-br from-white to-[#f4f9ff] p-4 shadow-[0_20px_55px_-34px_rgba(11,27,52,0.35)] flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-[#0B1B34]">Pipeline queue</h1>
             <p className="text-xs text-[#365274]">Work queue for check-in and manual resume pipelines.</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <label className="inline-flex items-center gap-2 rounded-xl border border-[#b8d2ef] bg-white px-3 py-2 text-xs cursor-pointer hover:bg-[#f2f8ff] text-[#0B1B34]">
               <FileUp size={14} />
               {uploading ? 'Uploading…' : 'Bulk upload resumes'}
@@ -1281,34 +1281,36 @@ const Pipeline: React.FC = () => {
 
         <div className="grid grid-cols-1 xl:grid-cols-[340px_1fr] gap-4">
           <div className="rounded-2xl border border-[#cfe0f4] bg-white shadow-sm overflow-hidden">
-            <div className="p-3 border-b border-slate-100 space-y-2">
-              <div className="grid grid-cols-2 gap-2">
+            <div className="p-3 border-b border-[#e5eef9] space-y-2.5 bg-gradient-to-b from-[#f8fbff] to-white">
+              <div className="grid grid-cols-2 gap-2 rounded-xl bg-[#f1f7ff] p-1 border border-[#d8e8fa]">
                 <button
                   type="button"
                   onClick={() => setLeftSection('checkin')}
                   className={`rounded-lg border px-3 py-2 text-xs font-semibold text-left transition ${
                     leftSection === 'checkin'
-                      ? 'border-[#005EB8] bg-[#eaf3ff] text-[#0B1B34]'
-                      : 'border-[#d6e5f6] bg-white text-[#365274] hover:bg-[#f6faff]'
+                      ? 'border-[#005EB8] bg-white text-[#0B1B34] shadow-sm'
+                      : 'border-transparent bg-transparent text-[#365274] hover:bg-white/70'
                   }`}
                 >
-                  Candidate check-in resumes ({checkinCount})
+                  <span className="block">Candidate check-in resumes</span>
+                  <span className="text-[10px] font-bold text-[#0B1B34]">{checkinCount}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setLeftSection('manual')}
                   className={`rounded-lg border px-3 py-2 text-xs font-semibold text-left transition ${
                     leftSection === 'manual'
-                      ? 'border-[#005EB8] bg-[#eaf3ff] text-[#0B1B34]'
-                      : 'border-[#d6e5f6] bg-white text-[#365274] hover:bg-[#f6faff]'
+                      ? 'border-[#005EB8] bg-white text-[#0B1B34] shadow-sm'
+                      : 'border-transparent bg-transparent text-[#365274] hover:bg-white/70'
                   }`}
                 >
-                  Manually uploaded resumes ({manualCount})
+                  <span className="block">Manually uploaded resumes</span>
+                  <span className="text-[10px] font-bold text-[#0B1B34]">{manualCount}</span>
                 </button>
               </div>
               <div className="relative">
                 <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, phone, email" className="w-full rounded-lg border border-slate-200 pl-8 pr-3 py-2 text-xs" />
+                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, phone, email" className="w-full rounded-lg border border-[#c9ddf4] pl-8 pr-3 py-2 text-xs" />
               </div>
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[11px] text-[#1e3a63]">Showing {filteredCandidates.length} candidate(s)</p>
@@ -1324,14 +1326,14 @@ const Pipeline: React.FC = () => {
                 <span className="text-right">Stage</span>
               </div>
               {filteredCandidates.map((c) => (
-                <div key={c.id} className={`w-full px-3 py-1.5 border-b border-[#edf3fb] ${selectedCandidateId === c.id ? 'bg-[#eaf3ff]' : 'hover:bg-[#f8fbff]'}`}>
+                <div key={c.id} className={`w-full px-3 py-1.5 border-b border-[#edf3fb] ${selectedCandidateId === c.id ? 'bg-[#eaf3ff] ring-1 ring-inset ring-[#cde3fb]' : 'hover:bg-[#f8fbff]'}`}>
                   <div className="flex items-start gap-2">
                     <input type="checkbox" checked={selectedIds.has(c.id)} onChange={() => toggleSelectedId(c.id)} className="mt-1 rounded border-slate-300" />
                     <button type="button" onClick={() => setSelectedCandidateId(c.id)} className="flex-1 text-left min-w-0">
                       <div className="grid grid-cols-[1fr_1.2fr_90px] gap-2 items-center">
                         <p className="text-xs font-semibold text-[#0B1B34] truncate">{safeName(c)}</p>
                         <p className="text-[11px] text-[#365274] truncate">{c.phone || 'No phone'} {c.email ? `· ${c.email}` : ''}</p>
-                        <span className="text-[10px] rounded-full bg-[#e2efff] px-2 py-0.5 text-[#0B1B34] text-right">{c.journey_stage}</span>
+                        <span className="text-[10px] rounded-full bg-[#e2efff] px-2 py-0.5 text-[#0B1B34] text-right font-semibold">{c.journey_stage}</span>
                       </div>
                       <p className="text-[10px] text-[#4c6788] mt-0.5">
                         {c.scheduled_for ? `Scheduled ${formatDateTimeCanadaEastern(c.scheduled_for)}` : 'No schedule'} · {c.status} · {c.source === 'journey_upload' ? 'Journey' : 'Upload'}
@@ -1357,8 +1359,8 @@ const Pipeline: React.FC = () => {
               <div className="p-8 text-sm text-slate-500">Select a candidate to open resume + call controls.</div>
             ) : (
               <div className="min-h-[calc(100vh-250px)] flex flex-col">
-                <div className="px-3 py-2.5 border-b border-slate-100 flex flex-wrap items-center gap-2">
-                  <p className="text-sm font-semibold text-slate-900 flex-1 truncate">{safeName(selectedBundle.candidate)}</p>
+                <div className="px-3 py-2.5 border-b border-[#e5eef9] bg-gradient-to-r from-white to-[#f6faff] flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-semibold text-[#0B1B34] flex-1 truncate">{safeName(selectedBundle.candidate)}</p>
                   <span className={`text-[10px] rounded-full px-2 py-0.5 ${
                     selectedBundle.candidate.source === 'journey_upload'
                       ? 'bg-emerald-100 text-emerald-700'
@@ -1366,7 +1368,7 @@ const Pipeline: React.FC = () => {
                   }`}>
                     {selectedBundle.candidate.source === 'journey_upload' ? 'Journey upload' : 'Bought upload'}
                   </span>
-                  <select value={selectedResume?.id || ''} onChange={(e) => setSelectedResumeId(e.target.value)} className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs">
+                  <select value={selectedResume?.id || ''} onChange={(e) => setSelectedResumeId(e.target.value)} className="rounded-lg border border-[#c9ddf4] px-2 py-1.5 text-xs text-[#0B1B34]">
                     {selectedBundle.resumes.map((r) => (
                       <option key={r.id} value={r.id}>
                         {(r.resume_source === 'journey_upload' ? '[Journey] ' : '[Upload] ')}
@@ -1379,7 +1381,7 @@ const Pipeline: React.FC = () => {
                   </Button>
                 </div>
 
-                <div className="flex-1 min-h-[62vh] bg-slate-50 border-b border-slate-200">
+                <div className="flex-1 min-h-[62vh] bg-[#f8fbff] border-b border-[#e2ecf8]">
                   {selectedResume ? (() => {
                     const kind = getPipelineResumeViewerKind(selectedResume);
                     const url = getPipelineResumeDisplayUrl(selectedResume);
