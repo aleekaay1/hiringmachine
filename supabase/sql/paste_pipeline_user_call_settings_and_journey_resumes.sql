@@ -4,11 +4,13 @@
 create table if not exists public.pipeline_user_call_settings (
   user_id uuid primary key references auth.users(id) on delete cascade,
   extension text,
-  caller_id text,
   dialing_locale text default 'ca',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.pipeline_user_call_settings
+  drop column if exists caller_id;
 
 create index if not exists pipeline_user_call_settings_updated_idx
   on public.pipeline_user_call_settings(updated_at desc);

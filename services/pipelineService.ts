@@ -106,7 +106,6 @@ export interface PipelineCallLog {
 
 export interface PipelineCallContext {
   extension?: string | null;
-  callerId?: string | null;
   dialingLocale?: string | null;
 }
 
@@ -161,7 +160,6 @@ export interface PipelineEmailSendLog {
 export interface PipelineUserCallSettings {
   user_id: string;
   extension: string | null;
-  caller_id: string | null;
   dialing_locale: string | null;
   created_at: string;
   updated_at: string;
@@ -346,14 +344,12 @@ function mergeCallContextMetadata(
 ): Record<string, unknown> | null {
   if (!callContext) return existing ?? null;
   const extension = String(callContext.extension || '').trim();
-  const callerId = String(callContext.callerId || '').trim();
   const dialingLocale = String(callContext.dialingLocale || '').trim();
-  if (!extension && !callerId && !dialingLocale) return existing ?? null;
+  if (!extension && !dialingLocale) return existing ?? null;
   return {
     ...(existing || {}),
     call_context: {
       extension: extension || null,
-      caller_id: callerId || null,
       dialing_locale: dialingLocale || null,
     },
   };
@@ -613,6 +609,46 @@ export async function listPipelineCandidates(): Promise<PipelineCandidate[]> {
   return (data || []) as PipelineCandidate[];
 }
 
+export async function listPipelineFreshJourneyCandidates(): Promise<PipelineCandidate[]> {
+  const rows = await listPipelineCandidates();
+  const queue = rows.filter((c) => {
+    const source = String(c.source || '').toLowerCase();
+    const stage = String(c.journey_stage || '').toLowerCase();
+    const status = String(c.status || '').toLowerCase();
+    const metadata = c.metadata && typeof c.metadata === 'object' ? c.metadata : {};
+    const touchedAt = String((metadata as Record<string, unknown>).pipeline_touched_at || '').trim();
+    return source === 'journey_upload' && stage === 'new' && status === 'open' && !touchedAt;
+  });
+  if (!queue.length) return [];
+
+  const queueIds = new Set(queue.map((c) => c.id));
+  const { data: resumes, error } = await supabase
+    .from('pipeline_resumes')
+    .select('candidate_id,resume_source')
+    .in('candidate_id', [...queueIds])
+    .limit(4000);
+
+  if (error) {
+    // Backward compatibility before resume_source migration.
+    const { data: legacyResumes, error: legacyErr } = await supabase
+      .from('pipeline_resumes')
+      .select('candidate_id')
+      .in('candidate_id', [...queueIds])
+      .limit(4000);
+    if (legacyErr) throw legacyErr;
+    const ids = new Set((legacyResumes || []).map((r) => String((r as { candidate_id?: string }).candidate_id || '')).filter(Boolean));
+    return queue.filter((c) => ids.has(c.id));
+  }
+
+  const candidateIdsWithJourneyResume = new Set(
+    (resumes || [])
+      .filter((r) => String((r as { resume_source?: string }).resume_source || 'journey_upload') === 'journey_upload')
+      .map((r) => String((r as { candidate_id?: string }).candidate_id || ''))
+      .filter(Boolean),
+  );
+  return queue.filter((c) => candidateIdsWithJourneyResume.has(c.id));
+}
+
 export async function getPipelineUserCallSettings(): Promise<PipelineUserCallSettings | null> {
   const { data: auth } = await supabase.auth.getUser();
   const userId = auth.user?.id;
@@ -628,7 +664,6 @@ export async function getPipelineUserCallSettings(): Promise<PipelineUserCallSet
 
 export async function savePipelineUserCallSettings(input: {
   extension?: string | null;
-  callerId?: string | null;
   dialingLocale?: string | null;
 }): Promise<PipelineUserCallSettings> {
   const { data: auth } = await supabase.auth.getUser();
@@ -637,7 +672,6 @@ export async function savePipelineUserCallSettings(input: {
   const payload = {
     user_id: userId,
     extension: input.extension?.trim() || null,
-    caller_id: input.callerId?.trim() || null,
     dialing_locale: input.dialingLocale?.trim() || null,
     updated_at: new Date().toISOString(),
   };
@@ -648,6 +682,25 @@ export async function savePipelineUserCallSettings(input: {
     .single();
   if (error) throw error;
   return data as PipelineUserCallSettings;
+}
+
+export async function markPipelineCandidateTouched(candidateId: string): Promise<void> {
+  const { data: row, error: getErr } = await supabase
+    .from('pipeline_candidates')
+    .select('metadata')
+    .eq('id', candidateId)
+    .maybeSingle();
+  if (getErr) throw getErr;
+  const metadata = row?.metadata && typeof row.metadata === 'object'
+    ? { ...(row.metadata as Record<string, unknown>) }
+    : {};
+  if (metadata.pipeline_touched_at) return;
+  metadata.pipeline_touched_at = new Date().toISOString();
+  const { error } = await supabase
+    .from('pipeline_candidates')
+    .update({ metadata })
+    .eq('id', candidateId);
+  if (error) throw error;
 }
 
 export async function listPipelineCandidateActivityTimeline(candidateId: string): Promise<PipelineActivityTimelineItem[]> {
@@ -729,11 +782,24 @@ export async function listPipelineCandidateActivityTimeline(candidateId: string)
 export async function syncJourneyResumesIntoPipeline(): Promise<{ importedCandidates: number; importedResumes: number }> {
   const { data: sourceRows, error: sourceError } = await supabase
     .from('candidates')
-    .select('id, first_name, last_name, email, phone, applicant_questionnaire')
+    .select('id, first_name, last_name, email, phone, status, admin_data, applicant_questionnaire')
     .order('timestamp', { ascending: false })
     .limit(2000);
   if (sourceError) throw sourceError;
   const journeyRows = (sourceRows || []).filter((row) => {
+    const status = String((row as { status?: string }).status || '').trim().toLowerCase();
+    if (status && !['new', 'open', 'pending', 'checked_in', 'checked in'].includes(status)) return false;
+    const adminData = ((row as { admin_data?: Record<string, unknown> }).admin_data || {}) as Record<string, unknown>;
+    const pipelineStage = String(adminData.pipelineStage || '').trim().toLowerCase();
+    const progressedStages = new Set([
+      'live career overview session attended',
+      'leadership assessment form sent',
+      'leadership form submitted, awaiting evaluation',
+      'evaluation done',
+      'interview scheduled',
+      'final decision',
+    ]);
+    if (pipelineStage && progressedStages.has(pipelineStage)) return false;
     const aq = ((row as any).applicant_questionnaire || {}) as Record<string, unknown>;
     const resumeUrls = Array.isArray(aq.resumeUrls) ? aq.resumeUrls : [];
     return resumeUrls.some((x) => String(x || '').trim().length > 0);

@@ -14,7 +14,6 @@ const PipelineSettings: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [extension, setExtension] = useState('');
-  const [callerId, setCallerId] = useState('');
   const [dialingLocale, setDialingLocale] = useState('ca');
 
   useEffect(() => {
@@ -38,7 +37,6 @@ const PipelineSettings: React.FC = () => {
         const settings = await getPipelineUserCallSettings();
         if (cancelled) return;
         setExtension(settings?.extension || '');
-        setCallerId(settings?.caller_id || '');
         setDialingLocale(settings?.dialing_locale || 'ca');
       } catch (e) {
         if (!cancelled) {
@@ -75,44 +73,35 @@ const PipelineSettings: React.FC = () => {
   return (
     <Layout isAdmin>
       <div className="mx-auto w-full max-w-3xl p-6">
-        <div className="rounded-3xl border border-white/15 bg-slate-900/60 p-6 shadow-[0_26px_70px_-35px_rgba(15,23,42,0.9)] backdrop-blur-xl">
+        <div className="rounded-3xl border border-[#c8ddf4] bg-white p-6 shadow-[0_24px_64px_-36px_rgba(11,27,52,0.45)]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h1 className="text-xl font-semibold text-slate-100">Pipeline call settings</h1>
-              <p className="mt-1 text-sm text-slate-400">
+              <h1 className="text-xl font-semibold text-[#0B1B34]">Pipeline call settings</h1>
+              <p className="mt-1 text-sm text-[#365274]">
                 Saved per user and attached to dial, disposition, evaluation, and timeline logs.
               </p>
             </div>
-            <Link to="/pipeline" className="text-sm font-semibold text-sky-300 hover:text-sky-200">
+            <Link to="/pipeline" className="text-sm font-semibold text-[#005EB8] hover:text-[#0B1B34]">
               Back to pipeline
             </Link>
           </div>
 
           <div className="mt-6 grid gap-4 md:grid-cols-2">
-            <label className="text-sm text-slate-300">
+            <label className="text-sm text-[#0B1B34]">
               Extension
               <input
                 value={extension}
                 onChange={(e) => setExtension(e.target.value)}
                 placeholder="e.g. 102"
-                className="mt-1 w-full rounded-xl border border-white/15 bg-slate-950/40 px-3 py-2 text-sm text-slate-100"
+                className="mt-1 w-full rounded-xl border border-[#b8d2ef] bg-white px-3 py-2 text-sm text-[#0B1B34]"
               />
             </label>
-            <label className="text-sm text-slate-300">
-              Caller ID
-              <input
-                value={callerId}
-                onChange={(e) => setCallerId(e.target.value)}
-                placeholder="e.g. +14165551234"
-                className="mt-1 w-full rounded-xl border border-white/15 bg-slate-950/40 px-3 py-2 text-sm text-slate-100"
-              />
-            </label>
-            <label className="text-sm text-slate-300 md:col-span-2">
+            <label className="text-sm text-[#0B1B34] md:col-span-2">
               Dialing locale
               <select
                 value={dialingLocale}
                 onChange={(e) => setDialingLocale(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-white/15 bg-slate-950/40 px-3 py-2 text-sm text-slate-100"
+                className="mt-1 w-full rounded-xl border border-[#b8d2ef] bg-white px-3 py-2 text-sm text-[#0B1B34]"
               >
                 <option value="ca">Canada (default)</option>
                 <option value="us">United States</option>
@@ -129,7 +118,6 @@ const PipelineSettings: React.FC = () => {
                 try {
                   await savePipelineUserCallSettings({
                     extension,
-                    callerId,
                     dialingLocale,
                   });
                   setMessage('Settings saved.');
@@ -144,7 +132,7 @@ const PipelineSettings: React.FC = () => {
               {saving ? 'Saving…' : 'Save settings'}
             </Button>
             {(loading || message) && (
-              <p className="text-sm text-slate-300">{loading ? 'Loading settings…' : message}</p>
+              <p className="text-sm text-[#365274]">{loading ? 'Loading settings…' : message}</p>
             )}
           </div>
         </div>

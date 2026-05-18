@@ -15,12 +15,13 @@ import {
   getPipelineResumeDisplayUrl,
   getPipelineResumeOpenInNewTabUrl,
   getPipelineResumeViewerKind,
-  listPipelineCandidates,
+  listPipelineFreshJourneyCandidates,
   listPipelineCandidateActivityTimeline,
   listPipelineIncomingEmailLogs,
   listPipelineEmailSendLogs,
   getPipelineUserCallSettings,
   logPipelineCallAction,
+  markPipelineCandidateTouched,
   savePipelineUserCallSettings,
   savePipelineCallDisposition,
   savePipelineEvaluation,
@@ -343,6 +344,7 @@ const Pipeline: React.FC = () => {
   const [authError, setAuthError] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -352,8 +354,6 @@ const Pipeline: React.FC = () => {
   const [selectedResumeId, setSelectedResumeId] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
-  const [stageFilter, setStageFilter] = useState<string>('');
-  const [statusFilter, setStatusFilter] = useState<string>('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const [newNote, setNewNote] = useState('');
@@ -378,9 +378,9 @@ const Pipeline: React.FC = () => {
   const [callDispositionError, setCallDispositionError] = useState<string | null>(null);
   const [dialLogWarning, setDialLogWarning] = useState<string | null>(null);
   const [agentExtension, setAgentExtension] = useState('');
-  const [callerId, setCallerId] = useState('');
   const [dialingLocale, setDialingLocale] = useState('ca');
   const [callSettingsSaving, setCallSettingsSaving] = useState(false);
+  const [journeySyncing, setJourneySyncing] = useState(false);
   const [toneEnabled, setToneEnabled] = useState(true);
   const [logsDrawerOpen, setLogsDrawerOpen] = useState(false);
   const [timelineRows, setTimelineRows] = useState<PipelineActivityTimelineItem[]>([]);
@@ -427,14 +427,16 @@ const Pipeline: React.FC = () => {
     setError(null);
     setLoading(true);
     try {
-      try {
-        await syncJourneyResumesIntoPipeline();
-      } catch {
-        /* journey sync is best-effort until migration is applied */
-      }
-      const rows = await listPipelineCandidates();
+      const rows = await listPipelineFreshJourneyCandidates();
       setCandidates(rows);
-      if (!selectedCandidateId && rows.length > 0) setSelectedCandidateId(rows[0].id);
+      if (!rows.length) {
+        setSelectedCandidateId(null);
+        setSelectedBundle(null);
+        setSelectedResumeId(null);
+      } else if (!selectedCandidateId || !rows.some((r) => r.id === selectedCandidateId)) {
+        setSelectedBundle(null);
+        setSelectedCandidateId(rows[0].id);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -442,9 +444,22 @@ const Pipeline: React.FC = () => {
     }
   };
 
+  const syncJourneyQueue = async () => {
+    setJourneySyncing(true);
+    setError(null);
+    try {
+      await syncJourneyResumesIntoPipeline();
+      await loadCandidates();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setJourneySyncing(false);
+    }
+  };
+
   const loadSelectedBundle = async (candidateId: string) => {
     setError(null);
-    setLoading(true);
+    setDetailLoading(true);
     try {
       const bundle = await getPipelineCandidateBundle(candidateId);
       setSelectedBundle(bundle);
@@ -457,7 +472,7 @@ const Pipeline: React.FC = () => {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      setDetailLoading(false);
     }
   };
 
@@ -478,7 +493,6 @@ const Pipeline: React.FC = () => {
       .then((settings) => {
         if (cancelled || !settings) return;
         setAgentExtension(settings.extension || '');
-        setCallerId(settings.caller_id || '');
         setDialingLocale(settings.dialing_locale || 'ca');
       })
       .catch(() => {
@@ -493,10 +507,9 @@ const Pipeline: React.FC = () => {
   const callContext: PipelineCallContext = useMemo(
     () => ({
       extension: agentExtension.trim() || null,
-      callerId: callerId.trim() || null,
       dialingLocale: dialingLocale || null,
     }),
-    [agentExtension, callerId, dialingLocale],
+    [agentExtension, dialingLocale],
   );
 
   const loadTimeline = async (candidateId: string) => {
@@ -614,8 +627,6 @@ const Pipeline: React.FC = () => {
   const filteredCandidates = useMemo(() => {
     const q = search.trim().toLowerCase();
     return candidates.filter((c) => {
-      if (stageFilter && c.journey_stage !== stageFilter) return false;
-      if (statusFilter && c.status !== statusFilter) return false;
       if (!q) return true;
       return (
         safeName(c).toLowerCase().includes(q) ||
@@ -623,7 +634,7 @@ const Pipeline: React.FC = () => {
         String(c.email || '').toLowerCase().includes(q)
       );
     });
-  }, [candidates, search, stageFilter, statusFilter]);
+  }, [candidates, search]);
 
   const uploadFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -726,6 +737,7 @@ const Pipeline: React.FC = () => {
       const { data } = await supabase.auth.getUser();
       const actorLabel = String(data.user?.user_metadata?.full_name || data.user?.user_metadata?.name || data.user?.email || '').trim() || undefined;
       await addPipelineNote(selectedBundle.candidate.id, newNote, actorLabel);
+      await markPipelineCandidateTouched(selectedBundle.candidate.id);
       setNewNote('');
       setNotesCollapsed(true);
       await loadSelectedBundle(selectedBundle.candidate.id);
@@ -754,6 +766,7 @@ const Pipeline: React.FC = () => {
         actorLabel,
         callContext,
       });
+      await markPipelineCandidateTouched(selectedBundle.candidate.id);
       setEvaluationCollapsed(true);
       await loadSelectedBundle(selectedBundle.candidate.id);
       await loadTimeline(selectedBundle.candidate.id);
@@ -773,6 +786,7 @@ const Pipeline: React.FC = () => {
         selectedBundle.candidate.id,
         scheduledForInput ? new Date(scheduledForInput).toISOString() : null
       );
+      await markPipelineCandidateTouched(selectedBundle.candidate.id);
       await loadSelectedBundle(selectedBundle.candidate.id);
       await loadTimeline(selectedBundle.candidate.id);
       await loadCandidates();
@@ -789,7 +803,6 @@ const Pipeline: React.FC = () => {
     try {
       await savePipelineUserCallSettings({
         extension: agentExtension,
-        callerId,
         dialingLocale,
       });
       setCallActionMsg('Call settings saved.');
@@ -914,6 +927,7 @@ const Pipeline: React.FC = () => {
         actorLabel,
         callContext,
       });
+      await markPipelineCandidateTouched(selectedBundle.candidate.id);
       const withLog: PipelinePendingCallSession = { ...session, dialLogId: dialLog.id };
       setPendingCall(withLog);
       writePendingCallSession(withLog);
@@ -951,6 +965,7 @@ const Pipeline: React.FC = () => {
         actorLabel,
         callContext,
       });
+      await markPipelineCandidateTouched(pendingCall.candidateId);
       setPendingCall(null);
       writePendingCallSession(null);
       setCallDisposition('');
@@ -1025,6 +1040,7 @@ const Pipeline: React.FC = () => {
           actorLabel,
           callContext,
         });
+        await markPipelineCandidateTouched(selectedBundle.candidate.id);
         await loadSelectedBundle(selectedBundle.candidate.id);
         await loadTimeline(selectedBundle.candidate.id);
         return;
@@ -1047,6 +1063,7 @@ const Pipeline: React.FC = () => {
         actorLabel,
         callContext,
       });
+      await markPipelineCandidateTouched(selectedBundle.candidate.id);
       await loadSelectedBundle(selectedBundle.candidate.id);
       await loadTimeline(selectedBundle.candidate.id);
       try {
@@ -1207,13 +1224,13 @@ const Pipeline: React.FC = () => {
   return (
     <Layout isAdmin>
       <div className="w-full max-w-[1500px] mx-auto p-4 space-y-4">
-        <div className="rounded-3xl border border-white/15 bg-slate-900/55 p-4 shadow-[0_24px_70px_-36px_rgba(15,23,42,0.9)] backdrop-blur-xl flex flex-wrap items-center justify-between gap-3">
+        <div className="rounded-3xl border border-[#c8ddf4] bg-white p-4 shadow-[0_20px_55px_-34px_rgba(11,27,52,0.45)] flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-lg font-semibold text-slate-100">Pipeline</h1>
-            <p className="text-xs text-slate-400">Softphone-first workflow with timeline logs, notes, evaluations, and resume sources.</p>
+            <h1 className="text-lg font-semibold text-[#0B1B34]">Pipeline queue</h1>
+            <p className="text-xs text-[#365274]">Only newest untouched check-in resumes show here.</p>
           </div>
           <div className="flex items-center gap-2">
-            <label className="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-3 py-2 text-xs cursor-pointer hover:bg-slate-50">
+            <label className="inline-flex items-center gap-2 rounded-xl border border-[#b8d2ef] bg-white px-3 py-2 text-xs cursor-pointer hover:bg-[#f2f8ff] text-[#0B1B34]">
               <FileUp size={14} />
               {uploading ? 'Uploading…' : 'Bulk upload resumes'}
               <input
@@ -1229,7 +1246,11 @@ const Pipeline: React.FC = () => {
               <RefreshCw size={14} className={loading ? 'mr-1 animate-spin' : 'mr-1'} />
               Refresh
             </Button>
-            <Link to="/pipeline-settings" className="inline-flex items-center gap-1 rounded-xl border border-slate-400/60 px-3 py-2 text-xs text-slate-100 hover:bg-slate-800/50">
+            <Button variant="outline" onClick={() => void syncJourneyQueue()} disabled={journeySyncing} className="text-xs">
+              <RefreshCw size={13} className={journeySyncing ? 'mr-1 animate-spin' : 'mr-1'} />
+              {journeySyncing ? 'Syncing check-ins…' : 'Sync check-in resumes'}
+            </Button>
+            <Link to="/pipeline-settings" className="inline-flex items-center gap-1 rounded-xl border border-[#b8d2ef] px-3 py-2 text-xs text-[#0B1B34] hover:bg-[#f2f8ff]">
               <Settings2 size={13} />
               Pipeline settings
             </Link>
@@ -1239,48 +1260,36 @@ const Pipeline: React.FC = () => {
         {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">{error}</div>}
 
         <div className="grid grid-cols-1 xl:grid-cols-[340px_1fr] gap-4">
-          <div className="rounded-2xl border border-white/15 bg-slate-900/50 shadow-sm overflow-hidden backdrop-blur-xl">
+          <div className="rounded-2xl border border-[#cfe0f4] bg-white shadow-sm overflow-hidden">
             <div className="p-3 border-b border-slate-100 space-y-2">
               <div className="relative">
                 <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, phone, email" className="w-full rounded-lg border border-slate-200 pl-8 pr-3 py-2 text-xs" />
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value)} className="rounded-lg border border-slate-200 px-2 py-2 text-xs">
-                  <option value="">All stages</option>
-                  {JOURNEY_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
-                <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rounded-lg border border-slate-200 px-2 py-2 text-xs">
-                  <option value="">All status</option>
-                  <option value="open">open</option>
-                  <option value="in_progress">in_progress</option>
-                  <option value="closed">closed</option>
-                </select>
-              </div>
               <div className="flex items-center justify-between gap-2">
-                <p className="text-[11px] text-slate-500">Showing {filteredCandidates.length} / {candidates.length}</p>
+                <p className="text-[11px] text-[#1e3a63]">Queue: {filteredCandidates.length} untouched check-in resumes</p>
                 <Button variant="outline" className="!min-h-0 h-7 px-2 text-[11px]" onClick={() => void bulkDeleteSelected()} disabled={!selectedIds.size || loading}>
                   <Trash2 size={12} className="mr-1" /> Delete {selectedIds.size || ''}
                 </Button>
               </div>
             </div>
             <div className="max-h-[calc(100vh-250px)] overflow-auto">
-              <div className="sticky top-0 z-10 grid grid-cols-[1fr_1.2fr_90px] gap-2 bg-slate-50 border-b border-slate-200 px-3 py-1.5 text-[10px] uppercase tracking-wide text-slate-500">
+              <div className="sticky top-0 z-10 grid grid-cols-[1fr_1.2fr_90px] gap-2 bg-[#f3f8ff] border-b border-[#d6e5f6] px-3 py-1.5 text-[10px] uppercase tracking-wide text-[#365274]">
                 <span>Name</span>
                 <span>Contact</span>
                 <span className="text-right">Stage</span>
               </div>
               {filteredCandidates.map((c) => (
-                <div key={c.id} className={`w-full px-3 py-1.5 border-b border-slate-100 ${selectedCandidateId === c.id ? 'bg-slate-100' : 'hover:bg-slate-50'}`}>
+                <div key={c.id} className={`w-full px-3 py-1.5 border-b border-[#edf3fb] ${selectedCandidateId === c.id ? 'bg-[#eaf3ff]' : 'hover:bg-[#f8fbff]'}`}>
                   <div className="flex items-start gap-2">
                     <input type="checkbox" checked={selectedIds.has(c.id)} onChange={() => toggleSelectedId(c.id)} className="mt-1 rounded border-slate-300" />
                     <button type="button" onClick={() => setSelectedCandidateId(c.id)} className="flex-1 text-left min-w-0">
                       <div className="grid grid-cols-[1fr_1.2fr_90px] gap-2 items-center">
-                        <p className="text-xs font-medium text-slate-900 truncate">{safeName(c)}</p>
-                        <p className="text-[11px] text-slate-600 truncate">{c.phone || 'No phone'} {c.email ? `· ${c.email}` : ''}</p>
-                        <span className="text-[10px] rounded-full bg-slate-100 px-2 py-0.5 text-slate-700 text-right">{c.journey_stage}</span>
+                        <p className="text-xs font-semibold text-[#0B1B34] truncate">{safeName(c)}</p>
+                        <p className="text-[11px] text-[#365274] truncate">{c.phone || 'No phone'} {c.email ? `· ${c.email}` : ''}</p>
+                        <span className="text-[10px] rounded-full bg-[#e2efff] px-2 py-0.5 text-[#0B1B34] text-right">{c.journey_stage}</span>
                       </div>
-                      <p className="text-[10px] text-slate-500 mt-0.5">
+                      <p className="text-[10px] text-[#4c6788] mt-0.5">
                         {c.scheduled_for ? `Scheduled ${formatDateTimeCanadaEastern(c.scheduled_for)}` : 'No schedule'} · {c.status} · {c.source === 'journey_upload' ? 'Journey' : 'Upload'}
                       </p>
                     </button>
@@ -1288,13 +1297,15 @@ const Pipeline: React.FC = () => {
                 </div>
               ))}
               {!loading && filteredCandidates.length === 0 && (
-                <div className="p-6 text-center text-sm text-slate-500">No pipeline candidates yet.</div>
+                <div className="p-6 text-center text-sm text-[#365274]">No untouched check-in resumes in queue.</div>
               )}
             </div>
           </div>
 
-          <div className="rounded-2xl border border-white/15 bg-slate-900/40 shadow-sm overflow-hidden backdrop-blur-xl">
-            {!selectedBundle ? (
+          <div className="rounded-2xl border border-[#cfe0f4] bg-white shadow-sm overflow-hidden">
+            {detailLoading ? (
+              <div className="p-8 text-sm text-[#365274]">Loading candidate details…</div>
+            ) : !selectedBundle ? (
               <div className="p-8 text-sm text-slate-500">Select a candidate to open resume + call controls.</div>
             ) : (
               <div className="min-h-[calc(100vh-250px)] flex flex-col">
@@ -1409,23 +1420,17 @@ const Pipeline: React.FC = () => {
                         : 'Calls use the 3CX WebClient popup. Enter a number and Dial; you must log a disposition before placing another call.'}
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_120px_auto] gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_120px_auto] gap-2">
                       <input
                         value={agentExtension}
                         onChange={(e) => setAgentExtension(e.target.value)}
                         placeholder="Extension"
-                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
-                      />
-                      <input
-                        value={callerId}
-                        onChange={(e) => setCallerId(e.target.value)}
-                        placeholder="Caller ID"
-                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+                        className="rounded-lg border border-[#b8d2ef] px-2.5 py-1.5 text-xs"
                       />
                       <select
                         value={dialingLocale}
                         onChange={(e) => setDialingLocale(e.target.value)}
-                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+                        className="rounded-lg border border-[#b8d2ef] px-2.5 py-1.5 text-xs"
                       >
                         <option value="ca">CA</option>
                         <option value="us">US</option>
@@ -1726,31 +1731,31 @@ const Pipeline: React.FC = () => {
           )
         : null}
       {logsDrawerOpen && (
-        <div className="fixed inset-0 z-[120] bg-slate-950/45 backdrop-blur-sm">
-          <div className="absolute right-0 top-0 h-full w-full max-w-xl border-l border-white/15 bg-slate-900/95 shadow-2xl p-4 flex flex-col">
-            <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-3">
+        <div className="fixed inset-0 z-[120] bg-[#0B1B34]/20 backdrop-blur-sm">
+          <div className="absolute right-0 top-0 h-full w-full max-w-xl border-l border-[#cfe0f4] bg-white shadow-2xl p-4 flex flex-col">
+            <div className="flex items-center justify-between gap-2 border-b border-[#e2ecf8] pb-3">
               <div>
-                <p className="text-sm font-semibold text-slate-100">Activity logs</p>
-                <p className="text-[11px] text-slate-400">Timeline + call records (latest first)</p>
+                <p className="text-sm font-semibold text-[#0B1B34]">Activity logs</p>
+                <p className="text-[11px] text-[#365274]">Timeline + call records (latest first)</p>
               </div>
-              <button type="button" onClick={() => setLogsDrawerOpen(false)} className="rounded-lg border border-white/20 p-1.5 text-slate-200 hover:bg-slate-800/60">
+              <button type="button" onClick={() => setLogsDrawerOpen(false)} className="rounded-lg border border-[#cfe0f4] p-1.5 text-[#0B1B34] hover:bg-[#f2f8ff]">
                 <X size={14} />
               </button>
             </div>
             <div className="mt-3 flex-1 overflow-auto space-y-2 pr-1">
-              {timelineLoading && <p className="text-xs text-slate-400">Loading timeline…</p>}
+              {timelineLoading && <p className="text-xs text-[#365274]">Loading timeline…</p>}
               {timelineError && <p className="rounded-lg border border-red-400/30 bg-red-500/10 px-2 py-1 text-xs text-red-200">{timelineError}</p>}
-              {!timelineLoading && timelineRows.length === 0 && <p className="text-xs text-slate-500">No timeline entries yet.</p>}
+              {!timelineLoading && timelineRows.length === 0 && <p className="text-xs text-[#365274]">No timeline entries yet.</p>}
               {timelineRows.map((row) => (
-                <div key={`${row.kind}-${row.id}`} className="rounded-xl border border-white/10 bg-slate-950/50 p-2.5">
+                <div key={`${row.kind}-${row.id}`} className="rounded-xl border border-[#dbe8f7] bg-[#f8fbff] p-2.5">
                   <div className="flex items-start justify-between gap-2">
-                    <p className="text-xs font-semibold text-slate-100">{row.title}</p>
-                    <span className="text-[10px] text-slate-500">{formatDateTimeCanadaEastern(row.created_at)}</span>
+                    <p className="text-xs font-semibold text-[#0B1B34]">{row.title}</p>
+                    <span className="text-[10px] text-[#4c6788]">{formatDateTimeCanadaEastern(row.created_at)}</span>
                   </div>
-                  {row.actor_label && <p className="text-[10px] text-slate-400 mt-0.5">By {row.actor_label}</p>}
-                  {row.body && <p className="text-xs text-slate-200 mt-1 whitespace-pre-wrap">{row.body}</p>}
+                  {row.actor_label && <p className="text-[10px] text-[#4c6788] mt-0.5">By {row.actor_label}</p>}
+                  {row.body && <p className="text-xs text-[#0B1B34] mt-1 whitespace-pre-wrap">{row.body}</p>}
                   {row.kind === 'call_record' && row.metadata && (
-                    <p className="text-[10px] text-emerald-300 mt-1">
+                    <p className="text-[10px] text-[#1d7a4b] mt-1">
                       {String((row.metadata as Record<string, unknown>).dialed_number || '—')}
                     </p>
                   )}
@@ -1762,7 +1767,7 @@ const Pipeline: React.FC = () => {
       )}
       {notesPopout && typeof document !== 'undefined'
         ? createPortal(
-            <div className="fixed inset-0 z-[121] bg-slate-950/45 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-[121] bg-[#0B1B34]/20 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="w-full max-w-2xl rounded-2xl border border-blue-200 bg-white p-4 space-y-2 max-h-[88vh] overflow-auto">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-semibold text-blue-900">Notes</p>
@@ -1789,7 +1794,7 @@ const Pipeline: React.FC = () => {
         : null}
       {evaluationPopout && typeof document !== 'undefined'
         ? createPortal(
-            <div className="fixed inset-0 z-[122] bg-slate-950/45 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-[122] bg-[#0B1B34]/20 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="w-full max-w-3xl rounded-2xl border border-emerald-200 bg-white p-4 space-y-3 max-h-[90vh] overflow-auto">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-semibold text-emerald-900">Evaluation + schedule</p>
