@@ -15,8 +15,8 @@ import {
   getPipelineResumeDisplayUrl,
   getPipelineResumeOpenInNewTabUrl,
   getPipelineResumeViewerKind,
+  listPipelineAdminPushedJourneyCandidates,
   listPipelineManualCandidates,
-  listPipelineFreshJourneyCandidates,
   listPipelineCandidateActivityTimeline,
   listPipelineIncomingEmailLogs,
   listPipelineEmailSendLogs,
@@ -26,7 +26,6 @@ import {
   savePipelineUserCallSettings,
   savePipelineCallDisposition,
   savePipelineEvaluation,
-  syncJourneyResumesIntoPipeline,
   syncPipelineIncomingEmails,
   triggerPipelineResumeConversion,
   type PipelineActivityTimelineItem,
@@ -410,7 +409,6 @@ const Pipeline: React.FC = () => {
   const [agentExtension, setAgentExtension] = useState('');
   const [dialingLocale, setDialingLocale] = useState('ca');
   const [callSettingsSaving, setCallSettingsSaving] = useState(false);
-  const [journeySyncing, setJourneySyncing] = useState(false);
   const [toneEnabled, setToneEnabled] = useState(true);
   const [logsDrawerOpen, setLogsDrawerOpen] = useState(false);
   const [timelineRows, setTimelineRows] = useState<PipelineActivityTimelineItem[]>([]);
@@ -459,7 +457,7 @@ const Pipeline: React.FC = () => {
     try {
       const [manualRows, checkinRows] = await Promise.all([
         listPipelineManualCandidates(),
-        listPipelineFreshJourneyCandidates(),
+        listPipelineAdminPushedJourneyCandidates(),
       ]);
       const rows = [...checkinRows, ...manualRows].sort(
         (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
@@ -477,19 +475,6 @@ const Pipeline: React.FC = () => {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
-    }
-  };
-
-  const syncJourneyQueue = async () => {
-    setJourneySyncing(true);
-    setError(null);
-    try {
-      await syncJourneyResumesIntoPipeline();
-      await loadCandidates();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setJourneySyncing(false);
     }
   };
 
@@ -1314,10 +1299,6 @@ const Pipeline: React.FC = () => {
               <RefreshCw size={14} className={loading ? 'mr-1 animate-spin' : 'mr-1'} />
               Refresh
             </Button>
-            <Button variant="outline" onClick={() => void syncJourneyQueue()} disabled={journeySyncing} className="text-xs">
-              <RefreshCw size={13} className={journeySyncing ? 'mr-1 animate-spin' : 'mr-1'} />
-              {journeySyncing ? 'Syncing check-ins…' : 'Sync check-in resumes'}
-            </Button>
             <Link to="/pipeline-settings" className="inline-flex items-center gap-1 rounded-xl border border-[#b8d2ef] px-3 py-2 text-xs text-[#0B1B34] hover:bg-[#f2f8ff]">
               <Settings2 size={13} />
               Pipeline settings
@@ -1393,7 +1374,7 @@ const Pipeline: React.FC = () => {
               {!loading && filteredCandidates.length === 0 && (
                 <div className="p-6 text-center text-sm text-[#365274]">
                   {leftSection === 'checkin'
-                    ? 'No new check-in resumes available.'
+                    ? 'No check-in resumes sent from Candidates page yet.'
                     : 'No manually uploaded resumes available.'}
                 </div>
               )}

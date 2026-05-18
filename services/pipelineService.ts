@@ -614,6 +614,17 @@ export async function listPipelineManualCandidates(): Promise<PipelineCandidate[
   return rows.filter((c) => String(c.source || '').toLowerCase() !== 'journey_upload');
 }
 
+export async function listPipelineAdminPushedJourneyCandidates(): Promise<PipelineCandidate[]> {
+  const rows = await listPipelineCandidates();
+  return rows.filter((c) => {
+    const source = String(c.source || '').toLowerCase();
+    if (source !== 'journey_upload') return false;
+    const metadata = c.metadata && typeof c.metadata === 'object' ? c.metadata : {};
+    const origin = String((metadata as Record<string, unknown>).source_origin || '').trim().toLowerCase();
+    return origin === 'admin_push';
+  });
+}
+
 export async function listPipelineFreshJourneyCandidates(): Promise<PipelineCandidate[]> {
   const rows = await listPipelineCandidates();
   const queue = rows.filter((c) => {
