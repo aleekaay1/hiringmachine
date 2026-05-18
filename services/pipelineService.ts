@@ -354,6 +354,11 @@ function isModernJourneyPipelineMetadata(metadata: Record<string, unknown>): boo
   return queueVersion === 'v2' || sourceOrigin === 'admin_push' || sourceOrigin === 'checkin_journey';
 }
 
+function isAdminPushJourneyPipelineMetadata(metadata: Record<string, unknown>): boolean {
+  const sourceOrigin = String(metadata.source_origin || '').trim().toLowerCase();
+  return sourceOrigin === 'admin_push';
+}
+
 function mergeCallContextMetadata(
   existing: Record<string, unknown> | null | undefined,
   callContext?: PipelineCallContext | null,
@@ -862,7 +867,10 @@ async function upsertJourneyRowsIntoPipeline(
   for (const c of existingCandidates) {
     if (String(c.source || '').trim().toLowerCase() !== 'journey_upload') continue;
     const metadata = candidateMetadata(c);
-    if (!isModernJourneyPipelineMetadata(metadata)) continue;
+    const shouldUseForDedupe = sourceOrigin === 'admin_push'
+      ? isAdminPushJourneyPipelineMetadata(metadata)
+      : isModernJourneyPipelineMetadata(metadata);
+    if (!shouldUseForDedupe) continue;
     const sourceCandidateId = sourceCandidateIdFromMetadata(metadata);
     if (sourceCandidateId) bySourceCandidateId.set(sourceCandidateId, c);
   }
@@ -1015,7 +1023,7 @@ export async function listSourceCandidateIdsInPipeline(): Promise<Set<string>> {
   const ids = new Set<string>();
   for (const row of data || []) {
     const metadata = candidateMetadata(row);
-    if (!isModernJourneyPipelineMetadata(metadata)) continue;
+    if (!isAdminPushJourneyPipelineMetadata(metadata)) continue;
     const id = sourceCandidateIdFromMetadata(metadata);
     if (id) ids.add(id);
   }
