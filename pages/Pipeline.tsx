@@ -13,6 +13,7 @@ import {
   deletePipelineCandidate,
   getPipelineCandidateBundle,
   getPipelineResumeDisplayUrl,
+  getPipelineResumeOpenInNewTabUrl,
   getPipelineResumeViewerKind,
   listPipelineCandidates,
   listPipelineCandidateActivityTimeline,
@@ -1358,7 +1359,14 @@ const Pipeline: React.FC = () => {
                             {docPreviewText}
                           </pre>
                         )}
-                        <a href={url} target="_blank" rel="noreferrer" className="block text-blue-700 underline">Open source file</a>
+                        <a
+                          href={getPipelineResumeOpenInNewTabUrl(selectedResume) || url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block text-blue-700 underline"
+                        >
+                          Open in new tab
+                        </a>
                       </div>
                     );
                   })() : (

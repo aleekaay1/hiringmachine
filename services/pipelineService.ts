@@ -553,12 +553,54 @@ function fileViewerKind(resume: PipelineResume): 'pdf' | 'image' | 'other' {
   return 'other';
 }
 
+function isHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function resumeExtension(resume: PipelineResume): string {
+  const name = String(resume.original_filename || '').trim().toLowerCase();
+  const dot = name.lastIndexOf('.');
+  return dot >= 0 ? name.slice(dot + 1) : '';
+}
+
 export function getPipelineResumeDisplayUrl(resume: PipelineResume): string | null {
   return resume.converted_pdf_url || resume.public_url;
 }
 
 export function getPipelineResumeViewerKind(resume: PipelineResume): 'pdf' | 'image' | 'other' {
   return fileViewerKind(resume);
+}
+
+export function getPipelineResumeOpenInNewTabUrl(resume: PipelineResume): string | null {
+  const displayUrl = getPipelineResumeDisplayUrl(resume);
+  if (!displayUrl) return null;
+
+  // Preserve current inline-friendly behavior for PDF/image resumes.
+  if (getPipelineResumeViewerKind(resume) !== 'other') return displayUrl;
+
+  // If a converted PDF exists for a non-inline source, prefer it for best tab viewing.
+  if (resume.converted_pdf_url) return resume.converted_pdf_url;
+
+  const sourceUrl = String(resume.public_url || '').trim();
+  if (!sourceUrl || !isHttpUrl(sourceUrl)) return sourceUrl || null;
+
+  const ext = resumeExtension(resume);
+  const mime = String(resume.mime_type || '').toLowerCase();
+
+  if (ext === 'doc' || ext === 'docx') {
+    return `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(sourceUrl)}`;
+  }
+
+  if (ext === 'rtf' || ext === 'txt' || mime.startsWith('text/') || mime.includes('rtf')) {
+    return `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(sourceUrl)}`;
+  }
+
+  return sourceUrl;
 }
 
 export async function listPipelineCandidates(): Promise<PipelineCandidate[]> {
