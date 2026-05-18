@@ -61,6 +61,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.m
 
 const JOURNEY_OPTIONS = ['new', 'queued_for_call', 'attempted', 'connected', 'follow_up', 'qualified', 'not_interested', 'hired'];
 const DISPOSITION_OPTIONS = ['Need callback', 'No answer', 'Connected', 'Not interested', 'Qualified', 'Close'];
+const PIPELINE_UI_CACHE_KEY = 'pipeline_ui_cache_v1';
 const DIAL_PAD = [
   { d: '1', s: '' },
   { d: '2', s: 'ABC' },
@@ -219,6 +220,33 @@ function writePendingCallSession(session: PipelinePendingCallSession | null): vo
     return;
   }
   window.localStorage.setItem(PIPELINE_PENDING_CALL_STORAGE_KEY, JSON.stringify(session));
+}
+
+type PipelineUiCache = {
+  candidates: PipelineCandidate[];
+  selectedCandidateId: string | null;
+  selectedBundle: PipelineCandidateBundle | null;
+  selectedResumeId: string | null;
+  timelineRows: PipelineActivityTimelineItem[];
+  cachedAt: string;
+};
+
+function readPipelineUiCache(): PipelineUiCache | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(PIPELINE_UI_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PipelineUiCache;
+    if (!parsed || !Array.isArray(parsed.candidates)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writePipelineUiCache(cache: PipelineUiCache): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(PIPELINE_UI_CACHE_KEY, JSON.stringify(cache));
 }
 
 type CallDispositionPanelProps = {
@@ -490,6 +518,16 @@ const Pipeline: React.FC = () => {
         setIsAuthenticated(true);
         const restored = readPendingCallSession();
         if (restored) setPendingCall(restored);
+        const cache = readPipelineUiCache();
+        if (cache) {
+          setCandidates(cache.candidates || []);
+          setSelectedCandidateId(cache.selectedCandidateId || null);
+          setSelectedBundle(cache.selectedBundle || null);
+          setSelectedResumeId(cache.selectedResumeId || null);
+          setTimelineRows(cache.timelineRows || []);
+        } else {
+          void loadCandidates();
+        }
       }
     });
   }, []);
@@ -525,7 +563,7 @@ const Pipeline: React.FC = () => {
     setTimelineError(null);
     try {
       const rows = await listPipelineCandidateActivityTimeline(candidateId);
-      setTimelineRows(rows);
+      setTimelineRows(rows.filter((r) => r.kind === 'call_log' || r.kind === 'call_record'));
     } catch (e) {
       setTimelineError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -534,12 +572,22 @@ const Pipeline: React.FC = () => {
   };
 
   useEffect(() => {
-    if (isAuthenticated) void loadCandidates();
-  }, [isAuthenticated]);
+    if (!selectedCandidateId || !isAuthenticated) return;
+    if (selectedBundle?.candidate.id === selectedCandidateId) return;
+    void loadSelectedBundle(selectedCandidateId);
+  }, [selectedCandidateId, isAuthenticated, selectedBundle?.candidate.id]);
 
   useEffect(() => {
-    if (selectedCandidateId && isAuthenticated) void loadSelectedBundle(selectedCandidateId);
-  }, [selectedCandidateId, isAuthenticated]);
+    if (!isAuthenticated) return;
+    writePipelineUiCache({
+      candidates,
+      selectedCandidateId,
+      selectedBundle,
+      selectedResumeId,
+      timelineRows,
+      cachedAt: new Date().toISOString(),
+    });
+  }, [isAuthenticated, candidates, selectedCandidateId, selectedBundle, selectedResumeId, timelineRows]);
 
   useEffect(() => {
     const c = selectedBundle?.candidate;
@@ -1785,8 +1833,8 @@ const Pipeline: React.FC = () => {
           <div className="absolute right-0 top-0 h-full w-full max-w-xl border-l border-[#cfe0f4] bg-white shadow-2xl p-4 flex flex-col">
             <div className="flex items-center justify-between gap-2 border-b border-[#e2ecf8] pb-3">
               <div>
-                <p className="text-sm font-semibold text-[#0B1B34]">Activity logs</p>
-                <p className="text-[11px] text-[#365274]">Timeline + call records (latest first)</p>
+                <p className="text-sm font-semibold text-[#0B1B34]">Call logs</p>
+                <p className="text-[11px] text-[#365274]">Dial logs + dispositions (latest first)</p>
               </div>
               <button type="button" onClick={() => setLogsDrawerOpen(false)} className="rounded-lg border border-[#cfe0f4] p-1.5 text-[#0B1B34] hover:bg-[#f2f8ff]">
                 <X size={14} />
@@ -1799,15 +1847,21 @@ const Pipeline: React.FC = () => {
               {timelineRows.map((row) => (
                 <div key={`${row.kind}-${row.id}`} className="rounded-xl border border-[#dbe8f7] bg-[#f8fbff] p-2.5">
                   <div className="flex items-start justify-between gap-2">
-                    <p className="text-xs font-semibold text-[#0B1B34]">{row.title}</p>
+                    <p className="text-xs font-semibold text-[#0B1B34]">
+                      {row.kind === 'call_record'
+                        ? row.title
+                        : row.title.replace(/^Log:\s*/i, '').replace(/_/g, ' ')}
+                    </p>
                     <span className="text-[10px] text-[#4c6788]">{formatDateTimeCanadaEastern(row.created_at)}</span>
                   </div>
                   {row.actor_label && <p className="text-[10px] text-[#4c6788] mt-0.5">By {row.actor_label}</p>}
-                  {row.body && <p className="text-xs text-[#0B1B34] mt-1 whitespace-pre-wrap">{row.body}</p>}
                   {row.kind === 'call_record' && row.metadata && (
                     <p className="text-[10px] text-[#1d7a4b] mt-1">
                       {String((row.metadata as Record<string, unknown>).dialed_number || '—')}
                     </p>
+                  )}
+                  {row.kind === 'call_log' && row.body && (
+                    <p className="text-[10px] text-[#4c6788] mt-1">{row.body}</p>
                   )}
                 </div>
               ))}
