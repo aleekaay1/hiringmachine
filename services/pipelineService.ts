@@ -338,6 +338,22 @@ function normalizeName(value: string | null | undefined): string {
     .replace(/\s+/g, ' ');
 }
 
+function candidateMetadata(record: { metadata?: unknown } | null | undefined): Record<string, unknown> {
+  return record?.metadata && typeof record.metadata === 'object'
+    ? (record.metadata as Record<string, unknown>)
+    : {};
+}
+
+function sourceCandidateIdFromMetadata(metadata: Record<string, unknown>): string {
+  return String(metadata.source_candidate_id || '').trim();
+}
+
+function isModernJourneyPipelineMetadata(metadata: Record<string, unknown>): boolean {
+  const queueVersion = String(metadata.pipeline_queue_version || '').trim().toLowerCase();
+  const sourceOrigin = String(metadata.source_origin || '').trim().toLowerCase();
+  return queueVersion === 'v2' || sourceOrigin === 'admin_push' || sourceOrigin === 'checkin_journey';
+}
+
 function mergeCallContextMetadata(
   existing: Record<string, unknown> | null | undefined,
   callContext?: PipelineCallContext | null,
@@ -844,8 +860,10 @@ async function upsertJourneyRowsIntoPipeline(
   const existingCandidates = await listPipelineCandidates();
   const bySourceCandidateId = new Map<string, PipelineCandidate>();
   for (const c of existingCandidates) {
-    const metadata = c.metadata && typeof c.metadata === 'object' ? c.metadata : {};
-    const sourceCandidateId = String((metadata as Record<string, unknown>).source_candidate_id || '').trim();
+    if (String(c.source || '').trim().toLowerCase() !== 'journey_upload') continue;
+    const metadata = candidateMetadata(c);
+    if (!isModernJourneyPipelineMetadata(metadata)) continue;
+    const sourceCandidateId = sourceCandidateIdFromMetadata(metadata);
     if (sourceCandidateId) bySourceCandidateId.set(sourceCandidateId, c);
   }
 
@@ -996,10 +1014,9 @@ export async function listSourceCandidateIdsInPipeline(): Promise<Set<string>> {
   if (error) throw error;
   const ids = new Set<string>();
   for (const row of data || []) {
-    const metadata = row?.metadata && typeof row.metadata === 'object'
-      ? row.metadata as Record<string, unknown>
-      : {};
-    const id = String(metadata.source_candidate_id || '').trim();
+    const metadata = candidateMetadata(row);
+    if (!isModernJourneyPipelineMetadata(metadata)) continue;
+    const id = sourceCandidateIdFromMetadata(metadata);
     if (id) ids.add(id);
   }
   return ids;
