@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { CandidateMailbox } from '../components/CandidateMailbox';
 import { Button } from '../components/UI';
@@ -14,15 +15,21 @@ import {
   getPipelineResumeDisplayUrl,
   getPipelineResumeViewerKind,
   listPipelineCandidates,
+  listPipelineCandidateActivityTimeline,
   listPipelineIncomingEmailLogs,
   listPipelineEmailSendLogs,
+  getPipelineUserCallSettings,
   logPipelineCallAction,
+  savePipelineUserCallSettings,
   savePipelineCallDisposition,
   savePipelineEvaluation,
+  syncJourneyResumesIntoPipeline,
   syncPipelineIncomingEmails,
   triggerPipelineResumeConversion,
+  type PipelineActivityTimelineItem,
   type PipelineCandidate,
   type PipelineCandidateBundle,
+  type PipelineCallContext,
   type PipelineEmailSendLog,
   type PipelineIncomingEmailLog,
   type PipelineCandidateProfile,
@@ -42,7 +49,7 @@ import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { sendEmail } from '../services/emailService';
 import { normalizeMessageIdForHeader, subjectForReply } from '../services/inboundEmailFormat';
 import { appendEmailSignatureToHtml } from '../services/emailSignatureHtml';
-import { ExternalLink, FileUp, Phone, RefreshCw, Search, Trash2, Volume2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, ExternalLink, FileUp, Logs, Maximize2, Minimize2, Phone, RefreshCw, Search, Settings2, Trash2, Volume2, X } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -369,7 +376,19 @@ const Pipeline: React.FC = () => {
   const [callDispositionSaving, setCallDispositionSaving] = useState(false);
   const [callDispositionError, setCallDispositionError] = useState<string | null>(null);
   const [dialLogWarning, setDialLogWarning] = useState<string | null>(null);
+  const [agentExtension, setAgentExtension] = useState('');
+  const [callerId, setCallerId] = useState('');
+  const [dialingLocale, setDialingLocale] = useState('ca');
+  const [callSettingsSaving, setCallSettingsSaving] = useState(false);
   const [toneEnabled, setToneEnabled] = useState(true);
+  const [logsDrawerOpen, setLogsDrawerOpen] = useState(false);
+  const [timelineRows, setTimelineRows] = useState<PipelineActivityTimelineItem[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineError, setTimelineError] = useState<string | null>(null);
+  const [notesCollapsed, setNotesCollapsed] = useState(false);
+  const [evaluationCollapsed, setEvaluationCollapsed] = useState(false);
+  const [notesPopout, setNotesPopout] = useState(false);
+  const [evaluationPopout, setEvaluationPopout] = useState(false);
   const [emailTemplateId, setEmailTemplateId] = useState<string>('no_answer_followup');
   const [emailTo, setEmailTo] = useState('');
   const [emailCc, setEmailCc] = useState('');
@@ -407,6 +426,11 @@ const Pipeline: React.FC = () => {
     setError(null);
     setLoading(true);
     try {
+      try {
+        await syncJourneyResumesIntoPipeline();
+      } catch {
+        /* journey sync is best-effort until migration is applied */
+      }
       const rows = await listPipelineCandidates();
       setCandidates(rows);
       if (!selectedCandidateId && rows.length > 0) setSelectedCandidateId(rows[0].id);
@@ -446,7 +470,46 @@ const Pipeline: React.FC = () => {
     });
   }, []);
 
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let cancelled = false;
+    void getPipelineUserCallSettings()
+      .then((settings) => {
+        if (cancelled || !settings) return;
+        setAgentExtension(settings.extension || '');
+        setCallerId(settings.caller_id || '');
+        setDialingLocale(settings.dialing_locale || 'ca');
+      })
+      .catch(() => {
+        /* settings table may not exist before migration; ignore */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated]);
+
   const dialerLocked = Boolean(pendingCall);
+  const callContext: PipelineCallContext = useMemo(
+    () => ({
+      extension: agentExtension.trim() || null,
+      callerId: callerId.trim() || null,
+      dialingLocale: dialingLocale || null,
+    }),
+    [agentExtension, callerId, dialingLocale],
+  );
+
+  const loadTimeline = async (candidateId: string) => {
+    setTimelineLoading(true);
+    setTimelineError(null);
+    try {
+      const rows = await listPipelineCandidateActivityTimeline(candidateId);
+      setTimelineRows(rows);
+    } catch (e) {
+      setTimelineError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTimelineLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (isAuthenticated) void loadCandidates();
@@ -482,6 +545,12 @@ const Pipeline: React.FC = () => {
     void listPipelineEmailSendLogs(c.id)
       .then(setEmailSendLogs)
       .catch(() => setEmailSendLogs([]));
+    void loadTimeline(c.id);
+  }, [selectedBundle?.candidate.id]);
+
+  useEffect(() => {
+    setNotesPopout(false);
+    setEvaluationPopout(false);
   }, [selectedBundle?.candidate.id]);
 
   const selectedResume: PipelineResume | null = useMemo(() => {
@@ -657,7 +726,9 @@ const Pipeline: React.FC = () => {
       const actorLabel = String(data.user?.user_metadata?.full_name || data.user?.user_metadata?.name || data.user?.email || '').trim() || undefined;
       await addPipelineNote(selectedBundle.candidate.id, newNote, actorLabel);
       setNewNote('');
+      setNotesCollapsed(true);
       await loadSelectedBundle(selectedBundle.candidate.id);
+      await loadTimeline(selectedBundle.candidate.id);
       await loadCandidates();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -680,8 +751,11 @@ const Pipeline: React.FC = () => {
         journeyStage,
         comments: evaluationComments,
         actorLabel,
+        callContext,
       });
+      setEvaluationCollapsed(true);
       await loadSelectedBundle(selectedBundle.candidate.id);
+      await loadTimeline(selectedBundle.candidate.id);
       await loadCandidates();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -699,11 +773,29 @@ const Pipeline: React.FC = () => {
         scheduledForInput ? new Date(scheduledForInput).toISOString() : null
       );
       await loadSelectedBundle(selectedBundle.candidate.id);
+      await loadTimeline(selectedBundle.candidate.id);
       await loadCandidates();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setScheduleSaving(false);
+    }
+  };
+
+  const saveCallSettings = async () => {
+    setCallSettingsSaving(true);
+    setCallActionMsg(null);
+    try {
+      await savePipelineUserCallSettings({
+        extension: agentExtension,
+        callerId,
+        dialingLocale,
+      });
+      setCallActionMsg('Call settings saved.');
+    } catch (e) {
+      setCallActionMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCallSettingsSaving(false);
     }
   };
 
@@ -815,10 +907,11 @@ const Pipeline: React.FC = () => {
         resumeId: selectedResume?.id ?? null,
         action: 'dial_webclient_popup',
         outcome: 'ok',
-        agentExtension: null,
+        agentExtension: agentExtension.trim() || null,
         requestPayload: { destination: normalizedDestination },
         responsePayload: { mode: 'webclient_popup', url },
         actorLabel,
+        callContext,
       });
       const withLog: PipelinePendingCallSession = { ...session, dialLogId: dialLog.id };
       setPendingCall(withLog);
@@ -855,6 +948,7 @@ const Pipeline: React.FC = () => {
           session_id: pendingCall.sessionId,
         },
         actorLabel,
+        callContext,
       });
       setPendingCall(null);
       writePendingCallSession(null);
@@ -865,6 +959,7 @@ const Pipeline: React.FC = () => {
       const refreshId = selectedBundle?.candidate.id || pendingCall.candidateId;
       if (refreshId) {
         await loadSelectedBundle(refreshId);
+        await loadTimeline(refreshId);
         await loadCandidates();
       }
     } catch (e) {
@@ -927,8 +1022,10 @@ const Pipeline: React.FC = () => {
           },
           responsePayload: { error: result.error || 'Failed to send email.' },
           actorLabel,
+          callContext,
         });
         await loadSelectedBundle(selectedBundle.candidate.id);
+        await loadTimeline(selectedBundle.candidate.id);
         return;
       }
       setEmailMsg('Email sent successfully.');
@@ -947,8 +1044,10 @@ const Pipeline: React.FC = () => {
         },
         responsePayload: { trigger: `pipeline_${emailTemplateId}` },
         actorLabel,
+        callContext,
       });
       await loadSelectedBundle(selectedBundle.candidate.id);
+      await loadTimeline(selectedBundle.candidate.id);
       try {
         const out = await listPipelineEmailSendLogs(selectedBundle.candidate.id);
         setEmailSendLogs(out);
@@ -1000,6 +1099,7 @@ const Pipeline: React.FC = () => {
       setProfileMsg('Candidate profile saved.');
       if (selectedBundle.candidate.id) {
         await loadSelectedBundle(selectedBundle.candidate.id);
+        await loadTimeline(selectedBundle.candidate.id);
       }
       await loadCandidates();
     } catch (e) {
@@ -1105,11 +1205,11 @@ const Pipeline: React.FC = () => {
 
   return (
     <Layout isAdmin>
-      <div className="w-full max-w-[1400px] mx-auto p-4 space-y-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm flex flex-wrap items-center justify-between gap-3">
+      <div className="w-full max-w-[1500px] mx-auto p-4 space-y-4">
+        <div className="rounded-3xl border border-white/15 bg-slate-900/55 p-4 shadow-[0_24px_70px_-36px_rgba(15,23,42,0.9)] backdrop-blur-xl flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-lg font-semibold text-slate-900">Pipeline</h1>
-            <p className="text-xs text-slate-500">Bulk resume intake, inline review, 3CX call controls, and candidate progression.</p>
+            <h1 className="text-lg font-semibold text-slate-100">Pipeline</h1>
+            <p className="text-xs text-slate-400">Softphone-first workflow with timeline logs, notes, evaluations, and resume sources.</p>
           </div>
           <div className="flex items-center gap-2">
             <label className="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-3 py-2 text-xs cursor-pointer hover:bg-slate-50">
@@ -1128,13 +1228,17 @@ const Pipeline: React.FC = () => {
               <RefreshCw size={14} className={loading ? 'mr-1 animate-spin' : 'mr-1'} />
               Refresh
             </Button>
+            <Link to="/pipeline-settings" className="inline-flex items-center gap-1 rounded-xl border border-slate-400/60 px-3 py-2 text-xs text-slate-100 hover:bg-slate-800/50">
+              <Settings2 size={13} />
+              Pipeline settings
+            </Link>
           </div>
         </div>
 
         {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">{error}</div>}
 
         <div className="grid grid-cols-1 xl:grid-cols-[340px_1fr] gap-4">
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div className="rounded-2xl border border-white/15 bg-slate-900/50 shadow-sm overflow-hidden backdrop-blur-xl">
             <div className="p-3 border-b border-slate-100 space-y-2">
               <div className="relative">
                 <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -1176,7 +1280,7 @@ const Pipeline: React.FC = () => {
                         <span className="text-[10px] rounded-full bg-slate-100 px-2 py-0.5 text-slate-700 text-right">{c.journey_stage}</span>
                       </div>
                       <p className="text-[10px] text-slate-500 mt-0.5">
-                        {c.scheduled_for ? `Scheduled ${formatDateTimeCanadaEastern(c.scheduled_for)}` : 'No schedule'} · {c.status}
+                        {c.scheduled_for ? `Scheduled ${formatDateTimeCanadaEastern(c.scheduled_for)}` : 'No schedule'} · {c.status} · {c.source === 'journey_upload' ? 'Journey' : 'Upload'}
                       </p>
                     </button>
                   </div>
@@ -1188,16 +1292,26 @@ const Pipeline: React.FC = () => {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div className="rounded-2xl border border-white/15 bg-slate-900/40 shadow-sm overflow-hidden backdrop-blur-xl">
             {!selectedBundle ? (
               <div className="p-8 text-sm text-slate-500">Select a candidate to open resume + call controls.</div>
             ) : (
               <div className="min-h-[calc(100vh-250px)] flex flex-col">
                 <div className="px-3 py-2.5 border-b border-slate-100 flex flex-wrap items-center gap-2">
                   <p className="text-sm font-semibold text-slate-900 flex-1 truncate">{safeName(selectedBundle.candidate)}</p>
+                  <span className={`text-[10px] rounded-full px-2 py-0.5 ${
+                    selectedBundle.candidate.source === 'journey_upload'
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : 'bg-blue-100 text-blue-700'
+                  }`}>
+                    {selectedBundle.candidate.source === 'journey_upload' ? 'Journey upload' : 'Bought upload'}
+                  </span>
                   <select value={selectedResume?.id || ''} onChange={(e) => setSelectedResumeId(e.target.value)} className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs">
                     {selectedBundle.resumes.map((r) => (
-                      <option key={r.id} value={r.id}>{r.original_filename}</option>
+                      <option key={r.id} value={r.id}>
+                        {(r.resume_source === 'journey_upload' ? '[Journey] ' : '[Upload] ')}
+                        {r.original_filename}
+                      </option>
                     ))}
                   </select>
                   <Button variant="outline" className="!min-h-0 h-8 px-2 text-xs" onClick={() => void deleteCurrentCandidate()} disabled={loading}>
@@ -1257,6 +1371,21 @@ const Pipeline: React.FC = () => {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide flex items-center gap-1"><Phone size={13} /> Softphone dialer</h3>
                       <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setLogsDrawerOpen(true)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-100"
+                        >
+                          <Logs size={12} />
+                          Logs
+                        </button>
+                        <Link
+                          to="/pipeline-settings"
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-100"
+                        >
+                          <Settings2 size={12} />
+                          Settings
+                        </Link>
                         <button type="button" onClick={() => setToneEnabled((v) => !v)} className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] ${toneEnabled ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-500'}`}>
                           <Volume2 size={12} /> Key tones
                         </button>
@@ -1270,6 +1399,38 @@ const Pipeline: React.FC = () => {
                       {dialerLocked
                         ? 'Call in progress — save a disposition below to unlock the dialer for the next call.'
                         : 'Calls use the 3CX WebClient popup. Enter a number and Dial; you must log a disposition before placing another call.'}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_120px_auto] gap-2">
+                      <input
+                        value={agentExtension}
+                        onChange={(e) => setAgentExtension(e.target.value)}
+                        placeholder="Extension"
+                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+                      />
+                      <input
+                        value={callerId}
+                        onChange={(e) => setCallerId(e.target.value)}
+                        placeholder="Caller ID"
+                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+                      />
+                      <select
+                        value={dialingLocale}
+                        onChange={(e) => setDialingLocale(e.target.value)}
+                        className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs"
+                      >
+                        <option value="ca">CA</option>
+                        <option value="us">US</option>
+                        <option value="intl">INTL</option>
+                      </select>
+                      <Button
+                        variant="outline"
+                        className="!min-h-0 h-8 text-xs"
+                        onClick={() => void saveCallSettings()}
+                        disabled={callSettingsSaving}
+                      >
+                        {callSettingsSaving ? 'Saving…' : 'Save call prefs'}
+                      </Button>
                     </div>
 
                     {pendingCall && (
@@ -1387,89 +1548,94 @@ const Pipeline: React.FC = () => {
                     candidateEmail={String(selectedBundle.candidate.email || profileEmail || '').trim()}
                   />
 
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                    <section className="rounded-xl border border-slate-200 p-3 space-y-2">
-                      <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Notes</h3>
-                      <div className="space-y-2 max-h-40 overflow-auto">
-                        {selectedBundle.notes.map((n) => (
-                          <div key={n.id} className="rounded-lg bg-slate-50 border border-slate-100 p-2">
-                            <p className="text-xs text-slate-800 whitespace-pre-wrap">{n.body}</p>
-                            <p className="text-[10px] text-slate-500 mt-1">{formatDateTimeCanadaEastern(n.created_at)}{n.author_label ? ` · ${n.author_label}` : ''}</p>
+                  <div className="space-y-3">
+                    {!notesPopout && (
+                      <section className="rounded-xl border border-blue-200 bg-blue-50/40 p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <h3 className="text-xs font-semibold text-blue-900 uppercase tracking-wide">Notes</h3>
+                          <div className="flex items-center gap-1">
+                            <button type="button" onClick={() => setNotesCollapsed((v) => !v)} className="rounded-lg border border-blue-300 bg-white px-2 py-1 text-[11px] text-blue-900">
+                              {notesCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+                            </button>
+                            <button type="button" onClick={() => setNotesPopout(true)} className="rounded-lg border border-blue-300 bg-white px-2 py-1 text-[11px] text-blue-900">
+                              <Maximize2 size={12} />
+                            </button>
                           </div>
-                        ))}
-                        {selectedBundle.notes.length === 0 && <p className="text-xs text-slate-400">No notes yet.</p>}
-                      </div>
-                      <textarea value={newNote} onChange={(e) => setNewNote(e.target.value)} rows={3} placeholder="Write note…" className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                      <Button onClick={() => void addNote()} disabled={!newNote.trim() || noteSaving}>
-                        {noteSaving ? 'Saving…' : 'Add note'}
-                      </Button>
-                    </section>
-
-                    <section className="rounded-xl border border-slate-200 p-3 space-y-2">
-                      <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Evaluation + schedule</h3>
-                      <div className="grid grid-cols-2 gap-2">
-                        <label className="text-xs text-slate-600">
-                          Fit (1-10)
-                          <input type="number" min={1} max={10} value={fitScore ?? ''} onChange={(e) => setFitScore(e.target.value ? Number(e.target.value) : null)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                        </label>
-                        <label className="text-xs text-slate-600">
-                          Journey stage
-                          <select value={journeyStage} onChange={(e) => setJourneyStage(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs">
-                            {JOURNEY_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-                          </select>
-                        </label>
-                        <label className="text-xs text-slate-600 col-span-2">
-                          Disposition
-                          <select value={disposition} onChange={(e) => setDisposition(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs">
-                            <option value="">Select</option>
-                            {DISPOSITION_OPTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
-                          </select>
-                        </label>
-                        <label className="text-xs text-slate-600 col-span-2">
-                          Schedule
-                          <input type="datetime-local" value={scheduledForInput} onChange={(e) => setScheduledForInput(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                        </label>
-                        <label className="text-xs text-slate-600 col-span-2">
-                          Next action
-                          <input value={nextAction} onChange={(e) => setNextAction(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                        </label>
-                        <label className="text-xs text-slate-600 col-span-2">
-                          Comments
-                          <textarea value={evaluationComments} onChange={(e) => setEvaluationComments(e.target.value)} rows={3} className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" />
-                        </label>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <Button onClick={() => void saveEvaluation()} disabled={evalSaving}>{evalSaving ? 'Saving…' : 'Save evaluation'}</Button>
-                        <Button variant="outline" onClick={() => void saveSchedule()} disabled={scheduleSaving}>{scheduleSaving ? 'Saving…' : 'Save schedule'}</Button>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2 text-xs">
-                        <div className="rounded-lg bg-slate-50 border border-slate-100 p-2">
-                          <p className="text-slate-500">Total logs</p>
-                          <p className="font-semibold text-slate-900">{selectedBundle.callLogs.length}</p>
                         </div>
-                        <div className="rounded-lg bg-slate-50 border border-slate-100 p-2">
-                          <p className="text-slate-500">Dispositions</p>
-                          <p className="font-semibold text-slate-900">{(selectedBundle.callRecords ?? []).length}</p>
-                        </div>
-                        <div className="rounded-lg bg-slate-50 border border-slate-100 p-2">
-                          <p className="text-slate-500">Dials</p>
-                          <p className="font-semibold text-slate-900">{selectedBundle.callLogs.filter((x) => x.action === 'dial_webclient_popup').length}</p>
-                        </div>
-                      </div>
-                      {(selectedBundle.callRecords ?? []).length > 0 && (
-                        <div className="max-h-28 overflow-auto space-y-1.5">
-                          {(selectedBundle.callRecords ?? []).slice(0, 8).map((r) => (
-                            <div key={r.id} className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-1.5 text-[10px]">
-                              <p className="font-medium text-slate-800">{r.disposition} · {r.dialed_number}</p>
-                              <p className="text-slate-500 truncate">
-                                {formatDateTimeCanadaEastern(r.disposed_at)}
-                                {r.comment ? ` · ${r.comment}` : ''}
-                              </p>
+                        {!notesCollapsed && (
+                          <>
+                            <div className="space-y-2 max-h-40 overflow-auto">
+                              {selectedBundle.notes.map((n) => (
+                                <div key={n.id} className="rounded-lg bg-white border border-blue-100 p-2">
+                                  <p className="text-xs text-slate-800 whitespace-pre-wrap">{n.body}</p>
+                                  <p className="text-[10px] text-slate-500 mt-1">{formatDateTimeCanadaEastern(n.created_at)}{n.author_label ? ` · ${n.author_label}` : ''}</p>
+                                </div>
+                              ))}
+                              {selectedBundle.notes.length === 0 && <p className="text-xs text-slate-400">No notes yet.</p>}
                             </div>
-                          ))}
+                            <textarea value={newNote} onChange={(e) => setNewNote(e.target.value)} rows={3} placeholder="Write note…" className="w-full rounded-lg border border-blue-200 px-2 py-1.5 text-xs" />
+                            <Button onClick={() => void addNote()} disabled={!newNote.trim() || noteSaving}>
+                              {noteSaving ? 'Saving…' : 'Add note'}
+                            </Button>
+                          </>
+                        )}
+                      </section>
+                    )}
+
+                    {!evaluationPopout && (
+                      <section className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <h3 className="text-xs font-semibold text-emerald-900 uppercase tracking-wide">Evaluation + schedule</h3>
+                          <div className="flex items-center gap-1">
+                            <button type="button" onClick={() => setEvaluationCollapsed((v) => !v)} className="rounded-lg border border-emerald-300 bg-white px-2 py-1 text-[11px] text-emerald-900">
+                              {evaluationCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+                            </button>
+                            <button type="button" onClick={() => setEvaluationPopout(true)} className="rounded-lg border border-emerald-300 bg-white px-2 py-1 text-[11px] text-emerald-900">
+                              <Maximize2 size={12} />
+                            </button>
+                          </div>
                         </div>
-                      )}
-                    </section>
+                        {!evaluationCollapsed && (
+                          <>
+                            <div className="grid grid-cols-2 gap-2">
+                              <label className="text-xs text-slate-600">
+                                Fit (1-10)
+                                <input type="number" min={1} max={10} value={fitScore ?? ''} onChange={(e) => setFitScore(e.target.value ? Number(e.target.value) : null)} className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-xs" />
+                              </label>
+                              <label className="text-xs text-slate-600">
+                                Journey stage
+                                <select value={journeyStage} onChange={(e) => setJourneyStage(e.target.value)} className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-xs">
+                                  {JOURNEY_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                              </label>
+                              <label className="text-xs text-slate-600 col-span-2">
+                                Disposition
+                                <select value={disposition} onChange={(e) => setDisposition(e.target.value)} className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-xs">
+                                  <option value="">Select</option>
+                                  {DISPOSITION_OPTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+                                </select>
+                              </label>
+                              <label className="text-xs text-slate-600 col-span-2">
+                                Schedule
+                                <input type="datetime-local" value={scheduledForInput} onChange={(e) => setScheduledForInput(e.target.value)} className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-xs" />
+                              </label>
+                              <label className="text-xs text-slate-600 col-span-2">
+                                Next action
+                                <input value={nextAction} onChange={(e) => setNextAction(e.target.value)} className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-xs" />
+                              </label>
+                              <label className="text-xs text-slate-600 col-span-2">
+                                Comments
+                                <textarea value={evaluationComments} onChange={(e) => setEvaluationComments(e.target.value)} rows={3} className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-xs" />
+                              </label>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button onClick={() => void saveEvaluation()} disabled={evalSaving}>{evalSaving ? 'Saving…' : 'Save evaluation'}</Button>
+                              <Button variant="outline" onClick={() => void saveSchedule()} disabled={scheduleSaving}>{scheduleSaving ? 'Saving…' : 'Save schedule'}</Button>
+                            </div>
+                          </>
+                        )}
+                      </section>
+                    )}
                   </div>
 
                   <section className="rounded-xl border border-slate-200 p-3 space-y-2">
@@ -1546,6 +1712,118 @@ const Pipeline: React.FC = () => {
                   dialLogWarning={dialLogWarning}
                   onSave={() => void saveCallDisposition()}
                 />
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+      {logsDrawerOpen && (
+        <div className="fixed inset-0 z-[120] bg-slate-950/45 backdrop-blur-sm">
+          <div className="absolute right-0 top-0 h-full w-full max-w-xl border-l border-white/15 bg-slate-900/95 shadow-2xl p-4 flex flex-col">
+            <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-100">Activity logs</p>
+                <p className="text-[11px] text-slate-400">Timeline + call records (latest first)</p>
+              </div>
+              <button type="button" onClick={() => setLogsDrawerOpen(false)} className="rounded-lg border border-white/20 p-1.5 text-slate-200 hover:bg-slate-800/60">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="mt-3 flex-1 overflow-auto space-y-2 pr-1">
+              {timelineLoading && <p className="text-xs text-slate-400">Loading timeline…</p>}
+              {timelineError && <p className="rounded-lg border border-red-400/30 bg-red-500/10 px-2 py-1 text-xs text-red-200">{timelineError}</p>}
+              {!timelineLoading && timelineRows.length === 0 && <p className="text-xs text-slate-500">No timeline entries yet.</p>}
+              {timelineRows.map((row) => (
+                <div key={`${row.kind}-${row.id}`} className="rounded-xl border border-white/10 bg-slate-950/50 p-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-xs font-semibold text-slate-100">{row.title}</p>
+                    <span className="text-[10px] text-slate-500">{formatDateTimeCanadaEastern(row.created_at)}</span>
+                  </div>
+                  {row.actor_label && <p className="text-[10px] text-slate-400 mt-0.5">By {row.actor_label}</p>}
+                  {row.body && <p className="text-xs text-slate-200 mt-1 whitespace-pre-wrap">{row.body}</p>}
+                  {row.kind === 'call_record' && row.metadata && (
+                    <p className="text-[10px] text-emerald-300 mt-1">
+                      {String((row.metadata as Record<string, unknown>).dialed_number || '—')}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      {notesPopout && typeof document !== 'undefined'
+        ? createPortal(
+            <div className="fixed inset-0 z-[121] bg-slate-950/45 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="w-full max-w-2xl rounded-2xl border border-blue-200 bg-white p-4 space-y-2 max-h-[88vh] overflow-auto">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold text-blue-900">Notes</p>
+                  <button type="button" onClick={() => setNotesPopout(false)} className="rounded-lg border border-blue-200 p-1 text-blue-900">
+                    <Minimize2 size={14} />
+                  </button>
+                </div>
+                <div className="space-y-2 max-h-[46vh] overflow-auto">
+                  {selectedBundle?.notes.map((n) => (
+                    <div key={n.id} className="rounded-lg bg-blue-50 border border-blue-100 p-2">
+                      <p className="text-xs text-slate-800 whitespace-pre-wrap">{n.body}</p>
+                      <p className="text-[10px] text-slate-500 mt-1">{formatDateTimeCanadaEastern(n.created_at)}{n.author_label ? ` · ${n.author_label}` : ''}</p>
+                    </div>
+                  ))}
+                </div>
+                <textarea value={newNote} onChange={(e) => setNewNote(e.target.value)} rows={4} placeholder="Write note…" className="w-full rounded-lg border border-blue-200 px-2 py-1.5 text-xs" />
+                <Button onClick={() => void addNote()} disabled={!newNote.trim() || noteSaving}>
+                  {noteSaving ? 'Saving…' : 'Add note'}
+                </Button>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+      {evaluationPopout && typeof document !== 'undefined'
+        ? createPortal(
+            <div className="fixed inset-0 z-[122] bg-slate-950/45 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="w-full max-w-3xl rounded-2xl border border-emerald-200 bg-white p-4 space-y-3 max-h-[90vh] overflow-auto">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold text-emerald-900">Evaluation + schedule</p>
+                  <button type="button" onClick={() => setEvaluationPopout(false)} className="rounded-lg border border-emerald-200 p-1 text-emerald-900">
+                    <Minimize2 size={14} />
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="text-xs text-slate-600">
+                    Fit (1-10)
+                    <input type="number" min={1} max={10} value={fitScore ?? ''} onChange={(e) => setFitScore(e.target.value ? Number(e.target.value) : null)} className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-xs" />
+                  </label>
+                  <label className="text-xs text-slate-600">
+                    Journey stage
+                    <select value={journeyStage} onChange={(e) => setJourneyStage(e.target.value)} className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-xs">
+                      {JOURNEY_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs text-slate-600 col-span-2">
+                    Disposition
+                    <select value={disposition} onChange={(e) => setDisposition(e.target.value)} className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-xs">
+                      <option value="">Select</option>
+                      {DISPOSITION_OPTIONS.map((d) => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs text-slate-600 col-span-2">
+                    Schedule
+                    <input type="datetime-local" value={scheduledForInput} onChange={(e) => setScheduledForInput(e.target.value)} className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-xs" />
+                  </label>
+                  <label className="text-xs text-slate-600 col-span-2">
+                    Next action
+                    <input value={nextAction} onChange={(e) => setNextAction(e.target.value)} className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-xs" />
+                  </label>
+                  <label className="text-xs text-slate-600 col-span-2">
+                    Comments
+                    <textarea value={evaluationComments} onChange={(e) => setEvaluationComments(e.target.value)} rows={4} className="mt-1 w-full rounded-lg border border-emerald-200 px-2 py-1.5 text-xs" />
+                  </label>
+                </div>
+                <div className="flex gap-2">
+                  <Button onClick={() => void saveEvaluation()} disabled={evalSaving}>{evalSaving ? 'Saving…' : 'Save evaluation'}</Button>
+                  <Button variant="outline" onClick={() => void saveSchedule()} disabled={scheduleSaving}>{scheduleSaving ? 'Saving…' : 'Save schedule'}</Button>
+                </div>
               </div>
             </div>,
             document.body,

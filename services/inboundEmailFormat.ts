@@ -10,9 +10,16 @@ const REPLY_SPLIT_PATTERNS: RegExp[] = [
   /\r?\nLe .{6,120} a écrit\s*:\s*\r?\n/i,
 ];
 
+function stripQuoteMarkers(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*>+\s?/g, ''))
+    .join('\n');
+}
+
 /** Normalize spaces; keep paragraph breaks. */
 export function normalizeInboundWhitespace(text: string): string {
-  return text
+  return stripQuoteMarkers(text)
     .replace(/\r\n/g, '\n')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{4,}/g, '\n\n\n')

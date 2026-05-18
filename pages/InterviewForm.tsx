@@ -250,6 +250,7 @@ const InterviewForm: React.FC = () => {
           ...DEFAULT_ADMIN_DATA,
           ...c.adminData,
           pipelineStage: PIPELINE_STAGE_AFTER_CHECK_IN,
+          checkedInAt: c.adminData?.checkedInAt ?? new Date().toISOString(),
         },
       });
 

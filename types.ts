@@ -217,6 +217,10 @@ export interface AdminData {
     | null;
   resumeReviewedAt: string | null; // ISO - when admin reviewed/approved resumes
   questionnaireDisqualified: QuestionnaireDisqualified | null;
+  /** ISO — first successful reception check-in (eligible path). Used for 24h leadership reminder scheduling. */
+  checkedInAt?: string | null;
+  /** ISO — automated 24h post–check-in leadership assessment reminder email was sent (at most once). */
+  leadershipAssessmentReminder24hSentAt?: string | null;
   finalDecision?: 'Hired' | 'Not Hired';
   webinarGeek?: {
     synced_at?: string;

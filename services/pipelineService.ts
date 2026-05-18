@@ -58,6 +58,9 @@ export interface PipelineResume {
   converted_pdf_url: string | null;
   conversion_status: 'pending' | 'processing' | 'ready' | 'failed' | 'not_required';
   conversion_error: string | null;
+  resume_source?: 'bulk_upload' | 'journey_upload' | string;
+  source_candidate_id?: string | null;
+  source_resume_url?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -99,6 +102,12 @@ export interface PipelineCallLog {
   created_by_user_id: string | null;
   created_by_label: string | null;
   created_at: string;
+}
+
+export interface PipelineCallContext {
+  extension?: string | null;
+  callerId?: string | null;
+  dialingLocale?: string | null;
 }
 
 export interface PipelineCallRecord {
@@ -147,6 +156,25 @@ export interface PipelineEmailSendLog {
   status: string;
   created_at: string;
   error_message: string | null;
+}
+
+export interface PipelineUserCallSettings {
+  user_id: string;
+  extension: string | null;
+  caller_id: string | null;
+  dialing_locale: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PipelineActivityTimelineItem {
+  id: string;
+  kind: 'note' | 'evaluation' | 'call_log' | 'call_record';
+  title: string;
+  body: string | null;
+  actor_label: string | null;
+  created_at: string;
+  metadata: Record<string, unknown> | null;
 }
 
 export interface PipelineCandidateBundle {
@@ -293,6 +321,42 @@ function compactText(raw: string): string {
     .replace(/\r/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function normalizeEmail(value: string | null | undefined): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizePhone(value: string | null | undefined): string {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function normalizeName(value: string | null | undefined): string {
+  return String(value || '')
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+function mergeCallContextMetadata(
+  existing: Record<string, unknown> | null | undefined,
+  callContext?: PipelineCallContext | null,
+): Record<string, unknown> | null {
+  if (!callContext) return existing ?? null;
+  const extension = String(callContext.extension || '').trim();
+  const callerId = String(callContext.callerId || '').trim();
+  const dialingLocale = String(callContext.dialingLocale || '').trim();
+  if (!extension && !callerId && !dialingLocale) return existing ?? null;
+  return {
+    ...(existing || {}),
+    call_context: {
+      extension: extension || null,
+      caller_id: callerId || null,
+      dialing_locale: dialingLocale || null,
+    },
+  };
 }
 
 function firstMatchingLine(lines: string[], re: RegExp): string | null {
@@ -507,6 +571,237 @@ export async function listPipelineCandidates(): Promise<PipelineCandidate[]> {
   return (data || []) as PipelineCandidate[];
 }
 
+export async function getPipelineUserCallSettings(): Promise<PipelineUserCallSettings | null> {
+  const { data: auth } = await supabase.auth.getUser();
+  const userId = auth.user?.id;
+  if (!userId) return null;
+  const { data, error } = await supabase
+    .from('pipeline_user_call_settings')
+    .select('*')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw error;
+  return (data || null) as PipelineUserCallSettings | null;
+}
+
+export async function savePipelineUserCallSettings(input: {
+  extension?: string | null;
+  callerId?: string | null;
+  dialingLocale?: string | null;
+}): Promise<PipelineUserCallSettings> {
+  const { data: auth } = await supabase.auth.getUser();
+  const userId = auth.user?.id;
+  if (!userId) throw new Error('You must be signed in.');
+  const payload = {
+    user_id: userId,
+    extension: input.extension?.trim() || null,
+    caller_id: input.callerId?.trim() || null,
+    dialing_locale: input.dialingLocale?.trim() || null,
+    updated_at: new Date().toISOString(),
+  };
+  const { data, error } = await supabase
+    .from('pipeline_user_call_settings')
+    .upsert(payload, { onConflict: 'user_id' })
+    .select('*')
+    .single();
+  if (error) throw error;
+  return data as PipelineUserCallSettings;
+}
+
+export async function listPipelineCandidateActivityTimeline(candidateId: string): Promise<PipelineActivityTimelineItem[]> {
+  const [
+    { data: notes, error: notesError },
+    { data: evals, error: evalError },
+    { data: logs, error: logsError },
+    { data: records, error: recordsError },
+  ] = await Promise.all([
+    supabase.from('pipeline_notes').select('*').eq('candidate_id', candidateId).order('created_at', { ascending: false }).limit(300),
+    supabase.from('pipeline_evaluations').select('*').eq('candidate_id', candidateId).order('created_at', { ascending: false }).limit(300),
+    supabase.from('pipeline_call_logs').select('*').eq('candidate_id', candidateId).order('created_at', { ascending: false }).limit(400),
+    supabase.from('pipeline_call_records').select('*').eq('candidate_id', candidateId).order('created_at', { ascending: false }).limit(400),
+  ]);
+  if (notesError) throw notesError;
+  if (evalError) throw evalError;
+  if (logsError) throw logsError;
+  if (recordsError) throw recordsError;
+
+  const output: PipelineActivityTimelineItem[] = [];
+  for (const row of notes || []) {
+    output.push({
+      id: String((row as any).id),
+      kind: 'note',
+      title: 'Note added',
+      body: String((row as any).body || '').trim() || null,
+      actor_label: (row as any).author_label ?? null,
+      created_at: String((row as any).created_at),
+      metadata: null,
+    });
+  }
+  for (const row of evals || []) {
+    output.push({
+      id: String((row as any).id),
+      kind: 'evaluation',
+      title: 'Evaluation saved',
+      body: String((row as any).comments || '').trim() || null,
+      actor_label: (row as any).created_by_label ?? null,
+      created_at: String((row as any).created_at),
+      metadata: {
+        fit_score: (row as any).fit_score ?? null,
+        disposition: (row as any).disposition ?? null,
+        next_action: (row as any).next_action ?? null,
+        journey_stage: (row as any).journey_stage ?? null,
+      },
+    });
+  }
+  for (const row of logs || []) {
+    output.push({
+      id: String((row as any).id),
+      kind: 'call_log',
+      title: `Log: ${String((row as any).action || 'action')}`,
+      body: String((row as any).outcome || '').trim() || null,
+      actor_label: (row as any).created_by_label ?? null,
+      created_at: String((row as any).created_at),
+      metadata: (row as any).request_payload ?? (row as any).response_payload ?? null,
+    });
+  }
+  for (const row of records || []) {
+    output.push({
+      id: String((row as any).id),
+      kind: 'call_record',
+      title: `Disposition: ${String((row as any).disposition || 'unknown')}`,
+      body: String((row as any).comment || '').trim() || null,
+      actor_label: (row as any).recruiter_label ?? null,
+      created_at: String((row as any).created_at),
+      metadata: {
+        dialed_number: (row as any).dialed_number ?? null,
+        dial_started_at: (row as any).dial_started_at ?? null,
+        disposed_at: (row as any).disposed_at ?? null,
+        threecx_metadata: (row as any).threecx_metadata ?? null,
+      },
+    });
+  }
+  output.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  return output;
+}
+
+export async function syncJourneyResumesIntoPipeline(): Promise<{ importedCandidates: number; importedResumes: number }> {
+  const { data: sourceRows, error: sourceError } = await supabase
+    .from('candidates')
+    .select('id, first_name, last_name, email, phone, applicant_questionnaire')
+    .order('timestamp', { ascending: false })
+    .limit(2000);
+  if (sourceError) throw sourceError;
+  const journeyRows = (sourceRows || []).filter((row) => {
+    const aq = ((row as any).applicant_questionnaire || {}) as Record<string, unknown>;
+    const resumeUrls = Array.isArray(aq.resumeUrls) ? aq.resumeUrls : [];
+    return resumeUrls.some((x) => String(x || '').trim().length > 0);
+  });
+  if (journeyRows.length === 0) return { importedCandidates: 0, importedResumes: 0 };
+
+  const existingCandidates = await listPipelineCandidates();
+  const byEmail = new Map<string, PipelineCandidate>();
+  const byPhone = new Map<string, PipelineCandidate>();
+  const byName = new Map<string, PipelineCandidate[]>();
+  for (const c of existingCandidates) {
+    const em = normalizeEmail(c.email);
+    const ph = normalizePhone(c.phone);
+    const nm = normalizeName(c.full_name);
+    if (em) byEmail.set(em, c);
+    if (ph) byPhone.set(ph, c);
+    if (nm) {
+      const arr = byName.get(nm) || [];
+      arr.push(c);
+      byName.set(nm, arr);
+    }
+  }
+
+  let importedCandidates = 0;
+  let importedResumes = 0;
+  for (const row of journeyRows) {
+    const aq = (((row as any).applicant_questionnaire || {}) as Record<string, unknown>);
+    const rawResumeUrls = Array.isArray(aq.resumeUrls) ? aq.resumeUrls : [];
+    const resumeUrls = rawResumeUrls.map((x) => String(x || '').trim()).filter(Boolean);
+    if (resumeUrls.length === 0) continue;
+    const fullName = `${String((row as any).first_name || '').trim()} ${String((row as any).last_name || '').trim()}`.trim() || 'Unknown Candidate';
+    const email = normalizeEmail((row as any).email);
+    const phone = normalizePhone((row as any).phone);
+    const name = normalizeName(fullName);
+    let matched =
+      (email && byEmail.get(email))
+      || (phone && byPhone.get(phone))
+      || (name && (byName.get(name) || [])[0])
+      || null;
+
+    if (!matched) {
+      const { data: inserted, error: insertError } = await supabase
+        .from('pipeline_candidates')
+        .insert({
+          full_name: fullName,
+          email: email || null,
+          phone: phone || null,
+          source: 'journey_upload',
+          metadata: {
+            source_candidate_id: String((row as any).id),
+            source_origin: 'checkin_journey',
+          },
+        })
+        .select('id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at')
+        .single();
+      if (insertError) throw insertError;
+      matched = inserted as PipelineCandidate;
+      importedCandidates += 1;
+      if (email) byEmail.set(email, matched);
+      if (phone) byPhone.set(phone, matched);
+      if (name) {
+        const arr = byName.get(name) || [];
+        arr.push(matched);
+        byName.set(name, arr);
+      }
+    }
+
+    const { data: existingResumes, error: existingError } = await supabase
+      .from('pipeline_resumes')
+      .select('id, public_url, original_filename')
+      .eq('candidate_id', matched.id);
+    if (existingError) throw existingError;
+    const knownUrls = new Set((existingResumes || []).map((x) => String((x as any).public_url || '').trim()).filter(Boolean));
+    for (const resumeUrl of resumeUrls) {
+      if (knownUrls.has(resumeUrl)) continue;
+      const urlNoQuery = resumeUrl.split('?')[0] || resumeUrl;
+      const filenameGuess = urlNoQuery.split('/').pop() || 'journey_resume.pdf';
+      const lowerFileName = filenameGuess.toLowerCase();
+      const inferredMime =
+        lowerFileName.endsWith('.pdf') ? 'application/pdf'
+          : lowerFileName.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            : lowerFileName.endsWith('.doc') ? 'application/msword'
+              : lowerFileName.endsWith('.txt') ? 'text/plain'
+                : lowerFileName.endsWith('.rtf') ? 'application/rtf'
+                  : null;
+      const { error: resumeInsertError } = await supabase
+        .from('pipeline_resumes')
+        .insert({
+          candidate_id: matched.id,
+          storage_bucket: 'candidate-resumes',
+          storage_path: `external:${String((row as any).id)}:${filenameGuess}`,
+          public_url: resumeUrl,
+          original_filename: filenameGuess,
+          mime_type: inferredMime,
+          size_bytes: null,
+          conversion_status: 'not_required',
+          converted_pdf_url: inferredMime === 'application/pdf' ? resumeUrl : null,
+          resume_source: 'journey_upload',
+          source_candidate_id: String((row as any).id),
+          source_resume_url: resumeUrl,
+        });
+      if (resumeInsertError) throw resumeInsertError;
+      importedResumes += 1;
+      knownUrls.add(resumeUrl);
+    }
+  }
+
+  return { importedCandidates, importedResumes };
+}
+
 export async function getPipelineCandidateBundle(candidateId: string): Promise<PipelineCandidateBundle | null> {
   const { data: candidate, error: cErr } = await supabase
     .from('pipeline_candidates')
@@ -680,6 +975,7 @@ export async function bulkUploadPipelineResumes(
           mime_type: file.type || null,
           size_bytes: file.size,
           conversion_status: conversionStatus,
+          resume_source: 'bulk_upload',
         })
         .select('*')
         .single();
@@ -750,6 +1046,7 @@ export async function savePipelineEvaluation(input: {
   journeyStage: string;
   comments: string;
   actorLabel?: string;
+  callContext?: PipelineCallContext | null;
 }): Promise<PipelineEvaluation> {
   const { data: auth } = await supabase.auth.getUser();
   const { data, error } = await supabase
@@ -776,6 +1073,20 @@ export async function savePipelineEvaluation(input: {
     })
     .eq('id', input.candidateId);
   if (upErr) throw upErr;
+
+  await logPipelineCallAction({
+    candidateId: input.candidateId,
+    action: 'evaluation_saved',
+    outcome: 'ok',
+    requestPayload: {
+      fit_score: input.fitScore,
+      disposition: input.disposition || null,
+      next_action: input.nextAction || null,
+      journey_stage: input.journeyStage || null,
+    },
+    actorLabel: input.actorLabel ?? null,
+    callContext: input.callContext ?? null,
+  });
 
   return data as PipelineEvaluation;
 }
@@ -832,6 +1143,7 @@ export async function savePipelineCallDisposition(input: {
   threecxMetadata?: Record<string, unknown> | null;
   actorLabel?: string | null;
   updateJourneyStage?: boolean;
+  callContext?: PipelineCallContext | null;
 }): Promise<PipelineCallRecord> {
   const { data: auth } = await supabase.auth.getUser();
   const disposedAt = new Date().toISOString();
@@ -848,7 +1160,7 @@ export async function savePipelineCallDisposition(input: {
       dialed_number: input.dialedNumber,
       dial_started_at: input.dialStartedAt,
       disposed_at: disposedAt,
-      threecx_metadata: input.threecxMetadata ?? {},
+      threecx_metadata: mergeCallContextMetadata(input.threecxMetadata ?? {}, input.callContext) ?? {},
     })
     .select('*')
     .single();
@@ -878,9 +1190,11 @@ export async function savePipelineCallDisposition(input: {
       dialed_number: input.dialedNumber,
       dial_log_id: input.dialLogId ?? null,
       comment: input.comment?.trim() || null,
+      call_context: input.callContext ?? null,
     },
     responsePayload: { call_record_id: data.id },
     actorLabel: input.actorLabel ?? null,
+    callContext: input.callContext ?? null,
   });
 
   return data as PipelineCallRecord;
@@ -897,6 +1211,7 @@ export async function logPipelineCallAction(input: {
   requestPayload?: Record<string, unknown> | null;
   responsePayload?: Record<string, unknown> | null;
   actorLabel?: string | null;
+  callContext?: PipelineCallContext | null;
 }): Promise<PipelineCallLog> {
   const { data: auth } = await supabase.auth.getUser();
   const { data, error } = await supabase
@@ -909,7 +1224,7 @@ export async function logPipelineCallAction(input: {
       outcome: input.outcome ?? null,
       duration_seconds: input.durationSeconds ?? null,
       agent_extension: input.agentExtension ?? null,
-      request_payload: input.requestPayload ?? null,
+      request_payload: mergeCallContextMetadata(input.requestPayload, input.callContext),
       response_payload: input.responsePayload ?? null,
       created_by_user_id: auth.user?.id ?? null,
       created_by_label: input.actorLabel ?? null,

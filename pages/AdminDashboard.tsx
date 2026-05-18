@@ -10,7 +10,7 @@ import {
 } from '../services/storageService';
 import { getAssessmentSummary } from '../services/assessmentSummary';
 import { sendEmail } from '../services/emailService';
-import { EMAIL_TEMPLATES, mergeTemplate } from '../services/emailTemplates';
+import { EMAIL_TEMPLATES, mergeTemplate, type CrmEmailTemplateId } from '../services/emailTemplates';
 import { appendEmailSignatureToHtml, getSiteOriginForEmail, CC_EMAIL_ALEX, SIGNATURE_LOGO_URL } from '../services/emailSignature';
 import { getAssessmentLookupUrlForClient } from '../services/hiringUrls';
 import {
@@ -92,14 +92,22 @@ function formatEmailLogType(type: string | undefined): string {
   if (!type) return 'Custom / compose';
   const map: Record<string, string> = {
     stage2_post_checkin: 'Stage 2 – Post check-in',
-    stage3_assessment_link: 'Leadership assessment form sent',
+    stage3_assessment_link: 'Leadership assessment (after session attended)',
+    stage3_assessment_link_post_overview: 'Leadership assessment (post overview / CEO follow-up)',
+    missed_live_session_reschedule: 'Missed live session – reschedule',
     stage5_evaluation: 'Evaluation done',
     compose: 'Compose (manual)',
     manual: 'Compose (manual)',
     automated_post_checkin: 'Automated – Post check-in (session invite)',
     automated_post_assessment_submit: 'Automated – Assessment submitted',
+    automated_leadership_assessment_reminder_24h: 'Automated – Leadership reminder (24h after check-in)',
     automated_stage3_after_live_session: 'Automated – Leadership assessment form sent',
     automated_evaluation_done: 'Automated – Evaluation done',
+    'crm_template:stage2_post_checkin': 'CRM – Post check-in',
+    'crm_template:stage3_assessment_link': 'CRM – Leadership assessment (after session)',
+    'crm_template:stage3_assessment_link_post_overview': 'CRM – Leadership assessment (post overview)',
+    'crm_template:missed_live_session_reschedule': 'CRM – Missed session reschedule',
+    'crm_template:stage5_evaluation': 'CRM – Evaluation',
   };
   return map[type] ?? type;
 }
@@ -119,9 +127,7 @@ const AdminDashboard: React.FC = () => {
   const [pipelineFilter, setPipelineFilter] = useState<PipelineStage | ''>('');
   const [newNote, setNewNote] = useState('');
   const [showEmailModal, setShowEmailModal] = useState(false);
-  const [emailModalMode, setEmailModalMode] = useState<
-    'stage2_post_checkin' | 'stage3_assessment_link' | 'stage5_evaluation' | 'compose' | null
-  >(null);
+  const [emailModalMode, setEmailModalMode] = useState<CrmEmailTemplateId | 'compose' | null>(null);
   const [emailSubject, setEmailSubject] = useState('');
   const [copyToast, setCopyToast] = useState(false);
   const [emailBody, setEmailBody] = useState('');
@@ -798,9 +804,7 @@ const AdminDashboard: React.FC = () => {
     updateAdminData(prev => ({ ...prev, resumeReviewedAt: new Date().toISOString() }));
   };
 
-  const openEmailModal = (
-    mode: 'stage2_post_checkin' | 'stage3_assessment_link' | 'stage5_evaluation' | 'compose'
-  ) => {
+  const openEmailModal = (mode: CrmEmailTemplateId | 'compose') => {
     setEmailModalMode(mode);
     setEmailError(null);
     setEmailPreviewTab('edit');
@@ -813,7 +817,7 @@ const AdminDashboard: React.FC = () => {
       if (template) {
         const origin = getSiteOriginForEmail();
         const extras =
-          mode === 'stage3_assessment_link'
+          mode === 'stage3_assessment_link' || mode === 'stage3_assessment_link_post_overview'
             ? { '{{assessmentLookupUrl}}': getAssessmentLookupUrlForClient() }
             : undefined;
         const { subject, bodyHtml } = mergeTemplate(template.subject, template.bodyHtml, selectedCandidate, extras, {
@@ -1918,11 +1922,7 @@ const AdminDashboard: React.FC = () => {
                       <Button
                         key={t.id}
                         variant="outline"
-                        onClick={() =>
-                          openEmailModal(
-                            t.id as 'stage2_post_checkin' | 'stage3_assessment_link' | 'stage5_evaluation'
-                          )
-                        }
+                        onClick={() => openEmailModal(t.id)}
                         className="text-sm"
                         title={t.hint}
                       >
