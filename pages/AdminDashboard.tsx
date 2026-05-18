@@ -37,6 +37,7 @@ import { supabase } from '../services/supabaseClient';
 import { canAccessSection, getCurrentUserProfile, type AppRole } from '../services/accessControl';
 import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { hasResumeOrLinkedInMaterial } from '../services/linkedinUrl';
+import { sendCandidatesToPipelineFromAdmin } from '../services/pipelineService';
 
 const SUGGESTED_TAGS = ['Strong fit', 'Follow up', 'Licensing needed', 'High potential', 'Second interview', 'Offer extended'];
 
@@ -122,6 +123,7 @@ const AdminDashboard: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [sendingToPipeline, setSendingToPipeline] = useState(false);
   const [showAnswers, setShowAnswers] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [pipelineFilter, setPipelineFilter] = useState<PipelineStage | ''>('');
@@ -715,6 +717,21 @@ const AdminDashboard: React.FC = () => {
       alert('Unable to delete all selected candidates. Please try again.');
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleBulkSendToPipeline = async () => {
+    if (selectedIds.size === 0) return;
+    setSendingToPipeline(true);
+    try {
+      const ids = Array.from(selectedIds);
+      const result = await sendCandidatesToPipelineFromAdmin(ids);
+      alert(`Sent to pipeline: ${result.importedCandidates} candidates, ${result.importedResumes} resumes imported.`);
+      setSelectedIds(new Set());
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSendingToPipeline(false);
     }
   };
 
@@ -1329,6 +1346,14 @@ const AdminDashboard: React.FC = () => {
                     className="text-xs px-2 py-1 bg-[#005EB8] text-white rounded hover:opacity-90 disabled:opacity-50"
                   >
                     Apply
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleBulkSendToPipeline}
+                    disabled={sendingToPipeline}
+                    className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:opacity-90 disabled:opacity-50"
+                  >
+                    {sendingToPipeline ? 'Sending...' : 'Send to pipeline'}
                   </button>
                   <button
                     type="button"

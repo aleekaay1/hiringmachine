@@ -15,6 +15,7 @@ import {
   getPipelineResumeDisplayUrl,
   getPipelineResumeOpenInNewTabUrl,
   getPipelineResumeViewerKind,
+  listPipelineManualCandidates,
   listPipelineFreshJourneyCandidates,
   listPipelineCandidateActivityTimeline,
   listPipelineIncomingEmailLogs,
@@ -354,6 +355,7 @@ const Pipeline: React.FC = () => {
   const [selectedResumeId, setSelectedResumeId] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
+  const [leftSection, setLeftSection] = useState<'manual' | 'checkin'>('checkin');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const [newNote, setNewNote] = useState('');
@@ -427,7 +429,13 @@ const Pipeline: React.FC = () => {
     setError(null);
     setLoading(true);
     try {
-      const rows = await listPipelineFreshJourneyCandidates();
+      const [manualRows, checkinRows] = await Promise.all([
+        listPipelineManualCandidates(),
+        listPipelineFreshJourneyCandidates(),
+      ]);
+      const rows = [...checkinRows, ...manualRows].sort(
+        (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+      );
       setCandidates(rows);
       if (!rows.length) {
         setSelectedCandidateId(null);
@@ -627,6 +635,9 @@ const Pipeline: React.FC = () => {
   const filteredCandidates = useMemo(() => {
     const q = search.trim().toLowerCase();
     return candidates.filter((c) => {
+      const source = String(c.source || '').toLowerCase();
+      if (leftSection === 'checkin' && source !== 'journey_upload') return false;
+      if (leftSection === 'manual' && source === 'journey_upload') return false;
       if (!q) return true;
       return (
         safeName(c).toLowerCase().includes(q) ||
@@ -634,7 +645,16 @@ const Pipeline: React.FC = () => {
         String(c.email || '').toLowerCase().includes(q)
       );
     });
-  }, [candidates, search]);
+  }, [candidates, search, leftSection]);
+
+  const checkinCount = useMemo(
+    () => candidates.filter((c) => String(c.source || '').toLowerCase() === 'journey_upload').length,
+    [candidates],
+  );
+  const manualCount = useMemo(
+    () => candidates.filter((c) => String(c.source || '').toLowerCase() !== 'journey_upload').length,
+    [candidates],
+  );
 
   const uploadFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -1227,7 +1247,7 @@ const Pipeline: React.FC = () => {
         <div className="rounded-3xl border border-[#c8ddf4] bg-white p-4 shadow-[0_20px_55px_-34px_rgba(11,27,52,0.45)] flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-[#0B1B34]">Pipeline queue</h1>
-            <p className="text-xs text-[#365274]">Only newest untouched check-in resumes show here.</p>
+            <p className="text-xs text-[#365274]">Work queue for check-in and manual resume pipelines.</p>
           </div>
           <div className="flex items-center gap-2">
             <label className="inline-flex items-center gap-2 rounded-xl border border-[#b8d2ef] bg-white px-3 py-2 text-xs cursor-pointer hover:bg-[#f2f8ff] text-[#0B1B34]">
@@ -1262,12 +1282,36 @@ const Pipeline: React.FC = () => {
         <div className="grid grid-cols-1 xl:grid-cols-[340px_1fr] gap-4">
           <div className="rounded-2xl border border-[#cfe0f4] bg-white shadow-sm overflow-hidden">
             <div className="p-3 border-b border-slate-100 space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setLeftSection('checkin')}
+                  className={`rounded-lg border px-3 py-2 text-xs font-semibold text-left transition ${
+                    leftSection === 'checkin'
+                      ? 'border-[#005EB8] bg-[#eaf3ff] text-[#0B1B34]'
+                      : 'border-[#d6e5f6] bg-white text-[#365274] hover:bg-[#f6faff]'
+                  }`}
+                >
+                  Candidate check-in resumes ({checkinCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLeftSection('manual')}
+                  className={`rounded-lg border px-3 py-2 text-xs font-semibold text-left transition ${
+                    leftSection === 'manual'
+                      ? 'border-[#005EB8] bg-[#eaf3ff] text-[#0B1B34]'
+                      : 'border-[#d6e5f6] bg-white text-[#365274] hover:bg-[#f6faff]'
+                  }`}
+                >
+                  Manually uploaded resumes ({manualCount})
+                </button>
+              </div>
               <div className="relative">
                 <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, phone, email" className="w-full rounded-lg border border-slate-200 pl-8 pr-3 py-2 text-xs" />
               </div>
               <div className="flex items-center justify-between gap-2">
-                <p className="text-[11px] text-[#1e3a63]">Queue: {filteredCandidates.length} untouched check-in resumes</p>
+                <p className="text-[11px] text-[#1e3a63]">Showing {filteredCandidates.length} candidate(s)</p>
                 <Button variant="outline" className="!min-h-0 h-7 px-2 text-[11px]" onClick={() => void bulkDeleteSelected()} disabled={!selectedIds.size || loading}>
                   <Trash2 size={12} className="mr-1" /> Delete {selectedIds.size || ''}
                 </Button>
@@ -1297,7 +1341,11 @@ const Pipeline: React.FC = () => {
                 </div>
               ))}
               {!loading && filteredCandidates.length === 0 && (
-                <div className="p-6 text-center text-sm text-[#365274]">No untouched check-in resumes in queue.</div>
+                <div className="p-6 text-center text-sm text-[#365274]">
+                  {leftSection === 'checkin'
+                    ? 'No new check-in resumes available.'
+                    : 'No manually uploaded resumes available.'}
+                </div>
               )}
             </div>
           </div>

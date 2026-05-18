@@ -609,6 +609,11 @@ export async function listPipelineCandidates(): Promise<PipelineCandidate[]> {
   return (data || []) as PipelineCandidate[];
 }
 
+export async function listPipelineManualCandidates(): Promise<PipelineCandidate[]> {
+  const rows = await listPipelineCandidates();
+  return rows.filter((c) => String(c.source || '').toLowerCase() !== 'journey_upload');
+}
+
 export async function listPipelineFreshJourneyCandidates(): Promise<PipelineCandidate[]> {
   const rows = await listPipelineCandidates();
   const queue = rows.filter((c) => {
@@ -617,7 +622,8 @@ export async function listPipelineFreshJourneyCandidates(): Promise<PipelineCand
     const status = String(c.status || '').toLowerCase();
     const metadata = c.metadata && typeof c.metadata === 'object' ? c.metadata : {};
     const touchedAt = String((metadata as Record<string, unknown>).pipeline_touched_at || '').trim();
-    return source === 'journey_upload' && stage === 'new' && status === 'open' && !touchedAt;
+    const queueVersion = String((metadata as Record<string, unknown>).pipeline_queue_version || '').trim().toLowerCase();
+    return source === 'journey_upload' && stage === 'new' && status === 'open' && !touchedAt && queueVersion === 'v2';
   });
   if (!queue.length) return [];
 
@@ -646,7 +652,38 @@ export async function listPipelineFreshJourneyCandidates(): Promise<PipelineCand
       .map((r) => String((r as { candidate_id?: string }).candidate_id || ''))
       .filter(Boolean),
   );
-  return queue.filter((c) => candidateIdsWithJourneyResume.has(c.id));
+  const candidatesWithJourneyResume = queue.filter((c) => candidateIdsWithJourneyResume.has(c.id));
+  if (!candidatesWithJourneyResume.length) return [];
+
+  const ids = candidatesWithJourneyResume.map((c) => c.id);
+  const [
+    { data: notes, error: notesErr },
+    { data: evals, error: evalErr },
+    { data: logs, error: logsErr },
+    { data: records, error: recordsErr },
+  ] = await Promise.all([
+    supabase.from('pipeline_notes').select('candidate_id').in('candidate_id', ids).limit(5000),
+    supabase.from('pipeline_evaluations').select('candidate_id').in('candidate_id', ids).limit(5000),
+    supabase.from('pipeline_call_logs').select('candidate_id').in('candidate_id', ids).limit(5000),
+    supabase.from('pipeline_call_records').select('candidate_id').in('candidate_id', ids).limit(5000),
+  ]);
+
+  if (notesErr) throw notesErr;
+  if (evalErr) throw evalErr;
+  if (logsErr) throw logsErr;
+  if (recordsErr) {
+    const msg = String(recordsErr.message || '');
+    const missing = recordsErr.code === '42P01' || msg.includes('pipeline_call_records');
+    if (!missing) throw recordsErr;
+  }
+
+  const touchedIds = new Set<string>();
+  for (const row of notes || []) touchedIds.add(String((row as { candidate_id?: string }).candidate_id || ''));
+  for (const row of evals || []) touchedIds.add(String((row as { candidate_id?: string }).candidate_id || ''));
+  for (const row of logs || []) touchedIds.add(String((row as { candidate_id?: string }).candidate_id || ''));
+  for (const row of records || []) touchedIds.add(String((row as { candidate_id?: string }).candidate_id || ''));
+
+  return candidatesWithJourneyResume.filter((c) => !touchedIds.has(c.id));
 }
 
 export async function getPipelineUserCallSettings(): Promise<PipelineUserCallSettings | null> {
@@ -779,6 +816,110 @@ export async function listPipelineCandidateActivityTimeline(candidateId: string)
   return output;
 }
 
+type JourneySourceRow = {
+  id: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  applicant_questionnaire?: Record<string, unknown> | null;
+};
+
+async function upsertJourneyRowsIntoPipeline(
+  rows: JourneySourceRow[],
+  sourceOrigin: 'checkin_journey' | 'admin_push',
+): Promise<{ importedCandidates: number; importedResumes: number }> {
+  if (!rows.length) return { importedCandidates: 0, importedResumes: 0 };
+  const existingCandidates = await listPipelineCandidates();
+  const bySourceCandidateId = new Map<string, PipelineCandidate>();
+  for (const c of existingCandidates) {
+    const metadata = c.metadata && typeof c.metadata === 'object' ? c.metadata : {};
+    const sourceCandidateId = String((metadata as Record<string, unknown>).source_candidate_id || '').trim();
+    if (sourceCandidateId) bySourceCandidateId.set(sourceCandidateId, c);
+  }
+
+  let importedCandidates = 0;
+  let importedResumes = 0;
+  for (const row of rows) {
+    const sourceCandidateId = String(row.id || '').trim();
+    if (!sourceCandidateId) continue;
+    const aq = (row.applicant_questionnaire || {}) as Record<string, unknown>;
+    const rawResumeUrls = Array.isArray(aq.resumeUrls) ? aq.resumeUrls : [];
+    const resumeUrls = rawResumeUrls.map((x) => String(x || '').trim()).filter(Boolean);
+    if (resumeUrls.length === 0) continue;
+
+    let matched = bySourceCandidateId.get(sourceCandidateId) || null;
+    if (!matched) {
+      const fullName = `${String(row.first_name || '').trim()} ${String(row.last_name || '').trim()}`.trim() || 'Unknown Candidate';
+      const email = normalizeEmail(row.email);
+      const phone = normalizePhone(row.phone);
+      const { data: inserted, error: insertError } = await supabase
+        .from('pipeline_candidates')
+        .insert({
+          full_name: fullName,
+          email: email || null,
+          phone: phone || null,
+          source: 'journey_upload',
+          metadata: {
+            source_candidate_id: sourceCandidateId,
+            source_origin: sourceOrigin,
+            pipeline_queue_version: 'v2',
+          },
+        })
+        .select('id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at')
+        .single();
+      if (insertError) throw insertError;
+      matched = inserted as PipelineCandidate;
+      bySourceCandidateId.set(sourceCandidateId, matched);
+      importedCandidates += 1;
+    }
+
+    const { data: existingResumes, error: existingError } = await supabase
+      .from('pipeline_resumes')
+      .select('id, public_url, source_resume_url')
+      .eq('candidate_id', matched.id);
+    if (existingError) throw existingError;
+    const knownUrls = new Set(
+      (existingResumes || [])
+        .flatMap((x) => [String((x as { public_url?: string }).public_url || '').trim(), String((x as { source_resume_url?: string }).source_resume_url || '').trim()])
+        .filter(Boolean),
+    );
+    for (const resumeUrl of resumeUrls) {
+      if (knownUrls.has(resumeUrl)) continue;
+      const urlNoQuery = resumeUrl.split('?')[0] || resumeUrl;
+      const filenameGuess = urlNoQuery.split('/').pop() || 'journey_resume.pdf';
+      const lowerFileName = filenameGuess.toLowerCase();
+      const inferredMime =
+        lowerFileName.endsWith('.pdf') ? 'application/pdf'
+          : lowerFileName.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            : lowerFileName.endsWith('.doc') ? 'application/msword'
+              : lowerFileName.endsWith('.txt') ? 'text/plain'
+                : lowerFileName.endsWith('.rtf') ? 'application/rtf'
+                  : null;
+      const { error: resumeInsertError } = await supabase
+        .from('pipeline_resumes')
+        .insert({
+          candidate_id: matched.id,
+          storage_bucket: 'candidate-resumes',
+          storage_path: `external:${sourceCandidateId}:${filenameGuess}`,
+          public_url: resumeUrl,
+          original_filename: filenameGuess,
+          mime_type: inferredMime,
+          size_bytes: null,
+          conversion_status: 'not_required',
+          converted_pdf_url: inferredMime === 'application/pdf' ? resumeUrl : null,
+          resume_source: 'journey_upload',
+          source_candidate_id: sourceCandidateId,
+          source_resume_url: resumeUrl,
+        });
+      if (resumeInsertError) throw resumeInsertError;
+      importedResumes += 1;
+      knownUrls.add(resumeUrl);
+    }
+  }
+  return { importedCandidates, importedResumes };
+}
+
 export async function syncJourneyResumesIntoPipeline(): Promise<{ importedCandidates: number; importedResumes: number }> {
   const { data: sourceRows, error: sourceError } = await supabase
     .from('candidates')
@@ -800,114 +941,22 @@ export async function syncJourneyResumesIntoPipeline(): Promise<{ importedCandid
       'final decision',
     ]);
     if (pipelineStage && progressedStages.has(pipelineStage)) return false;
-    const aq = ((row as any).applicant_questionnaire || {}) as Record<string, unknown>;
+    const aq = ((row as { applicant_questionnaire?: Record<string, unknown> }).applicant_questionnaire || {}) as Record<string, unknown>;
     const resumeUrls = Array.isArray(aq.resumeUrls) ? aq.resumeUrls : [];
     return resumeUrls.some((x) => String(x || '').trim().length > 0);
-  });
-  if (journeyRows.length === 0) return { importedCandidates: 0, importedResumes: 0 };
+  }) as JourneySourceRow[];
+  return upsertJourneyRowsIntoPipeline(journeyRows, 'checkin_journey');
+}
 
-  const existingCandidates = await listPipelineCandidates();
-  const byEmail = new Map<string, PipelineCandidate>();
-  const byPhone = new Map<string, PipelineCandidate>();
-  const byName = new Map<string, PipelineCandidate[]>();
-  for (const c of existingCandidates) {
-    const em = normalizeEmail(c.email);
-    const ph = normalizePhone(c.phone);
-    const nm = normalizeName(c.full_name);
-    if (em) byEmail.set(em, c);
-    if (ph) byPhone.set(ph, c);
-    if (nm) {
-      const arr = byName.get(nm) || [];
-      arr.push(c);
-      byName.set(nm, arr);
-    }
-  }
-
-  let importedCandidates = 0;
-  let importedResumes = 0;
-  for (const row of journeyRows) {
-    const aq = (((row as any).applicant_questionnaire || {}) as Record<string, unknown>);
-    const rawResumeUrls = Array.isArray(aq.resumeUrls) ? aq.resumeUrls : [];
-    const resumeUrls = rawResumeUrls.map((x) => String(x || '').trim()).filter(Boolean);
-    if (resumeUrls.length === 0) continue;
-    const fullName = `${String((row as any).first_name || '').trim()} ${String((row as any).last_name || '').trim()}`.trim() || 'Unknown Candidate';
-    const email = normalizeEmail((row as any).email);
-    const phone = normalizePhone((row as any).phone);
-    const name = normalizeName(fullName);
-    let matched =
-      (email && byEmail.get(email))
-      || (phone && byPhone.get(phone))
-      || (name && (byName.get(name) || [])[0])
-      || null;
-
-    if (!matched) {
-      const { data: inserted, error: insertError } = await supabase
-        .from('pipeline_candidates')
-        .insert({
-          full_name: fullName,
-          email: email || null,
-          phone: phone || null,
-          source: 'journey_upload',
-          metadata: {
-            source_candidate_id: String((row as any).id),
-            source_origin: 'checkin_journey',
-          },
-        })
-        .select('id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at')
-        .single();
-      if (insertError) throw insertError;
-      matched = inserted as PipelineCandidate;
-      importedCandidates += 1;
-      if (email) byEmail.set(email, matched);
-      if (phone) byPhone.set(phone, matched);
-      if (name) {
-        const arr = byName.get(name) || [];
-        arr.push(matched);
-        byName.set(name, arr);
-      }
-    }
-
-    const { data: existingResumes, error: existingError } = await supabase
-      .from('pipeline_resumes')
-      .select('id, public_url, original_filename')
-      .eq('candidate_id', matched.id);
-    if (existingError) throw existingError;
-    const knownUrls = new Set((existingResumes || []).map((x) => String((x as any).public_url || '').trim()).filter(Boolean));
-    for (const resumeUrl of resumeUrls) {
-      if (knownUrls.has(resumeUrl)) continue;
-      const urlNoQuery = resumeUrl.split('?')[0] || resumeUrl;
-      const filenameGuess = urlNoQuery.split('/').pop() || 'journey_resume.pdf';
-      const lowerFileName = filenameGuess.toLowerCase();
-      const inferredMime =
-        lowerFileName.endsWith('.pdf') ? 'application/pdf'
-          : lowerFileName.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-            : lowerFileName.endsWith('.doc') ? 'application/msword'
-              : lowerFileName.endsWith('.txt') ? 'text/plain'
-                : lowerFileName.endsWith('.rtf') ? 'application/rtf'
-                  : null;
-      const { error: resumeInsertError } = await supabase
-        .from('pipeline_resumes')
-        .insert({
-          candidate_id: matched.id,
-          storage_bucket: 'candidate-resumes',
-          storage_path: `external:${String((row as any).id)}:${filenameGuess}`,
-          public_url: resumeUrl,
-          original_filename: filenameGuess,
-          mime_type: inferredMime,
-          size_bytes: null,
-          conversion_status: 'not_required',
-          converted_pdf_url: inferredMime === 'application/pdf' ? resumeUrl : null,
-          resume_source: 'journey_upload',
-          source_candidate_id: String((row as any).id),
-          source_resume_url: resumeUrl,
-        });
-      if (resumeInsertError) throw resumeInsertError;
-      importedResumes += 1;
-      knownUrls.add(resumeUrl);
-    }
-  }
-
-  return { importedCandidates, importedResumes };
+export async function sendCandidatesToPipelineFromAdmin(candidateIds: string[]): Promise<{ importedCandidates: number; importedResumes: number }> {
+  const ids = [...new Set(candidateIds.map((id) => String(id || '').trim()).filter(Boolean))];
+  if (!ids.length) return { importedCandidates: 0, importedResumes: 0 };
+  const { data, error } = await supabase
+    .from('candidates')
+    .select('id, first_name, last_name, email, phone, applicant_questionnaire')
+    .in('id', ids);
+  if (error) throw error;
+  return upsertJourneyRowsIntoPipeline((data || []) as JourneySourceRow[], 'admin_push');
 }
 
 export async function getPipelineCandidateBundle(candidateId: string): Promise<PipelineCandidateBundle | null> {
