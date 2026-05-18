@@ -987,6 +987,24 @@ export async function sendCandidatesToPipelineFromAdmin(candidateIds: string[]):
   };
 }
 
+export async function listSourceCandidateIdsInPipeline(): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from('pipeline_candidates')
+    .select('metadata,source')
+    .eq('source', 'journey_upload')
+    .limit(5000);
+  if (error) throw error;
+  const ids = new Set<string>();
+  for (const row of data || []) {
+    const metadata = row?.metadata && typeof row.metadata === 'object'
+      ? row.metadata as Record<string, unknown>
+      : {};
+    const id = String(metadata.source_candidate_id || '').trim();
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
 export async function getPipelineCandidateBundle(candidateId: string): Promise<PipelineCandidateBundle | null> {
   const { data: candidate, error: cErr } = await supabase
     .from('pipeline_candidates')

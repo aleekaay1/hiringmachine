@@ -37,7 +37,7 @@ import { supabase } from '../services/supabaseClient';
 import { canAccessSection, getCurrentUserProfile, type AppRole } from '../services/accessControl';
 import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { hasResumeOrLinkedInMaterial } from '../services/linkedinUrl';
-import { sendCandidatesToPipelineFromAdmin } from '../services/pipelineService';
+import { listSourceCandidateIdsInPipeline, sendCandidatesToPipelineFromAdmin } from '../services/pipelineService';
 
 const SUGGESTED_TAGS = ['Strong fit', 'Follow up', 'Licensing needed', 'High potential', 'Second interview', 'Offer extended'];
 
@@ -140,6 +140,8 @@ const AdminDashboard: React.FC = () => {
   const [savingAdmin, setSavingAdmin] = useState(false);
   const [newTag, setNewTag] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [sourceIdsInPipeline, setSourceIdsInPipeline] = useState<Set<string>>(new Set());
+  const [hideAlreadyInPipeline, setHideAlreadyInPipeline] = useState(false);
   const [bulkStage, setBulkStage] = useState<PipelineStage | ''>('');
   const [nextStepEdit, setNextStepEdit] = useState('');
   const [reportStaffEmail, setReportStaffEmail] = useState('');
@@ -204,8 +206,16 @@ const AdminDashboard: React.FC = () => {
   };
 
   const selectAll = () => {
-    if (selectedIds.size === filteredCandidates.length) setSelectedIds(new Set());
-    else setSelectedIds(new Set(filteredCandidates.map(c => c.id)));
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      const allVisibleSelected = filteredCandidates.length > 0 && filteredCandidates.every(c => next.has(c.id));
+      if (allVisibleSelected) {
+        filteredCandidates.forEach(c => next.delete(c.id));
+      } else {
+        filteredCandidates.forEach(c => next.add(c.id));
+      }
+      return next;
+    });
   };
 
   const handleBulkStageChange = async () => {
@@ -248,8 +258,11 @@ const AdminDashboard: React.FC = () => {
     if (pipelineFilter) {
       list = list.filter(c => getAdminData(c).pipelineStage === pipelineFilter);
     }
+    if (hideAlreadyInPipeline) {
+      list = list.filter(c => !sourceIdsInPipeline.has(c.id));
+    }
     return list;
-  }, [candidates, searchQuery, pipelineFilter]);
+  }, [candidates, searchQuery, pipelineFilter, hideAlreadyInPipeline, sourceIdsInPipeline]);
 
   const leadershipPendingQueue = useMemo(() => {
     const now = Date.now();
@@ -300,8 +313,12 @@ const AdminDashboard: React.FC = () => {
         try {
           setLoading(true);
           setError(null);
-          const data = await getCandidatesForAdminList();
+          const [data, pipelineSourceIds] = await Promise.all([
+            getCandidatesForAdminList(),
+            listSourceCandidateIdsInPipeline(),
+          ]);
           setCandidates(data);
+          setSourceIdsInPipeline(pipelineSourceIds);
         } catch (err) {
           console.error(err);
           setError('Unable to load candidates. Please try again later.');
@@ -740,6 +757,8 @@ const AdminDashboard: React.FC = () => {
         (skippedNoResume > 0 ? `\nSkipped (no resume URL): ${skippedNoResume}` : '') +
         alreadyOrNoNew,
       );
+      const latest = await listSourceCandidateIdsInPipeline();
+      setSourceIdsInPipeline(latest);
       setSelectedIds(new Set());
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
@@ -1339,6 +1358,15 @@ const AdminDashboard: React.FC = () => {
                   </button>
                 ))}
               </div>
+              <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={hideAlreadyInPipeline}
+                  onChange={e => setHideAlreadyInPipeline(e.target.checked)}
+                  className="rounded border-gray-300 text-[#005EB8]"
+                />
+                <span>Hide already in pipeline</span>
+              </label>
               {selectedIds.size > 0 && (
                 <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-gray-200">
                   <span className="text-xs text-gray-600">{selectedIds.size} selected</span>
@@ -1385,7 +1413,7 @@ const AdminDashboard: React.FC = () => {
             </div>
             <div className="overflow-y-auto flex-grow">
               <div className="grid grid-cols-[34px,1.1fr,0.8fr,1.15fr,0.9fr,1.15fr,0.8fr,0.6fr,0.85fr] items-center gap-2 px-4 py-2 border-b border-gray-100 bg-[#f8fbff] text-[11px] font-semibold text-gray-500 uppercase tracking-wide sticky top-0 z-10">
-                <input type="checkbox" checked={selectedIds.size === filteredCandidates.length && filteredCandidates.length > 0} onChange={selectAll} className="rounded border-gray-300 text-[#005EB8]" />
+                <input type="checkbox" checked={filteredCandidates.length > 0 && filteredCandidates.every(c => selectedIds.has(c.id))} onChange={selectAll} className="rounded border-gray-300 text-[#005EB8]" />
                 <span>Candidate Name</span>
                 <span>Phone</span>
                 <span>Email</span>
@@ -1418,6 +1446,11 @@ const AdminDashboard: React.FC = () => {
                       <button type="button" onClick={() => selectCandidate(c)} className="font-semibold text-sm text-[#0b1f3a] hover:underline truncate text-left">
                         {c.firstName} {c.lastName}
                       </button>
+                    {sourceIdsInPipeline.has(c.id) && (
+                      <span className="mt-1 inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                        Already in pipeline
+                      </span>
+                    )}
                     </div>
                     <div className="text-[12px] text-gray-700 truncate">{c.phone || '-'}</div>
                     <div className="text-[12px] text-gray-600 truncate">{c.email}</div>
