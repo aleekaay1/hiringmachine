@@ -959,15 +959,32 @@ export async function syncJourneyResumesIntoPipeline(): Promise<{ importedCandid
   return upsertJourneyRowsIntoPipeline(journeyRows, 'checkin_journey');
 }
 
-export async function sendCandidatesToPipelineFromAdmin(candidateIds: string[]): Promise<{ importedCandidates: number; importedResumes: number }> {
+export async function sendCandidatesToPipelineFromAdmin(candidateIds: string[]): Promise<{
+  selected: number;
+  withResumes: number;
+  importedCandidates: number;
+  importedResumes: number;
+}> {
   const ids = [...new Set(candidateIds.map((id) => String(id || '').trim()).filter(Boolean))];
-  if (!ids.length) return { importedCandidates: 0, importedResumes: 0 };
+  if (!ids.length) return { selected: 0, withResumes: 0, importedCandidates: 0, importedResumes: 0 };
   const { data, error } = await supabase
     .from('candidates')
     .select('id, first_name, last_name, email, phone, applicant_questionnaire')
     .in('id', ids);
   if (error) throw error;
-  return upsertJourneyRowsIntoPipeline((data || []) as JourneySourceRow[], 'admin_push');
+  const selectedRows = (data || []) as JourneySourceRow[];
+  const withResumesRows = selectedRows.filter((row) => {
+    const aq = (row.applicant_questionnaire || {}) as Record<string, unknown>;
+    const resumeUrls = Array.isArray(aq.resumeUrls) ? aq.resumeUrls : [];
+    return resumeUrls.some((x) => String(x || '').trim().length > 0);
+  });
+  const result = await upsertJourneyRowsIntoPipeline(withResumesRows, 'admin_push');
+  return {
+    selected: ids.length,
+    withResumes: withResumesRows.length,
+    importedCandidates: result.importedCandidates,
+    importedResumes: result.importedResumes,
+  };
 }
 
 export async function getPipelineCandidateBundle(candidateId: string): Promise<PipelineCandidateBundle | null> {

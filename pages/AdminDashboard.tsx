@@ -726,7 +726,20 @@ const AdminDashboard: React.FC = () => {
     try {
       const ids = Array.from(selectedIds);
       const result = await sendCandidatesToPipelineFromAdmin(ids);
-      alert(`Sent to pipeline: ${result.importedCandidates} candidates, ${result.importedResumes} resumes imported.`);
+      const skippedNoResume = Math.max(0, result.selected - result.withResumes);
+      const alreadyOrNoNew =
+        result.withResumes > 0 && result.importedCandidates === 0 && result.importedResumes === 0
+          ? '\nSelected candidates were already in Pipeline or had no new resume URLs to import.'
+          : '';
+      alert(
+        `Pipeline send result:\n` +
+        `Selected: ${result.selected}\n` +
+        `With resume URLs: ${result.withResumes}\n` +
+        `New pipeline candidates: ${result.importedCandidates}\n` +
+        `New resumes imported: ${result.importedResumes}` +
+        (skippedNoResume > 0 ? `\nSkipped (no resume URL): ${skippedNoResume}` : '') +
+        alreadyOrNoNew,
+      );
       setSelectedIds(new Set());
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
@@ -1352,6 +1365,7 @@ const AdminDashboard: React.FC = () => {
                     onClick={handleBulkSendToPipeline}
                     disabled={sendingToPipeline}
                     className="text-xs px-2 py-1 bg-emerald-600 text-white rounded hover:opacity-90 disabled:opacity-50"
+                    title="Copies selected candidates into Pipeline (does not delete from Candidates)"
                   >
                     {sendingToPipeline ? 'Sending...' : 'Send to pipeline'}
                   </button>
