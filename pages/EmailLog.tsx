@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
@@ -8,6 +8,15 @@ import { sendEmail } from '../services/emailService';
 import { mergeTemplate } from '../services/emailTemplates';
 import { getSiteOriginForEmail } from '../services/emailSignature';
 import { fetchLiveSessionsDashboard, type PastMeetingRow, type UpcomingMeetingRow } from '../services/liveSessionsIntegrations';
+import {
+  createWednesdayCampaignRunSnapshot,
+  finalizeWednesdayCampaignRunCounts,
+  listWednesdayCampaignRuns,
+  prepareWednesdayCampaignRunForSend,
+  recordWednesdayCampaignRecipientSendResult,
+  type WednesdayCampaignRunSnapshotRecipientInput,
+  type WednesdayCampaignRunWithRecipients,
+} from '../services/wednesdayCampaignRuns';
 import { Candidate } from '../types';
 import { Download, Mail, RefreshCw, Search } from 'lucide-react';
 
@@ -70,6 +79,11 @@ type WednesdayCampaignRecipient = {
   status: string;
   candidateId: string | null;
   mergeCandidate: { firstName: string; lastName: string; email: string; phone: string };
+};
+
+type WednesdaySentTracking = {
+  candidateIds: Set<string>;
+  recipientEmails: Set<string>;
 };
 
 const WEDNESDAY_MANUAL_TRIGGER = 'manual_wednesday_live_overview';
@@ -247,6 +261,45 @@ function buildWednesdayManualMergeExtras(sessionStartIso?: string, now: Date = n
   };
 }
 
+function buildWednesdayRunSnapshotRecipients(input: {
+  session: WednesdaySessionOption;
+  candidates: Candidate[];
+  sentTracking: WednesdaySentTracking;
+}): WednesdayCampaignRunSnapshotRecipientInput[] {
+  const candidatesByEmail = new Map<string, Candidate>();
+  for (const candidate of input.candidates) {
+    const key = normalizeEmail(candidate.email);
+    if (!key || candidatesByEmail.has(key)) continue;
+    candidatesByEmail.set(key, candidate);
+  }
+
+  const recipients: WednesdayCampaignRunSnapshotRecipientInput[] = [];
+  const seen = new Set<string>();
+  for (const invitee of input.session.invitees) {
+    const email = normalizeEmail(invitee.email);
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    const candidate = candidatesByEmail.get(email) ?? null;
+    const candidateId = candidate?.id ?? null;
+    const deduped =
+      input.sentTracking.recipientEmails.has(email) ||
+      (candidateId ? input.sentTracking.candidateIds.has(candidateId) : false);
+    recipients.push({
+      recipientKey: invitee.key || email,
+      inviteeName: invitee.name || '(No name)',
+      inviteeEmail: email,
+      inviteeStatus: invitee.status || 'active',
+      selected: !deduped,
+      sendStatus: deduped ? 'skipped' : 'pending',
+      candidateId,
+      errorMessage: deduped ? 'Skipped by dedupe (already sent in prior Wednesday run).' : null,
+      inviteeUri: invitee.inviteeUri,
+      eventUri: invitee.eventUri,
+    });
+  }
+  return recipients;
+}
+
 const EmailLog: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [email, setEmail] = useState('admin@globelife-paz.com');
@@ -266,11 +319,19 @@ const EmailLog: React.FC = () => {
   const [campaignProgress, setCampaignProgress] = useState<{ current: number; total: number } | null>(null);
   const [campaignError, setCampaignError] = useState<string | null>(null);
   const [campaignResult, setCampaignResult] = useState<WednesdaySendResult | null>(null);
+  const [campaignPersistenceError, setCampaignPersistenceError] = useState<string | null>(null);
+  const [currentCampaignRunId, setCurrentCampaignRunId] = useState<string | null>(null);
+  const [currentCampaignRunSessionKey, setCurrentCampaignRunSessionKey] = useState<string | null>(null);
+  const [previousRuns, setPreviousRuns] = useState<WednesdayCampaignRunWithRecipients[]>([]);
+  const [previousRunsLoading, setPreviousRunsLoading] = useState(false);
+  const [previousRunsError, setPreviousRunsError] = useState<string | null>(null);
+  const [selectedPreviousRunId, setSelectedPreviousRunId] = useState<string>('');
   const [wednesdaySentCandidateIds, setWednesdaySentCandidateIds] = useState<Set<string>>(new Set());
   const [wednesdaySentEmails, setWednesdaySentEmails] = useState<Set<string>>(new Set());
   const [sentTrackingReady, setSentTrackingReady] = useState(false);
   const [campaignSubjectDraft, setCampaignSubjectDraft] = useState(WEDNESDAY_REMINDER_SUBJECT_DEFAULT);
   const [campaignBodyDraft, setCampaignBodyDraft] = useState(WEDNESDAY_REMINDER_BODY_DEFAULT);
+  const selectedSessionKeyRef = useRef('');
 
   useEffect(() => {
     void supabase.auth.getSession().then(({ data: s }) => {
@@ -309,6 +370,28 @@ const EmailLog: React.FC = () => {
   useEffect(() => {
     if (isAuthenticated) void load();
   }, [isAuthenticated, load]);
+
+  useEffect(() => {
+    selectedSessionKeyRef.current = selectedSessionKey;
+  }, [selectedSessionKey]);
+
+  const loadPreviousRuns = useCallback(async (preferredRunId?: string) => {
+    setPreviousRunsError(null);
+    setPreviousRunsLoading(true);
+    try {
+      const runs = await listWednesdayCampaignRuns(60);
+      setPreviousRuns(runs);
+      setSelectedPreviousRunId((prev) => {
+        const target = preferredRunId || prev;
+        if (target && runs.some((r) => r.run.id === target)) return target;
+        return runs[0]?.run.id || '';
+      });
+    } catch (err) {
+      setPreviousRunsError(err instanceof Error ? err.message : 'Failed to load previous runs.');
+    } finally {
+      setPreviousRunsLoading(false);
+    }
+  }, []);
 
   const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
     const { data: s } = await supabase.auth.getSession();
@@ -378,19 +461,60 @@ const EmailLog: React.FC = () => {
         ...dashboard.data.past_meetings,
       ];
       const nextSessionOptions = deriveSessionOptions(rowsCombined, nowEt);
+      const selectedKeyFromState = selectedSessionKeyRef.current;
+      const resolvedSelectedKey =
+        selectedKeyFromState && nextSessionOptions.some((option) => option.key === selectedKeyFromState)
+          ? selectedKeyFromState
+          : nextSessionOptions[0]?.key || '';
+      const selectedOptionForRun = nextSessionOptions.find((option) => option.key === resolvedSelectedKey) || null;
 
       setCandidateRows(allCandidates);
       setSessionOptions(nextSessionOptions);
       setSentTrackingReady(true);
       setWednesdaySentCandidateIds(sentTracking.candidateIds);
       setWednesdaySentEmails(sentTracking.recipientEmails);
-      setSelectedSessionKey((prev) => {
-        if (prev && nextSessionOptions.some((s) => s.key === prev)) return prev;
-        return nextSessionOptions[0]?.key || '';
-      });
+      setSelectedSessionKey(resolvedSelectedKey);
+
+      if (selectedOptionForRun) {
+        try {
+          const snapshotRecipients = buildWednesdayRunSnapshotRecipients({
+            session: selectedOptionForRun,
+            candidates: allCandidates,
+            sentTracking,
+          });
+          const run = await createWednesdayCampaignRunSnapshot({
+            sessionTitle: selectedOptionForRun.title,
+            sessionStartAt: selectedOptionForRun.startTimeIso,
+            sessionLabel: selectedOptionForRun.label,
+            source: sync ? 'email_log_manual_fetch' : 'email_log_autoload',
+            recipients: snapshotRecipients,
+            metadata: {
+              session_key: selectedOptionForRun.key,
+              invitees_raw_count: selectedOptionForRun.invitees.length,
+            },
+          });
+          setCurrentCampaignRunId(run.id);
+          setCurrentCampaignRunSessionKey(selectedOptionForRun.key);
+          setCampaignPersistenceError(null);
+          void loadPreviousRuns(run.id);
+        } catch (persistErr) {
+          setCurrentCampaignRunId(null);
+          setCurrentCampaignRunSessionKey(null);
+          setCampaignPersistenceError(
+            persistErr instanceof Error
+              ? `Fetched invitees but could not persist run snapshot: ${persistErr.message}`
+              : 'Fetched invitees but could not persist run snapshot.'
+          );
+        }
+      } else {
+        setCurrentCampaignRunId(null);
+        setCurrentCampaignRunSessionKey(null);
+      }
     } catch (err) {
       setSessionOptions([]);
       setSelectedSessionKey('');
+      setCurrentCampaignRunId(null);
+      setCurrentCampaignRunSessionKey(null);
       setWednesdaySentCandidateIds(new Set());
       setWednesdaySentEmails(new Set());
       setSentTrackingReady(false);
@@ -398,11 +522,15 @@ const EmailLog: React.FC = () => {
     } finally {
       setCampaignSourceLoading(false);
     }
-  }, [getFreshAccessToken, loadWednesdaySentTracking]);
+  }, [getFreshAccessToken, loadPreviousRuns, loadWednesdaySentTracking]);
 
   useEffect(() => {
     if (isAuthenticated) void loadCampaignRecipients(false);
   }, [isAuthenticated, loadCampaignRecipients]);
+
+  useEffect(() => {
+    if (isAuthenticated) void loadPreviousRuns();
+  }, [isAuthenticated, loadPreviousRuns]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -440,6 +568,11 @@ const EmailLog: React.FC = () => {
   const selectedSession = useMemo(
     () => sessionOptions.find((option) => option.key === selectedSessionKey) || null,
     [sessionOptions, selectedSessionKey]
+  );
+
+  const selectedPreviousRun = useMemo(
+    () => previousRuns.find((entry) => entry.run.id === selectedPreviousRunId) || null,
+    [previousRuns, selectedPreviousRunId]
   );
 
   const candidatesByEmail = useMemo(() => {
@@ -566,6 +699,65 @@ const EmailLog: React.FC = () => {
     setCampaignResult(null);
     setCampaignProgress({ current: 0, total: selectedRecipients.length });
 
+    let activeRunId: string | null = currentCampaignRunId;
+    let runFetchedCount = selectedSession?.invitees.length ?? selectedRecipients.length;
+
+    if (selectedSession) {
+      const snapshotRecipients = buildWednesdayRunSnapshotRecipients({
+        session: selectedSession,
+        candidates: candidateRows,
+        sentTracking: {
+          candidateIds: wednesdaySentCandidateIds,
+          recipientEmails: wednesdaySentEmails,
+        },
+      });
+      runFetchedCount = snapshotRecipients.length;
+      const runSessionMismatch = !activeRunId || currentCampaignRunSessionKey !== selectedSession.key;
+      if (runSessionMismatch) {
+        try {
+          const run = await createWednesdayCampaignRunSnapshot({
+            sessionTitle: selectedSession.title,
+            sessionStartAt: selectedSession.startTimeIso,
+            sessionLabel: selectedSession.label,
+            source: 'email_log_send_autocreate',
+            recipients: snapshotRecipients,
+            metadata: {
+              session_key: selectedSession.key,
+              invitees_raw_count: selectedSession.invitees.length,
+              reason: 'autocreated_before_send',
+            },
+          });
+          activeRunId = run.id;
+          setCurrentCampaignRunId(run.id);
+          setCurrentCampaignRunSessionKey(selectedSession.key);
+          setCampaignPersistenceError(null);
+          void loadPreviousRuns(run.id);
+        } catch (persistErr) {
+          setCampaignPersistenceError(
+            persistErr instanceof Error
+              ? `Could not create persistent run before send: ${persistErr.message}`
+              : 'Could not create persistent run before send.'
+          );
+          activeRunId = null;
+        }
+      }
+    }
+
+    if (activeRunId) {
+      try {
+        await prepareWednesdayCampaignRunForSend({
+          runId: activeRunId,
+          selectedRecipientKeys: selectedRecipients.map((recipient) => recipient.key),
+        });
+      } catch (prepareErr) {
+        setCampaignPersistenceError(
+          prepareErr instanceof Error
+            ? `Emails are still sending, but failed to prepare run status persistence: ${prepareErr.message}`
+            : 'Emails are still sending, but failed to prepare run status persistence.'
+        );
+      }
+    }
+
     const resultRows: WednesdaySendResultRow[] = [];
     let sent = 0;
     let failed = 0;
@@ -611,16 +803,52 @@ const EmailLog: React.FC = () => {
           to: recipient.email,
           status: 'sent',
         });
+        if (activeRunId) {
+          try {
+            await recordWednesdayCampaignRecipientSendResult({
+              runId: activeRunId,
+              recipientKey: recipient.key,
+              inviteeEmail: recipient.email,
+              sendStatus: 'sent',
+              candidateId: recipient.candidateId,
+            });
+          } catch (persistErr) {
+            setCampaignPersistenceError(
+              persistErr instanceof Error
+                ? `Email sent but result persistence failed for ${recipient.email}: ${persistErr.message}`
+                : `Email sent but result persistence failed for ${recipient.email}.`
+            );
+          }
+        }
       } else {
         failed += 1;
+        const errorMessage = ('error' in response ? response.error : '') || 'Failed to send email.';
         resultRows.push({
           recipientKey: recipient.key,
           candidateId: recipient.candidateId,
           recipientName: recipient.name,
           to: recipient.email,
           status: 'failed',
-          error: ('error' in response ? response.error : '') || 'Failed to send email.',
+          error: errorMessage,
         });
+        if (activeRunId) {
+          try {
+            await recordWednesdayCampaignRecipientSendResult({
+              runId: activeRunId,
+              recipientKey: recipient.key,
+              inviteeEmail: recipient.email,
+              sendStatus: 'failed',
+              candidateId: recipient.candidateId,
+              errorMessage,
+            });
+          } catch (persistErr) {
+            setCampaignPersistenceError(
+              persistErr instanceof Error
+                ? `Failed-send persistence issue for ${recipient.email}: ${persistErr.message}`
+                : `Failed-send persistence issue for ${recipient.email}.`
+            );
+          }
+        }
       }
       if (i < selectedRecipients.length - 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 150));
@@ -636,7 +864,26 @@ const EmailLog: React.FC = () => {
       completedAt: new Date().toISOString(),
       rows: resultRows,
     });
-    void Promise.all([load(), loadCampaignRecipients(false)]);
+    if (activeRunId) {
+      const skippedCount = Math.max(0, runFetchedCount - selectedRecipients.length);
+      try {
+        await finalizeWednesdayCampaignRunCounts({
+          runId: activeRunId,
+          selectedCount: selectedRecipients.length,
+          sentCount: sent,
+          failedCount: failed,
+          skippedCount,
+        });
+        void loadPreviousRuns(activeRunId);
+      } catch (persistErr) {
+        setCampaignPersistenceError(
+          persistErr instanceof Error
+            ? `Send completed, but failed to finalize persisted run counts: ${persistErr.message}`
+            : 'Send completed, but failed to finalize persisted run counts.'
+        );
+      }
+    }
+    void Promise.all([load(), loadCampaignRecipients(false), loadPreviousRuns(activeRunId || undefined)]);
   };
 
   const downloadCsv = () => {
@@ -781,6 +1028,12 @@ const EmailLog: React.FC = () => {
             <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-sm px-4 py-3">{campaignSourceError}</div>
           )}
 
+          {campaignPersistenceError && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-sm px-4 py-3">
+              {campaignPersistenceError}
+            </div>
+          )}
+
           {!campaignSourceError && sessionOptions.length === 0 && !campaignSourceLoading && (
             <div className="rounded-xl border border-[#d6deea] bg-[#f8fbff] text-[#334155] text-sm px-4 py-3">
               No matching Calendly session found for &quot;{TARGET_SESSION_TITLE}&quot; today at 11:30 AM ET.
@@ -809,6 +1062,78 @@ const EmailLog: React.FC = () => {
               )}
             </div>
           )}
+
+          <div className="rounded-xl border border-[#d6deea] p-3 bg-[#fcfdff] space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-xs font-semibold text-[#5c6b82]">Previous runs</div>
+                <div className="text-xs text-[#6f7b8d]">Each fetch and send is persisted with recipient-level history.</div>
+              </div>
+              <Button type="button" variant="secondary" onClick={() => void loadPreviousRuns()} disabled={previousRunsLoading || campaignSending}>
+                <RefreshCw size={14} className={previousRunsLoading ? 'animate-spin inline mr-1.5' : 'inline mr-1.5'} />
+                Refresh runs
+              </Button>
+            </div>
+            {previousRunsError && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 text-amber-900 text-xs px-3 py-2">{previousRunsError}</div>
+            )}
+            <select
+              value={selectedPreviousRunId}
+              onChange={(e) => setSelectedPreviousRunId(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg border border-[#cfe3f9] bg-white text-sm text-[#0B1B34] focus:outline-none focus:ring-2 focus:ring-[#005EB8]/25"
+              disabled={previousRunsLoading || previousRuns.length === 0}
+            >
+              {previousRuns.length === 0 ? (
+                <option value="">No saved runs yet</option>
+              ) : (
+                previousRuns.map(({ run }) => (
+                  <option key={run.id} value={run.id}>
+                    {formatDateTimeCanadaEastern(run.created_at)} - {run.session_label} - fetched {run.fetched_invitee_count}, sent {run.sent_count}, failed {run.failed_count}, skipped {run.skipped_count}
+                  </option>
+                ))
+              )}
+            </select>
+            {selectedPreviousRun && (
+              <details className="rounded-lg border border-[#d6deea] bg-white" open>
+                <summary className="cursor-pointer px-3 py-2 text-xs text-[#334155]">
+                  Run details: {formatDateTimeCanadaEastern(selectedPreviousRun.run.created_at)} - {selectedPreviousRun.run.session_label}
+                </summary>
+                <div className="px-3 pb-3 space-y-2">
+                  <div className="text-xs text-[#5c6b82]">
+                    Trigger: {selectedPreviousRun.run.trigger_label} · Fetched: <strong>{selectedPreviousRun.run.fetched_invitee_count}</strong> · Selected:{' '}
+                    <strong>{selectedPreviousRun.run.selected_count}</strong> · Sent: <strong className="text-emerald-700">{selectedPreviousRun.run.sent_count}</strong> · Failed:{' '}
+                    <strong className="text-red-700">{selectedPreviousRun.run.failed_count}</strong> · Skipped: <strong>{selectedPreviousRun.run.skipped_count}</strong>
+                  </div>
+                  <div className="max-h-56 overflow-auto rounded border border-[#e5eaf3]">
+                    <table className="min-w-full text-left text-xs border-collapse">
+                      <thead className="sticky top-0 z-10 bg-[#eef2f7] text-[#0B1B34] font-semibold border-b border-[#d6deea]">
+                        <tr>
+                          <th className="px-2 py-2 border-r border-[#d6deea]">Invitee</th>
+                          <th className="px-2 py-2 border-r border-[#d6deea]">Email</th>
+                          <th className="px-2 py-2 border-r border-[#d6deea]">Selected</th>
+                          <th className="px-2 py-2 border-r border-[#d6deea]">Send status</th>
+                          <th className="px-2 py-2 border-r border-[#d6deea]">Email log</th>
+                          <th className="px-2 py-2">Error</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedPreviousRun.recipients.map((recipient) => (
+                          <tr key={recipient.id} className="border-b border-[#e8edf4] align-top">
+                            <td className="px-2 py-1.5 border-r border-[#eef2f7]">{recipient.invitee_name}</td>
+                            <td className="px-2 py-1.5 border-r border-[#eef2f7] break-all">{recipient.invitee_email}</td>
+                            <td className="px-2 py-1.5 border-r border-[#eef2f7]">{recipient.selected ? 'yes' : 'no'}</td>
+                            <td className="px-2 py-1.5 border-r border-[#eef2f7]">{recipient.send_status}</td>
+                            <td className="px-2 py-1.5 border-r border-[#eef2f7] break-all">{recipient.email_send_log_id || '—'}</td>
+                            <td className="px-2 py-1.5 text-red-700">{recipient.error_message || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </details>
+            )}
+          </div>
 
           <div className="rounded-xl border border-[#d6deea] overflow-hidden">
             <div className="px-4 py-3 bg-[#f8fbff] border-b border-[#d6deea] flex flex-wrap items-center justify-between gap-2">
