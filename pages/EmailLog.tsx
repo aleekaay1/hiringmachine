@@ -5,7 +5,7 @@ import { supabase } from '../services/supabaseClient';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { getCandidates } from '../services/storageService';
 import { sendEmail } from '../services/emailService';
-import { EMAIL_TEMPLATES, mergeTemplate } from '../services/emailTemplates';
+import { mergeTemplate } from '../services/emailTemplates';
 import { getSiteOriginForEmail } from '../services/emailSignature';
 import { Candidate, type PipelineStage, normalizePipelineStage } from '../types';
 import { Download, Mail, RefreshCw, Search } from 'lucide-react';
@@ -45,6 +45,16 @@ type WednesdaySendResult = {
 
 const WEDNESDAY_MANUAL_TRIGGER = 'manual_wednesday_live_overview';
 const EMAIL_SEND_LOGS_PAGE_SIZE = 1000;
+const WEDNESDAY_REMINDER_SUBJECT_DEFAULT = 'Reminder: Live Overview Session Starts in 30 Minutes';
+const WEDNESDAY_REMINDER_BODY_DEFAULT = `
+<p>Hi {{firstName}},</p>
+<p>This is a reminder that your Live Overview Session begins in about 30 minutes.</p>
+<p><strong>Date:</strong> {{sessionDate}}<br/><strong>Time:</strong> {{sessionTime}}</p>
+<p><strong>Join link:</strong> <a href="{{Zoom Link}}" target="_blank" rel="noopener noreferrer">{{Zoom Link}}</a></p>
+<p>Please join a few minutes early so we can begin on time.</p>
+<p>Best regards,</p>
+{{emailSignature}}
+`.trim();
 
 function csvEscape(s: string): string {
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
@@ -54,6 +64,11 @@ function csvEscape(s: string): string {
 function candidateName(candidate: Candidate): string {
   const full = `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim();
   return full || '(No name)';
+}
+
+function ensureEmailSignaturePlaceholder(bodyHtml: string): string {
+  if (bodyHtml.includes('{{emailSignature}}')) return bodyHtml;
+  return `${bodyHtml.trim()}\n\n<p>Best regards,</p>\n{{emailSignature}}`;
 }
 
 function hasLeadershipFormSubmitted(candidate: Candidate, stage: PipelineStage): boolean {
@@ -95,10 +110,6 @@ function buildWednesdayManualMergeExtras(now: Date = new Date()): Record<string,
 }
 
 const EmailLog: React.FC = () => {
-  const stage2Template = useMemo(
-    () => EMAIL_TEMPLATES.find((t) => t.id === 'stage2_post_checkin') ?? null,
-    []
-  );
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [email, setEmail] = useState('admin@globelife-paz.com');
   const [password, setPassword] = useState('');
@@ -117,6 +128,8 @@ const EmailLog: React.FC = () => {
   const [campaignResult, setCampaignResult] = useState<WednesdaySendResult | null>(null);
   const [wednesdaySentCandidateIds, setWednesdaySentCandidateIds] = useState<Set<string>>(new Set());
   const [sentTrackingReady, setSentTrackingReady] = useState(false);
+  const [campaignSubjectDraft, setCampaignSubjectDraft] = useState(WEDNESDAY_REMINDER_SUBJECT_DEFAULT);
+  const [campaignBodyDraft, setCampaignBodyDraft] = useState(WEDNESDAY_REMINDER_BODY_DEFAULT);
 
   useEffect(() => {
     void supabase.auth.getSession().then(({ data: s }) => {
@@ -269,7 +282,6 @@ const EmailLog: React.FC = () => {
   const previewCandidate = selectedEligibleCandidates[0] ?? eligibleCandidates[0] ?? null;
 
   const previewEmail = useMemo(() => {
-    if (!stage2Template) return null;
     const fallback = {
       firstName: 'Candidate',
       lastName: '',
@@ -277,13 +289,13 @@ const EmailLog: React.FC = () => {
       phone: '',
     };
     return mergeTemplate(
-      stage2Template.subject,
-      stage2Template.bodyHtml,
+      campaignSubjectDraft,
+      ensureEmailSignaturePlaceholder(campaignBodyDraft),
       previewCandidate || fallback,
       buildWednesdayManualMergeExtras(),
       { siteOrigin: getSiteOriginForEmail() }
     );
-  }, [previewCandidate, stage2Template]);
+  }, [campaignBodyDraft, campaignSubjectDraft, previewCandidate]);
 
   const toggleCandidateSelection = (id: string) => {
     setSelectedCandidateIds((prev) => {
@@ -304,8 +316,14 @@ const EmailLog: React.FC = () => {
 
   const sendWednesdayCampaign = async () => {
     if (campaignSending) return;
-    if (!stage2Template) {
-      setCampaignError('Template not found: Stage 2 – Post check-in.');
+    const draftSubject = campaignSubjectDraft.trim();
+    if (!draftSubject) {
+      setCampaignError('Subject is required.');
+      return;
+    }
+    const draftBody = campaignBodyDraft.trim();
+    if (!draftBody) {
+      setCampaignError('Body is required.');
       return;
     }
     if (selectedEligibleCandidates.length === 0) {
@@ -332,8 +350,8 @@ const EmailLog: React.FC = () => {
       const candidate = selectedEligibleCandidates[i];
       setCampaignProgress({ current: i + 1, total: selectedEligibleCandidates.length });
       const merged = mergeTemplate(
-        stage2Template.subject,
-        stage2Template.bodyHtml,
+        draftSubject,
+        ensureEmailSignaturePlaceholder(draftBody),
         candidate,
         buildWednesdayManualMergeExtras(),
         { siteOrigin: getSiteOriginForEmail() }
@@ -578,21 +596,31 @@ const EmailLog: React.FC = () => {
 
           <div className="rounded-xl border border-[#d6deea] p-4 bg-[#fcfdff] space-y-3">
             <div className="text-sm text-[#334155]">
-              <strong>Template preview:</strong>{' '}
-              {stage2Template ? 'Stage 2 – Post check-in (existing automation template family)' : 'Template unavailable'}
+              <strong>Reminder draft preview:</strong> Wednesday Live Overview manual campaign
               {previewCandidate ? ` · Previewing ${candidateName(previewCandidate)}` : ''}
             </div>
             <div>
               <label className="block text-xs font-semibold text-[#5c6b82] mb-1">Subject</label>
               <input
                 type="text"
-                readOnly
-                value={previewEmail?.subject || ''}
-                className="w-full px-3 py-2 rounded-lg border border-[#cfe3f9] bg-white text-sm text-[#0B1B34]"
+                value={campaignSubjectDraft}
+                onChange={(e) => setCampaignSubjectDraft(e.target.value)}
+                disabled={campaignSending}
+                className="w-full px-3 py-2 rounded-lg border border-[#cfe3f9] bg-white text-sm text-[#0B1B34] focus:outline-none focus:ring-2 focus:ring-[#005EB8]/25"
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-[#5c6b82] mb-1">Body (rendered)</label>
+              <label className="block text-xs font-semibold text-[#5c6b82] mb-1">Body HTML (editable)</label>
+              <textarea
+                value={campaignBodyDraft}
+                onChange={(e) => setCampaignBodyDraft(e.target.value)}
+                disabled={campaignSending}
+                rows={8}
+                className="w-full px-3 py-2 rounded-lg border border-[#cfe3f9] bg-white text-sm text-[#0B1B34] font-mono focus:outline-none focus:ring-2 focus:ring-[#005EB8]/25"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-[#5c6b82] mb-1">Body preview (rendered)</label>
               <div
                 className="rounded-lg border border-[#cfe3f9] bg-white p-4 text-sm text-[#1A2942] max-h-56 overflow-auto prose prose-sm max-w-none"
                 dangerouslySetInnerHTML={{ __html: previewEmail?.bodyHtml || '<p class="text-gray-400">No preview available.</p>' }}
@@ -617,7 +645,8 @@ const EmailLog: React.FC = () => {
                 campaignSending ||
                 eligibleLoading ||
                 selectedEligibleCandidates.length === 0 ||
-                !stage2Template ||
+                !campaignSubjectDraft.trim() ||
+                !campaignBodyDraft.trim() ||
                 !sentTrackingReady
               }
             >
