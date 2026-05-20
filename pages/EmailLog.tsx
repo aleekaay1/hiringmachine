@@ -70,6 +70,27 @@ function isWednesdayLiveOverviewEligible(candidate: Candidate): boolean {
   return hasCheckInSignal && checkedInOnly && !hasLeadershipFormSubmitted(candidate, stage);
 }
 
+function getCurrentEasternDateLabel(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(now);
+}
+
+function buildWednesdayManualMergeExtras(now: Date = new Date()): Record<string, string> {
+  const sessionDate = getCurrentEasternDateLabel(now);
+  const sessionTime = '11:30 AM Eastern Time (ET)';
+  return {
+    '{{Date}}': sessionDate,
+    '{{sessionDate}}': sessionDate,
+    '{{Time}}': sessionTime,
+    '{{sessionTime}}': sessionTime,
+  };
+}
+
 const EmailLog: React.FC = () => {
   const stage2Template = useMemo(
     () => EMAIL_TEMPLATES.find((t) => t.id === 'stage2_post_checkin') ?? null,
@@ -217,7 +238,7 @@ const EmailLog: React.FC = () => {
       stage2Template.subject,
       stage2Template.bodyHtml,
       previewCandidate || fallback,
-      undefined,
+      buildWednesdayManualMergeExtras(),
       { siteOrigin: getSiteOriginForEmail() }
     );
   }, [previewCandidate, stage2Template]);
@@ -272,7 +293,7 @@ const EmailLog: React.FC = () => {
         stage2Template.subject,
         stage2Template.bodyHtml,
         candidate,
-        undefined,
+        buildWednesdayManualMergeExtras(),
         { siteOrigin: getSiteOriginForEmail() }
       );
       const response = await sendEmail(token, {
@@ -439,7 +460,7 @@ const EmailLog: React.FC = () => {
             <div>
               <h2 className="text-base font-semibold text-[#0B1B34]">Wednesday Live Overview Send</h2>
               <p className="text-sm text-[#5c6b82]">
-                Manual campaign: run every Wednesday at 11:00 AM EST for candidates who are checked in only and have not submitted leadership form.
+                Manual campaign: run every Wednesday at 11:30 AM ET for candidates who are checked in only and have not submitted leadership form.
               </p>
             </div>
             <div className="flex items-center gap-2">
