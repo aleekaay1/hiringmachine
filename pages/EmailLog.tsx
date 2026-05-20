@@ -43,6 +43,9 @@ type WednesdaySendResult = {
   rows: WednesdaySendResultRow[];
 };
 
+const WEDNESDAY_MANUAL_TRIGGER = 'manual_wednesday_live_overview';
+const EMAIL_SEND_LOGS_PAGE_SIZE = 1000;
+
 function csvEscape(s: string): string {
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
@@ -112,6 +115,8 @@ const EmailLog: React.FC = () => {
   const [campaignProgress, setCampaignProgress] = useState<{ current: number; total: number } | null>(null);
   const [campaignError, setCampaignError] = useState<string | null>(null);
   const [campaignResult, setCampaignResult] = useState<WednesdaySendResult | null>(null);
+  const [wednesdaySentCandidateIds, setWednesdaySentCandidateIds] = useState<Set<string>>(new Set());
+  const [sentTrackingReady, setSentTrackingReady] = useState(false);
 
   useEffect(() => {
     void supabase.auth.getSession().then(({ data: s }) => {
@@ -151,19 +156,55 @@ const EmailLog: React.FC = () => {
     if (isAuthenticated) void load();
   }, [isAuthenticated, load]);
 
+  const loadWednesdaySentCandidateIds = useCallback(async (): Promise<Set<string>> => {
+    const sentCandidateIds = new Set<string>();
+    let from = 0;
+    for (;;) {
+      const { data, error } = await supabase
+        .from('email_send_logs')
+        .select('candidate_id')
+        .eq('trigger_label', WEDNESDAY_MANUAL_TRIGGER)
+        .eq('status', 'sent')
+        .not('candidate_id', 'is', null)
+        .order('created_at', { ascending: false })
+        .range(from, from + EMAIL_SEND_LOGS_PAGE_SIZE - 1);
+
+      if (error) {
+        throw error;
+      }
+
+      const page = (data as Array<{ candidate_id: string | null }> | null) ?? [];
+      for (const row of page) {
+        if (row.candidate_id) {
+          sentCandidateIds.add(row.candidate_id);
+        }
+      }
+
+      if (page.length < EMAIL_SEND_LOGS_PAGE_SIZE) break;
+      from += EMAIL_SEND_LOGS_PAGE_SIZE;
+    }
+
+    return sentCandidateIds;
+  }, []);
+
   const loadCampaignCandidates = useCallback(async () => {
     setEligibleError(null);
     setEligibleLoading(true);
+    setSentTrackingReady(false);
     try {
-      const data = await getCandidates();
+      const [data, sentCandidateIds] = await Promise.all([getCandidates(), loadWednesdaySentCandidateIds()]);
       setCandidateRows(data);
+      setWednesdaySentCandidateIds(sentCandidateIds);
+      setSentTrackingReady(true);
     } catch (err) {
       setCandidateRows([]);
+      setWednesdaySentCandidateIds(new Set());
+      setSentTrackingReady(false);
       setEligibleError(err instanceof Error ? err.message : 'Failed to load candidates.');
     } finally {
       setEligibleLoading(false);
     }
-  }, []);
+  }, [loadWednesdaySentCandidateIds]);
 
   useEffect(() => {
     if (isAuthenticated) void loadCampaignCandidates();
@@ -206,8 +247,9 @@ const EmailLog: React.FC = () => {
     () =>
       candidateRows
         .filter(isWednesdayLiveOverviewEligible)
+        .filter((candidate) => !wednesdaySentCandidateIds.has(candidate.id))
         .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()),
-    [candidateRows]
+    [candidateRows, wednesdaySentCandidateIds]
   );
 
   const eligibleSelectionKey = useMemo(
@@ -300,11 +342,17 @@ const EmailLog: React.FC = () => {
         to: candidate.email,
         subject: merged.subject,
         bodyHtml: merged.bodyHtml,
-        trigger: 'manual_wednesday_live_overview',
+        trigger: WEDNESDAY_MANUAL_TRIGGER,
         candidateId: candidate.id,
       });
       if ('ok' in response && response.ok) {
         sent += 1;
+        setWednesdaySentCandidateIds((prev) => {
+          if (prev.has(candidate.id)) return prev;
+          const next = new Set(prev);
+          next.add(candidate.id);
+          return next;
+        });
         resultRows.push({
           candidateId: candidate.id,
           candidateName: candidateName(candidate),
@@ -335,7 +383,7 @@ const EmailLog: React.FC = () => {
       completedAt: new Date().toISOString(),
       rows: resultRows,
     });
-    void load();
+    void Promise.all([load(), loadCampaignCandidates()]);
   };
 
   const downloadCsv = () => {
@@ -565,7 +613,13 @@ const EmailLog: React.FC = () => {
             <Button
               type="button"
               onClick={() => void sendWednesdayCampaign()}
-              disabled={campaignSending || selectedEligibleCandidates.length === 0 || !stage2Template}
+              disabled={
+                campaignSending ||
+                eligibleLoading ||
+                selectedEligibleCandidates.length === 0 ||
+                !stage2Template ||
+                !sentTrackingReady
+              }
             >
               {campaignSending ? 'Sending...' : `Send to selected (${selectedEligibleCandidates.length})`}
             </Button>
