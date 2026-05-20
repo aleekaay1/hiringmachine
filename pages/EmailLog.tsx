@@ -7,7 +7,8 @@ import { getCandidates } from '../services/storageService';
 import { sendEmail } from '../services/emailService';
 import { mergeTemplate } from '../services/emailTemplates';
 import { getSiteOriginForEmail } from '../services/emailSignature';
-import { Candidate, type PipelineStage, normalizePipelineStage } from '../types';
+import { fetchLiveSessionsDashboard, type PastMeetingRow, type UpcomingMeetingRow } from '../services/liveSessionsIntegrations';
+import { Candidate } from '../types';
 import { Download, Mail, RefreshCw, Search } from 'lucide-react';
 
 type EmailSendLogRow = {
@@ -28,8 +29,9 @@ type EmailSendLogRow = {
 type WednesdaySendStatus = 'sent' | 'failed';
 
 type WednesdaySendResultRow = {
-  candidateId: string;
-  candidateName: string;
+  recipientKey: string;
+  candidateId: string | null;
+  recipientName: string;
   to: string;
   status: WednesdaySendStatus;
   error?: string;
@@ -43,8 +45,38 @@ type WednesdaySendResult = {
   rows: WednesdaySendResultRow[];
 };
 
+type CalendlyInviteeLite = {
+  key: string;
+  name: string;
+  email: string;
+  status: string;
+  inviteeUri: string | null;
+  eventUri: string | null;
+};
+
+type WednesdaySessionOption = {
+  key: string;
+  title: string;
+  startTimeIso: string;
+  startMinutesEt: number | null;
+  label: string;
+  invitees: CalendlyInviteeLite[];
+};
+
+type WednesdayCampaignRecipient = {
+  key: string;
+  name: string;
+  email: string;
+  status: string;
+  candidateId: string | null;
+  mergeCandidate: { firstName: string; lastName: string; email: string; phone: string };
+};
+
 const WEDNESDAY_MANUAL_TRIGGER = 'manual_wednesday_live_overview';
 const EMAIL_SEND_LOGS_PAGE_SIZE = 1000;
+const TARGET_SESSION_TITLE = 'Live Online Career Session';
+const TARGET_SESSION_START_MINUTES_ET = 11 * 60 + 30;
+const TARGET_SESSION_MATCH_WINDOW_MINUTES = 90;
 const WEDNESDAY_REMINDER_SUBJECT_DEFAULT = 'Reminder: Live Overview Session Starts in 30 Minutes';
 const WEDNESDAY_REMINDER_BODY_DEFAULT = `
 <p>Hi {{firstName}},</p>
@@ -61,7 +93,7 @@ function csvEscape(s: string): string {
   return s;
 }
 
-function candidateName(candidate: Candidate): string {
+function candidateName(candidate: { firstName?: string; lastName?: string }): string {
   const full = `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim();
   return full || '(No name)';
 }
@@ -71,21 +103,112 @@ function ensureEmailSignaturePlaceholder(bodyHtml: string): string {
   return `${bodyHtml.trim()}\n\n<p>Best regards,</p>\n{{emailSignature}}`;
 }
 
-function hasLeadershipFormSubmitted(candidate: Candidate, stage: PipelineStage): boolean {
-  if (candidate.status === 'assessment_complete' || Boolean(candidate.assessment)) return true;
-  return (
-    stage === 'Leadership form submitted, awaiting evaluation' ||
-    stage === 'Evaluation Done' ||
-    stage === 'Interview scheduled' ||
-    stage === 'Final decision'
-  );
+function normalizeEmail(input: string | null | undefined): string {
+  return String(input || '')
+    .trim()
+    .toLowerCase();
 }
 
-function isWednesdayLiveOverviewEligible(candidate: Candidate): boolean {
-  const stage = normalizePipelineStage(candidate.adminData?.pipelineStage);
-  const hasCheckInSignal = candidate.status === 'interview_complete' || Boolean(candidate.applicantQuestionnaire);
-  const checkedInOnly = stage === 'Checked In';
-  return hasCheckInSignal && checkedInOnly && !hasLeadershipFormSubmitted(candidate, stage);
+function parseFirstEmailAddress(input: string | null | undefined): string {
+  const raw = String(input || '').trim();
+  if (!raw) return '';
+  const first = raw.split(',')[0] ?? '';
+  const bracketMatch = first.match(/<([^>]+)>/);
+  return normalizeEmail(bracketMatch?.[1] || first);
+}
+
+function splitName(fullName: string): { firstName: string; lastName: string } {
+  const cleaned = fullName.trim().replace(/\s+/g, ' ');
+  if (!cleaned) return { firstName: 'Candidate', lastName: '' };
+  const parts = cleaned.split(' ');
+  const firstName = parts.shift() || 'Candidate';
+  return { firstName, lastName: parts.join(' ') };
+}
+
+function easternDateKey(iso: string): string {
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return '';
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(parsed));
+}
+
+function easternMinutes(iso: string): number | null {
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return null;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+    .formatToParts(new Date(parsed))
+    .reduce<Record<string, string>>((acc, part) => {
+      acc[part.type] = part.value;
+      return acc;
+    }, {});
+  const hh = Number(parts.hour);
+  const mm = Number(parts.minute);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+  return hh * 60 + mm;
+}
+
+function deriveSessionOptions(
+  rows: Array<PastMeetingRow | UpcomingMeetingRow>,
+  targetDateKeyEt: string
+): WednesdaySessionOption[] {
+  const byKey = new Map<string, WednesdaySessionOption>();
+  for (const row of rows) {
+    const title = String(row.calendly?.name || row.zoom.topic || '').trim();
+    const startTimeIso = String(row.calendly?.start_time || row.zoom.start_time || '').trim();
+    if (!title || !startTimeIso) continue;
+    if (easternDateKey(startTimeIso) !== targetDateKeyEt) continue;
+    if (!title.toLowerCase().includes(TARGET_SESSION_TITLE.toLowerCase())) continue;
+    const startMinutesEt = easternMinutes(startTimeIso);
+    if (startMinutesEt == null || Math.abs(startMinutesEt - TARGET_SESSION_START_MINUTES_ET) > TARGET_SESSION_MATCH_WINDOW_MINUTES) {
+      continue;
+    }
+
+    const key = `${title}|${startTimeIso}|${row.calendly?.uri || row.zoom.uuid || 'session'}`;
+    const inviteesRaw = row.invitees || [];
+    const invitees = inviteesRaw
+      .map((inv, idx) => {
+        const email = normalizeEmail((inv as { email?: string }).email);
+        const name = String((inv as { name?: string }).name || '').trim() || '(No name)';
+        if (!email) return null;
+        const inviteeUri = (inv as { invitee_uri?: string }).invitee_uri ?? null;
+        const eventUri = (inv as { event_uri?: string }).event_uri ?? row.calendly?.uri ?? null;
+        return {
+          key: inviteeUri || `${email}|${idx}`,
+          email,
+          name,
+          status: String((inv as { status?: string }).status || 'active'),
+          inviteeUri,
+          eventUri,
+        } as CalendlyInviteeLite;
+      })
+      .filter((inv): inv is CalendlyInviteeLite => Boolean(inv));
+    byKey.set(key, {
+      key,
+      title,
+      startTimeIso,
+      startMinutesEt,
+      label: `${title} - ${formatDateTimeCanadaEastern(startTimeIso)}`,
+      invitees,
+    });
+  }
+
+  return [...byKey.values()].sort((a, b) => {
+    const aMin = a.startMinutesEt ?? Number.POSITIVE_INFINITY;
+    const bMin = b.startMinutesEt ?? Number.POSITIVE_INFINITY;
+    const aDist = Math.abs(aMin - TARGET_SESSION_START_MINUTES_ET);
+    const bDist = Math.abs(bMin - TARGET_SESSION_START_MINUTES_ET);
+    if (aDist !== bDist) return aDist - bDist;
+    return a.startTimeIso.localeCompare(b.startTimeIso);
+  });
 }
 
 function getCurrentEasternDateLabel(now: Date = new Date()): string {
@@ -98,9 +221,24 @@ function getCurrentEasternDateLabel(now: Date = new Date()): string {
   }).format(now);
 }
 
-function buildWednesdayManualMergeExtras(now: Date = new Date()): Record<string, string> {
-  const sessionDate = getCurrentEasternDateLabel(now);
-  const sessionTime = '11:30 AM Eastern Time (ET)';
+function easternTimeLabelForIso(iso: string): string {
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return '11:30 AM Eastern Time (ET)';
+  return (
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).format(new Date(parsed)) + ' Eastern Time (ET)'
+  );
+}
+
+function buildWednesdayManualMergeExtras(sessionStartIso?: string, now: Date = new Date()): Record<string, string> {
+  const parsed = sessionStartIso ? Date.parse(sessionStartIso) : NaN;
+  const baseDate = Number.isFinite(parsed) ? new Date(parsed) : now;
+  const sessionDate = getCurrentEasternDateLabel(baseDate);
+  const sessionTime = sessionStartIso ? easternTimeLabelForIso(sessionStartIso) : '11:30 AM Eastern Time (ET)';
   return {
     '{{Date}}': sessionDate,
     '{{sessionDate}}': sessionDate,
@@ -119,14 +257,17 @@ const EmailLog: React.FC = () => {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [candidateRows, setCandidateRows] = useState<Candidate[]>([]);
-  const [eligibleLoading, setEligibleLoading] = useState(false);
-  const [eligibleError, setEligibleError] = useState<string | null>(null);
-  const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
+  const [campaignSourceLoading, setCampaignSourceLoading] = useState(false);
+  const [campaignSourceError, setCampaignSourceError] = useState<string | null>(null);
+  const [sessionOptions, setSessionOptions] = useState<WednesdaySessionOption[]>([]);
+  const [selectedSessionKey, setSelectedSessionKey] = useState<string>('');
+  const [selectedRecipientKeys, setSelectedRecipientKeys] = useState<Set<string>>(new Set());
   const [campaignSending, setCampaignSending] = useState(false);
   const [campaignProgress, setCampaignProgress] = useState<{ current: number; total: number } | null>(null);
   const [campaignError, setCampaignError] = useState<string | null>(null);
   const [campaignResult, setCampaignResult] = useState<WednesdaySendResult | null>(null);
   const [wednesdaySentCandidateIds, setWednesdaySentCandidateIds] = useState<Set<string>>(new Set());
+  const [wednesdaySentEmails, setWednesdaySentEmails] = useState<Set<string>>(new Set());
   const [sentTrackingReady, setSentTrackingReady] = useState(false);
   const [campaignSubjectDraft, setCampaignSubjectDraft] = useState(WEDNESDAY_REMINDER_SUBJECT_DEFAULT);
   const [campaignBodyDraft, setCampaignBodyDraft] = useState(WEDNESDAY_REMINDER_BODY_DEFAULT);
@@ -169,16 +310,27 @@ const EmailLog: React.FC = () => {
     if (isAuthenticated) void load();
   }, [isAuthenticated, load]);
 
-  const loadWednesdaySentCandidateIds = useCallback(async (): Promise<Set<string>> => {
+  const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
+    const { data: s } = await supabase.auth.getSession();
+    if (s.session?.access_token) return s.session.access_token;
+    const { data: refreshed, error } = await supabase.auth.refreshSession();
+    if (error) return null;
+    return refreshed.session?.access_token ?? null;
+  }, []);
+
+  const loadWednesdaySentTracking = useCallback(async (): Promise<{
+    candidateIds: Set<string>;
+    recipientEmails: Set<string>;
+  }> => {
     const sentCandidateIds = new Set<string>();
+    const sentRecipientEmails = new Set<string>();
     let from = 0;
     for (;;) {
       const { data, error } = await supabase
         .from('email_send_logs')
-        .select('candidate_id')
+        .select('candidate_id, to_email')
         .eq('trigger_label', WEDNESDAY_MANUAL_TRIGGER)
         .eq('status', 'sent')
-        .not('candidate_id', 'is', null)
         .order('created_at', { ascending: false })
         .range(from, from + EMAIL_SEND_LOGS_PAGE_SIZE - 1);
 
@@ -186,10 +338,15 @@ const EmailLog: React.FC = () => {
         throw error;
       }
 
-      const page = (data as Array<{ candidate_id: string | null }> | null) ?? [];
+      const page =
+        (data as Array<{ candidate_id: string | null; to_email: string | null }> | null) ?? [];
       for (const row of page) {
         if (row.candidate_id) {
           sentCandidateIds.add(row.candidate_id);
+        }
+        const recipientEmail = parseFirstEmailAddress(row.to_email);
+        if (recipientEmail) {
+          sentRecipientEmails.add(recipientEmail);
         }
       }
 
@@ -197,31 +354,55 @@ const EmailLog: React.FC = () => {
       from += EMAIL_SEND_LOGS_PAGE_SIZE;
     }
 
-    return sentCandidateIds;
+    return { candidateIds: sentCandidateIds, recipientEmails: sentRecipientEmails };
   }, []);
 
-  const loadCampaignCandidates = useCallback(async () => {
-    setEligibleError(null);
-    setEligibleLoading(true);
+  const loadCampaignRecipients = useCallback(async (sync: boolean = false) => {
+    setCampaignSourceError(null);
+    setCampaignSourceLoading(true);
     setSentTrackingReady(false);
     try {
-      const [data, sentCandidateIds] = await Promise.all([getCandidates(), loadWednesdaySentCandidateIds()]);
-      setCandidateRows(data);
-      setWednesdaySentCandidateIds(sentCandidateIds);
+      const [allCandidates, sentTracking] = await Promise.all([getCandidates(), loadWednesdaySentTracking()]);
+      const token = await getFreshAccessToken();
+      if (!token) {
+        throw new Error('Your session expired. Please sign in again.');
+      }
+      const dashboard = await fetchLiveSessionsDashboard(token, sync ? { sync: true } : { readCache: true });
+      if (!dashboard.ok) {
+        throw new Error(dashboard.error || 'Failed to load Calendly sessions.');
+      }
+
+      const nowEt = easternDateKey(new Date().toISOString());
+      const rowsCombined: Array<PastMeetingRow | UpcomingMeetingRow> = [
+        ...dashboard.data.upcoming_meetings,
+        ...dashboard.data.past_meetings,
+      ];
+      const nextSessionOptions = deriveSessionOptions(rowsCombined, nowEt);
+
+      setCandidateRows(allCandidates);
+      setSessionOptions(nextSessionOptions);
       setSentTrackingReady(true);
+      setWednesdaySentCandidateIds(sentTracking.candidateIds);
+      setWednesdaySentEmails(sentTracking.recipientEmails);
+      setSelectedSessionKey((prev) => {
+        if (prev && nextSessionOptions.some((s) => s.key === prev)) return prev;
+        return nextSessionOptions[0]?.key || '';
+      });
     } catch (err) {
-      setCandidateRows([]);
+      setSessionOptions([]);
+      setSelectedSessionKey('');
       setWednesdaySentCandidateIds(new Set());
+      setWednesdaySentEmails(new Set());
       setSentTrackingReady(false);
-      setEligibleError(err instanceof Error ? err.message : 'Failed to load candidates.');
+      setCampaignSourceError(err instanceof Error ? err.message : 'Failed to load session invitees.');
     } finally {
-      setEligibleLoading(false);
+      setCampaignSourceLoading(false);
     }
-  }, [loadWednesdaySentCandidateIds]);
+  }, [getFreshAccessToken, loadWednesdaySentTracking]);
 
   useEffect(() => {
-    if (isAuthenticated) void loadCampaignCandidates();
-  }, [isAuthenticated, loadCampaignCandidates]);
+    if (isAuthenticated) void loadCampaignRecipients(false);
+  }, [isAuthenticated, loadCampaignRecipients]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -256,30 +437,73 @@ const EmailLog: React.FC = () => {
     });
   }, [rows, search]);
 
-  const eligibleCandidates = useMemo(
-    () =>
-      candidateRows
-        .filter(isWednesdayLiveOverviewEligible)
-        .filter((candidate) => !wednesdaySentCandidateIds.has(candidate.id))
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()),
-    [candidateRows, wednesdaySentCandidateIds]
+  const selectedSession = useMemo(
+    () => sessionOptions.find((option) => option.key === selectedSessionKey) || null,
+    [sessionOptions, selectedSessionKey]
   );
 
-  const eligibleSelectionKey = useMemo(
-    () => eligibleCandidates.map((c) => c.id).join('|'),
-    [eligibleCandidates]
+  const candidatesByEmail = useMemo(() => {
+    const map = new Map<string, Candidate>();
+    for (const candidate of candidateRows) {
+      const key = normalizeEmail(candidate.email);
+      if (!key || map.has(key)) continue;
+      map.set(key, candidate);
+    }
+    return map;
+  }, [candidateRows]);
+
+  const recipientRows = useMemo<WednesdayCampaignRecipient[]>(() => {
+    const seen = new Set<string>();
+    const rowsOut: WednesdayCampaignRecipient[] = [];
+    for (const invitee of selectedSession?.invitees ?? []) {
+      const emailKey = normalizeEmail(invitee.email);
+      if (!emailKey || seen.has(emailKey)) continue;
+      seen.add(emailKey);
+
+      const candidate = candidatesByEmail.get(emailKey) ?? null;
+      const candidateId = candidate?.id ?? null;
+      if (wednesdaySentEmails.has(emailKey)) continue;
+      if (candidateId && wednesdaySentCandidateIds.has(candidateId)) continue;
+
+      const nameForMerge = invitee.name || candidateName(candidate ?? { firstName: '', lastName: '' });
+      const { firstName, lastName } = splitName(nameForMerge);
+      rowsOut.push({
+        key: invitee.key || `${emailKey}|${candidateId || 'invitee'}`,
+        name: nameForMerge,
+        email: emailKey,
+        status: invitee.status,
+        candidateId,
+        mergeCandidate: {
+          firstName: candidate?.firstName || firstName,
+          lastName: candidate?.lastName || lastName,
+          email: emailKey,
+          phone: candidate?.phone || '',
+        },
+      });
+    }
+    return rowsOut.sort((a, b) => a.email.localeCompare(b.email));
+  }, [candidatesByEmail, selectedSession, wednesdaySentCandidateIds, wednesdaySentEmails]);
+
+  const excludedAlreadySentCount = useMemo(() => {
+    const total = selectedSession?.invitees.length ?? 0;
+    return Math.max(0, total - recipientRows.length);
+  }, [selectedSession, recipientRows.length]);
+
+  const recipientSelectionKey = useMemo(
+    () => recipientRows.map((r) => r.key).join('|'),
+    [recipientRows]
   );
 
   useEffect(() => {
-    setSelectedCandidateIds(new Set(eligibleCandidates.map((c) => c.id)));
-  }, [eligibleSelectionKey]);
+    setSelectedRecipientKeys(new Set(recipientRows.map((r) => r.key)));
+  }, [recipientSelectionKey]);
 
-  const selectedEligibleCandidates = useMemo(
-    () => eligibleCandidates.filter((c) => selectedCandidateIds.has(c.id)),
-    [eligibleCandidates, selectedCandidateIds]
+  const selectedRecipients = useMemo(
+    () => recipientRows.filter((r) => selectedRecipientKeys.has(r.key)),
+    [recipientRows, selectedRecipientKeys]
   );
 
-  const previewCandidate = selectedEligibleCandidates[0] ?? eligibleCandidates[0] ?? null;
+  const previewRecipient = selectedRecipients[0] ?? recipientRows[0] ?? null;
 
   const previewEmail = useMemo(() => {
     const fallback = {
@@ -291,27 +515,27 @@ const EmailLog: React.FC = () => {
     return mergeTemplate(
       campaignSubjectDraft,
       ensureEmailSignaturePlaceholder(campaignBodyDraft),
-      previewCandidate || fallback,
-      buildWednesdayManualMergeExtras(),
+      previewRecipient?.mergeCandidate || fallback,
+      buildWednesdayManualMergeExtras(selectedSession?.startTimeIso),
       { siteOrigin: getSiteOriginForEmail() }
     );
-  }, [campaignBodyDraft, campaignSubjectDraft, previewCandidate]);
+  }, [campaignBodyDraft, campaignSubjectDraft, previewRecipient, selectedSession?.startTimeIso]);
 
-  const toggleCandidateSelection = (id: string) => {
-    setSelectedCandidateIds((prev) => {
+  const toggleRecipientSelection = (key: string) => {
+    setSelectedRecipientKeys((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
 
-  const selectAllEligible = () => {
-    setSelectedCandidateIds(new Set(eligibleCandidates.map((c) => c.id)));
+  const selectAllRecipients = () => {
+    setSelectedRecipientKeys(new Set(recipientRows.map((r) => r.key)));
   };
 
-  const deselectAllEligible = () => {
-    setSelectedCandidateIds(new Set());
+  const deselectAllRecipients = () => {
+    setSelectedRecipientKeys(new Set());
   };
 
   const sendWednesdayCampaign = async () => {
@@ -326,8 +550,8 @@ const EmailLog: React.FC = () => {
       setCampaignError('Body is required.');
       return;
     }
-    if (selectedEligibleCandidates.length === 0) {
-      setCampaignError('Select at least one eligible candidate.');
+    if (selectedRecipients.length === 0) {
+      setCampaignError('Select at least one Calendly invitee.');
       return;
     }
     const { data: s } = await supabase.auth.getSession();
@@ -340,54 +564,65 @@ const EmailLog: React.FC = () => {
     setCampaignSending(true);
     setCampaignError(null);
     setCampaignResult(null);
-    setCampaignProgress({ current: 0, total: selectedEligibleCandidates.length });
+    setCampaignProgress({ current: 0, total: selectedRecipients.length });
 
     const resultRows: WednesdaySendResultRow[] = [];
     let sent = 0;
     let failed = 0;
 
-    for (let i = 0; i < selectedEligibleCandidates.length; i += 1) {
-      const candidate = selectedEligibleCandidates[i];
-      setCampaignProgress({ current: i + 1, total: selectedEligibleCandidates.length });
+    for (let i = 0; i < selectedRecipients.length; i += 1) {
+      const recipient = selectedRecipients[i];
+      setCampaignProgress({ current: i + 1, total: selectedRecipients.length });
       const merged = mergeTemplate(
         draftSubject,
         ensureEmailSignaturePlaceholder(draftBody),
-        candidate,
-        buildWednesdayManualMergeExtras(),
+        recipient.mergeCandidate,
+        buildWednesdayManualMergeExtras(selectedSession?.startTimeIso),
         { siteOrigin: getSiteOriginForEmail() }
       );
       const response = await sendEmail(token, {
-        to: candidate.email,
+        to: recipient.email,
         subject: merged.subject,
         bodyHtml: merged.bodyHtml,
         trigger: WEDNESDAY_MANUAL_TRIGGER,
-        candidateId: candidate.id,
+        candidateId: recipient.candidateId || undefined,
       });
       if ('ok' in response && response.ok) {
         sent += 1;
-        setWednesdaySentCandidateIds((prev) => {
-          if (prev.has(candidate.id)) return prev;
+        setWednesdaySentEmails((prev) => {
+          if (prev.has(recipient.email)) return prev;
           const next = new Set(prev);
-          next.add(candidate.id);
+          next.add(recipient.email);
           return next;
         });
+        if (recipient.candidateId) {
+          const candidateId = recipient.candidateId;
+          setWednesdaySentCandidateIds((prev) => {
+            if (prev.has(candidateId)) return prev;
+            const next = new Set(prev);
+            next.add(candidateId);
+            return next;
+          });
+        }
         resultRows.push({
-          candidateId: candidate.id,
-          candidateName: candidateName(candidate),
-          to: candidate.email,
+          recipientKey: recipient.key,
+          candidateId: recipient.candidateId,
+          recipientName: recipient.name,
+          to: recipient.email,
           status: 'sent',
         });
       } else {
         failed += 1;
         resultRows.push({
-          candidateId: candidate.id,
-          candidateName: candidateName(candidate),
-          to: candidate.email,
+          recipientKey: recipient.key,
+          candidateId: recipient.candidateId,
+          recipientName: recipient.name,
+          to: recipient.email,
           status: 'failed',
           error: ('error' in response ? response.error : '') || 'Failed to send email.',
         });
       }
-      if (i < selectedEligibleCandidates.length - 1) {
+      if (i < selectedRecipients.length - 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 150));
       }
     }
@@ -395,13 +630,13 @@ const EmailLog: React.FC = () => {
     setCampaignSending(false);
     setCampaignProgress(null);
     setCampaignResult({
-      attempted: selectedEligibleCandidates.length,
+      attempted: selectedRecipients.length,
       sent,
       failed,
       completedAt: new Date().toISOString(),
       rows: resultRows,
     });
-    void Promise.all([load(), loadCampaignCandidates()]);
+    void Promise.all([load(), loadCampaignRecipients(false)]);
   };
 
   const downloadCsv = () => {
@@ -526,31 +761,66 @@ const EmailLog: React.FC = () => {
             <div>
               <h2 className="text-base font-semibold text-[#0B1B34]">Wednesday Live Overview Send</h2>
               <p className="text-sm text-[#5c6b82]">
-                Manual campaign: run every Wednesday at 11:30 AM ET for candidates who are checked in only and have not submitted leadership form.
+                Manual campaign: fetch invitees from Calendly for today&apos;s 11:30 AM ET Live Online Career Session.
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <Button type="button" variant="secondary" onClick={() => void loadCampaignCandidates()} disabled={eligibleLoading || campaignSending}>
-                <RefreshCw size={16} className={eligibleLoading ? 'animate-spin inline mr-1.5' : 'inline mr-1.5'} />
-                Refresh eligibility
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => void loadCampaignRecipients(true)}
+                disabled={campaignSourceLoading || campaignSending}
+              >
+                <RefreshCw size={16} className={campaignSourceLoading ? 'animate-spin inline mr-1.5' : 'inline mr-1.5'} />
+                Fetch Calendly sessions
               </Button>
             </div>
           </div>
 
-          {eligibleError && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-sm px-4 py-3">{eligibleError}</div>
+          {campaignSourceError && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-sm px-4 py-3">{campaignSourceError}</div>
+          )}
+
+          {!campaignSourceError && sessionOptions.length === 0 && !campaignSourceLoading && (
+            <div className="rounded-xl border border-[#d6deea] bg-[#f8fbff] text-[#334155] text-sm px-4 py-3">
+              No matching Calendly session found for &quot;{TARGET_SESSION_TITLE}&quot; today at 11:30 AM ET.
+            </div>
+          )}
+
+          {sessionOptions.length > 0 && (
+            <div className="rounded-xl border border-[#d6deea] p-3 bg-[#fcfdff] space-y-2">
+              <div className="text-xs font-semibold text-[#5c6b82]">Calendly session occurrence</div>
+              <select
+                value={selectedSessionKey}
+                onChange={(e) => setSelectedSessionKey(e.target.value)}
+                disabled={campaignSending}
+                className="w-full px-3 py-2 rounded-lg border border-[#cfe3f9] bg-white text-sm text-[#0B1B34] focus:outline-none focus:ring-2 focus:ring-[#005EB8]/25"
+              >
+                {sessionOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {sessionOptions.length > 1 && (
+                <div className="text-xs text-[#6f7b8d]">
+                  Multiple close matches found. Select the exact occurrence to message.
+                </div>
+              )}
+            </div>
           )}
 
           <div className="rounded-xl border border-[#d6deea] overflow-hidden">
             <div className="px-4 py-3 bg-[#f8fbff] border-b border-[#d6deea] flex flex-wrap items-center justify-between gap-2">
               <div className="text-sm text-[#334155]">
-                Eligible: <strong>{eligibleCandidates.length}</strong> · Selected: <strong>{selectedEligibleCandidates.length}</strong>
+                Invitees fetched: <strong>{selectedSession?.invitees.length ?? 0}</strong> · Already sent (deduped):{' '}
+                <strong>{excludedAlreadySentCount}</strong> · Selected: <strong>{selectedRecipients.length}</strong>
               </div>
               <div className="flex items-center gap-2">
-                <Button type="button" variant="secondary" onClick={selectAllEligible} disabled={eligibleCandidates.length === 0 || campaignSending}>
+                <Button type="button" variant="secondary" onClick={selectAllRecipients} disabled={recipientRows.length === 0 || campaignSending}>
                   Select all
                 </Button>
-                <Button type="button" variant="secondary" onClick={deselectAllEligible} disabled={selectedEligibleCandidates.length === 0 || campaignSending}>
+                <Button type="button" variant="secondary" onClick={deselectAllRecipients} disabled={selectedRecipients.length === 0 || campaignSending}>
                   Deselect all
                 </Button>
               </div>
@@ -560,36 +830,41 @@ const EmailLog: React.FC = () => {
                 <thead className="sticky top-0 z-10 bg-[#eef2f7] text-[#0B1B34] font-semibold border-b border-[#d6deea]">
                   <tr>
                     <th className="px-3 py-2 border-r border-[#d6deea] w-10">Sel</th>
-                    <th className="px-3 py-2 border-r border-[#d6deea]">Candidate</th>
+                    <th className="px-3 py-2 border-r border-[#d6deea]">Invitee</th>
                     <th className="px-3 py-2 border-r border-[#d6deea]">Email</th>
-                    <th className="px-3 py-2 whitespace-nowrap">Stage</th>
+                    <th className="px-3 py-2 border-r border-[#d6deea]">Status</th>
+                    <th className="px-3 py-2 whitespace-nowrap">Candidate ID</th>
                   </tr>
                 </thead>
                 <tbody className="text-[12px] text-[#1A2942]">
-                  {eligibleCandidates.map((c) => {
-                    const stage = normalizePipelineStage(c.adminData?.pipelineStage);
-                    const checked = selectedCandidateIds.has(c.id);
+                  {recipientRows.map((recipient) => {
+                    const checked = selectedRecipientKeys.has(recipient.key);
                     return (
-                      <tr key={c.id} className="border-b border-[#e8edf4] hover:bg-[#f8fafc]">
+                      <tr key={recipient.key} className="border-b border-[#e8edf4] hover:bg-[#f8fafc]">
                         <td className="px-3 py-2 border-r border-[#eef2f7]">
                           <input
                             type="checkbox"
                             checked={checked}
-                            onChange={() => toggleCandidateSelection(c.id)}
+                            onChange={() => toggleRecipientSelection(recipient.key)}
                             disabled={campaignSending}
                             className="h-4 w-4 rounded border-[#b8c8df] text-[#005EB8] focus:ring-[#005EB8]/30"
                           />
                         </td>
-                        <td className="px-3 py-2 border-r border-[#eef2f7]">{candidateName(c)}</td>
-                        <td className="px-3 py-2 border-r border-[#eef2f7] break-all">{c.email}</td>
-                        <td className="px-3 py-2 whitespace-nowrap">{stage}</td>
+                        <td className="px-3 py-2 border-r border-[#eef2f7]">{recipient.name}</td>
+                        <td className="px-3 py-2 border-r border-[#eef2f7] break-all">{recipient.email}</td>
+                        <td className="px-3 py-2 border-r border-[#eef2f7]">{recipient.status}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">{recipient.candidateId || '—'}</td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
-              {!eligibleLoading && eligibleCandidates.length === 0 && (
-                <div className="p-6 text-center text-sm text-[#6f7b8d]">No eligible candidates right now.</div>
+              {!campaignSourceLoading && recipientRows.length === 0 && (
+                <div className="p-6 text-center text-sm text-[#6f7b8d]">
+                  {selectedSession
+                    ? 'No unsent invitees available for this session.'
+                    : 'Fetch Calendly sessions to load invitees.'}
+                </div>
               )}
             </div>
           </div>
@@ -597,7 +872,7 @@ const EmailLog: React.FC = () => {
           <div className="rounded-xl border border-[#d6deea] p-4 bg-[#fcfdff] space-y-3">
             <div className="text-sm text-[#334155]">
               <strong>Reminder draft preview:</strong> Wednesday Live Overview manual campaign
-              {previewCandidate ? ` · Previewing ${candidateName(previewCandidate)}` : ''}
+              {previewRecipient ? ` · Previewing ${previewRecipient.name}` : ''}
             </div>
             <div>
               <label className="block text-xs font-semibold text-[#5c6b82] mb-1">Subject</label>
@@ -643,14 +918,14 @@ const EmailLog: React.FC = () => {
               onClick={() => void sendWednesdayCampaign()}
               disabled={
                 campaignSending ||
-                eligibleLoading ||
-                selectedEligibleCandidates.length === 0 ||
+                campaignSourceLoading ||
+                selectedRecipients.length === 0 ||
                 !campaignSubjectDraft.trim() ||
                 !campaignBodyDraft.trim() ||
                 !sentTrackingReady
               }
             >
-              {campaignSending ? 'Sending...' : `Send to selected (${selectedEligibleCandidates.length})`}
+              {campaignSending ? 'Sending...' : `Send to selected (${selectedRecipients.length})`}
             </Button>
           </div>
 
@@ -673,9 +948,9 @@ const EmailLog: React.FC = () => {
                   </thead>
                   <tbody className="text-[12px] text-[#1A2942]">
                     {campaignResult.rows.map((r) => (
-                      <tr key={`${r.candidateId}-${r.to}`} className="border-b border-[#e8edf4] hover:bg-[#f8fafc] align-top">
+                      <tr key={`${r.recipientKey}-${r.to}`} className="border-b border-[#e8edf4] hover:bg-[#f8fafc] align-top">
                         <td className="px-3 py-2 border-r border-[#eef2f7] break-all">{r.to}</td>
-                        <td className="px-3 py-2 border-r border-[#eef2f7]">{r.candidateName}</td>
+                        <td className="px-3 py-2 border-r border-[#eef2f7]">{r.recipientName}</td>
                         <td className="px-3 py-2 border-r border-[#eef2f7]">
                           <span className={r.status === 'failed' ? 'text-red-700 font-semibold' : 'text-emerald-700 font-semibold'}>
                             {r.status}
