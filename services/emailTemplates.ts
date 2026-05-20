@@ -114,6 +114,87 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
 
 export type CrmEmailTemplateId = (typeof EMAIL_TEMPLATES)[number]['id'];
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function normalizeZoomUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+
+  // If a user pastes full anchor HTML, prefer its href.
+  const hrefMatch = trimmed.match(/href\s*=\s*["']?([^"'\s>]+)/i);
+  let candidate = hrefMatch?.[1] ?? trimmed;
+  candidate = candidate.replace(/^["'\s]+|["'\s]+$/g, '');
+
+  // Drop leaked attributes accidentally pasted into the URL field.
+  const attrLeakStart = candidate.search(/[\s"'<>]/);
+  if (attrLeakStart >= 0) {
+    candidate = candidate.slice(0, attrLeakStart);
+  }
+
+  if (!candidate) return '';
+  if (!/^https?:\/\//i.test(candidate)) return '';
+
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+    return parsed.toString();
+  } catch {
+    return '';
+  }
+}
+
+function renderZoomAnchor(url: string): string {
+  if (!url) return '';
+  const escaped = escapeHtml(url);
+  return `<a href="${escaped}" target="_blank" rel="noopener noreferrer">${escaped}</a>`;
+}
+
+function replaceZoomLinkToken(bodyHtml: string, zoomUrl: string): string {
+  if (!bodyHtml.includes('{{Zoom Link}}')) return bodyHtml;
+  if (!zoomUrl) return bodyHtml.split('{{Zoom Link}}').join('');
+
+  const anchor = renderZoomAnchor(zoomUrl);
+
+  // If token appears in href, replace with plain URL first.
+  let body = bodyHtml.replace(/href=(["'])\s*\{\{Zoom Link\}\}\s*\1/gi, `href="${escapeHtml(zoomUrl)}"`);
+
+  // Any remaining token occurrences should become clickable anchors.
+  body = body.split('{{Zoom Link}}').join(anchor);
+  return body;
+}
+
+function linkifyPlainZoomUrl(bodyHtml: string, zoomUrl: string): string {
+  if (!zoomUrl || !bodyHtml.includes(zoomUrl)) return bodyHtml;
+
+  const anchor = renderZoomAnchor(zoomUrl);
+  const zoomPattern = new RegExp(escapeRegExp(zoomUrl), 'g');
+  const tokens = bodyHtml.split(/(<[^>]+>)/g);
+  let insideAnchor = false;
+
+  return tokens
+    .map((token) => {
+      if (token.startsWith('<')) {
+        if (/^<a\b/i.test(token)) insideAnchor = true;
+        if (/^<\/a\b/i.test(token)) insideAnchor = false;
+        return token;
+      }
+      if (insideAnchor) return token;
+      return token.replace(zoomPattern, anchor);
+    })
+    .join('');
+}
+
 /**
  * Stage 4 – sent after Leadership Assessment submission (automation only; not a manual button).
  * Sync HTML/subject with supabase/functions/_shared/postAssessmentSubmitEmailTemplate.ts (Edge Function).
@@ -163,20 +244,20 @@ export function mergeTemplate(
   map['{{emailSignature}}'] = signature;
 
   const assessUrl = map['{{assessmentLookupUrl}}'] || '';
-  const zoomUrlVal = map['{{zoomUrl}}'] || '';
+  const zoomUrlVal = normalizeZoomUrl(map['{{zoomUrl}}'] || '');
+  map['{{zoomUrl}}'] = zoomUrlVal;
   map['{{First Name}}'] = map['{{firstName}}'];
   map['{{Assessment Link}}'] = assessUrl
     ? `<a href="${assessUrl}" target="_blank" rel="noopener noreferrer">${assessUrl}</a>`
     : '';
-  map['{{Zoom Link}}'] = zoomUrlVal
-    ? `<a href="${zoomUrlVal}" target="_blank" rel="noopener noreferrer">${zoomUrlVal}</a>`
-    : '';
+  map['{{Zoom Link}}'] = zoomUrlVal;
 
   let sub = subject;
-  let body = bodyHtml;
+  let body = replaceZoomLinkToken(bodyHtml, zoomUrlVal);
   for (const [key, value] of Object.entries(map)) {
     sub = sub.split(key).join(value);
     body = body.split(key).join(value);
   }
+  body = linkifyPlainZoomUrl(body, zoomUrlVal);
   return { subject: sub, bodyHtml: body };
 }
