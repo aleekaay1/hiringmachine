@@ -1527,40 +1527,81 @@ const AdminDashboard: React.FC = () => {
                   const activeIdx = Math.max(0, journeyStages.indexOf(journeyStage));
                   const n = journeyStages.length;
                   const isFinal = journeyStage === 'Final decision';
+                  const connectorInsetPercent = n > 0 ? 50 / n : 0;
                   return (
                     <div className="mt-2 rounded-2xl border border-gray-200 bg-gradient-to-r from-slate-100 via-slate-50 to-emerald-50/40 px-3 py-5 sm:px-5 sm:py-6 shadow-sm">
                       <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500 mb-4">Hiring journey</p>
                       <div className="overflow-x-auto overflow-y-visible pt-2 pb-1 -mx-1">
-                        <div className="min-w-[560px] sm:min-w-0 relative px-1">
-                          <div className="pointer-events-none absolute left-3 right-3 top-[22px] h-[3px] rounded-full bg-gray-200 z-0" aria-hidden />
-                          {n > 1 && (
+                        <div className="min-w-[560px] sm:min-w-0 px-1">
+                          <div className="relative">
                             <div
-                              className="pointer-events-none absolute left-3 top-[22px] h-[3px] rounded-full bg-[#005EB8] z-0 transition-all duration-300"
-                              style={{ width: `calc((100% - 24px) * ${activeIdx / (n - 1)})` }}
+                              className="pointer-events-none absolute top-5 h-[3px] rounded-full bg-gray-200 z-0"
+                              style={{ left: `${connectorInsetPercent}%`, right: `${connectorInsetPercent}%` }}
                               aria-hidden
                             />
-                          )}
-                          <div className="relative z-10 flex justify-between items-start gap-0">
+                            {n > 1 && (
+                              <div
+                                className="pointer-events-none absolute top-5 h-[3px] rounded-full z-0"
+                                style={{ left: `${connectorInsetPercent}%`, right: `${connectorInsetPercent}%` }}
+                                aria-hidden
+                              >
+                                <div
+                                  className="h-full rounded-full bg-[#005EB8] transition-all duration-300"
+                                  style={{ width: `${(activeIdx / (n - 1)) * 100}%` }}
+                                />
+                              </div>
+                            )}
+
+                            <div
+                              className="relative z-10 grid gap-0"
+                              style={{ gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` }}
+                            >
+                              {journeyStages.map((stage, i) => {
+                                const done = i <= activeIdx;
+                                const active = i === activeIdx;
+                                return (
+                                  <div key={`${stage}-marker`} className="flex flex-col items-center min-w-0 px-1" title={stage}>
+                                    <div
+                                      className={`relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 shadow-sm transition-transform ${
+                                        active
+                                          ? isFinal
+                                            ? 'scale-110 border-red-500 bg-red-500 text-white'
+                                            : 'scale-110 border-[#005EB8] bg-[#005EB8] text-white'
+                                          : done
+                                            ? 'border-[#005EB8] bg-white text-[#005EB8]'
+                                            : 'border-gray-300 bg-white text-gray-400'
+                                      }`}
+                                    >
+                                      {active ? <User size={18} strokeWidth={2.5} aria-hidden /> : <span className="text-[11px] font-bold">{i + 1}</span>}
+                                    </div>
+                                    <span
+                                      className={`mt-2 h-2.5 w-2.5 rounded-full border-2 ${
+                                        active
+                                          ? isFinal
+                                            ? 'border-red-500 bg-red-500'
+                                            : 'border-[#005EB8] bg-[#005EB8]'
+                                          : done
+                                            ? 'border-[#005EB8] bg-[#005EB8]'
+                                            : 'border-gray-300 bg-white'
+                                      }`}
+                                      aria-hidden
+                                    />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          <div
+                            className="mt-2 grid gap-0"
+                            style={{ gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` }}
+                          >
                             {journeyStages.map((stage, i) => {
-                              const done = i <= activeIdx;
                               const active = i === activeIdx;
                               const isFinalNode = stage === 'Final decision';
                               return (
-                                <div key={stage} className="flex flex-col items-center flex-1 min-w-0 max-w-[100px] sm:max-w-none" title={stage}>
-                                  <div
-                                    className={`relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 shadow-sm transition-transform ${
-                                      active
-                                        ? isFinal
-                                          ? 'scale-110 border-red-500 bg-red-500 text-white'
-                                          : 'scale-110 border-[#005EB8] bg-[#005EB8] text-white'
-                                        : done
-                                          ? 'border-[#005EB8] bg-white text-[#005EB8]'
-                                          : 'border-gray-300 bg-white text-gray-400'
-                                    }`}
-                                  >
-                                    {active ? <User size={18} strokeWidth={2.5} aria-hidden /> : <span className="text-[11px] font-bold">{i + 1}</span>}
-                                  </div>
-                                  <p className={`mt-2 text-[9px] sm:text-[10px] font-semibold text-center leading-tight px-0.5 ${active ? (isFinal ? 'text-red-700' : 'text-[#005EB8]') : 'text-gray-600'}`}>
+                                <div key={`${stage}-label`} className="flex flex-col items-center min-w-0 px-1" title={stage}>
+                                  <p className={`text-[9px] sm:text-[10px] font-semibold text-center leading-tight px-0.5 ${active ? (isFinal ? 'text-red-700' : 'text-[#005EB8]') : 'text-gray-600'}`}>
                                     {TIMELINE_SHORT_LABELS[stage]}
                                   </p>
                                   {isFinalNode && (
