@@ -621,10 +621,10 @@ const WebinarGeekDashboard: React.FC = () => {
       'registration_last_name',
       'email',
       'phone',
-      'name_from_file',
-      'team',
-      'scheduled_on',
-      'scheduled_for',
+      'SET BY',
+      'SOURCE TYPE',
+      'REGISTRATION DATE',
+      'WEBINAR DATE',
       'watch_minutes',
       'watched',
     ];
@@ -1097,10 +1097,10 @@ const WebinarGeekDashboard: React.FC = () => {
                   <th className="px-3 py-2 font-medium">Name</th>
                   <th className="px-3 py-2 font-medium">Email</th>
                   <th className="px-3 py-2 font-medium">Phone</th>
-                  <th className="px-3 py-2 font-medium">File tag name</th>
-                  <th className="px-3 py-2 font-medium">Team</th>
-                  <th className="px-3 py-2 font-medium">Scheduled on</th>
-                  <th className="px-3 py-2 font-medium">Scheduled for</th>
+                  <th className="px-3 py-2 font-medium">SET BY</th>
+                  <th className="px-3 py-2 font-medium">SOURCE TYPE</th>
+                  <th className="px-3 py-2 font-medium">REGISTRATION DATE</th>
+                  <th className="px-3 py-2 font-medium">WEBINAR DATE</th>
                   <th className="px-3 py-2 font-medium min-w-[9rem]">Status / notes</th>
                   <th className="px-3 py-2 font-medium">Watched</th>
                   <th className="px-3 py-2 font-medium">Watch (min)</th>
@@ -1176,7 +1176,7 @@ const WebinarGeekDashboard: React.FC = () => {
                 <Detail label="Email" value={String(selectedRow.email || '0')} />
                 <Detail label="Phone" value={getPhoneDisplay(selectedRow)} />
                 <Detail label="Name (file tag)" value={fileTagNameFromRow(selectedRow)} />
-                <Detail label="Team" value={recruiterTeamFromRow(selectedRow)} />
+                <Detail label="SOURCE TYPE" value={recruiterTeamFromRow(selectedRow)} />
                 <Detail
                   label="Filename tag"
                   value={(() => {
@@ -1185,14 +1185,14 @@ const WebinarGeekDashboard: React.FC = () => {
                   })()}
                 />
                 <Detail
-                  label="Scheduled on"
+                  label="REGISTRATION DATE"
                   value={(() => {
                     const t = hrScheduledMsFromRow(selectedRow);
                     return t ? formatDateTimeCanadaEastern(t) : '—';
                   })()}
                 />
                 <Detail
-                  label="Scheduled for"
+                  label="WEBINAR DATE"
                   value={(() => {
                     const t = webinarSessionMsFromRow(selectedRow);
                     return t ? formatDateTimeCanadaEastern(t) : '—';
