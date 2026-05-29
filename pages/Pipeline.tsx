@@ -41,8 +41,10 @@ import {
 } from '../services/pipelineService';
 import { buildThreeCxWebclientUrl } from '../services/threeCxService';
 import {
+  PIPELINE_BOOKED_SUBTYPES,
   PIPELINE_CALL_DISPOSITIONS,
   PIPELINE_PENDING_CALL_STORAGE_KEY,
+  type PipelineBookedSubtype,
   type PipelineCallDisposition,
   type PipelinePendingCallSession,
 } from '../services/pipelineCallDispositions';
@@ -254,6 +256,10 @@ type CallDispositionPanelProps = {
   onSelectDisposition: (d: PipelineCallDisposition) => void;
   callDispositionComment: string;
   onCommentChange: (value: string) => void;
+  bookedSubtype: PipelineBookedSubtype | '';
+  onBookedSubtypeChange: (value: PipelineBookedSubtype | '') => void;
+  callbackAtInput: string;
+  onCallbackAtInputChange: (value: string) => void;
   callDispositionError: string | null;
   callDispositionSaving: boolean;
   dialLogWarning: string | null;
@@ -267,6 +273,10 @@ function CallDispositionPanel({
   onSelectDisposition,
   callDispositionComment,
   onCommentChange,
+  bookedSubtype,
+  onBookedSubtypeChange,
+  callbackAtInput,
+  onCallbackAtInputChange,
   callDispositionError,
   callDispositionSaving,
   dialLogWarning,
@@ -327,6 +337,34 @@ function CallDispositionPanel({
           className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
         />
       </label>
+
+      {callDisposition === 'Booked' && (
+        <label className="block text-xs text-slate-600">
+          Booked subtype (required)
+          <select
+            value={bookedSubtype}
+            onChange={(e) => onBookedSubtypeChange(e.target.value as PipelineBookedSubtype)}
+            className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
+          >
+            <option value="">Select subtype</option>
+            {PIPELINE_BOOKED_SUBTYPES.map((item) => (
+              <option key={item} value={item}>{item}</option>
+            ))}
+          </select>
+        </label>
+      )}
+
+      {callDisposition === 'Callback requested' && (
+        <label className="block text-xs text-slate-600">
+          Callback date/time (required)
+          <input
+            type="datetime-local"
+            value={callbackAtInput}
+            onChange={(e) => onCallbackAtInputChange(e.target.value)}
+            className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
+          />
+        </label>
+      )}
 
       {callDispositionError && (
         <p className="text-xs text-red-700 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{callDispositionError}</p>
@@ -403,6 +441,8 @@ const Pipeline: React.FC = () => {
   const [pendingCall, setPendingCall] = useState<PipelinePendingCallSession | null>(null);
   const [callDisposition, setCallDisposition] = useState<PipelineCallDisposition | ''>('');
   const [callDispositionComment, setCallDispositionComment] = useState('');
+  const [callDispositionBookedSubtype, setCallDispositionBookedSubtype] = useState<PipelineBookedSubtype | ''>('');
+  const [callDispositionCallbackAt, setCallDispositionCallbackAt] = useState('');
   const [callDispositionSaving, setCallDispositionSaving] = useState(false);
   const [callDispositionError, setCallDispositionError] = useState<string | null>(null);
   const [dialLogWarning, setDialLogWarning] = useState<string | null>(null);
@@ -945,6 +985,8 @@ const Pipeline: React.FC = () => {
     writePendingCallSession(session);
     setCallDisposition('');
     setCallDispositionComment('');
+    setCallDispositionBookedSubtype('');
+    setCallDispositionCallbackAt('');
     setCallDispositionError(null);
     setDialLogWarning(null);
     setCallActionMsg('Opened 3CX webclient — log the disposition below (or in the popup).');
@@ -982,6 +1024,14 @@ const Pipeline: React.FC = () => {
       setCallDispositionError('Select a disposition to continue.');
       return;
     }
+    if (callDisposition === 'Booked' && !callDispositionBookedSubtype) {
+      setCallDispositionError('Booked subtype is required.');
+      return;
+    }
+    if (callDisposition === 'Callback requested' && !callDispositionCallbackAt) {
+      setCallDispositionError('Callback date and time is required.');
+      return;
+    }
     setCallDispositionSaving(true);
     setCallDispositionError(null);
     try {
@@ -1002,12 +1052,16 @@ const Pipeline: React.FC = () => {
         },
         actorLabel,
         callContext,
+        callbackAt: callDispositionCallbackAt || null,
+        bookedSubtype: callDispositionBookedSubtype || null,
       });
       await markPipelineCandidateTouched(pendingCall.candidateId);
       setPendingCall(null);
       writePendingCallSession(null);
       setCallDisposition('');
       setCallDispositionComment('');
+      setCallDispositionBookedSubtype('');
+      setCallDispositionCallbackAt('');
       setDialLogWarning(null);
       setCallActionMsg('Call disposition saved. Dialer unlocked.');
       const refreshId = selectedBundle?.candidate.id || pendingCall.candidateId;
@@ -1311,6 +1365,22 @@ const Pipeline: React.FC = () => {
               <Settings2 size={13} />
               Pipeline settings
             </Link>
+            <Link to="/pipeline/call" className="inline-flex items-center gap-1 rounded-xl border border-[#b8d2ef] px-3 py-2 text-xs text-[#0B1B34] hover:bg-[#f2f8ff]">
+              <Phone size={13} />
+              Auto call workspace
+            </Link>
+            <Link to="/pipeline/performance" className="inline-flex items-center gap-1 rounded-xl border border-[#b8d2ef] px-3 py-2 text-xs text-[#0B1B34] hover:bg-[#f2f8ff]">
+              <Logs size={13} />
+              Performance
+            </Link>
+            <Link to="/pipeline/email" className="inline-flex items-center gap-1 rounded-xl border border-[#b8d2ef] px-3 py-2 text-xs text-[#0B1B34] hover:bg-[#f2f8ff]">
+              <ExternalLink size={13} />
+              Email workspace
+            </Link>
+            <Link to="/pipeline/uploads" className="inline-flex items-center gap-1 rounded-xl border border-[#b8d2ef] px-3 py-2 text-xs text-[#0B1B34] hover:bg-[#f2f8ff]">
+              <FileUp size={13} />
+              Uploads
+            </Link>
           </div>
         </div>
 
@@ -1507,10 +1577,16 @@ const Pipeline: React.FC = () => {
                         callDisposition={callDisposition}
                         onSelectDisposition={(d) => {
                           setCallDisposition(d);
+                          if (d !== 'Booked') setCallDispositionBookedSubtype('');
+                          if (d !== 'Callback requested') setCallDispositionCallbackAt('');
                           setCallDispositionError(null);
                         }}
                         callDispositionComment={callDispositionComment}
                         onCommentChange={setCallDispositionComment}
+                        bookedSubtype={callDispositionBookedSubtype}
+                        onBookedSubtypeChange={setCallDispositionBookedSubtype}
+                        callbackAtInput={callDispositionCallbackAt}
+                        onCallbackAtInputChange={setCallDispositionCallbackAt}
                         callDispositionError={callDispositionError}
                         callDispositionSaving={callDispositionSaving}
                         dialLogWarning={dialLogWarning}
@@ -1771,10 +1847,16 @@ const Pipeline: React.FC = () => {
                   callDisposition={callDisposition}
                   onSelectDisposition={(d) => {
                     setCallDisposition(d);
+                    if (d !== 'Booked') setCallDispositionBookedSubtype('');
+                    if (d !== 'Callback requested') setCallDispositionCallbackAt('');
                     setCallDispositionError(null);
                   }}
                   callDispositionComment={callDispositionComment}
                   onCommentChange={setCallDispositionComment}
+                  bookedSubtype={callDispositionBookedSubtype}
+                  onBookedSubtypeChange={setCallDispositionBookedSubtype}
+                  callbackAtInput={callDispositionCallbackAt}
+                  onCallbackAtInputChange={setCallDispositionCallbackAt}
                   callDispositionError={callDispositionError}
                   callDispositionSaving={callDispositionSaving}
                   dialLogWarning={dialLogWarning}
@@ -1815,6 +1897,15 @@ const Pipeline: React.FC = () => {
                   {row.kind === 'call_record' && row.metadata && (
                     <p className="text-[10px] text-[#1d7a4b] mt-1">
                       {String((row.metadata as Record<string, unknown>).dialed_number || '—')}
+                      {(() => {
+                        const callbackAt = String((row.metadata as Record<string, unknown>).callback_at || '').trim();
+                        if (!callbackAt) return '';
+                        return ` · Callback ${formatDateTimeCanadaEastern(callbackAt)}`;
+                      })()}
+                      {(() => {
+                        const subtype = String((row.metadata as Record<string, unknown>).booked_subtype || '').trim();
+                        return subtype ? ` · ${subtype}` : '';
+                      })()}
                     </p>
                   )}
                   {row.kind === 'call_log' && row.body && (

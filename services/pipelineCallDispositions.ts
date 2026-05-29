@@ -4,6 +4,7 @@ export const PIPELINE_CALL_DISPOSITIONS = [
   'Voicemail left',
   'Busy / line busy',
   'Callback requested',
+  'Booked',
   'Wrong number',
   'Not interested',
   'Connected',
@@ -13,6 +14,8 @@ export const PIPELINE_CALL_DISPOSITIONS = [
 ] as const;
 
 export type PipelineCallDisposition = (typeof PIPELINE_CALL_DISPOSITIONS)[number];
+export const PIPELINE_BOOKED_SUBTYPES = ['Live Session', 'Webinar'] as const;
+export type PipelineBookedSubtype = (typeof PIPELINE_BOOKED_SUBTYPES)[number];
 
 export const PIPELINE_PENDING_CALL_STORAGE_KEY = 'pohiring_pipeline_pending_call_v1';
 
@@ -45,6 +48,8 @@ export function journeyStageForCallDisposition(disposition: PipelineCallDisposit
     case 'Not interested':
     case 'Do not call':
       return 'not_interested';
+    case 'Booked':
+      return 'qualified';
     case 'Connected':
       return 'connected';
     case 'Interested – next step':

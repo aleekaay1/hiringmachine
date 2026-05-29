@@ -18,6 +18,10 @@ import CallsAnalytics from './pages/CallsAnalytics';
 import HRDashboard from './pages/HRDashboard';
 import EmailLog from './pages/EmailLog';
 import Pipeline from './pages/Pipeline';
+import PipelineCallWorkspace from './pages/PipelineCallWorkspace';
+import PipelinePerformance from './pages/PipelinePerformance';
+import PipelineEmailWorkspace from './pages/PipelineEmailWorkspace';
+import PipelineUploadsWorkspace from './pages/PipelineUploadsWorkspace';
 import PipelineSettings from './pages/PipelineSettings';
 import SuperDashboard from './pages/SuperDashboard';
 
@@ -43,6 +47,10 @@ const App: React.FC = () => {
         <Route path="/calls-analytics" element={<CallsAnalytics />} />
         <Route path="/hr-dashboard" element={<HRDashboard />} />
         <Route path="/pipeline" element={<Pipeline />} />
+        <Route path="/pipeline/call" element={<PipelineCallWorkspace />} />
+        <Route path="/pipeline/performance" element={<PipelinePerformance />} />
+        <Route path="/pipeline/email" element={<PipelineEmailWorkspace />} />
+        <Route path="/pipeline/uploads" element={<PipelineUploadsWorkspace />} />
         <Route path="/pipeline-settings" element={<PipelineSettings />} />
         <Route path="/superdashboard" element={<SuperDashboard />} />
         <Route path="/qr" element={<QrCodes />} />

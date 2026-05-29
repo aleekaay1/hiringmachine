@@ -123,6 +123,8 @@ export interface PipelineCallRecord {
   disposed_at: string;
   threecx_metadata: Record<string, unknown>;
   created_at: string;
+  callback_at?: string | null;
+  booked_subtype?: string | null;
 }
 
 export interface PipelineIncomingEmailLog {
@@ -161,6 +163,7 @@ export interface PipelineUserCallSettings {
   user_id: string;
   extension: string | null;
   dialing_locale: string | null;
+  daily_upload_target: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -373,6 +376,19 @@ function mergeCallContextMetadata(
       extension: extension || null,
       dialing_locale: dialingLocale || null,
     },
+  };
+}
+
+export function readCallRecordMeta(record: Pick<PipelineCallRecord, 'threecx_metadata'>): {
+  callbackAt: string | null;
+  bookedSubtype: string | null;
+} {
+  const meta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
+    ? (record.threecx_metadata as Record<string, unknown>)
+    : {};
+  return {
+    callbackAt: typeof meta.callback_at === 'string' ? meta.callback_at : null,
+    bookedSubtype: typeof meta.booked_subtype === 'string' ? meta.booked_subtype : null,
   };
 }
 
@@ -734,6 +750,7 @@ export async function getPipelineUserCallSettings(): Promise<PipelineUserCallSet
 export async function savePipelineUserCallSettings(input: {
   extension?: string | null;
   dialingLocale?: string | null;
+  dailyUploadTarget?: number | null;
 }): Promise<PipelineUserCallSettings> {
   const { data: auth } = await supabase.auth.getUser();
   const userId = auth.user?.id;
@@ -742,6 +759,9 @@ export async function savePipelineUserCallSettings(input: {
     user_id: userId,
     extension: input.extension?.trim() || null,
     dialing_locale: input.dialingLocale?.trim() || null,
+    daily_upload_target: Number.isFinite(input.dailyUploadTarget)
+      ? Math.max(0, Math.round(Number(input.dailyUploadTarget)))
+      : null,
     updated_at: new Date().toISOString(),
   };
   const { data, error } = await supabase
@@ -841,6 +861,8 @@ export async function listPipelineCandidateActivityTimeline(candidateId: string)
         dial_started_at: (row as any).dial_started_at ?? null,
         disposed_at: (row as any).disposed_at ?? null,
         threecx_metadata: (row as any).threecx_metadata ?? null,
+        callback_at: ((row as any).threecx_metadata as Record<string, unknown> | null)?.callback_at ?? null,
+        booked_subtype: ((row as any).threecx_metadata as Record<string, unknown> | null)?.booked_subtype ?? null,
       },
     });
   }
@@ -1372,9 +1394,19 @@ export async function savePipelineCallDisposition(input: {
   actorLabel?: string | null;
   updateJourneyStage?: boolean;
   callContext?: PipelineCallContext | null;
+  callbackAt?: string | null;
+  bookedSubtype?: string | null;
 }): Promise<PipelineCallRecord> {
   const { data: auth } = await supabase.auth.getUser();
   const disposedAt = new Date().toISOString();
+  const callbackAt = input.callbackAt ? new Date(input.callbackAt).toISOString() : null;
+  const bookedSubtype = input.bookedSubtype?.trim() || null;
+  if (input.disposition === 'Callback requested' && !callbackAt) {
+    throw new Error('Callback date and time is required for Callback requested.');
+  }
+  if (input.disposition === 'Booked' && !bookedSubtype) {
+    throw new Error('Booked subtype is required.');
+  }
   const { data, error } = await supabase
     .from('pipeline_call_records')
     .insert({
@@ -1388,7 +1420,11 @@ export async function savePipelineCallDisposition(input: {
       dialed_number: input.dialedNumber,
       dial_started_at: input.dialStartedAt,
       disposed_at: disposedAt,
-      threecx_metadata: mergeCallContextMetadata(input.threecxMetadata ?? {}, input.callContext) ?? {},
+      threecx_metadata: mergeCallContextMetadata({
+        ...(input.threecxMetadata ?? {}),
+        callback_at: callbackAt,
+        booked_subtype: bookedSubtype,
+      }, input.callContext) ?? {},
     })
     .select('*')
     .single();
@@ -1418,6 +1454,8 @@ export async function savePipelineCallDisposition(input: {
       dialed_number: input.dialedNumber,
       dial_log_id: input.dialLogId ?? null,
       comment: input.comment?.trim() || null,
+      callback_at: callbackAt,
+      booked_subtype: bookedSubtype,
       call_context: input.callContext ?? null,
     },
     responsePayload: { call_record_id: data.id },
@@ -1483,6 +1521,100 @@ export async function listPipelineEmailSendLogs(candidateId: string): Promise<Pi
     .limit(150);
   if (error) throw error;
   return (data || []) as PipelineEmailSendLog[];
+}
+
+export async function listPipelineCallRecords(input?: {
+  candidateIds?: string[];
+  recruiterUserId?: string | null;
+  fromIso?: string | null;
+  toIso?: string | null;
+  limit?: number;
+}): Promise<PipelineCallRecord[]> {
+  let query = supabase
+    .from('pipeline_call_records')
+    .select('*')
+    .order('disposed_at', { ascending: false })
+    .limit(input?.limit ?? 1500);
+
+  if (input?.candidateIds && input.candidateIds.length > 0) {
+    query = query.in('candidate_id', input.candidateIds);
+  }
+  if (input?.recruiterUserId) {
+    query = query.eq('recruiter_user_id', input.recruiterUserId);
+  }
+  if (input?.fromIso) {
+    query = query.gte('disposed_at', input.fromIso);
+  }
+  if (input?.toIso) {
+    query = query.lte('disposed_at', input.toIso);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data || []) as PipelineCallRecord[];
+}
+
+export async function listPipelineResumesForCandidates(candidateIds: string[]): Promise<PipelineResume[]> {
+  if (!candidateIds.length) return [];
+  const { data, error } = await supabase
+    .from('pipeline_resumes')
+    .select('*')
+    .in('candidate_id', candidateIds)
+    .order('created_at', { ascending: false })
+    .limit(4000);
+  if (error) throw error;
+  return (data || []) as PipelineResume[];
+}
+
+export async function listPipelineIncomingEmailLogsByCandidates(
+  candidateIds: string[],
+  input?: { fromIso?: string | null; toIso?: string | null },
+): Promise<PipelineIncomingEmailLog[]> {
+  if (!candidateIds.length) return [];
+  let query = supabase
+    .from('email_inbox_logs')
+    .select('*')
+    .in('candidate_id', candidateIds)
+    .order('received_at', { ascending: false })
+    .limit(3000);
+  if (input?.fromIso) query = query.gte('received_at', input.fromIso);
+  if (input?.toIso) query = query.lte('received_at', input.toIso);
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data || []) as PipelineIncomingEmailLog[];
+}
+
+export async function listPipelineCallLogs(input?: {
+  candidateIds?: string[];
+  createdByUserId?: string | null;
+  actions?: string[];
+  fromIso?: string | null;
+  toIso?: string | null;
+  limit?: number;
+}): Promise<PipelineCallLog[]> {
+  let query = supabase
+    .from('pipeline_call_logs')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(input?.limit ?? 3000);
+  if (input?.candidateIds && input.candidateIds.length > 0) {
+    query = query.in('candidate_id', input.candidateIds);
+  }
+  if (input?.createdByUserId) {
+    query = query.eq('created_by_user_id', input.createdByUserId);
+  }
+  if (input?.actions && input.actions.length > 0) {
+    query = query.in('action', input.actions);
+  }
+  if (input?.fromIso) {
+    query = query.gte('created_at', input.fromIso);
+  }
+  if (input?.toIso) {
+    query = query.lte('created_at', input.toIso);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data || []) as PipelineCallLog[];
 }
 
 export async function syncPipelineIncomingEmails(days = 10, limit = 80): Promise<{ synced: number; mapped: number }> {
