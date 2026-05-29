@@ -108,6 +108,10 @@ function shiftYmdDays(ymd: string, deltaDays: number): string {
   return localDateToYmd(d);
 }
 
+function monthDayYmd(viewYear: number, viewMonth0: number, day: number): string {
+  return `${viewYear}-${pad2(viewMonth0 + 1)}-${pad2(day)}`;
+}
+
 /** Friday -> Thursday week boundaries for a given YMD (Toronto wall date). */
 function fridayWeekBoundsFromYmd(ymd: string): { since: string; until: string; title: string } {
   const d = ymdToLocalDate(ymd);
@@ -346,6 +350,17 @@ const WebinarGeekDashboard: React.FC = () => {
     });
   }, [scopedSubscriptionCache, weekWindow.since, weekWindow.until]);
 
+  const rowsInViewMonthByDate = useMemo(() => {
+    const map = new Map<string, AnyRow[]>();
+    for (const row of rowsInViewMonth) {
+      const key = fmtDateKey(row);
+      if (key === 'unknown') continue;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(row);
+    }
+    return map;
+  }, [rowsInViewMonth]);
+
   const schedulesInViewMonth = useMemo(() => {
     const nowMs = Date.now();
     const [vy, vm] = monthAnchorYmd.split('-').map(Number);
@@ -365,10 +380,16 @@ const WebinarGeekDashboard: React.FC = () => {
     if (scopeMode === 'week') return rowsInViewWeek;
     if (scopeMode === 'day') {
       if (!selectedDayYmd) return [];
-      return rowsInViewMonth.filter((r) => fmtDateKey(r) === selectedDayYmd);
+      return rowsInViewMonthByDate.get(selectedDayYmd) ?? [];
     }
     return rowsInViewMonth;
-  }, [scopeMode, rowsInViewWeek, rowsInViewMonth, selectedDayYmd]);
+  }, [scopeMode, rowsInViewWeek, rowsInViewMonth, rowsInViewMonthByDate, selectedDayYmd]);
+
+  useEffect(() => {
+    if (!selectedNameKey) return;
+    const stillVisibleInScope = rowsForScope.some((row) => rowMatchesNameKey(row, selectedNameKey));
+    if (!stillVisibleInScope) setSelectedNameKey(null);
+  }, [rowsForScope, selectedNameKey]);
 
   const nameProfiles = useMemo(
     () => buildRecruiterFilterProfiles(rowsForScope, watchSecondsFromRow),
@@ -511,13 +532,9 @@ const WebinarGeekDashboard: React.FC = () => {
 
   const dayCounts = useMemo(() => {
     const map = new Map<string, { invited: number; watched: number; schedules: number }>();
-    for (const row of rowsInViewMonth) {
-      const key = fmtDateKey(row);
-      if (key === 'unknown') continue;
-      if (!map.has(key)) map.set(key, { invited: 0, watched: 0, schedules: 0 });
-      const e = map.get(key)!;
-      e.invited += 1;
-      if (row.watched === true) e.watched += 1;
+    for (const [key, rows] of rowsInViewMonthByDate.entries()) {
+      const watched = rows.reduce((sum, row) => (row.watched === true ? sum + 1 : sum), 0);
+      map.set(key, { invited: rows.length, watched, schedules: 0 });
     }
     for (const b of schedulesInViewMonth) {
       const key = eventMsToTorontoYmd(b.dateMs);
@@ -525,7 +542,7 @@ const WebinarGeekDashboard: React.FC = () => {
       map.get(key)!.schedules += 1;
     }
     return map;
-  }, [rowsInViewMonth, schedulesInViewMonth]);
+  }, [rowsInViewMonthByDate, schedulesInViewMonth]);
 
   const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
     const { data: s } = await supabase.auth.getSession();
@@ -958,7 +975,7 @@ const WebinarGeekDashboard: React.FC = () => {
               if (day == null) {
                 return <div key={`e-${idx}`} className="min-h-[64px] rounded-xl bg-slate-50/80" />;
               }
-              const ymd = `${viewYear}-${pad2(viewMonth0 + 1)}-${pad2(day)}`;
+              const ymd = monthDayYmd(viewYear, viewMonth0, day);
               const counts = dayCounts.get(ymd);
               const invited = counts?.invited ?? 0;
               const watched = counts?.watched ?? 0;

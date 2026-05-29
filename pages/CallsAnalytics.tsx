@@ -26,7 +26,6 @@ import {
   buildRecruiterBookingProfiles,
   buildRecruiterLeaderboard,
   buildRecruiterWeeklyTargetLeaderboard,
-  dayBookingCountsByHrDate,
   fmtHrScheduledDateKey,
   profileInitials,
   RECRUITER_WEEKLY_WEBINAR_TARGET,
@@ -146,14 +145,31 @@ const CallsAnalytics: React.FC = () => {
     });
   }, [scopedSubscriptionCache, weekWindow.since, weekWindow.until]);
 
+  const rowsInViewMonthByDate = useMemo(() => {
+    const map = new Map<string, AnyRow[]>();
+    for (const row of rowsInViewMonth) {
+      const key = fmtHrScheduledDateKey(row);
+      if (key === 'unknown') continue;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(row);
+    }
+    return map;
+  }, [rowsInViewMonth]);
+
   const rowsForScope = useMemo(() => {
     if (scopeMode === 'week') return rowsInViewWeek;
     if (scopeMode === 'day') {
       if (!selectedDayYmd) return [];
-      return rowsInViewMonth.filter((r) => fmtHrScheduledDateKey(r) === selectedDayYmd);
+      return rowsInViewMonthByDate.get(selectedDayYmd) ?? [];
     }
     return rowsInViewMonth;
-  }, [scopeMode, rowsInViewWeek, rowsInViewMonth, selectedDayYmd]);
+  }, [scopeMode, rowsInViewWeek, rowsInViewMonth, rowsInViewMonthByDate, selectedDayYmd]);
+
+  useEffect(() => {
+    if (!selectedRecruiterKey) return;
+    const stillVisibleInScope = rowsForScope.some((row) => rowMatchesNameKey(row, selectedRecruiterKey));
+    if (!stillVisibleInScope) setSelectedRecruiterKey(null);
+  }, [rowsForScope, selectedRecruiterKey]);
 
   const recruiterProfiles = useMemo(
     () => buildRecruiterBookingProfiles(rowsForScope, watchSecondsFromRow),
@@ -201,7 +217,14 @@ const CallsAnalytics: React.FC = () => {
     return cells;
   }, [viewYear, viewMonth0]);
 
-  const dayCounts = useMemo(() => dayBookingCountsByHrDate(rowsInViewMonth), [rowsInViewMonth]);
+  const dayCounts = useMemo(() => {
+    const map = new Map<string, { bookings: number; watched: number }>();
+    for (const [key, rows] of rowsInViewMonthByDate.entries()) {
+      const watched = rows.reduce((sum, row) => (row.watched === true ? sum + 1 : sum), 0);
+      map.set(key, { bookings: rows.length, watched });
+    }
+    return map;
+  }, [rowsInViewMonthByDate]);
 
   const summary = useMemo(() => {
     const bookings = rowsForScope.length;
