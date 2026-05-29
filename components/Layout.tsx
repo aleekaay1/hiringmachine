@@ -2,7 +2,13 @@ import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { COLORS } from '../constants';
 import { supabase } from '../services/supabaseClient';
-import { canAccessSection, getCurrentUserProfile, type AppRole } from '../services/accessControl';
+import {
+  canAccessSection,
+  defaultRouteForRole,
+  getCurrentUserProfile,
+  type AppRole,
+  type AppSection,
+} from '../services/accessControl';
 import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut, MonitorPlay, Mail, PhoneCall, SlidersHorizontal } from 'lucide-react';
 
 interface LayoutProps {
@@ -22,6 +28,7 @@ const Layout: React.FC<LayoutProps> = ({
   const navigate = useNavigate();
   const location = useLocation();
   const [role, setRole] = React.useState<AppRole | null>(null);
+  const [roleResolved, setRoleResolved] = React.useState(false);
 
   const current = `${location.pathname}${location.search}`;
   const isActive = (path: string) => current === path;
@@ -32,23 +39,56 @@ const Layout: React.FC<LayoutProps> = ({
     { name: 'QR Codes', route: '/qr', icon: QrCode, section: 'qr' as const },
     { name: 'Live Sessions', route: '/live-sessions', icon: Video, section: 'live-sessions' as const },
     { name: 'Webinar Geek', route: '/webinar-geek', icon: MonitorPlay, section: 'webinar-geek' as const },
-    { name: 'Pipeline', route: '/pipeline', icon: PhoneCall, section: 'candidates' as const },
-    { name: 'Pipeline settings', route: '/pipeline-settings', icon: SlidersHorizontal, section: 'settings' as const },
+    { name: 'Calls Analytics', route: '/calls-analytics', icon: BarChart3, section: 'calls-analytics' as const },
+    { name: 'Pipeline', route: '/pipeline', icon: PhoneCall, section: 'pipeline' as const },
+    { name: 'Pipeline settings', route: '/pipeline-settings', icon: SlidersHorizontal, section: 'pipeline-settings' as const },
     { name: 'Analytics', route: '/admin?view=analytics', icon: BarChart3, section: 'analytics' as const },
     { name: 'Settings', route: '/admin?view=settings', icon: Settings, section: 'settings' as const },
     { name: 'Email log', route: '/email-log', icon: Mail, section: 'email-log' as const },
   ] as const;
 
+  const currentSection = React.useMemo<AppSection>(() => {
+    if (location.pathname === '/pipeline') return 'pipeline';
+    if (location.pathname === '/pipeline-settings') return 'pipeline-settings';
+    if (location.pathname === '/calls-analytics') return 'calls-analytics';
+    if (location.pathname === '/webinar-geek') return 'webinar-geek';
+    if (location.pathname === '/live-sessions') return 'live-sessions';
+    if (location.pathname === '/hr-dashboard') return 'hr-dashboard';
+    if (location.pathname === '/qr') return 'qr';
+    if (location.pathname === '/email-log') return 'email-log';
+    if (location.pathname === '/superdashboard') return 'superdashboard';
+    if (location.pathname === '/admin') {
+      const view = new URLSearchParams(location.search).get('view');
+      if (view === 'candidates') return 'candidates';
+      if (view === 'analytics') return 'analytics';
+      if (view === 'settings') return 'settings';
+      return 'overview';
+    }
+    return 'overview';
+  }, [location.pathname, location.search]);
+
   React.useEffect(() => {
     if (!isAdmin) return;
     let cancelled = false;
     void getCurrentUserProfile().then((profile) => {
-      if (!cancelled) setRole(profile?.role ?? null);
+      if (!cancelled) {
+        setRole(profile?.role ?? null);
+        setRoleResolved(true);
+      }
     });
     return () => {
       cancelled = true;
     };
   }, [isAdmin]);
+
+  React.useEffect(() => {
+    if (!isAdmin || !roleResolved) return;
+    if (canAccessSection(role, currentSection)) return;
+    const fallback = defaultRouteForRole(role);
+    if (fallback !== `${location.pathname}${location.search}`) {
+      navigate(fallback, { replace: true });
+    }
+  }, [isAdmin, roleResolved, role, currentSection, location.pathname, location.search, navigate]);
 
   const visibleAdminMenu = adminMenu.filter((item) => canAccessSection(role, item.section));
 

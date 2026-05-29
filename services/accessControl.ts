@@ -1,12 +1,29 @@
 import type { User } from '@supabase/supabase-js';
 import { supabase } from './supabaseClient';
 
-export type AppRole = 'admin' | 'recruiter' | 'webinar' | 'hr' | 'viewer';
+export type AppRole = 'admin' | 'leadership' | 'recruiter' | 'webinar' | 'hr' | 'viewer';
+export type AppSection =
+  | 'overview'
+  | 'candidates'
+  | 'qr'
+  | 'live-sessions'
+  | 'webinar-geek'
+  | 'calls-analytics'
+  | 'analytics'
+  | 'settings'
+  | 'pipeline'
+  | 'pipeline-settings'
+  | 'hr-dashboard'
+  | 'email-log'
+  | 'superdashboard';
 
 export interface UserProfile {
   user_id: string;
+  email?: string | null;
   full_name: string | null;
   role: AppRole;
+  points?: number | null;
+  points_updated_at?: string | null;
 }
 
 /** When `public.user_profiles` is not in PostgREST (404 / PGRST205), avoid hammering a missing table every layout mount. */
@@ -23,7 +40,14 @@ function isMissingUserProfilesRelation(error: { code?: string; message?: string 
 }
 
 function coerceAppRole(value: unknown): AppRole | null {
-  if (value === 'admin' || value === 'recruiter' || value === 'webinar' || value === 'hr' || value === 'viewer') {
+  if (
+    value === 'admin' ||
+    value === 'leadership' ||
+    value === 'recruiter' ||
+    value === 'webinar' ||
+    value === 'hr' ||
+    value === 'viewer'
+  ) {
     return value;
   }
   return null;
@@ -41,8 +65,9 @@ function staffProfileFromAuthUser(user: User): UserProfile {
     null;
   return {
     user_id: user.id,
+    email: user.email ?? null,
     full_name: fullName,
-    role: fromJwt ?? 'admin',
+    role: fromJwt ?? 'viewer',
   };
 }
 
@@ -58,7 +83,7 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
 
   const { data, error } = await supabase
     .from('user_profiles')
-    .select('user_id, full_name, role')
+    .select('user_id, email, full_name, role, points, points_updated_at')
     .eq('user_id', userId)
     .maybeSingle();
 
@@ -79,10 +104,76 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
   return null;
 }
 
-export function canAccessSection(role: AppRole | null, section: 'overview' | 'candidates' | 'qr' | 'live-sessions' | 'webinar-geek' | 'analytics' | 'settings' | 'hr-dashboard' | 'email-log'): boolean {
-  if (!role || role === 'admin') return true;
-  if (role === 'recruiter') return section === 'overview' || section === 'candidates' || section === 'live-sessions' || section === 'email-log';
-  if (role === 'webinar') return section === 'overview' || section === 'webinar-geek' || section === 'analytics';
-  if (role === 'hr') return section === 'overview' || section === 'candidates' || section === 'hr-dashboard' || section === 'live-sessions' || section === 'email-log';
+export function canAccessSection(role: AppRole | null, section: AppSection): boolean {
+  if (!role) return section === 'overview';
+  if (role === 'admin' || role === 'leadership') return true;
+  if (role === 'recruiter') {
+    return (
+      section === 'overview' ||
+      section === 'settings' ||
+      section === 'pipeline' ||
+      section === 'pipeline-settings' ||
+      section === 'calls-analytics' ||
+      section === 'webinar-geek'
+    );
+  }
+  if (role === 'webinar') return section === 'overview' || section === 'webinar-geek' || section === 'calls-analytics';
+  if (role === 'hr') {
+    return (
+      section === 'overview' ||
+      section === 'candidates' ||
+      section === 'hr-dashboard' ||
+      section === 'live-sessions' ||
+      section === 'email-log'
+    );
+  }
   return section === 'overview';
+}
+
+export function defaultRouteForRole(role: AppRole | null): string {
+  if (role === 'recruiter') return '/pipeline';
+  if (role === 'webinar') return '/webinar-geek';
+  if (role === 'hr') return '/hr-dashboard';
+  return '/admin?view=overview';
+}
+
+export async function listAllUserProfiles(): Promise<UserProfile[]> {
+  const { data, error } = await supabase
+    .from('user_profiles')
+    .select('user_id, email, full_name, role, points, points_updated_at')
+    .order('full_name', { ascending: true, nullsFirst: false })
+    .order('email', { ascending: true, nullsFirst: false });
+  if (error) throw error;
+  return (data || []) as UserProfile[];
+}
+
+function normalizeIdentityToken(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+export function buildRecruiterScopeTokens(email: string | null | undefined, fullName: string | null | undefined): Set<string> {
+  const tokens = new Set<string>();
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const localPart = normalizedEmail.split('@')[0] || '';
+  const name = String(fullName || '').trim().toLowerCase();
+
+  const add = (raw: string) => {
+    const token = normalizeIdentityToken(raw);
+    if (token) tokens.add(token);
+  };
+
+  add(normalizedEmail);
+  add(localPart);
+  add(localPart.replace(/[._-]+/g, ' '));
+  add(localPart.replace(/[._-]+/g, ''));
+  add(name);
+  add(name.replace(/\s+/g, ''));
+
+  return tokens;
+}
+
+export function recruiterOwnsNameKey(nameKey: string | null, tokens: Set<string>): boolean {
+  if (!nameKey || tokens.size === 0) return false;
+  const normalized = normalizeIdentityToken(nameKey);
+  return tokens.has(normalized);
 }

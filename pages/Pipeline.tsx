@@ -15,7 +15,6 @@ import {
   getPipelineResumeDisplayUrl,
   getPipelineResumeOpenInNewTabUrl,
   getPipelineResumeViewerKind,
-  listPipelineAdminPushedJourneyCandidates,
   listPipelineManualCandidates,
   listPipelineCandidateActivityTimeline,
   listPipelineIncomingEmailLogs,
@@ -382,7 +381,6 @@ const Pipeline: React.FC = () => {
   const [selectedResumeId, setSelectedResumeId] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
-  const [leftSection, setLeftSection] = useState<'manual' | 'checkin'>('checkin');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const [newNote, setNewNote] = useState('');
@@ -455,11 +453,8 @@ const Pipeline: React.FC = () => {
     setError(null);
     setLoading(true);
     try {
-      const [manualRows, checkinRows] = await Promise.all([
-        listPipelineManualCandidates(),
-        listPipelineAdminPushedJourneyCandidates(),
-      ]);
-      const rows = [...checkinRows, ...manualRows].sort(
+      const manualRows = await listPipelineManualCandidates();
+      const rows = [...manualRows].sort(
         (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
       );
       setCandidates(rows);
@@ -668,9 +663,6 @@ const Pipeline: React.FC = () => {
   const filteredCandidates = useMemo(() => {
     const q = search.trim().toLowerCase();
     return candidates.filter((c) => {
-      const source = String(c.source || '').toLowerCase();
-      if (leftSection === 'checkin' && source !== 'journey_upload') return false;
-      if (leftSection === 'manual' && source === 'journey_upload') return false;
       if (!q) return true;
       return (
         safeName(c).toLowerCase().includes(q) ||
@@ -678,16 +670,7 @@ const Pipeline: React.FC = () => {
         String(c.email || '').toLowerCase().includes(q)
       );
     });
-  }, [candidates, search, leftSection]);
-
-  const checkinCount = useMemo(
-    () => candidates.filter((c) => String(c.source || '').toLowerCase() === 'journey_upload').length,
-    [candidates],
-  );
-  const manualCount = useMemo(
-    () => candidates.filter((c) => String(c.source || '').toLowerCase() !== 'journey_upload').length,
-    [candidates],
-  );
+  }, [candidates, search]);
 
   const uploadFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -1280,7 +1263,7 @@ const Pipeline: React.FC = () => {
         <div className="rounded-3xl border border-[#c8ddf4] bg-gradient-to-br from-white to-[#f4f9ff] p-4 shadow-[0_20px_55px_-34px_rgba(11,27,52,0.35)] flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-[#0B1B34]">Pipeline queue</h1>
-            <p className="text-xs text-[#365274]">Work queue for check-in and manual resume pipelines.</p>
+            <p className="text-xs text-[#365274]">Work queue for manually uploaded resumes only.</p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <label className="inline-flex items-center gap-2 rounded-xl border border-[#b8d2ef] bg-white px-3 py-2 text-xs cursor-pointer hover:bg-[#f2f8ff] text-[#0B1B34]">
@@ -1311,32 +1294,6 @@ const Pipeline: React.FC = () => {
         <div className="grid grid-cols-1 xl:grid-cols-[340px_1fr] gap-4">
           <div className="rounded-2xl border border-[#cfe0f4] bg-white shadow-sm overflow-hidden">
             <div className="p-3 border-b border-[#e5eef9] space-y-2.5 bg-gradient-to-b from-[#f8fbff] to-white">
-              <div className="grid grid-cols-2 gap-2 rounded-xl bg-[#f1f7ff] p-1 border border-[#d8e8fa]">
-                <button
-                  type="button"
-                  onClick={() => setLeftSection('checkin')}
-                  className={`rounded-lg border px-3 py-2 text-xs font-semibold text-left transition ${
-                    leftSection === 'checkin'
-                      ? 'border-[#005EB8] bg-white text-[#0B1B34] shadow-sm'
-                      : 'border-transparent bg-transparent text-[#365274] hover:bg-white/70'
-                  }`}
-                >
-                  <span className="block">Candidate check-in resumes</span>
-                  <span className="text-[10px] font-bold text-[#0B1B34]">{checkinCount}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLeftSection('manual')}
-                  className={`rounded-lg border px-3 py-2 text-xs font-semibold text-left transition ${
-                    leftSection === 'manual'
-                      ? 'border-[#005EB8] bg-white text-[#0B1B34] shadow-sm'
-                      : 'border-transparent bg-transparent text-[#365274] hover:bg-white/70'
-                  }`}
-                >
-                  <span className="block">Manually uploaded resumes</span>
-                  <span className="text-[10px] font-bold text-[#0B1B34]">{manualCount}</span>
-                </button>
-              </div>
               <div className="relative">
                 <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, phone, email" className="w-full rounded-lg border border-[#c9ddf4] pl-8 pr-3 py-2 text-xs" />
@@ -1365,7 +1322,7 @@ const Pipeline: React.FC = () => {
                         <span className="text-[10px] rounded-full bg-[#e2efff] px-2 py-0.5 text-[#0B1B34] text-right font-semibold">{c.journey_stage}</span>
                       </div>
                       <p className="text-[10px] text-[#4c6788] mt-0.5">
-                        {c.scheduled_for ? `Scheduled ${formatDateTimeCanadaEastern(c.scheduled_for)}` : 'No schedule'} · {c.status} · {c.source === 'journey_upload' ? 'Journey' : 'Upload'}
+                        {c.scheduled_for ? `Scheduled ${formatDateTimeCanadaEastern(c.scheduled_for)}` : 'No schedule'} · {c.status} · Manual upload
                       </p>
                     </button>
                   </div>
@@ -1373,9 +1330,7 @@ const Pipeline: React.FC = () => {
               ))}
               {!loading && filteredCandidates.length === 0 && (
                 <div className="p-6 text-center text-sm text-[#365274]">
-                  {leftSection === 'checkin'
-                    ? 'No check-in resumes sent from Candidates page yet.'
-                    : 'No manually uploaded resumes available.'}
+                  No manually uploaded resumes available.
                 </div>
               )}
             </div>
@@ -1390,12 +1345,8 @@ const Pipeline: React.FC = () => {
               <div className="min-h-[calc(100vh-250px)] flex flex-col">
                 <div className="px-3 py-2.5 border-b border-[#e5eef9] bg-gradient-to-r from-white to-[#f6faff] flex flex-wrap items-center gap-2">
                   <p className="text-sm font-semibold text-[#0B1B34] flex-1 truncate">{safeName(selectedBundle.candidate)}</p>
-                  <span className={`text-[10px] rounded-full px-2 py-0.5 ${
-                    selectedBundle.candidate.source === 'journey_upload'
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : 'bg-blue-100 text-blue-700'
-                  }`}>
-                    {selectedBundle.candidate.source === 'journey_upload' ? 'Journey upload' : 'Bought upload'}
+                  <span className="text-[10px] rounded-full px-2 py-0.5 bg-blue-100 text-blue-700">
+                    Manual upload
                   </span>
                   <select value={selectedResume?.id || ''} onChange={(e) => setSelectedResumeId(e.target.value)} className="rounded-lg border border-[#c9ddf4] px-2 py-1.5 text-xs text-[#0B1B34]">
                     {selectedBundle.resumes.map((r) => (

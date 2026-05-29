@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
+import { getCurrentUserProfile, type AppRole } from '../services/accessControl';
+import { filterRowsForRecruiterOwnership } from '../services/recruiterDataScope';
 import { fetchWebinarGeekDashboard, syncWebinarGeekCandidates } from '../services/webinarGeekIntegrations';
 import { ChevronLeft, ChevronRight, Download, MessageSquare, RefreshCw, Search, UserCircle2, X } from 'lucide-react';
 import {
@@ -284,6 +286,10 @@ const WebinarGeekDashboard: React.FC = () => {
   const [lastFetchRange, setLastFetchRange] = useState<string | null>(null);
   const [dataFromDatabase, setDataFromDatabase] = useState(false);
   const [cacheNotice, setCacheNotice] = useState<string | null>(null);
+  const [viewerRole, setViewerRole] = useState<AppRole | null>(null);
+  const [viewerEmail, setViewerEmail] = useState<string | null>(null);
+  const [viewerFullName, setViewerFullName] = useState<string | null>(null);
+  const [viewerContextReady, setViewerContextReady] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   /** First day of the month being viewed (YYYY-MM-01), Toronto wall month via local month arithmetic. */
@@ -304,32 +310,39 @@ const WebinarGeekDashboard: React.FC = () => {
   const [savingWgNote, setSavingWgNote] = useState(false);
   const [showAllSchedules, setShowAllSchedules] = useState(false);
   const [expandedScheduleKey, setExpandedScheduleKey] = useState<string | null>(null);
+  const scopedSubscriptionCache = useMemo(() => {
+    if (subscriptionCache === null) return null;
+    if (!viewerContextReady) return [];
+    if (viewerRole !== 'recruiter') return subscriptionCache;
+    return filterRowsForRecruiterOwnership(subscriptionCache, viewerEmail, viewerFullName);
+  }, [subscriptionCache, viewerContextReady, viewerRole, viewerEmail, viewerFullName]);
+
   const monthWindow = useMemo(() => monthBoundsFromFirstYmd(monthAnchorYmd), [monthAnchorYmd]);
 
   /** Rows whose event date falls in the calendar month being viewed (no API). */
   const rowsInViewMonth = useMemo(() => {
-    if (!subscriptionCache) return [];
+    if (!scopedSubscriptionCache) return [];
     const [vy, vm] = monthAnchorYmd.split('-').map(Number);
     const start = `${vy}-${pad2(vm)}-01`;
     const lastD = new Date(vy, vm, 0).getDate();
     const end = `${vy}-${pad2(vm)}-${pad2(lastD)}`;
-    return subscriptionCache.filter((row) => {
+    return scopedSubscriptionCache.filter((row) => {
       const k = fmtDateKey(row);
       if (k === 'unknown') return false;
       return k >= start && k <= end;
     });
-  }, [subscriptionCache, monthAnchorYmd]);
+  }, [scopedSubscriptionCache, monthAnchorYmd]);
 
   const weekWindow = useMemo(() => fridayWeekBoundsFromYmd(weekAnchorYmd), [weekAnchorYmd]);
 
   const rowsInViewWeek = useMemo(() => {
-    if (!subscriptionCache) return [];
-    return subscriptionCache.filter((row) => {
+    if (!scopedSubscriptionCache) return [];
+    return scopedSubscriptionCache.filter((row) => {
       const k = fmtDateKey(row);
       if (k === 'unknown') return false;
       return k >= weekWindow.since && k <= weekWindow.until;
     });
-  }, [subscriptionCache, weekWindow.since, weekWindow.until]);
+  }, [scopedSubscriptionCache, weekWindow.since, weekWindow.until]);
 
   const schedulesInViewMonth = useMemo(() => {
     const nowMs = Date.now();
@@ -400,7 +413,7 @@ const WebinarGeekDashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!subscriptionCache?.length) {
+    if (!scopedSubscriptionCache?.length) {
       setWgNotesBySubId({});
       setWgNotesError(null);
       return;
@@ -439,7 +452,7 @@ const WebinarGeekDashboard: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [subscriptionCache, rowsInViewMonth]);
+  }, [scopedSubscriptionCache, rowsInViewMonth]);
 
   const handleAddWgHrNote = useCallback(async () => {
     const row = selectedRow;
@@ -681,6 +694,25 @@ const WebinarGeekDashboard: React.FC = () => {
 
   useEffect(() => {
     if (!isAuthenticated) return;
+    let cancelled = false;
+    void (async () => {
+      const [{ data: authData }, profile] = await Promise.all([
+        supabase.auth.getUser(),
+        getCurrentUserProfile(),
+      ]);
+      if (cancelled) return;
+      setViewerRole(profile?.role ?? null);
+      setViewerEmail(authData.user?.email ?? profile?.email ?? null);
+      setViewerFullName(profile?.full_name ?? null);
+      setViewerContextReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
     void (async () => {
       const { data, error, tableMissing } = await loadWebinarGeekDashboardCache();
       if (tableMissing) {
@@ -746,7 +778,7 @@ const WebinarGeekDashboard: React.FC = () => {
                 {' · '}
                 {new Date(lastFetchAt).toLocaleString()}
                 {lastFetchRange ? ` · range ${lastFetchRange}` : ''}
-                {subscriptionCache != null ? ` · ${subscriptionCache.length} rows` : ''}
+                {scopedSubscriptionCache != null ? ` · ${scopedSubscriptionCache.length} rows` : ''}
               </p>
             )}
           </div>
@@ -778,7 +810,7 @@ const WebinarGeekDashboard: React.FC = () => {
                   <p className="text-sm font-semibold text-slate-900">Filter by recruiter</p>
                   <p className="text-[11px] text-slate-500">
                     Recruiters from <span className="font-mono">cooper_*</span> / <span className="font-mono">rms_*</span> file tags.
-                    HR can see each recruiter&apos;s invitees; recruiters can filter to their own bookings.
+                    Recruiter role is automatically scoped to their own records; leadership/admin can see full data.
                   </p>
                 </div>
               </div>

@@ -2,6 +2,8 @@
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
+import { getCurrentUserProfile, type AppRole } from '../services/accessControl';
+import { filterRowsForRecruiterOwnership } from '../services/recruiterDataScope';
 import { fetchWebinarGeekDashboard } from '../services/webinarGeekIntegrations';
 import {
   loadWebinarGeekDashboardCache,
@@ -86,31 +88,42 @@ const CallsAnalytics: React.FC = () => {
   const [weekAnchorYmd, setWeekAnchorYmd] = useState(() => torontoYmdFromDate());
   const [selectedRecruiterKey, setSelectedRecruiterKey] = useState<string | null>(null);
   const [leaderboardTab, setLeaderboardTab] = useState<LeaderboardTab>('performance');
+  const [viewerRole, setViewerRole] = useState<AppRole | null>(null);
+  const [viewerEmail, setViewerEmail] = useState<string | null>(null);
+  const [viewerFullName, setViewerFullName] = useState<string | null>(null);
+  const [viewerContextReady, setViewerContextReady] = useState(false);
+
+  const scopedSubscriptionCache = useMemo(() => {
+    if (subscriptionCache === null) return null;
+    if (!viewerContextReady) return [];
+    if (viewerRole !== 'recruiter') return subscriptionCache;
+    return filterRowsForRecruiterOwnership(subscriptionCache, viewerEmail, viewerFullName);
+  }, [subscriptionCache, viewerContextReady, viewerRole, viewerEmail, viewerFullName]);
 
   const monthWindow = useMemo(() => monthBoundsFromFirstYmd(monthAnchorYmd), [monthAnchorYmd]);
   const weekWindow = useMemo(() => fridayWeekBoundsFromYmd(weekAnchorYmd), [weekAnchorYmd]);
 
   const rowsInViewMonth = useMemo(() => {
-    if (!subscriptionCache) return [];
+    if (!scopedSubscriptionCache) return [];
     const [vy, vm] = monthAnchorYmd.split('-').map(Number);
     const start = `${vy}-${String(vm).padStart(2, '0')}-01`;
     const lastD = new Date(vy, vm, 0).getDate();
     const end = `${vy}-${String(vm).padStart(2, '0')}-${String(lastD).padStart(2, '0')}`;
-    return subscriptionCache.filter((row) => {
+    return scopedSubscriptionCache.filter((row) => {
       const k = fmtHrScheduledDateKey(row);
       if (k === 'unknown') return false;
       return k >= start && k <= end;
     });
-  }, [subscriptionCache, monthAnchorYmd]);
+  }, [scopedSubscriptionCache, monthAnchorYmd]);
 
   const rowsInViewWeek = useMemo(() => {
-    if (!subscriptionCache) return [];
-    return subscriptionCache.filter((row) => {
+    if (!scopedSubscriptionCache) return [];
+    return scopedSubscriptionCache.filter((row) => {
       const k = fmtHrScheduledDateKey(row);
       if (k === 'unknown') return false;
       return k >= weekWindow.since && k <= weekWindow.until;
     });
-  }, [subscriptionCache, weekWindow.since, weekWindow.until]);
+  }, [scopedSubscriptionCache, weekWindow.since, weekWindow.until]);
 
   const rowsForScope = useMemo(() => {
     if (scopeMode === 'week') return rowsInViewWeek;
@@ -281,6 +294,25 @@ const CallsAnalytics: React.FC = () => {
 
   useEffect(() => {
     if (!isAuthenticated) return;
+    let cancelled = false;
+    void (async () => {
+      const [{ data: authData }, profile] = await Promise.all([
+        supabase.auth.getUser(),
+        getCurrentUserProfile(),
+      ]);
+      if (cancelled) return;
+      setViewerRole(profile?.role ?? null);
+      setViewerEmail(authData.user?.email ?? profile?.email ?? null);
+      setViewerFullName(profile?.full_name ?? null);
+      setViewerContextReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
     void (async () => {
       const { data, error, tableMissing } = await loadWebinarGeekDashboardCache();
       if (tableMissing) {
@@ -358,7 +390,7 @@ const CallsAnalytics: React.FC = () => {
           weeklyTargetLeaderboard={weeklyTargetLeaderboard}
           selectedRecruiterKey={selectedRecruiterKey}
           onSelectRecruiter={setSelectedRecruiterKey}
-          subscriptionCache={subscriptionCache}
+          subscriptionCache={scopedSubscriptionCache}
           scopeMode={scopeMode}
           setScopeMode={setScopeMode}
           monthAnchorYmd={monthAnchorYmd}
