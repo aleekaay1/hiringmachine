@@ -755,22 +755,47 @@ export async function savePipelineUserCallSettings(input: {
   const { data: auth } = await supabase.auth.getUser();
   const userId = auth.user?.id;
   if (!userId) throw new Error('You must be signed in.');
-  const payload = {
+  const payloadBase = {
     user_id: userId,
     extension: input.extension?.trim() || null,
     dialing_locale: input.dialingLocale?.trim() || null,
+    updated_at: new Date().toISOString(),
+  };
+  const payloadWithDailyTarget = {
+    ...payloadBase,
     daily_upload_target: Number.isFinite(input.dailyUploadTarget)
       ? Math.max(0, Math.round(Number(input.dailyUploadTarget)))
       : null,
-    updated_at: new Date().toISOString(),
   };
+  const isMissingDailyTargetColumn = (error: { code?: string | null; message?: string | null } | null | undefined): boolean => {
+    if (!error) return false;
+    if (error.code === '42703') return true;
+    const msg = String(error.message || '').toLowerCase();
+    return msg.includes('daily_upload_target') && msg.includes('does not exist');
+  };
+
   const { data, error } = await supabase
     .from('pipeline_user_call_settings')
-    .upsert(payload, { onConflict: 'user_id' })
+    .upsert(payloadWithDailyTarget, { onConflict: 'user_id' })
     .select('*')
     .single();
-  if (error) throw error;
-  return data as PipelineUserCallSettings;
+  if (!error) return data as PipelineUserCallSettings;
+
+  // Backward compatibility: some deployments may not have run phase-2 SQL yet.
+  if (isMissingDailyTargetColumn(error)) {
+    const { data: fallbackData, error: fallbackError } = await supabase
+      .from('pipeline_user_call_settings')
+      .upsert(payloadBase, { onConflict: 'user_id' })
+      .select('*')
+      .single();
+    if (fallbackError) throw fallbackError;
+    return {
+      ...(fallbackData as PipelineUserCallSettings),
+      daily_upload_target: null,
+    };
+  }
+
+  throw error;
 }
 
 export async function markPipelineCandidateTouched(candidateId: string): Promise<void> {
