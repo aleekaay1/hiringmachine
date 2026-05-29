@@ -149,9 +149,38 @@ function unixMsFromField(value: unknown): number | null {
   return n > 1e12 ? n : n * 1000;
 }
 
-/** When HR scheduled / invited (subscription created_at). */
+function firstUnixMs(values: unknown[]): number | null {
+  for (const value of values) {
+    const ms = unixMsFromField(value);
+    if (ms != null) return ms;
+  }
+  return null;
+}
+
+/**
+ * Recruiter invite/registration action timestamp.
+ * Never reads webinar session/broadcast dates.
+ */
+export function inviteActionMsFromRow(row: AnyRow): number | null {
+  const registration =
+    row.registration && typeof row.registration === 'object'
+      ? (row.registration as AnyRow)
+      : null;
+  return firstUnixMs([
+    row.created_at,
+    row.registration_date,
+    row.registered_at,
+    row.subscribed_at,
+    row.invited_at,
+    row.invite_created_at,
+    registration?.created_at,
+    registration?.registered_at,
+  ]);
+}
+
+/** When HR scheduled / invited (subscription created_at and invite-action fallbacks). */
 export function hrScheduledMsFromRow(row: AnyRow): number | null {
-  return unixMsFromField(row.created_at);
+  return inviteActionMsFromRow(row);
 }
 
 /** When the webinar session runs (broadcast date). */

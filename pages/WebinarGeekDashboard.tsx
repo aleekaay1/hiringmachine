@@ -18,7 +18,7 @@ import {
   rowMatchesNameKey,
   webinarSessionMsFromRow,
 } from '../services/webinarGeekInviters';
-import { fmtWebinarSessionDateKey } from '../services/webinarGeekRecruiterAnalytics';
+import { fmtHrScheduledDateKey } from '../services/webinarGeekRecruiterAnalytics';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import type { AdminNote } from '../types';
 import {
@@ -162,9 +162,9 @@ function eventMsToTorontoYmd(ms: number): string {
   return `${y}-${mo}-${da}`;
 }
 
-/** Month/week/day scope + calendar: webinar session date (unchanged). */
+/** Month/week/day scope + calendar: recruiter invite/registration action date. */
 function fmtDateKey(row: AnyRow): string {
-  return fmtWebinarSessionDateKey(row);
+  return fmtHrScheduledDateKey(row);
 }
 
 /** Whole minutes from watch_duration seconds (0 if none). */
@@ -384,6 +384,11 @@ const WebinarGeekDashboard: React.FC = () => {
     }
     return rowsInViewMonth;
   }, [scopeMode, rowsInViewWeek, rowsInViewMonth, rowsInViewMonthByDate, selectedDayYmd]);
+
+  const selectedDayTotalRows = useMemo(() => {
+    if (scopeMode !== 'day' || !selectedDayYmd) return 0;
+    return rowsInViewMonthByDate.get(selectedDayYmd)?.length ?? 0;
+  }, [scopeMode, selectedDayYmd, rowsInViewMonthByDate]);
 
   useEffect(() => {
     if (!selectedNameKey) return;
@@ -1017,7 +1022,7 @@ const WebinarGeekDashboard: React.FC = () => {
             })}
           </div>
           <p className="mt-2 text-[10px] text-slate-500">
-            Click any calendar day to switch to day scope and load invitee detail rows for that date.
+            Click any calendar day to switch to day scope and load invitee detail rows for that invite date.
           </p>
           <div className="mt-3 rounded-xl border border-indigo-100 bg-indigo-50/40 px-3 py-2">
             <p className="text-[10px] uppercase tracking-wide font-semibold text-indigo-700 mb-1">Upcoming webinar schedules</p>
@@ -1184,7 +1189,9 @@ const WebinarGeekDashboard: React.FC = () => {
                   <tr>
                     <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
                       {scopeMode === 'day' && selectedDayYmd
-                        ? `No invitees found for ${ymdToShortLabel(selectedDayYmd)}.`
+                        ? selectedDayTotalRows === 0
+                          ? `No invitees found for ${ymdToShortLabel(selectedDayYmd)}.`
+                          : `No rows match active filters for ${ymdToShortLabel(selectedDayYmd)}.`
                         : 'No invitee rows in this scope.'}
                     </td>
                   </tr>
