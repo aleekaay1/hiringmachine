@@ -817,43 +817,55 @@ export async function savePipelineUserCallSettings(input: {
       : null,
   };
   const isMissingColumn = (
-    error: { code?: string | null; message?: string | null } | null | undefined,
+    error: { code?: string | null; message?: string | null; details?: string | null; hint?: string | null } | null | undefined,
     column: 'daily_upload_target' | 'daily_webinar_booking_target',
   ): boolean => {
     if (!error) return false;
-    if (error.code === '42703') return true;
-    const msg = String(error.message || '').toLowerCase();
-    return msg.includes(column) && msg.includes('does not exist');
+    const combined = `${String(error.message || '')} ${String(error.details || '')} ${String(error.hint || '')}`.toLowerCase();
+    const mentionsColumn = combined.includes(column);
+    // 42703: undefined column, PGRST204: column not found in schema cache.
+    if ((error.code === '42703' || error.code === 'PGRST204') && mentionsColumn) return true;
+    return mentionsColumn && (
+      combined.includes('does not exist') ||
+      combined.includes('could not find the')
+    );
   };
 
-  const { data, error } = await supabase
-    .from('pipeline_user_call_settings')
-    .upsert(payloadWithDailyTarget, { onConflict: 'user_id' })
-    .select('*')
-    .single();
-  if (!error) return data as PipelineUserCallSettings;
-
-  // Backward compatibility: some deployments may not have run all target-column migrations yet.
-  if (isMissingColumn(error, 'daily_upload_target') || isMissingColumn(error, 'daily_webinar_booking_target')) {
-    const fallbackPayload: Record<string, unknown> = { ...payloadBase };
-    if (!isMissingColumn(error, 'daily_upload_target')) {
-      fallbackPayload.daily_upload_target = payloadWithDailyTarget.daily_upload_target;
-    }
-    if (!isMissingColumn(error, 'daily_webinar_booking_target')) {
-      fallbackPayload.daily_webinar_booking_target = payloadWithDailyTarget.daily_webinar_booking_target;
-    }
-    const { data: fallbackData, error: fallbackError } = await supabase
+  const upsertAndSelect = async (payload: Record<string, unknown>) => {
+    return supabase
       .from('pipeline_user_call_settings')
-      .upsert(fallbackPayload, { onConflict: 'user_id' })
+      .upsert(payload, { onConflict: 'user_id' })
       .select('*')
       .single();
-    if (fallbackError) throw fallbackError;
-    const row = fallbackData as Record<string, unknown>;
+  };
+
+  const { data, error } = await upsertAndSelect(payloadWithDailyTarget as Record<string, unknown>);
+  if (!error) return data as PipelineUserCallSettings;
+
+  // Backward compatibility: retry with progressively smaller payload when new columns are missing.
+  const uploadMissing = isMissingColumn(error, 'daily_upload_target');
+  const webinarMissing = isMissingColumn(error, 'daily_webinar_booking_target');
+  if (uploadMissing || webinarMissing) {
+    const retryPayload: Record<string, unknown> = { ...payloadWithDailyTarget } as Record<string, unknown>;
+    if (uploadMissing) delete retryPayload.daily_upload_target;
+    if (webinarMissing) delete retryPayload.daily_webinar_booking_target;
+    const { data: retryData, error: retryError } = await upsertAndSelect(retryPayload);
+    if (!retryError) {
+      const row = retryData as Record<string, unknown>;
+      return {
+        ...(retryData as PipelineUserCallSettings),
+        daily_upload_target: typeof row.daily_upload_target === 'number' ? row.daily_upload_target : null,
+        daily_webinar_booking_target: typeof row.daily_webinar_booking_target === 'number' ? row.daily_webinar_booking_target : null,
+      };
+    }
+
+    // Final fallback: base columns only (works even when both target columns are absent).
+    const { data: baseData, error: baseError } = await upsertAndSelect(payloadBase as Record<string, unknown>);
+    if (baseError) throw baseError;
     return {
-      ...(fallbackData as PipelineUserCallSettings),
-      daily_upload_target: typeof row.daily_upload_target === 'number' ? row.daily_upload_target : null,
-      daily_webinar_booking_target:
-        typeof row.daily_webinar_booking_target === 'number' ? row.daily_webinar_booking_target : null,
+      ...(baseData as PipelineUserCallSettings),
+      daily_upload_target: null,
+      daily_webinar_booking_target: null,
     };
   }
 
