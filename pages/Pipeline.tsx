@@ -20,10 +20,14 @@ import {
   listPipelineIncomingEmailLogs,
   listPipelineEmailSendLogs,
   getPipelineUserCallSettings,
+  isPipelinePhoneInputClean,
   logPipelineCallAction,
   markPipelineCandidateTouched,
+  normalizeDialDestination,
+  readPipelineCandidatePhone,
   savePipelineUserCallSettings,
   savePipelineCallDisposition,
+  savePipelineCandidatePhoneOverride,
   savePipelineEvaluation,
   syncPipelineIncomingEmails,
   triggerPipelineResumeConversion,
@@ -153,14 +157,6 @@ function latestNoteText(bundle: PipelineCandidateBundle | null): string {
 
 function safeName(candidate: PipelineCandidate): string {
   return candidate.full_name?.trim() || 'Unknown Candidate';
-}
-
-function normalizeDialDestination(raw: string): string {
-  const cleaned = raw.replace(/[^\d+]/g, '').trim();
-  if (!cleaned) return '';
-  if (cleaned.startsWith('+1')) return cleaned.slice(1);
-  if (cleaned.startsWith('+')) return cleaned.slice(1);
-  return cleaned;
 }
 
 function readCandidateProfile(candidate: PipelineCandidate | null): PipelineCandidateProfile {
@@ -437,6 +433,9 @@ const Pipeline: React.FC = () => {
   const [scheduleSaving, setScheduleSaving] = useState(false);
 
   const [dialTarget, setDialTarget] = useState('');
+  const [candidatePhoneInput, setCandidatePhoneInput] = useState('');
+  const [candidatePhoneSaving, setCandidatePhoneSaving] = useState(false);
+  const [candidatePhoneMsg, setCandidatePhoneMsg] = useState<string | null>(null);
   const [callActionMsg, setCallActionMsg] = useState<string | null>(null);
   const [pendingCall, setPendingCall] = useState<PipelinePendingCallSession | null>(null);
   const [callDisposition, setCallDisposition] = useState<PipelineCallDisposition | ''>('');
@@ -526,7 +525,10 @@ const Pipeline: React.FC = () => {
       setScheduledForInput(
         bundle?.candidate.scheduled_for ? new Date(bundle.candidate.scheduled_for).toISOString().slice(0, 16) : ''
       );
-      setDialTarget(bundle?.candidate.phone || '');
+      const effectivePhone = bundle?.candidate ? readPipelineCandidatePhone(bundle.candidate).effectivePhone : '';
+      setCandidatePhoneInput(effectivePhone);
+      setDialTarget(effectivePhone);
+      setCandidatePhoneMsg(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -578,6 +580,19 @@ const Pipeline: React.FC = () => {
       dialingLocale: dialingLocale || null,
     }),
     [agentExtension, dialingLocale],
+  );
+  const selectedPhoneInfo = useMemo(
+    () => (selectedBundle?.candidate ? readPipelineCandidatePhone(selectedBundle.candidate) : null),
+    [selectedBundle?.candidate],
+  );
+  const pendingCallCandidate = useMemo(() => {
+    if (!pendingCall) return null;
+    if (selectedBundle?.candidate.id === pendingCall.candidateId) return selectedBundle.candidate;
+    return candidates.find((row) => row.id === pendingCall.candidateId) || null;
+  }, [pendingCall, selectedBundle?.candidate, candidates]);
+  const pendingCallPhoneInfo = useMemo(
+    () => (pendingCallCandidate ? readPipelineCandidatePhone(pendingCallCandidate) : null),
+    [pendingCallCandidate],
   );
 
   const loadTimeline = async (candidateId: string) => {
@@ -891,9 +906,37 @@ const Pipeline: React.FC = () => {
     }
   };
 
+  const saveCandidatePhone = async () => {
+    if (!selectedBundle?.candidate.id) return;
+    if (!isPipelinePhoneInputClean(candidatePhoneInput)) {
+      setCallActionMsg('Phone can only include digits, spaces, parentheses, dashes, and optional +.');
+      return;
+    }
+    setCandidatePhoneSaving(true);
+    setCandidatePhoneMsg(null);
+    try {
+      const updated = await savePipelineCandidatePhoneOverride({
+        candidateId: selectedBundle.candidate.id,
+        phoneInput: candidatePhoneInput,
+        source: 'legacy_pipeline',
+      });
+      setCandidates((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
+      setSelectedBundle((prev) => (prev ? { ...prev, candidate: updated } : prev));
+      const nextPhone = String(updated.phone || '').trim();
+      setCandidatePhoneInput(nextPhone);
+      setDialTarget(nextPhone);
+      setCandidatePhoneMsg('Corrected number saved for this candidate.');
+      setCallActionMsg('Saved corrected number and synced dialer.');
+    } catch (e) {
+      setCallActionMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCandidatePhoneSaving(false);
+    }
+  };
+
   const mediaSessionUrl = useMemo(
-    () => buildThreeCxWebclientUrl(dialTarget || selectedBundle?.candidate.phone || ''),
-    [dialTarget, selectedBundle?.candidate.phone],
+    () => buildThreeCxWebclientUrl(dialTarget || candidatePhoneInput || selectedBundle?.candidate.phone || ''),
+    [dialTarget, candidatePhoneInput, selectedBundle?.candidate.phone],
   );
 
   const selectedTemplate = useMemo(
@@ -959,7 +1002,8 @@ const Pipeline: React.FC = () => {
       setCallActionMsg('Save the call disposition before placing another call.');
       return;
     }
-    const normalizedDestination = normalizeDialDestination(dialTarget.trim());
+    const rawDialInput = dialTarget.trim() || candidatePhoneInput.trim();
+    const normalizedDestination = normalizeDialDestination(rawDialInput);
     if (!normalizedDestination) {
       setCallActionMsg('Enter a destination number to dial.');
       return;
@@ -1002,7 +1046,12 @@ const Pipeline: React.FC = () => {
         action: 'dial_webclient_popup',
         outcome: 'ok',
         agentExtension: agentExtension.trim() || null,
-        requestPayload: { destination: normalizedDestination },
+        requestPayload: {
+          destination: normalizedDestination,
+          phone_input: rawDialInput || null,
+          phone_override_applied: Boolean(selectedPhoneInfo?.overridePhone),
+          phone_original_extracted: selectedPhoneInfo?.originalExtractedPhone || null,
+        },
         responsePayload: { mode: 'webclient_popup', url },
         actorLabel,
         callContext,
@@ -1049,6 +1098,9 @@ const Pipeline: React.FC = () => {
           mode: 'webclient_popup',
           url: pendingCall.webclientUrl,
           session_id: pendingCall.sessionId,
+          phone_input: pendingCallPhoneInfo?.effectivePhone || null,
+          phone_override_applied: Boolean(pendingCallPhoneInfo?.overridePhone),
+          phone_original_extracted: pendingCallPhoneInfo?.originalExtractedPhone || null,
         },
         actorLabel,
         callContext,
@@ -1594,6 +1646,46 @@ const Pipeline: React.FC = () => {
                         compact
                       />
                     )}
+
+                    <div className="rounded-xl border border-[#d8e8fa] bg-white/80 p-3 space-y-2">
+                      <p className="text-[11px] font-semibold text-[#0B1B34]">Candidate phone override</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          value={candidatePhoneInput}
+                          onChange={(e) => {
+                            setCandidatePhoneInput(e.target.value);
+                            setCandidatePhoneMsg(null);
+                          }}
+                          placeholder="e.g. +1 (555) 123-4567"
+                          className="flex-1 min-w-[220px] rounded-lg border border-[#c7ddf5] px-2.5 py-1.5 text-xs"
+                        />
+                        <Button
+                          variant="outline"
+                          className="!min-h-0 h-8 text-xs"
+                          onClick={() => void saveCandidatePhone()}
+                          disabled={candidatePhoneSaving || dialerLocked}
+                        >
+                          {candidatePhoneSaving ? 'Saving…' : 'Save number'}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="!min-h-0 h-8 text-xs"
+                          onClick={() => setDialTarget(candidatePhoneInput)}
+                          disabled={dialerLocked}
+                        >
+                          Use in dialer
+                        </Button>
+                      </div>
+                      <p className="text-[10px] text-[#5b7fa7]">
+                        Normalized for dial: {normalizeDialDestination(candidatePhoneInput) || '—'}
+                      </p>
+                      {selectedPhoneInfo?.originalExtractedPhone && (
+                        <p className="text-[10px] text-slate-500">
+                          OCR extracted originally: {selectedPhoneInfo.originalExtractedPhone}
+                        </p>
+                      )}
+                      {candidatePhoneMsg && <p className="text-[10px] text-emerald-700">{candidatePhoneMsg}</p>}
+                    </div>
 
                     <div className="flex flex-wrap items-start gap-3">
                       <div className={`w-[220px] rounded-2xl border p-3 shadow-inner ${dialerLocked ? 'border-amber-200 bg-amber-50/40 opacity-60 pointer-events-none' : 'border-slate-300 bg-gradient-to-b from-slate-100 to-slate-50'}`}>

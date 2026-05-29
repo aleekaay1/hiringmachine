@@ -332,6 +332,50 @@ function normalizePhone(value: string | null | undefined): string {
   return String(value || '').replace(/\D/g, '');
 }
 
+const CLEAN_PHONE_INPUT_RE = /^[+\d\s()\-]*$/;
+
+export function isPipelinePhoneInputClean(raw: string): boolean {
+  const value = String(raw || '').trim();
+  if (!value) return false;
+  if (!CLEAN_PHONE_INPUT_RE.test(value)) return false;
+  return /\d/.test(value);
+}
+
+export function normalizeDialDestination(raw: string): string {
+  const cleaned = String(raw || '').replace(/[^\d+]/g, '').trim();
+  if (!cleaned) return '';
+  const normalizedPlus = cleaned.startsWith('+')
+    ? `+${cleaned.slice(1).replace(/\+/g, '')}`
+    : cleaned.replace(/\+/g, '');
+  if (normalizedPlus.startsWith('+1')) return normalizedPlus.slice(1);
+  if (normalizedPlus.startsWith('+')) return normalizedPlus.slice(1);
+  return normalizedPlus;
+}
+
+export function readPipelineCandidatePhone(candidate: Pick<PipelineCandidate, 'phone' | 'metadata'>): {
+  effectivePhone: string;
+  overridePhone: string | null;
+  originalExtractedPhone: string | null;
+} {
+  const metadata = candidate?.metadata && typeof candidate.metadata === 'object'
+    ? (candidate.metadata as Record<string, unknown>)
+    : {};
+  const overridePhoneRaw = metadata.phone_override;
+  const originalExtractedRaw = metadata.phone_original_extracted;
+  const overridePhone = typeof overridePhoneRaw === 'string' && overridePhoneRaw.trim()
+    ? overridePhoneRaw.trim()
+    : null;
+  const originalExtractedPhone = typeof originalExtractedRaw === 'string' && originalExtractedRaw.trim()
+    ? originalExtractedRaw.trim()
+    : null;
+  const effectivePhone = overridePhone || String(candidate.phone || '').trim();
+  return {
+    effectivePhone,
+    overridePhone,
+    originalExtractedPhone,
+  };
+}
+
 function normalizeName(value: string | null | undefined): string {
   return String(value || '')
     .normalize('NFKC')
@@ -1405,6 +1449,54 @@ export async function updatePipelineCandidateProfile(input: {
     })
     .eq('id', input.candidateId);
   if (error) throw error;
+}
+
+export async function savePipelineCandidatePhoneOverride(input: {
+  candidateId: string;
+  phoneInput: string;
+  source?: string | null;
+}): Promise<PipelineCandidate> {
+  const phoneInput = String(input.phoneInput || '').trim();
+  if (!isPipelinePhoneInputClean(phoneInput)) {
+    throw new Error('Phone input can only include digits, spaces, parentheses, dashes, and optional +.');
+  }
+  const { data: existing, error: getErr } = await supabase
+    .from('pipeline_candidates')
+    .select('id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at')
+    .eq('id', input.candidateId)
+    .maybeSingle();
+  if (getErr) throw getErr;
+  if (!existing) throw new Error('Candidate not found.');
+
+  const row = existing as PipelineCandidate;
+  const metadata = row.metadata && typeof row.metadata === 'object'
+    ? { ...(row.metadata as Record<string, unknown>) }
+    : {};
+  const existingOriginal = typeof metadata.phone_original_extracted === 'string'
+    ? String(metadata.phone_original_extracted || '').trim()
+    : '';
+  const currentPhone = String(row.phone || '').trim();
+  const originalExtracted = existingOriginal || currentPhone || null;
+
+  const nextMetadata: Record<string, unknown> = {
+    ...metadata,
+    phone_override: phoneInput,
+    phone_original_extracted: originalExtracted,
+    phone_override_updated_at: new Date().toISOString(),
+    phone_override_source: String(input.source || 'manual').trim() || 'manual',
+  };
+
+  const { data, error } = await supabase
+    .from('pipeline_candidates')
+    .update({
+      phone: phoneInput,
+      metadata: nextMetadata,
+    })
+    .eq('id', input.candidateId)
+    .select('id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at')
+    .single();
+  if (error) throw error;
+  return data as PipelineCandidate;
 }
 
 export async function savePipelineCallDisposition(input: {

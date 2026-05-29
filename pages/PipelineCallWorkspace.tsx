@@ -6,12 +6,16 @@ import { Button } from '../components/UI';
 import {
   getPipelineUserCallSettings,
   getPipelineResumeOpenInNewTabUrl,
+  isPipelinePhoneInputClean,
   listPipelineCallRecords,
   listPipelineManualCandidates,
   listPipelineResumesForCandidates,
   logPipelineCallAction,
+  normalizeDialDestination,
   readCallRecordMeta,
+  readPipelineCandidatePhone,
   savePipelineCallDisposition,
+  savePipelineCandidatePhoneOverride,
   savePipelineUserCallSettings,
   type PipelineCallRecord,
   type PipelineCandidate,
@@ -47,14 +51,6 @@ type CallbackRow = {
 
 type CandidateBookedOutcomeMap = Map<string, BookedOutcomeBucket>;
 
-function normalizeDialDestination(raw: string): string {
-  const cleaned = raw.replace(/[^\d+]/g, '').trim();
-  if (!cleaned) return '';
-  if (cleaned.startsWith('+1')) return cleaned.slice(1);
-  if (cleaned.startsWith('+')) return cleaned.slice(1);
-  return cleaned;
-}
-
 function latestRecordByCandidate(records: PipelineCallRecord[]): Map<string, PipelineCallRecord> {
   const map = new Map<string, PipelineCallRecord>();
   for (const row of records) {
@@ -89,6 +85,9 @@ const PipelineCallWorkspace: React.FC = () => {
   const [bookedSubtype, setBookedSubtype] = React.useState<PipelineBookedSubtype | ''>('');
   const [callbackAtInput, setCallbackAtInput] = React.useState('');
   const [comment, setComment] = React.useState('');
+  const [phoneInput, setPhoneInput] = React.useState('');
+  const [savingPhone, setSavingPhone] = React.useState(false);
+  const [phoneMsg, setPhoneMsg] = React.useState<string | null>(null);
 
   const [candidates, setCandidates] = React.useState<PipelineCandidate[]>([]);
   const [resumesByCandidate, setResumesByCandidate] = React.useState<Map<string, PipelineResume[]>>(new Map());
@@ -285,6 +284,20 @@ const PipelineCallWorkspace: React.FC = () => {
     if (!queueList.length) return null;
     return queueList.find((c) => c.id === selectedCandidateId) || queueList[0];
   }, [queueList, selectedCandidateId]);
+  const currentPhoneInfo = React.useMemo(
+    () => (currentCandidate ? readPipelineCandidatePhone(currentCandidate) : null),
+    [currentCandidate],
+  );
+
+  React.useEffect(() => {
+    if (!currentCandidate) {
+      setPhoneInput('');
+      setPhoneMsg(null);
+      return;
+    }
+    setPhoneInput(currentPhoneInfo?.effectivePhone || '');
+    setPhoneMsg(null);
+  }, [currentCandidate?.id, currentPhoneInfo?.effectivePhone]);
 
   const nextUp = React.useMemo(
     () => queueList.filter((c) => c.id !== currentCandidate?.id).slice(0, 5),
@@ -370,9 +383,34 @@ const PipelineCallWorkspace: React.FC = () => {
     }
   };
 
+  const saveCandidatePhoneOverride = async () => {
+    if (!currentCandidate) return;
+    if (!isPipelinePhoneInputClean(phoneInput)) {
+      setError('Phone input can only include digits, spaces, parentheses, dashes, and optional +.');
+      return;
+    }
+    setSavingPhone(true);
+    setError(null);
+    setPhoneMsg(null);
+    try {
+      const updated = await savePipelineCandidatePhoneOverride({
+        candidateId: currentCandidate.id,
+        phoneInput,
+        source: 'call_workspace',
+      });
+      setCandidates((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
+      setPhoneInput(String(updated.phone || '').trim());
+      setPhoneMsg('Corrected number saved for this candidate.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingPhone(false);
+    }
+  };
+
   const saveDisposition = async () => {
     if (!currentCandidate) return;
-    const dialedNumber = normalizeDialDestination(currentCandidate.phone || '');
+    const dialedNumber = normalizeDialDestination(phoneInput || currentCandidate.phone || '');
     if (!dialedNumber) {
       setError('Current candidate has no dialable number.');
       return;
@@ -406,6 +444,9 @@ const PipelineCallWorkspace: React.FC = () => {
         threecxMetadata: {
           source: 'phase2_call_workspace',
           auto_mode: autoMode,
+          phone_input: phoneInput.trim() || null,
+          phone_original_extracted: currentPhoneInfo?.originalExtractedPhone || null,
+          phone_override_applied: Boolean(currentPhoneInfo?.overridePhone),
         },
       });
       setActionMsg('Disposition saved.');
@@ -579,15 +620,46 @@ const PipelineCallWorkspace: React.FC = () => {
                     <div>
                       <h2 className="text-lg font-semibold text-[#0B1B34]">{currentCandidate.full_name || 'Unknown Candidate'}</h2>
                       <p className="text-xs text-[#4c6c92]">
-                        {currentCandidate.phone || 'No phone'} {currentCandidate.email ? `· ${currentCandidate.email}` : ''}
+                        {currentPhoneInfo?.effectivePhone || 'No phone'} {currentCandidate.email ? `· ${currentCandidate.email}` : ''}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Button className="!min-h-0 h-9 text-xs px-3" onClick={() => void placeCall(currentCandidate)}>
+                      <Button className="!min-h-0 h-9 text-xs px-3" onClick={() => void placeCall(currentCandidate, phoneInput)}>
                         <Phone size={13} className="mr-1" />
                         Place call
                       </Button>
                     </div>
+                  </div>
+                  <div className="mt-3 rounded-xl border border-[#dbe9f8] bg-white p-3">
+                    <p className="text-[11px] text-[#43658e] mb-1">Dial number override (save once for future calls)</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        value={phoneInput}
+                        onChange={(e) => {
+                          setPhoneInput(e.target.value);
+                          setPhoneMsg(null);
+                        }}
+                        placeholder="e.g. +1 (555) 123-4567"
+                        className="flex-1 min-w-[220px] rounded-lg border border-[#c7ddf5] px-2.5 py-2 text-xs"
+                      />
+                      <Button
+                        variant="outline"
+                        className="!min-h-0 h-9 px-3 text-xs"
+                        onClick={() => void saveCandidatePhoneOverride()}
+                        disabled={savingPhone || !currentCandidate}
+                      >
+                        {savingPhone ? 'Saving...' : 'Save number'}
+                      </Button>
+                    </div>
+                    <p className="mt-1 text-[10px] text-[#5b7fa7]">
+                      Normalized for dial: {normalizeDialDestination(phoneInput) || '—'}
+                    </p>
+                    {currentPhoneInfo?.originalExtractedPhone && (
+                      <p className="mt-1 text-[10px] text-slate-500">
+                        OCR extracted originally: {currentPhoneInfo.originalExtractedPhone}
+                      </p>
+                    )}
+                    {phoneMsg && <p className="mt-1 text-[10px] text-emerald-700">{phoneMsg}</p>}
                   </div>
                   <div className="mt-3">
                     <p className="text-[11px] text-[#43658e] mb-1">Resume preview controls</p>
