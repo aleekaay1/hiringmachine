@@ -973,8 +973,8 @@ const WebinarGeekDashboard: React.FC = () => {
                     if (scopeMode === 'week') {
                       setWeekAnchorYmd(ymd);
                     } else {
-                      setSelectedDayYmd((prev) => (prev === ymd ? null : ymd));
-                      if (scopeMode === 'day') setSelectedDayYmd(ymd);
+                      setSelectedDayYmd(ymd);
+                      setScopeMode('day');
                     }
                   }}
                   className={`min-h-[64px] rounded-xl border text-left px-2 py-1 flex flex-col justify-center gap-0.5 transition ${
@@ -999,6 +999,9 @@ const WebinarGeekDashboard: React.FC = () => {
               );
             })}
           </div>
+          <p className="mt-2 text-[10px] text-slate-500">
+            Click any calendar day to switch to day scope and load invitee detail rows for that date.
+          </p>
           <div className="mt-3 rounded-xl border border-indigo-100 bg-indigo-50/40 px-3 py-2">
             <p className="text-[10px] uppercase tracking-wide font-semibold text-indigo-700 mb-1">Upcoming webinar schedules</p>
             {schedulesInViewMonth.length === 0 ? (
@@ -1163,7 +1166,9 @@ const WebinarGeekDashboard: React.FC = () => {
                 {filteredRows.length === 0 ? (
                   <tr>
                     <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
-                      No rows
+                      {scopeMode === 'day' && selectedDayYmd
+                        ? `No invitees found for ${ymdToShortLabel(selectedDayYmd)}.`
+                        : 'No invitee rows in this scope.'}
                     </td>
                   </tr>
                 ) : (

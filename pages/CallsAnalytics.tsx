@@ -57,6 +57,25 @@ function watchSecondsFromRow(row: AnyRow): number {
   return Number.isFinite(sec) && sec > 0 ? sec : 0;
 }
 
+function phoneDisplay(row: AnyRow): string {
+  const phone = String(row.phone ?? row.telephone ?? row.mobile ?? '').trim();
+  return phone || '—';
+}
+
+function sourceDisplay(row: AnyRow): string {
+  const customField = String(row.custom_field || '').trim();
+  if (!customField) return 'registration_page';
+  const prefix = customField.split('_')[0]?.trim().toLowerCase() || '';
+  if (prefix === 'cooper' || prefix === 'rms') return 'file_tag';
+  return customField.length > 28 ? `${customField.slice(0, 28)}...` : customField;
+}
+
+function subscriptionStatus(row: AnyRow): string {
+  if (row.unsubscribed === true) return 'Unsubscribed';
+  if (row.watched === true) return 'Watched';
+  return 'Active';
+}
+
 function csvScalar(value: string | number): string {
   if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '0';
   const t = value.replace(/\u2014/g, '-').trim();
@@ -249,9 +268,12 @@ const CallsAnalytics: React.FC = () => {
     const headers = [
       'subscription_id',
       'recruiter',
+      'source',
       'team',
+      'status',
       'candidate_name',
       'email',
+      'phone',
       'scheduled_on',
       'scheduled_for',
       'watched',
@@ -267,9 +289,12 @@ const CallsAnalytics: React.FC = () => {
       return [
         String(row.id ?? '0'),
         csvScalar(recruiterNameFromRow(row)),
+        csvScalar(sourceDisplay(row)),
         csvScalar(recruiterTeamFromRow(row)),
+        csvScalar(subscriptionStatus(row)),
         csvScalar(candidateDisplayNameFromRow(row) || '0'),
         csvScalar(String(row.email ?? '')),
+        csvScalar(phoneDisplay(row)),
         hr,
         session,
         row.watched === true ? 'Yes' : 'No',
@@ -616,7 +641,9 @@ function CallsAnalyticsPage(p: PageProps) {
           weekWindow={p.weekWindow}
           monthWindow={p.monthWindow}
         />
-        <p className="text-[10px] text-slate-500 mb-2">Day counts = scheduled on date</p>
+        <p className="text-[10px] text-slate-500 mb-2">
+          Day counts = scheduled on date. Click a day cell to switch to day scope and open invitee detail rows.
+        </p>
         <CalendarGrid
           calendarCells={p.calendarCells}
           viewYear={p.viewYear}
@@ -648,13 +675,14 @@ function CallsAnalyticsPage(p: PageProps) {
       <div className={`${glassCard} overflow-hidden`}>
         <BookingsTableHeader
           count={p.filteredRows.length}
+          selectedDayYmd={p.scopeMode === 'day' ? p.selectedDayYmd : null}
           recruiterName={
             p.selectedRecruiterKey
               ? p.recruiterProfiles.find((r) => r.key === p.selectedRecruiterKey)?.displayName
               : undefined
           }
         />
-        <BookingsTable rows={p.filteredRows} />
+        <BookingsTable rows={p.filteredRows} selectedDayYmd={p.scopeMode === 'day' ? p.selectedDayYmd : null} />
       </div>
     </div>
   );
@@ -1492,28 +1520,34 @@ function CalendarEmptyCell() {
 function BookingsTableHeader({
   count,
   recruiterName,
+  selectedDayYmd,
 }: {
   count: number;
   recruiterName?: string;
+  selectedDayYmd?: string | null;
 }) {
   return (
     <div className="px-4 py-2.5 border-b border-white/50 bg-white/30 text-xs text-slate-600">
       {count} booking{count === 1 ? '' : 's'}
       {recruiterName && <span className="text-[#005EB8] font-medium"> · {recruiterName}</span>}
+      {selectedDayYmd && <span className="text-slate-500"> · Day {ymdToShortLabel(selectedDayYmd)}</span>}
     </div>
   );
 }
 
-function BookingsTable({ rows }: { rows: AnyRow[] }) {
+function BookingsTable({ rows, selectedDayYmd }: { rows: AnyRow[]; selectedDayYmd?: string | null }) {
   return (
     <div className="overflow-auto max-h-[min(70vh,520px)]">
       <table className="min-w-full text-xs text-slate-800">
         <thead className="sticky top-0 z-10 border-b border-white/50 bg-white/70 backdrop-blur">
           <tr className="text-left text-[10px] uppercase tracking-wide text-slate-500">
             <th className="px-3 py-2">Recruiter</th>
+            <th className="px-3 py-2">Source</th>
             <th className="px-3 py-2">Team</th>
+            <th className="px-3 py-2">Status</th>
             <th className="px-3 py-2">Candidate</th>
             <th className="px-3 py-2">Email</th>
+            <th className="px-3 py-2">Phone</th>
             <th className="px-3 py-2">Scheduled on</th>
             <th className="px-3 py-2">Scheduled for</th>
             <th className="px-3 py-2">Watched</th>
@@ -1522,8 +1556,8 @@ function BookingsTable({ rows }: { rows: AnyRow[] }) {
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
-                No rows in scope
+              <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
+                {selectedDayYmd ? `No invitees found for ${ymdToShortLabel(selectedDayYmd)}.` : 'No rows in scope.'}
               </td>
             </tr>
           ) : (
@@ -1533,9 +1567,12 @@ function BookingsTable({ rows }: { rows: AnyRow[] }) {
               return (
                 <tr key={String(row.id)} className="border-b border-white/30 hover:bg-white/40">
                   <td className="px-3 py-2 font-medium">{recruiterNameFromRow(row)}</td>
+                  <td className="px-3 py-2 text-slate-600">{sourceDisplay(row)}</td>
                   <td className="px-3 py-2 text-slate-600">{recruiterTeamFromRow(row)}</td>
+                  <td className="px-3 py-2 text-slate-600">{subscriptionStatus(row)}</td>
                   <td className="px-3 py-2">{candidateDisplayNameFromRow(row) || '—'}</td>
                   <td className="px-3 py-2 text-slate-600">{String(row.email || '—')}</td>
+                  <td className="px-3 py-2 text-slate-600 tabular-nums">{phoneDisplay(row)}</td>
                   <td className="px-3 py-2 tabular-nums text-slate-600">
                     {hrMs ? formatDateTimeCanadaEastern(hrMs) : '—'}
                   </td>

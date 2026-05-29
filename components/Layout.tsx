@@ -125,7 +125,7 @@ const Layout: React.FC<LayoutProps> = ({
           // no-op: storage may be unavailable in strict contexts
         }
       }
-      navigate('/dashboard', { replace: true });
+      navigate('/', { replace: true });
       if (typeof window !== 'undefined') window.location.reload();
     }
   }, [navigate]);

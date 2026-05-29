@@ -26,6 +26,14 @@ import {
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { buildThreeCxWebclientUrl } from '../services/threeCxService';
 import { supabase } from '../services/supabaseClient';
+import { getCurrentUserProfile } from '../services/accessControl';
+import {
+  BOOKED_OUTCOME_RULE_LABEL,
+  buildWebinarRowsByEmail,
+  classifyBookedOutcome,
+  loadScopedWebinarRowsForViewer,
+  type BookedOutcomeBucket,
+} from '../services/pipelineBookedOutcomes';
 
 type QueueFilter = 'all' | 'callbacks' | 'not_interested' | 'booked' | 'booked_no_show' | 'booked_didnt_watch';
 
@@ -36,6 +44,8 @@ type CallbackRow = {
   phone: string;
   latestRecord: PipelineCallRecord;
 };
+
+type CandidateBookedOutcomeMap = Map<string, BookedOutcomeBucket>;
 
 function normalizeDialDestination(raw: string): string {
   const cleaned = raw.replace(/[^\d+]/g, '').trim();
@@ -83,20 +93,21 @@ const PipelineCallWorkspace: React.FC = () => {
   const [candidates, setCandidates] = React.useState<PipelineCandidate[]>([]);
   const [resumesByCandidate, setResumesByCandidate] = React.useState<Map<string, PipelineResume[]>>(new Map());
   const [records, setRecords] = React.useState<PipelineCallRecord[]>([]);
-  const [currentUserId, setCurrentUserId] = React.useState<string | null>(null);
   const [todaysCallCount, setTodaysCallCount] = React.useState(0);
+  const [bookedOutcomeByCandidate, setBookedOutcomeByCandidate] = React.useState<CandidateBookedOutcomeMap>(new Map());
+  const [passSkippedCandidateIds, setPassSkippedCandidateIds] = React.useState<string[]>([]);
 
   const loadWorkspace = React.useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [{ data: auth }, settings, candidateRows] = await Promise.all([
+      const [{ data: auth }, profile, settings, candidateRows] = await Promise.all([
         supabase.auth.getUser(),
+        getCurrentUserProfile().catch(() => null),
         getPipelineUserCallSettings().catch(() => null),
         listPipelineManualCandidates(),
       ]);
       const uid = auth.user?.id ?? null;
-      setCurrentUserId(uid);
       setAgentExtension(settings?.extension || '');
       setDailyUploadTarget(settings?.daily_upload_target ?? '');
       const openRows = candidateRows
@@ -110,6 +121,7 @@ const PipelineCallWorkspace: React.FC = () => {
         setRecords([]);
         setSelectedCandidateId(null);
         setTodaysCallCount(0);
+        setBookedOutcomeByCandidate(new Map());
         return;
       }
 
@@ -134,6 +146,30 @@ const PipelineCallWorkspace: React.FC = () => {
       setResumesByCandidate(nextMap);
       setRecords(callRecordRows);
       setTodaysCallCount(todayRows.length);
+      try {
+        const scopedRows = await loadScopedWebinarRowsForViewer({
+          role: profile?.role ?? null,
+          viewerEmail: auth.user?.email ?? profile?.email ?? null,
+          viewerFullName: profile?.full_name ?? null,
+        });
+        const rowsByEmail = buildWebinarRowsByEmail(scopedRows);
+        const latest = latestRecordByCandidate(callRecordRows);
+        const bookedMap = new Map<string, BookedOutcomeBucket>();
+        for (const candidate of openRows) {
+          const latestRecord = latest.get(candidate.id);
+          if (!latestRecord || String(latestRecord.disposition || '').toLowerCase() !== 'booked') continue;
+          const meta = readCallRecordMeta(latestRecord);
+          const classification = classifyBookedOutcome({
+            bookedSubtype: meta.bookedSubtype,
+            candidateEmail: candidate.email,
+            rowsByEmail,
+          });
+          bookedMap.set(candidate.id, classification.bucket);
+        }
+        setBookedOutcomeByCandidate(bookedMap);
+      } catch {
+        setBookedOutcomeByCandidate(new Map());
+      }
       if (!selectedCandidateId || !openRows.some((row) => row.id === selectedCandidateId)) {
         setSelectedCandidateId(openRows[0]?.id ?? null);
       }
@@ -150,15 +186,29 @@ const PipelineCallWorkspace: React.FC = () => {
 
   const latestByCandidate = React.useMemo(() => latestRecordByCandidate(records), [records]);
 
-  const baseQueue = React.useMemo(() => {
-    if (queueFilter === 'all') return candidates;
-    if (queueFilter === 'booked_no_show' || queueFilter === 'booked_didnt_watch') return [];
-    return candidates.filter((candidate) => {
+  const callbackAtByCandidate = React.useMemo(() => {
+    const map = new Map<string, string>();
+    for (const candidate of candidates) {
       const latest = latestByCandidate.get(candidate.id);
-      if (!latest) return queueFilter === 'callbacks';
+      if (!latest) continue;
+      const callbackAt = readCallRecordMeta(latest).callbackAt;
+      if (callbackAt) map.set(candidate.id, callbackAt);
+    }
+    return map;
+  }, [candidates, latestByCandidate]);
+
+  const baseQueue = React.useMemo(() => {
+    const now = Date.now();
+    const skipped = new Set(passSkippedCandidateIds);
+    const visible = candidates.filter((candidate) => {
+      if (queueFilter !== 'callbacks' && queueFilter !== 'booked_no_show' && queueFilter !== 'booked_didnt_watch' && skipped.has(candidate.id)) {
+        return false;
+      }
+      const latest = latestByCandidate.get(candidate.id);
+      if (!latest) return queueFilter === 'all';
       const d = String(latest.disposition || '').toLowerCase();
       if (queueFilter === 'callbacks') {
-        return d === 'callback requested' || Boolean(readCallRecordMeta(latest).callbackAt);
+        return d === 'callback requested' || Boolean(callbackAtByCandidate.get(candidate.id));
       }
       if (queueFilter === 'not_interested') {
         return d === 'not interested' || d === 'do not call';
@@ -166,9 +216,34 @@ const PipelineCallWorkspace: React.FC = () => {
       if (queueFilter === 'booked') {
         return d === 'booked';
       }
+      if (queueFilter === 'booked_no_show') {
+        return bookedOutcomeByCandidate.get(candidate.id) === 'booked_no_show';
+      }
+      if (queueFilter === 'booked_didnt_watch') {
+        return bookedOutcomeByCandidate.get(candidate.id) === 'booked_didnt_watch';
+      }
       return true;
     });
-  }, [candidates, queueFilter, latestByCandidate]);
+
+    if (queueFilter === 'callbacks') {
+      return [...visible].sort((a, b) => {
+        const aAt = new Date(callbackAtByCandidate.get(a.id) || '9999-12-31').getTime();
+        const bAt = new Date(callbackAtByCandidate.get(b.id) || '9999-12-31').getTime();
+        return aAt - bAt;
+      });
+    }
+
+    if (queueFilter !== 'all') return visible;
+
+    const dueCallbacks: PipelineCandidate[] = [];
+    const remaining: PipelineCandidate[] = [];
+    for (const candidate of visible) {
+      const callbackAt = callbackAtByCandidate.get(candidate.id);
+      if (callbackAt && new Date(callbackAt).getTime() <= now) dueCallbacks.push(candidate);
+      else remaining.push(candidate);
+    }
+    return [...dueCallbacks, ...remaining];
+  }, [candidates, queueFilter, latestByCandidate, passSkippedCandidateIds, callbackAtByCandidate, bookedOutcomeByCandidate]);
 
   const queueCap = React.useMemo(() => {
     if (dailyUploadTarget === '' || Number(dailyUploadTarget) <= 0) return null;
@@ -179,6 +254,32 @@ const PipelineCallWorkspace: React.FC = () => {
     if (queueCap == null) return baseQueue;
     return baseQueue.slice(0, queueCap);
   }, [baseQueue, queueCap]);
+
+  const queueStateLabel = React.useMemo(() => {
+    if (queueFilter === 'all') return 'All queue (callbacks due first)';
+    if (queueFilter === 'callbacks') return 'Callback queue';
+    if (queueFilter === 'booked_no_show') return 'Booked no show (best-effort)';
+    if (queueFilter === 'booked_didnt_watch') return "Booked didn't watch (best-effort)";
+    if (queueFilter === 'booked') return 'Booked outcomes';
+    if (queueFilter === 'not_interested') return 'Not interested / do not call';
+    return 'Queue';
+  }, [queueFilter]);
+
+  const emptyQueueGuidance = React.useMemo(() => {
+    if (queueFilter === 'booked_no_show' || queueFilter === 'booked_didnt_watch') {
+      return 'No candidates matched this booked outcome bucket. Try Booked filter or refresh WebinarGeek cache.';
+    }
+    if (queueFilter === 'callbacks') {
+      return 'No callback candidates queued. Save a "Callback requested" disposition to add one.';
+    }
+    if (queueCap != null && queueCap <= 0) {
+      return 'Daily queue cap reached. Increase daily target or continue tomorrow.';
+    }
+    if (passSkippedCandidateIds.length > 0) {
+      return 'Current pass is complete for this queue. Use "Reset pass" to review skipped candidates again.';
+    }
+    return 'Queue is empty for selected filters/cap.';
+  }, [queueFilter, queueCap, passSkippedCandidateIds.length]);
 
   const currentCandidate = React.useMemo(() => {
     if (!queueList.length) return null;
@@ -313,11 +414,10 @@ const PipelineCallWorkspace: React.FC = () => {
       setCallbackAtInput('');
       setComment('');
       const currentId = currentCandidate.id;
+      setPassSkippedCandidateIds((prev) => (prev.includes(currentId) ? prev : [...prev, currentId]));
       await loadWorkspace();
       if (autoMode) {
-        const idx = queueList.findIndex((c) => c.id === currentId);
-        const nextCandidate = queueList[idx + 1] || queueList[0] || null;
-        setSelectedCandidateId(nextCandidate?.id ?? null);
+        setSelectedCandidateId(null);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -360,6 +460,14 @@ const PipelineCallWorkspace: React.FC = () => {
                 <RefreshCw size={14} className={loading ? 'mr-1 animate-spin' : 'mr-1'} />
                 Refresh queue
               </Button>
+              <Button
+                variant="outline"
+                className="!min-h-0 h-9 px-3 text-xs"
+                onClick={() => setPassSkippedCandidateIds([])}
+                disabled={!passSkippedCandidateIds.length}
+              >
+                Reset pass
+              </Button>
             </div>
           </div>
         </div>
@@ -385,16 +493,20 @@ const PipelineCallWorkspace: React.FC = () => {
                   key={item.id}
                   type="button"
                   onClick={() => setQueueFilter(item.id)}
+                  title={item.id === 'booked_no_show' || item.id === 'booked_didnt_watch' ? BOOKED_OUTCOME_RULE_LABEL : undefined}
                   className={`w-full mb-1 rounded-lg px-2 py-2 text-xs text-left border ${
                     queueFilter === item.id ? 'bg-[#e8f3ff] border-[#9dc6ef] text-[#0B1B34]' : 'bg-white border-slate-200 text-slate-600'
                   }`}
                 >
                   {item.label}
                   {(item.id === 'booked_no_show' || item.id === 'booked_didnt_watch') && (
-                    <span className="ml-2 text-[10px] text-slate-400">(Phase 3 data)</span>
+                    <span className="ml-2 text-[10px] text-slate-400">(email-matched)</span>
                   )}
                 </button>
               ))}
+              <p className="mt-1 text-[10px] text-[#5b7fa7]" title={BOOKED_OUTCOME_RULE_LABEL}>
+                Booked no-show / didn&apos;t watch use deterministic email-to-WebinarGeek best-effort mapping.
+              </p>
             </div>
 
             <div className="rounded-xl border border-[#dce9f8] bg-[#f8fbff] p-2.5 space-y-2">
@@ -450,12 +562,13 @@ const PipelineCallWorkspace: React.FC = () => {
           <section className="rounded-2xl border border-[#d8e8fa] bg-white/85 p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="text-xs text-[#4c6c92]">Queue size</p>
+                <p className="text-xs text-[#4c6c92]">{queueStateLabel}</p>
                 <p className="text-base font-semibold text-[#0B1B34]">{queueList.length}</p>
               </div>
               <div className="text-xs text-[#365274]">
                 <p>Current: {currentCandidate?.full_name || 'No candidate selected'}</p>
                 <p>Mode: {autoMode ? 'Auto (save -> next)' : 'Manual selection'}</p>
+                {queueCap != null && <p>Queue cap applied: {Math.max(queueCap, 0)}</p>}
               </div>
             </div>
 
@@ -499,7 +612,7 @@ const PipelineCallWorkspace: React.FC = () => {
                   </div>
                 </>
               ) : (
-                <p className="text-sm text-slate-600">Queue is empty for selected filters/cap.</p>
+                <p className="text-sm text-slate-600">{emptyQueueGuidance}</p>
               )}
             </div>
 

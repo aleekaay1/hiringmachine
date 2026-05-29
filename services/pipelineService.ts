@@ -1523,6 +1523,24 @@ export async function listPipelineEmailSendLogs(candidateId: string): Promise<Pi
   return (data || []) as PipelineEmailSendLog[];
 }
 
+export async function listPipelineEmailSendLogsByCandidates(
+  candidateIds: string[],
+  input?: { fromIso?: string | null; toIso?: string | null; limit?: number },
+): Promise<PipelineEmailSendLog[]> {
+  if (!candidateIds.length) return [];
+  let query = supabase
+    .from('email_send_logs')
+    .select('id,source,trigger_label,from_email,to_email,cc_email,subject,candidate_id,status,created_at,error_message')
+    .in('candidate_id', candidateIds)
+    .order('created_at', { ascending: false })
+    .limit(input?.limit ?? 3000);
+  if (input?.fromIso) query = query.gte('created_at', input.fromIso);
+  if (input?.toIso) query = query.lte('created_at', input.toIso);
+  const { data, error } = await query;
+  if (error) throw error;
+  return (data || []) as PipelineEmailSendLog[];
+}
+
 export async function listPipelineCallRecords(input?: {
   candidateIds?: string[];
   recruiterUserId?: string | null;

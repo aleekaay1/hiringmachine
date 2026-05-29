@@ -17,6 +17,7 @@ const PipelineAuthShell: React.FC<PipelineAuthShellProps> = ({
   redirectPath,
   children,
 }) => {
+  const [authReady, setAuthReady] = React.useState(false);
   const [isAuthenticated, setIsAuthenticated] = React.useState(false);
   const [email, setEmail] = React.useState('admin@globelife-paz.com');
   const [password, setPassword] = React.useState('');
@@ -26,12 +27,28 @@ const PipelineAuthShell: React.FC<PipelineAuthShellProps> = ({
   React.useEffect(() => {
     let cancelled = false;
     void supabase.auth.getSession().then(({ data }) => {
-      if (!cancelled && data.session) setIsAuthenticated(true);
+      if (cancelled) return;
+      setIsAuthenticated(Boolean(data.session));
+      setAuthReady(true);
+    });
+    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (cancelled) return;
+      setIsAuthenticated(Boolean(session));
+      setAuthReady(true);
     });
     return () => {
       cancelled = true;
+      authSub.subscription.unsubscribe();
     };
   }, []);
+
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-[#f7fbff] to-[#eef6ff] flex items-center justify-center p-4">
+        <p className="text-sm text-[#6f7b8d]">Loading session...</p>
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     return (
