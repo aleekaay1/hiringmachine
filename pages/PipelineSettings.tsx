@@ -15,6 +15,7 @@ const PipelineSettings: React.FC = () => {
   const [message, setMessage] = useState<string | null>(null);
   const [extension, setExtension] = useState('');
   const [dialingLocale, setDialingLocale] = useState('ca');
+  const [dailyWebinarBookingTarget, setDailyWebinarBookingTarget] = useState<number | ''>('');
 
   useEffect(() => {
     let cancelled = false;
@@ -38,6 +39,7 @@ const PipelineSettings: React.FC = () => {
         if (cancelled) return;
         setExtension(settings?.extension || '');
         setDialingLocale(settings?.dialing_locale || 'ca');
+        setDailyWebinarBookingTarget(settings?.daily_webinar_booking_target ?? '');
       } catch (e) {
         if (!cancelled) {
           setMessage(e instanceof Error ? e.message : String(e));
@@ -108,6 +110,21 @@ const PipelineSettings: React.FC = () => {
                 <option value="intl">International</option>
               </select>
             </label>
+            <label className="text-sm text-[#0B1B34] md:col-span-2">
+              Daily webinar booking target
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={dailyWebinarBookingTarget}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setDailyWebinarBookingTarget(next === '' ? '' : Math.max(0, Number(next)));
+                }}
+                placeholder="e.g. 8"
+                className="mt-1 w-full rounded-xl border border-[#b8d2ef] bg-white px-3 py-2 text-sm text-[#0B1B34]"
+              />
+            </label>
           </div>
 
           <div className="mt-6 flex items-center gap-3">
@@ -119,6 +136,8 @@ const PipelineSettings: React.FC = () => {
                   await savePipelineUserCallSettings({
                     extension,
                     dialingLocale,
+                    dailyWebinarBookingTarget:
+                      dailyWebinarBookingTarget === '' ? null : Number(dailyWebinarBookingTarget),
                   });
                   setMessage('Settings saved.');
                 } catch (e) {

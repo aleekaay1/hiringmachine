@@ -164,6 +164,7 @@ export interface PipelineUserCallSettings {
   extension: string | null;
   dialing_locale: string | null;
   daily_upload_target: number | null;
+  daily_webinar_booking_target: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -795,6 +796,7 @@ export async function savePipelineUserCallSettings(input: {
   extension?: string | null;
   dialingLocale?: string | null;
   dailyUploadTarget?: number | null;
+  dailyWebinarBookingTarget?: number | null;
 }): Promise<PipelineUserCallSettings> {
   const { data: auth } = await supabase.auth.getUser();
   const userId = auth.user?.id;
@@ -810,12 +812,18 @@ export async function savePipelineUserCallSettings(input: {
     daily_upload_target: Number.isFinite(input.dailyUploadTarget)
       ? Math.max(0, Math.round(Number(input.dailyUploadTarget)))
       : null,
+    daily_webinar_booking_target: Number.isFinite(input.dailyWebinarBookingTarget)
+      ? Math.max(0, Math.round(Number(input.dailyWebinarBookingTarget)))
+      : null,
   };
-  const isMissingDailyTargetColumn = (error: { code?: string | null; message?: string | null } | null | undefined): boolean => {
+  const isMissingColumn = (
+    error: { code?: string | null; message?: string | null } | null | undefined,
+    column: 'daily_upload_target' | 'daily_webinar_booking_target',
+  ): boolean => {
     if (!error) return false;
     if (error.code === '42703') return true;
     const msg = String(error.message || '').toLowerCase();
-    return msg.includes('daily_upload_target') && msg.includes('does not exist');
+    return msg.includes(column) && msg.includes('does not exist');
   };
 
   const { data, error } = await supabase
@@ -825,17 +833,27 @@ export async function savePipelineUserCallSettings(input: {
     .single();
   if (!error) return data as PipelineUserCallSettings;
 
-  // Backward compatibility: some deployments may not have run phase-2 SQL yet.
-  if (isMissingDailyTargetColumn(error)) {
+  // Backward compatibility: some deployments may not have run all target-column migrations yet.
+  if (isMissingColumn(error, 'daily_upload_target') || isMissingColumn(error, 'daily_webinar_booking_target')) {
+    const fallbackPayload: Record<string, unknown> = { ...payloadBase };
+    if (!isMissingColumn(error, 'daily_upload_target')) {
+      fallbackPayload.daily_upload_target = payloadWithDailyTarget.daily_upload_target;
+    }
+    if (!isMissingColumn(error, 'daily_webinar_booking_target')) {
+      fallbackPayload.daily_webinar_booking_target = payloadWithDailyTarget.daily_webinar_booking_target;
+    }
     const { data: fallbackData, error: fallbackError } = await supabase
       .from('pipeline_user_call_settings')
-      .upsert(payloadBase, { onConflict: 'user_id' })
+      .upsert(fallbackPayload, { onConflict: 'user_id' })
       .select('*')
       .single();
     if (fallbackError) throw fallbackError;
+    const row = fallbackData as Record<string, unknown>;
     return {
       ...(fallbackData as PipelineUserCallSettings),
-      daily_upload_target: null,
+      daily_upload_target: typeof row.daily_upload_target === 'number' ? row.daily_upload_target : null,
+      daily_webinar_booking_target:
+        typeof row.daily_webinar_booking_target === 'number' ? row.daily_webinar_booking_target : null,
     };
   }
 

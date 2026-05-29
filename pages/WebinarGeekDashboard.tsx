@@ -20,6 +20,7 @@ import {
 } from '../services/webinarGeekInviters';
 import { fmtHrScheduledDateKey, fmtWebinarSessionDateKey } from '../services/webinarGeekRecruiterAnalytics';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
+import { getPipelineUserCallSettings, savePipelineUserCallSettings } from '../services/pipelineService';
 import type { AdminNote } from '../types';
 import {
   fetchWebinarGeekNotesForIds,
@@ -45,6 +46,8 @@ type BroadcastSchedule = {
   subscriptionsCount: number | null;
 };
 type ScopeMode = 'month' | 'week' | 'day';
+type RecruiterDateGrouping = 'booking_action_date' | 'session_outcome_date';
+type RecruiterOutcomeStatus = 'pending' | 'watched' | 'partial' | 'no-show';
 
 const FULL_WATCH_SECONDS = 45 * 60;
 const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
@@ -188,6 +191,20 @@ function watchSecondsFromRow(row: AnyRow): number {
   return Number.isFinite(sec) && sec > 0 ? sec : 0;
 }
 
+function recruiterOutcomeStatusFromRow(row: AnyRow, nowMs: number): RecruiterOutcomeStatus {
+  const sessionMs = webinarSessionMsFromRow(row);
+  const watchSeconds = watchSecondsFromRow(row);
+  if (row.watched === true) return 'watched';
+  if (watchSeconds > 0) return 'partial';
+  if (sessionMs == null || sessionMs > nowMs) return 'pending';
+  return 'no-show';
+}
+
+function recruiterOutcomeLabel(status: RecruiterOutcomeStatus): string {
+  if (status === 'no-show') return 'No-show';
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
 /** CSV / Excel: no em-dash mojibake — use 0 when missing. */
 function csvScalar(value: string | number): string {
   if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '0';
@@ -291,6 +308,9 @@ const WebinarGeekDashboard: React.FC = () => {
   const [viewerEmail, setViewerEmail] = useState<string | null>(null);
   const [viewerFullName, setViewerFullName] = useState<string | null>(null);
   const [viewerContextReady, setViewerContextReady] = useState(false);
+  const [recruiterDateGrouping, setRecruiterDateGrouping] = useState<RecruiterDateGrouping>('booking_action_date');
+  const [dailyBookingTarget, setDailyBookingTarget] = useState<number | ''>('');
+  const [savingDailyBookingTarget, setSavingDailyBookingTarget] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   /** First day of the month being viewed (YYYY-MM-01), Toronto wall month via local month arithmetic. */
@@ -319,9 +339,11 @@ const WebinarGeekDashboard: React.FC = () => {
   }, [subscriptionCache, viewerContextReady, viewerRole, viewerEmail, viewerFullName]);
 
   const monthWindow = useMemo(() => monthBoundsFromFirstYmd(monthAnchorYmd), [monthAnchorYmd]);
+  const isRecruiterView = viewerRole === 'recruiter';
+  const groupedByBookingDate = isRecruiterView && recruiterDateGrouping === 'booking_action_date';
   const scopeDateKey = useMemo(
-    () => (viewerRole === 'recruiter' ? fmtHrScheduledDateKey : fmtWebinarSessionDateKey),
-    [viewerRole],
+    () => (groupedByBookingDate ? fmtHrScheduledDateKey : fmtWebinarSessionDateKey),
+    [groupedByBookingDate],
   );
 
   /** Rows whose event date falls in the calendar month being viewed (no API). */
@@ -526,13 +548,55 @@ const WebinarGeekDashboard: React.FC = () => {
 
   const scopeSummary = useMemo(() => {
     const invited = rowsForScope.length;
-    const watched = rowsForScope.reduce((sum, row) => (row.watched === true ? sum + 1 : sum), 0);
+    const nowMs = Date.now();
+    const watched = rowsForScope.reduce((sum, row) => {
+      if (!groupedByBookingDate) return row.watched === true ? sum + 1 : sum;
+      const status = recruiterOutcomeStatusFromRow(row, nowMs);
+      return status === 'watched' || status === 'partial' ? sum + 1 : sum;
+    }, 0);
     return {
       invited,
       watched,
       watchedPct: pct(watched, invited),
     };
-  }, [rowsForScope]);
+  }, [rowsForScope, groupedByBookingDate]);
+
+  const recruiterBookingKpis = useMemo(() => {
+    if (!isRecruiterView || !scopedSubscriptionCache) {
+      return {
+        bookedToday: 0,
+        bookedThisWeek: 0,
+        watchedOrShowed: 0,
+        knownOutcomeCount: 0,
+      };
+    }
+    const todayYmd = torontoYmdFromDate();
+    const week = fridayWeekBoundsFromYmd(todayYmd);
+    const nowMs = Date.now();
+    let bookedToday = 0;
+    let bookedThisWeek = 0;
+    let watchedOrShowed = 0;
+    let knownOutcomeCount = 0;
+    for (const row of scopedSubscriptionCache) {
+      const bookingKey = fmtHrScheduledDateKey(row);
+      if (bookingKey === todayYmd) bookedToday += 1;
+      if (bookingKey >= week.since && bookingKey <= week.until) bookedThisWeek += 1;
+      const outcome = recruiterOutcomeStatusFromRow(row, nowMs);
+      if (outcome !== 'pending') knownOutcomeCount += 1;
+      if (outcome === 'watched' || outcome === 'partial') watchedOrShowed += 1;
+    }
+    return {
+      bookedToday,
+      bookedThisWeek,
+      watchedOrShowed,
+      knownOutcomeCount,
+    };
+  }, [isRecruiterView, scopedSubscriptionCache]);
+
+  const recruiterTargetProgressPct = useMemo(() => {
+    if (dailyBookingTarget === '' || Number(dailyBookingTarget) <= 0) return 0;
+    return Math.round((100 * recruiterBookingKpis.bookedToday) / Number(dailyBookingTarget));
+  }, [dailyBookingTarget, recruiterBookingKpis.bookedToday]);
 
   const calendarCells = useMemo(() => {
     const firstDow = new Date(viewYear, viewMonth0, 1).getDay();
@@ -659,6 +723,20 @@ const WebinarGeekDashboard: React.FC = () => {
     await fetchDashboardData();
   }, [withAuthRetry, fetchDashboardData]);
 
+  const saveRecruiterDailyBookingTarget = useCallback(async () => {
+    if (!isRecruiterView) return;
+    setSavingDailyBookingTarget(true);
+    try {
+      await savePipelineUserCallSettings({
+        dailyWebinarBookingTarget: dailyBookingTarget === '' ? null : Number(dailyBookingTarget),
+      });
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : 'Could not save daily booking target.');
+    } finally {
+      setSavingDailyBookingTarget(false);
+    }
+  }, [dailyBookingTarget, isRecruiterView]);
+
   const handleCsvExport = useCallback(() => {
     const headers = [
       'subscription_id',
@@ -743,6 +821,19 @@ const WebinarGeekDashboard: React.FC = () => {
       cancelled = true;
     };
   }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !viewerContextReady || viewerRole !== 'recruiter') return;
+    let cancelled = false;
+    void (async () => {
+      const settings = await getPipelineUserCallSettings().catch(() => null);
+      if (cancelled) return;
+      setDailyBookingTarget(settings?.daily_webinar_booking_target ?? '');
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, viewerContextReady, viewerRole]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -852,6 +943,95 @@ const WebinarGeekDashboard: React.FC = () => {
             </Button>
           </div>
         </div>
+
+        {isRecruiterView && (
+          <section className="rounded-2xl border border-[#d8e8fa] bg-white p-4 shadow-sm space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">Recruiter performance split</p>
+                <p className="text-[11px] text-slate-500">
+                  Make booking targets on booking action date, then review outcomes grouped by webinar session date.
+                </p>
+              </div>
+              <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-0.5 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setRecruiterDateGrouping('booking_action_date')}
+                  className={`px-2.5 py-1 rounded-lg ${
+                    recruiterDateGrouping === 'booking_action_date'
+                      ? 'bg-white border border-slate-300 text-slate-900'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Booked by action date
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRecruiterDateGrouping('session_outcome_date')}
+                  className={`px-2.5 py-1 rounded-lg ${
+                    recruiterDateGrouping === 'session_outcome_date'
+                      ? 'bg-white border border-slate-300 text-slate-900'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Outcomes by session date
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">Booked today</p>
+                <p className="text-xl font-semibold text-slate-900 tabular-nums">{recruiterBookingKpis.bookedToday}</p>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">Booked this week</p>
+                <p className="text-xl font-semibold text-slate-900 tabular-nums">{recruiterBookingKpis.bookedThisWeek}</p>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">Daily target</p>
+                <p className="text-xl font-semibold text-slate-900 tabular-nums">
+                  {dailyBookingTarget === '' ? '—' : dailyBookingTarget}
+                </p>
+              </div>
+              <div className="rounded-xl border border-[#b8d6f5] bg-[#eef6ff] px-3 py-2.5">
+                <p className="text-[10px] uppercase tracking-wide text-[#2c5f93]">Progress to daily target</p>
+                <p className="text-xl font-semibold text-[#0B1B34] tabular-nums">{recruiterTargetProgressPct}%</p>
+              </div>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2.5">
+                <p className="text-[10px] uppercase tracking-wide text-emerald-700">Eventual watched/show count</p>
+                <p className="text-xl font-semibold text-emerald-900 tabular-nums">{recruiterBookingKpis.watchedOrShowed}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="text-[11px] text-slate-600">
+                Daily webinar booking target
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={dailyBookingTarget}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setDailyBookingTarget(next === '' ? '' : Math.max(0, Number(next)));
+                  }}
+                  className="ml-2 rounded-lg border border-[#c7ddf5] px-2 py-1.5 text-xs"
+                />
+              </label>
+              <Button
+                type="button"
+                variant="outline"
+                className="!min-h-0 h-8 px-3 text-xs"
+                disabled={savingDailyBookingTarget}
+                onClick={() => void saveRecruiterDailyBookingTarget()}
+              >
+                {savingDailyBookingTarget ? 'Saving…' : 'Save target'}
+              </Button>
+              <p className="text-[11px] text-slate-500">
+                Known outcomes: {recruiterBookingKpis.knownOutcomeCount} · pending outcomes are excluded from misses.
+              </p>
+            </div>
+          </section>
+        )}
 
         {subscriptionCache !== null && nameProfiles.length > 0 && (
           <section className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm space-y-3">
@@ -976,6 +1156,11 @@ const WebinarGeekDashboard: React.FC = () => {
               />
             </label>
           </div>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-[#b8d6f5] bg-[#eef6ff] px-2.5 py-1 text-[10px] font-semibold tracking-wide text-[#2f5f92]">
+              {groupedByBookingDate ? 'Grouped by booking date' : 'Grouped by session date'}
+            </span>
+          </div>
 
           <div className="grid grid-cols-7 gap-1.5 text-center text-[10px] font-medium uppercase tracking-wide text-slate-500 mb-1.5">
             {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
@@ -1016,14 +1201,14 @@ const WebinarGeekDashboard: React.FC = () => {
                 >
                   <span className="text-[11px] font-semibold text-slate-900 leading-tight">{label}</span>
                   <span className="text-[10px] text-slate-500 tabular-nums leading-tight">
-                    {invited === 0 ? '—' : `${invited} invited`}
+                    {invited === 0 ? '—' : `${invited} ${groupedByBookingDate ? 'booked' : 'invitees'}`}
                   </span>
-                  {schedules > 0 && (
+                  {!groupedByBookingDate && schedules > 0 && (
                     <span className="text-[9px] text-indigo-700 tabular-nums font-medium leading-tight">
                       {schedules} scheduled
                     </span>
                   )}
-                  {invited > 0 && (
+                  {!groupedByBookingDate && invited > 0 && (
                     <span className="text-[9px] text-slate-600 tabular-nums font-medium leading-tight">{pct(watched, invited)} watched</span>
                   )}
                 </button>
@@ -1031,9 +1216,9 @@ const WebinarGeekDashboard: React.FC = () => {
             })}
           </div>
           <p className="mt-2 text-[10px] text-slate-500">
-            {viewerRole === 'recruiter'
-              ? 'Grouped by booking date. Click any calendar day to switch to day scope and load invitee detail rows for that booking day.'
-              : 'Click any calendar day to switch to day scope and load invitee detail rows for that scheduled session date.'}
+            {groupedByBookingDate
+              ? 'Grouped by booking date. Calendar counts represent booking action count for each day; click a day to view booked invitees with action/session timestamps and current outcome.'
+              : 'Grouped by session date. Click any calendar day to switch to day scope and load invitee detail rows for that webinar session date.'}
           </p>
           <div className="mt-3 rounded-xl border border-indigo-100 bg-indigo-50/40 px-3 py-2">
             <p className="text-[10px] uppercase tracking-wide font-semibold text-indigo-700 mb-1">Upcoming webinar schedules</p>
@@ -1094,15 +1279,21 @@ const WebinarGeekDashboard: React.FC = () => {
         {viewerRole === 'recruiter' && scopedSubscriptionCache !== null && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
             <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
-              <p className="text-[10px] uppercase tracking-wide text-slate-500">Invitees in {scopeTitle.toLowerCase()}</p>
+              <p className="text-[10px] uppercase tracking-wide text-slate-500">
+                {groupedByBookingDate ? 'Booked items in scope' : 'Invitees in scope'}
+              </p>
               <p className="text-xl font-semibold text-slate-900 tabular-nums">{scopeSummary.invited}</p>
             </div>
             <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 px-3 py-2.5">
-              <p className="text-[10px] uppercase tracking-wide text-emerald-700">Watched %</p>
+              <p className="text-[10px] uppercase tracking-wide text-emerald-700">
+                {groupedByBookingDate ? 'Eventual watched %' : 'Watched %'}
+              </p>
               <p className="text-xl font-semibold text-emerald-900 tabular-nums">{scopeSummary.watchedPct}</p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
-              <p className="text-[10px] uppercase tracking-wide text-slate-500">Marked watched</p>
+              <p className="text-[10px] uppercase tracking-wide text-slate-500">
+                {groupedByBookingDate ? 'Known watched outcomes' : 'Marked watched'}
+              </p>
               <p className="text-xl font-semibold text-slate-900 tabular-nums">{scopeSummary.watched}</p>
             </div>
           </div>
@@ -1130,6 +1321,9 @@ const WebinarGeekDashboard: React.FC = () => {
                 {scopeMode === 'week'
                   ? weekWindow.title
                   : (scopeMode === 'day' && selectedDayYmd ? ymdToShortLabel(selectedDayYmd) : monthWindow.title)}
+              </span>
+              <span className="font-semibold text-slate-700">
+                · {groupedByBookingDate ? 'Grouped by booking date' : 'Grouped by session date'}
               </span>
               {wgNotesLoading && (
                 <span className="text-[10px] font-normal text-slate-400">Loading HR notes…</span>
@@ -1202,20 +1396,31 @@ const WebinarGeekDashboard: React.FC = () => {
                 <tr className="text-left text-[10px] uppercase tracking-wide text-slate-500">
                   <th className="px-3 py-2 font-medium">Name</th>
                   <th className="px-3 py-2 font-medium">Email</th>
-                  <th className="px-3 py-2 font-medium">Phone</th>
-                  <th className="px-3 py-2 font-medium">SET BY</th>
-                  <th className="px-3 py-2 font-medium">SOURCE TYPE</th>
-                  <th className="px-3 py-2 font-medium">REGISTRATION DATE</th>
-                  <th className="px-3 py-2 font-medium">WEBINAR DATE</th>
-                  <th className="px-3 py-2 font-medium min-w-[9rem]">Status / notes</th>
-                  <th className="px-3 py-2 font-medium">Watched</th>
-                  <th className="px-3 py-2 font-medium">Watch (min)</th>
+                  {groupedByBookingDate ? (
+                    <>
+                      <th className="px-3 py-2 font-medium">Booked action datetime</th>
+                      <th className="px-3 py-2 font-medium">Webinar session datetime</th>
+                      <th className="px-3 py-2 font-medium">Current outcome</th>
+                      <th className="px-3 py-2 font-medium">Watch (min)</th>
+                    </>
+                  ) : (
+                    <>
+                      <th className="px-3 py-2 font-medium">Phone</th>
+                      <th className="px-3 py-2 font-medium">SET BY</th>
+                      <th className="px-3 py-2 font-medium">SOURCE TYPE</th>
+                      <th className="px-3 py-2 font-medium">REGISTRATION DATE</th>
+                      <th className="px-3 py-2 font-medium">WEBINAR DATE</th>
+                      <th className="px-3 py-2 font-medium min-w-[9rem]">Status / notes</th>
+                      <th className="px-3 py-2 font-medium">Watched</th>
+                      <th className="px-3 py-2 font-medium">Watch (min)</th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
+                    <td colSpan={groupedByBookingDate ? 6 : 10} className="px-3 py-8 text-center text-slate-500">
                       {scopeMode === 'day' && selectedDayYmd
                         ? selectedDayTotalRows === 0
                           ? `No invitees found for ${ymdToShortLabel(selectedDayYmd)}.`
@@ -1231,6 +1436,7 @@ const WebinarGeekDashboard: React.FC = () => {
                     const sessionMs = webinarSessionMsFromRow(row);
                     const tone = watchRowToneClass(durationSec);
                     const latest = latestWebinarGeekNote(wgNotesBySubId[subscriptionKey(row)]);
+                    const outcome = recruiterOutcomeStatusFromRow(row, Date.now());
                     return (
                       <tr
                         key={String(row.id)}
@@ -1239,30 +1445,49 @@ const WebinarGeekDashboard: React.FC = () => {
                       >
                         <td className="px-3 py-2 font-medium text-slate-900">{name}</td>
                         <td className="px-3 py-2 text-slate-700">{String(row.email || '0')}</td>
-                        <td className="px-3 py-2 text-slate-700 tabular-nums">{getPhoneDisplay(row)}</td>
-                        <td className="px-3 py-2 text-slate-700">{fileTagNameFromRow(row)}</td>
-                        <td className="px-3 py-2 text-slate-600">{recruiterTeamFromRow(row)}</td>
-                        <td className="px-3 py-2 text-slate-600 tabular-nums">
-                          {hrMs ? formatDateTimeCanadaEastern(hrMs) : '—'}
-                        </td>
-                        <td className="px-3 py-2 text-slate-600 tabular-nums">
-                          {sessionMs ? formatDateTimeCanadaEastern(sessionMs) : '—'}
-                        </td>
-                        <td className="px-3 py-2 text-slate-700 align-top max-w-[14rem]">
-                          {latest ? (
-                            <>
-                              <p className="text-[11px] leading-snug line-clamp-2">{latest.text}</p>
-                              <p className="text-[9px] text-slate-500 mt-0.5 tabular-nums">
-                                {latest.authorEmail ? `${latest.authorEmail} · ` : ''}
-                                {formatDateTimeCanadaEastern(latest.createdAt)}
-                              </p>
-                            </>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">{row.watched === true ? 'Yes' : 'No'}</td>
-                        <td className="px-3 py-2 tabular-nums">{watchMinutes(row.watch_duration)}</td>
+                        {groupedByBookingDate ? (
+                          <>
+                            <td className="px-3 py-2 text-slate-600 tabular-nums">
+                              {hrMs ? formatDateTimeCanadaEastern(hrMs) : '—'}
+                            </td>
+                            <td className="px-3 py-2 text-slate-600 tabular-nums">
+                              {sessionMs ? formatDateTimeCanadaEastern(sessionMs) : '—'}
+                            </td>
+                            <td className="px-3 py-2">
+                              <span className="inline-flex rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-medium text-slate-700">
+                                {recruiterOutcomeLabel(outcome)}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 tabular-nums">{watchMinutes(row.watch_duration)}</td>
+                          </>
+                        ) : (
+                          <>
+                            <td className="px-3 py-2 text-slate-700 tabular-nums">{getPhoneDisplay(row)}</td>
+                            <td className="px-3 py-2 text-slate-700">{fileTagNameFromRow(row)}</td>
+                            <td className="px-3 py-2 text-slate-600">{recruiterTeamFromRow(row)}</td>
+                            <td className="px-3 py-2 text-slate-600 tabular-nums">
+                              {hrMs ? formatDateTimeCanadaEastern(hrMs) : '—'}
+                            </td>
+                            <td className="px-3 py-2 text-slate-600 tabular-nums">
+                              {sessionMs ? formatDateTimeCanadaEastern(sessionMs) : '—'}
+                            </td>
+                            <td className="px-3 py-2 text-slate-700 align-top max-w-[14rem]">
+                              {latest ? (
+                                <>
+                                  <p className="text-[11px] leading-snug line-clamp-2">{latest.text}</p>
+                                  <p className="text-[9px] text-slate-500 mt-0.5 tabular-nums">
+                                    {latest.authorEmail ? `${latest.authorEmail} · ` : ''}
+                                    {formatDateTimeCanadaEastern(latest.createdAt)}
+                                  </p>
+                                </>
+                              ) : (
+                                <span className="text-slate-400">—</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2">{row.watched === true ? 'Yes' : 'No'}</td>
+                            <td className="px-3 py-2 tabular-nums">{watchMinutes(row.watch_duration)}</td>
+                          </>
+                        )}
                       </tr>
                     );
                   })
