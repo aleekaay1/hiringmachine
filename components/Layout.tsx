@@ -29,6 +29,7 @@ const Layout: React.FC<LayoutProps> = ({
   const location = useLocation();
   const [role, setRole] = React.useState<AppRole | null>(null);
   const [roleResolved, setRoleResolved] = React.useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
 
   const current = `${location.pathname}${location.search}`;
   const isActive = (path: string) => current === path;
@@ -92,56 +93,100 @@ const Layout: React.FC<LayoutProps> = ({
 
   const visibleAdminMenu = adminMenu.filter((item) => canAccessSection(role, item.section));
 
+  const handleLogout = React.useCallback(async () => {
+    try {
+      await supabase.auth.signOut({ scope: 'global' });
+    } finally {
+      // Clear local page caches so a refresh does not appear to restore auth UX state.
+      if (typeof window !== 'undefined') {
+        try {
+          const keysToRemove: string[] = [];
+          for (let i = 0; i < window.localStorage.length; i += 1) {
+            const k = window.localStorage.key(i) || '';
+            if (
+              k.startsWith('pohiring_') ||
+              k.startsWith('pipeline_') ||
+              k.includes('supabase.auth.token')
+            ) {
+              keysToRemove.push(k);
+            }
+          }
+          keysToRemove.forEach((k) => window.localStorage.removeItem(k));
+          window.sessionStorage.clear();
+        } catch {
+          // no-op: storage may be unavailable in strict contexts
+        }
+      }
+      navigate('/dashboard', { replace: true });
+      if (typeof window !== 'undefined') window.location.reload();
+    }
+  }, [navigate]);
+
   return (
     <div className="min-h-screen flex font-sans text-gray-800" style={{ backgroundColor: isAdmin ? '#eef2f7' : COLORS.background }}>
       {isAdmin && (
-        <aside className="hidden lg:flex w-72 shrink-0 flex-col border-r border-[#1c3760] bg-[#0b1f3a] text-white">
-          <div className="px-5 py-6 border-b border-[#1c3760] flex flex-col items-center text-center gap-4">
-            <div className="h-60 w-60 rounded-full bg-white border border-[#d6deea] shadow-[0_10px_30px_-18px_rgba(0,0,0,0.45)] flex items-center justify-center overflow-hidden">
-              <img
-                src="/logo.png"
-                alt="Paz Hiring Journey"
-                className="h-56 w-56 object-contain"
-                onError={(e) => {
-                  const target = e.target as HTMLImageElement;
-                  target.style.display = 'none';
-                }}
-              />
-            </div>
-            <div className="text-sm font-semibold leading-tight text-slate-100">Paz Hiring Journey Management</div>
-          </div>
-          <nav className="p-3 space-y-1.5">
-            {visibleAdminMenu.map((item) => {
-              const Icon = item.icon;
-              const active = isActive(item.route);
-              return (
+        <aside
+          className={`hidden lg:flex shrink-0 flex-col border-r border-[#1c3760] bg-[#0b1f3a] text-white relative transition-all duration-300 ease-in-out ${
+            sidebarCollapsed ? 'w-5' : 'w-72'
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed((prev) => !prev)}
+            className="absolute -right-3 top-16 z-20 h-10 w-6 rounded-r-xl border border-[#2a528a] border-l-0 bg-[#123563] text-slate-200 hover:text-white hover:bg-[#1b4b88] text-xs font-bold shadow"
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {sidebarCollapsed ? '>' : '<'}
+          </button>
+
+          {!sidebarCollapsed && (
+            <>
+              <div className="px-5 py-6 border-b border-[#1c3760] flex flex-col items-center text-center gap-4">
+                <div className="h-60 w-60 rounded-full bg-white border border-[#d6deea] shadow-[0_10px_30px_-18px_rgba(0,0,0,0.45)] flex items-center justify-center overflow-hidden">
+                  <img
+                    src="/logo.png"
+                    alt="Paz Hiring Journey"
+                    className="h-56 w-56 object-contain"
+                    onError={(e) => {
+                      const target = e.target as HTMLImageElement;
+                      target.style.display = 'none';
+                    }}
+                  />
+                </div>
+                <div className="text-sm font-semibold leading-tight text-slate-100">Paz Hiring Journey Management</div>
+              </div>
+              <nav className="p-3 space-y-1.5">
+                {visibleAdminMenu.map((item) => {
+                  const Icon = item.icon;
+                  const active = isActive(item.route);
+                  return (
+                    <button
+                      key={item.name}
+                      type="button"
+                      onClick={() => navigate(item.route)}
+                      className={`w-full inline-flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition font-medium ${
+                        active
+                          ? 'bg-[#123563] text-white shadow-sm border border-[#2a528a]'
+                          : 'text-slate-300 hover:bg-[#123563]/60 hover:text-white'
+                      }`}
+                    >
+                      <Icon size={15} />
+                      {item.name}
+                    </button>
+                  );
+                })}
                 <button
-                  key={item.name}
                   type="button"
-                  onClick={() => navigate(item.route)}
-                  className={`w-full inline-flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition font-medium ${
-                    active
-                      ? 'bg-[#123563] text-white shadow-sm border border-[#2a528a]'
-                      : 'text-slate-300 hover:bg-[#123563]/60 hover:text-white'
-                  }`}
+                  onClick={() => void handleLogout()}
+                  className="w-full mt-3 inline-flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm text-slate-300 hover:bg-[#123563]/60 hover:text-white"
                 >
-                  <Icon size={15} />
-                  {item.name}
+                  <LogOut size={15} />
+                  Logout
                 </button>
-              );
-            })}
-            <button
-              type="button"
-              onClick={async () => {
-                await supabase.auth.signOut();
-                navigate('/dashboard');
-              }}
-              className="w-full mt-3 inline-flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm text-slate-300 hover:bg-[#123563]/60 hover:text-white"
-            >
-              <LogOut size={15} />
-              Logout
-            </button>
-          </nav>
+              </nav>
+            </>
+          )}
         </aside>
       )}
       <div className="min-h-screen flex flex-col flex-1">
