@@ -2,6 +2,7 @@ Shared temporary password for all staff accounts:
 PazTemp#2026
 
 Admins
+- ali@globelife-paz.com
 - reginald_bentajado@globelife-paz.com
 - hr.licensing@globelife-paz.com
 

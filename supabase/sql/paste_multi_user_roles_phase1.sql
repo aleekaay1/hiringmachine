@@ -122,6 +122,7 @@ on conflict do nothing;
 
 with mapped(email, role) as (
   values
+    ('ali@globelife-paz.com', 'admin'::public.app_role),
     ('reginald_bentajado@globelife-paz.com', 'admin'::public.app_role),
     ('hr.licensing@globelife-paz.com', 'admin'::public.app_role),
     ('akram@globelife-paz.com', 'leadership'::public.app_role),
@@ -163,6 +164,7 @@ set
 
 with mapped(email, role) as (
   values
+    ('ali@globelife-paz.com', 'admin'::public.app_role),
     ('reginald_bentajado@globelife-paz.com', 'admin'::public.app_role),
     ('hr.licensing@globelife-paz.com', 'admin'::public.app_role),
     ('akram@globelife-paz.com', 'leadership'::public.app_role),

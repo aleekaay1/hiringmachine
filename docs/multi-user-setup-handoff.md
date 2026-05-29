@@ -80,6 +80,7 @@ Go to `Authentication -> Users -> Add user`, then create each email below.
 Use your shared temporary password for all users (then force reset later).
 
 ### Admin
+- ali@globelife-paz.com
 - reginald_bentajado@globelife-paz.com
 - hr.licensing@globelife-paz.com
 
