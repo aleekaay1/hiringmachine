@@ -34,16 +34,16 @@ const Layout: React.FC<LayoutProps> = ({
   const isActive = (path: string) => current === path;
 
   const adminMenu = [
-    { name: 'Overview', route: '/admin?view=overview', icon: Home, section: 'overview' as const },
-    { name: 'Candidates', route: '/admin?view=candidates', icon: Users, section: 'candidates' as const },
+    { name: 'Overview', route: '/dashboard?view=overview', icon: Home, section: 'overview' as const },
+    { name: 'Candidates', route: '/dashboard?view=candidates', icon: Users, section: 'candidates' as const },
     { name: 'QR Codes', route: '/qr', icon: QrCode, section: 'qr' as const },
     { name: 'Live Sessions', route: '/live-sessions', icon: Video, section: 'live-sessions' as const },
     { name: 'Webinar Geek', route: '/webinar-geek', icon: MonitorPlay, section: 'webinar-geek' as const },
     { name: 'Calls Analytics', route: '/calls-analytics', icon: BarChart3, section: 'calls-analytics' as const },
     { name: 'Pipeline', route: '/pipeline', icon: PhoneCall, section: 'pipeline' as const },
     { name: 'Pipeline settings', route: '/pipeline-settings', icon: SlidersHorizontal, section: 'pipeline-settings' as const },
-    { name: 'Analytics', route: '/admin?view=analytics', icon: BarChart3, section: 'analytics' as const },
-    { name: 'Settings', route: '/admin?view=settings', icon: Settings, section: 'settings' as const },
+    { name: 'Analytics', route: '/dashboard?view=analytics', icon: BarChart3, section: 'analytics' as const },
+    { name: 'Settings', route: '/dashboard?view=settings', icon: Settings, section: 'settings' as const },
     { name: 'Email log', route: '/email-log', icon: Mail, section: 'email-log' as const },
   ] as const;
 
@@ -57,7 +57,7 @@ const Layout: React.FC<LayoutProps> = ({
     if (location.pathname === '/qr') return 'qr';
     if (location.pathname === '/email-log') return 'email-log';
     if (location.pathname === '/superdashboard') return 'superdashboard';
-    if (location.pathname === '/admin') {
+    if (location.pathname === '/dashboard' || location.pathname === '/admin') {
       const view = new URLSearchParams(location.search).get('view');
       if (view === 'candidates') return 'candidates';
       if (view === 'analytics') return 'analytics';
@@ -134,7 +134,7 @@ const Layout: React.FC<LayoutProps> = ({
               type="button"
               onClick={async () => {
                 await supabase.auth.signOut();
-                navigate('/admin');
+                navigate('/dashboard');
               }}
               className="w-full mt-3 inline-flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm text-slate-300 hover:bg-[#123563]/60 hover:text-white"
             >

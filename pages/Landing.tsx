@@ -10,6 +10,15 @@ const Landing: React.FC = () => {
   return (
     <Layout headerBannerSrc="/header.PNG">
       <div className="flex-grow flex flex-col items-stretch justify-center w-full max-w-6xl xl:max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 py-6 sm:py-10 text-center animate-fade-in safe-area-bottom">
+        <div className="w-full flex justify-end mb-4">
+          <Button
+            variant="outline"
+            onClick={() => navigate('/dashboard')}
+            className="text-sm sm:text-base px-4 py-2"
+          >
+            Admin Login
+          </Button>
+        </div>
         <div className="w-full space-y-6 sm:space-y-8 lg:space-y-10">
           <div className="space-y-4 sm:space-y-5">
             <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-[#005EB8] tracking-tight">

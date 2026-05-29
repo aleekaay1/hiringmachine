@@ -134,7 +134,7 @@ export function defaultRouteForRole(role: AppRole | null): string {
   if (role === 'recruiter') return '/pipeline';
   if (role === 'webinar') return '/webinar-geek';
   if (role === 'hr') return '/hr-dashboard';
-  return '/admin?view=overview';
+  return '/dashboard?view=overview';
 }
 
 export async function listAllUserProfiles(): Promise<UserProfile[]> {

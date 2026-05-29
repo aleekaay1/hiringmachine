@@ -393,7 +393,7 @@ const AdminDashboard: React.FC = () => {
   const handleGoogleLogin = async () => {
     setAuthError(null);
     setGoogleLoading(true);
-    const { error } = await signInWithGoogle('/admin');
+    const { error } = await signInWithGoogle('/dashboard');
     if (error) setAuthError(error);
     setGoogleLoading(false);
   };

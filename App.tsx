@@ -36,7 +36,8 @@ const App: React.FC = () => {
         <Route path="/assessment-lookup" element={<AssessmentLookup />} />
         <Route path="/thank-you" element={<ThankYou />} />
         <Route path="/not-eligible" element={<NotEligible />} />
-        <Route path="/admin" element={<AdminDashboard />} />
+        <Route path="/dashboard" element={<AdminDashboard />} />
+        <Route path="/admin" element={<Navigate to="/dashboard" replace />} />
         <Route path="/live-sessions" element={<LiveSessionsDashboard />} />
         <Route path="/webinar-geek" element={<WebinarGeekDashboard />} />
         <Route path="/calls-analytics" element={<CallsAnalytics />} />
