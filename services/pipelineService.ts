@@ -831,16 +831,41 @@ export async function savePipelineUserCallSettings(input: {
     );
   };
 
-  const upsertAndSelect = async (payload: Record<string, unknown>) => {
+  const normalizeSettingsRow = (row: Record<string, unknown>): PipelineUserCallSettings => ({
+    ...(row as unknown as PipelineUserCallSettings),
+    daily_upload_target: typeof row.daily_upload_target === 'number' ? row.daily_upload_target : null,
+    daily_webinar_booking_target:
+      typeof row.daily_webinar_booking_target === 'number' ? row.daily_webinar_booking_target : null,
+  });
+
+  // Avoid upsert/on_conflict to support environments where unique constraints or schema cache differ.
+  const writeAndSelect = async (payload: Record<string, unknown>) => {
+    const { data: existingRow, error: existingErr } = await supabase
+      .from('pipeline_user_call_settings')
+      .select('user_id')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (existingErr && existingErr.code !== 'PGRST116') throw existingErr;
+
+    if (existingRow) {
+      const { user_id: _ignored, ...updatePayload } = payload;
+      return supabase
+        .from('pipeline_user_call_settings')
+        .update(updatePayload)
+        .eq('user_id', userId)
+        .select('*')
+        .single();
+    }
+
     return supabase
       .from('pipeline_user_call_settings')
-      .upsert(payload, { onConflict: 'user_id' })
+      .insert(payload)
       .select('*')
       .single();
   };
 
-  const { data, error } = await upsertAndSelect(payloadWithDailyTarget as Record<string, unknown>);
-  if (!error) return data as PipelineUserCallSettings;
+  const { data, error } = await writeAndSelect(payloadWithDailyTarget as Record<string, unknown>);
+  if (!error) return normalizeSettingsRow(data as Record<string, unknown>);
 
   // Backward compatibility: retry with progressively smaller payload when new columns are missing.
   const uploadMissing = isMissingColumn(error, 'daily_upload_target');
@@ -849,24 +874,15 @@ export async function savePipelineUserCallSettings(input: {
     const retryPayload: Record<string, unknown> = { ...payloadWithDailyTarget } as Record<string, unknown>;
     if (uploadMissing) delete retryPayload.daily_upload_target;
     if (webinarMissing) delete retryPayload.daily_webinar_booking_target;
-    const { data: retryData, error: retryError } = await upsertAndSelect(retryPayload);
+    const { data: retryData, error: retryError } = await writeAndSelect(retryPayload);
     if (!retryError) {
-      const row = retryData as Record<string, unknown>;
-      return {
-        ...(retryData as PipelineUserCallSettings),
-        daily_upload_target: typeof row.daily_upload_target === 'number' ? row.daily_upload_target : null,
-        daily_webinar_booking_target: typeof row.daily_webinar_booking_target === 'number' ? row.daily_webinar_booking_target : null,
-      };
+      return normalizeSettingsRow(retryData as Record<string, unknown>);
     }
 
     // Final fallback: base columns only (works even when both target columns are absent).
-    const { data: baseData, error: baseError } = await upsertAndSelect(payloadBase as Record<string, unknown>);
+    const { data: baseData, error: baseError } = await writeAndSelect(payloadBase as Record<string, unknown>);
     if (baseError) throw baseError;
-    return {
-      ...(baseData as PipelineUserCallSettings),
-      daily_upload_target: null,
-      daily_webinar_booking_target: null,
-    };
+    return normalizeSettingsRow(baseData as Record<string, unknown>);
   }
 
   throw error;
