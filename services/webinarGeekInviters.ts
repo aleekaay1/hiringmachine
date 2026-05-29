@@ -167,7 +167,6 @@ export function inviteActionMsFromRow(row: AnyRow): number | null {
       ? (row.registration as AnyRow)
       : null;
   return firstUnixMs([
-    row.created_at,
     row.registration_date,
     row.registered_at,
     row.subscribed_at,
@@ -175,6 +174,8 @@ export function inviteActionMsFromRow(row: AnyRow): number | null {
     row.invite_created_at,
     registration?.created_at,
     registration?.registered_at,
+    // Stable WG fallback when explicit registration fields are absent.
+    row.created_at,
   ]);
 }
 

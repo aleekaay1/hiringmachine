@@ -27,6 +27,7 @@ import {
   buildRecruiterLeaderboard,
   buildRecruiterWeeklyTargetLeaderboard,
   fmtHrScheduledDateKey,
+  fmtWebinarSessionDateKey,
   profileInitials,
   RECRUITER_WEEKLY_WEBINAR_TARGET,
   rowMatchesNameKey,
@@ -122,6 +123,10 @@ const CallsAnalytics: React.FC = () => {
 
   const monthWindow = useMemo(() => monthBoundsFromFirstYmd(monthAnchorYmd), [monthAnchorYmd]);
   const weekWindow = useMemo(() => fridayWeekBoundsFromYmd(weekAnchorYmd), [weekAnchorYmd]);
+  const scopeDateKey = useMemo(
+    () => (viewerRole === 'recruiter' ? fmtHrScheduledDateKey : fmtWebinarSessionDateKey),
+    [viewerRole],
+  );
 
   const rowsInViewMonth = useMemo(() => {
     if (!scopedSubscriptionCache) return [];
@@ -130,31 +135,31 @@ const CallsAnalytics: React.FC = () => {
     const lastD = new Date(vy, vm, 0).getDate();
     const end = `${vy}-${String(vm).padStart(2, '0')}-${String(lastD).padStart(2, '0')}`;
     return scopedSubscriptionCache.filter((row) => {
-      const k = fmtHrScheduledDateKey(row);
+      const k = scopeDateKey(row);
       if (k === 'unknown') return false;
       return k >= start && k <= end;
     });
-  }, [scopedSubscriptionCache, monthAnchorYmd]);
+  }, [scopedSubscriptionCache, monthAnchorYmd, scopeDateKey]);
 
   const rowsInViewWeek = useMemo(() => {
     if (!scopedSubscriptionCache) return [];
     return scopedSubscriptionCache.filter((row) => {
-      const k = fmtHrScheduledDateKey(row);
+      const k = scopeDateKey(row);
       if (k === 'unknown') return false;
       return k >= weekWindow.since && k <= weekWindow.until;
     });
-  }, [scopedSubscriptionCache, weekWindow.since, weekWindow.until]);
+  }, [scopedSubscriptionCache, weekWindow.since, weekWindow.until, scopeDateKey]);
 
   const rowsInViewMonthByDate = useMemo(() => {
     const map = new Map<string, AnyRow[]>();
     for (const row of rowsInViewMonth) {
-      const key = fmtHrScheduledDateKey(row);
+      const key = scopeDateKey(row);
       if (key === 'unknown') continue;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(row);
     }
     return map;
-  }, [rowsInViewMonth]);
+  }, [rowsInViewMonth, scopeDateKey]);
 
   const rowsForScope = useMemo(() => {
     if (scopeMode === 'week') return rowsInViewWeek;
@@ -434,6 +439,7 @@ const CallsAnalytics: React.FC = () => {
       <div className="min-h-screen bg-gradient-to-br from-[#e8f2fc] via-[#f0f6ff] to-[#e6eef8]">
         <CallsAnalyticsPage
           scopeTitle={scopeTitle}
+          viewerRole={viewerRole}
           lastFetchAt={lastFetchAt}
           lastFetchRange={lastFetchRange}
           dataFromDatabase={dataFromDatabase}
@@ -546,6 +552,7 @@ function CallsAnalyticsLoginCard(props: {
 
 type PageProps = {
   scopeTitle: string;
+  viewerRole: AppRole | null;
   lastFetchAt: string | null;
   lastFetchRange: string | null;
   dataFromDatabase: boolean;
@@ -665,7 +672,9 @@ function CallsAnalyticsPage(p: PageProps) {
           monthWindow={p.monthWindow}
         />
         <p className="text-[10px] text-slate-500 mb-2">
-          Day counts = scheduled on date. Click a day cell to switch to day scope and open invitee detail rows.
+          {p.viewerRole === 'recruiter'
+            ? 'Grouped by booking date. Click a day cell to switch to day scope and open invitee detail rows.'
+            : 'Day counts = scheduled on date. Click a day cell to switch to day scope and open invitee detail rows.'}
         </p>
         <CalendarGrid
           calendarCells={p.calendarCells}

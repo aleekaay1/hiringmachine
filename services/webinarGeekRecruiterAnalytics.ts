@@ -109,7 +109,7 @@ export function fmtWebinarSessionDateKey(row: AnyRow): string {
 
 /** Recruiter analytics — when the invite was created (HR scheduled). */
 export function fmtHrScheduledDateKey(row: AnyRow): string {
-  const ms = inviteActionMsFromRow(row) ?? hrScheduledMsFromRow(row) ?? asUnixMs(row.watched_true_set_at);
+  const ms = inviteActionMsFromRow(row) ?? hrScheduledMsFromRow(row);
   if (!ms) return 'unknown';
   return eventMsToTorontoYmd(ms);
 }

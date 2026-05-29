@@ -18,7 +18,7 @@ import {
   rowMatchesNameKey,
   webinarSessionMsFromRow,
 } from '../services/webinarGeekInviters';
-import { fmtHrScheduledDateKey } from '../services/webinarGeekRecruiterAnalytics';
+import { fmtHrScheduledDateKey, fmtWebinarSessionDateKey } from '../services/webinarGeekRecruiterAnalytics';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import type { AdminNote } from '../types';
 import {
@@ -160,11 +160,6 @@ function eventMsToTorontoYmd(ms: number): string {
   const mo = p.find((x) => x.type === 'month')?.value ?? '01';
   const da = p.find((x) => x.type === 'day')?.value ?? '01';
   return `${y}-${mo}-${da}`;
-}
-
-/** Month/week/day scope + calendar: recruiter invite/registration action date. */
-function fmtDateKey(row: AnyRow): string {
-  return fmtHrScheduledDateKey(row);
 }
 
 /** Whole minutes from watch_duration seconds (0 if none). */
@@ -324,6 +319,10 @@ const WebinarGeekDashboard: React.FC = () => {
   }, [subscriptionCache, viewerContextReady, viewerRole, viewerEmail, viewerFullName]);
 
   const monthWindow = useMemo(() => monthBoundsFromFirstYmd(monthAnchorYmd), [monthAnchorYmd]);
+  const scopeDateKey = useMemo(
+    () => (viewerRole === 'recruiter' ? fmtHrScheduledDateKey : fmtWebinarSessionDateKey),
+    [viewerRole],
+  );
 
   /** Rows whose event date falls in the calendar month being viewed (no API). */
   const rowsInViewMonth = useMemo(() => {
@@ -333,33 +332,33 @@ const WebinarGeekDashboard: React.FC = () => {
     const lastD = new Date(vy, vm, 0).getDate();
     const end = `${vy}-${pad2(vm)}-${pad2(lastD)}`;
     return scopedSubscriptionCache.filter((row) => {
-      const k = fmtDateKey(row);
+      const k = scopeDateKey(row);
       if (k === 'unknown') return false;
       return k >= start && k <= end;
     });
-  }, [scopedSubscriptionCache, monthAnchorYmd]);
+  }, [scopedSubscriptionCache, monthAnchorYmd, scopeDateKey]);
 
   const weekWindow = useMemo(() => fridayWeekBoundsFromYmd(weekAnchorYmd), [weekAnchorYmd]);
 
   const rowsInViewWeek = useMemo(() => {
     if (!scopedSubscriptionCache) return [];
     return scopedSubscriptionCache.filter((row) => {
-      const k = fmtDateKey(row);
+      const k = scopeDateKey(row);
       if (k === 'unknown') return false;
       return k >= weekWindow.since && k <= weekWindow.until;
     });
-  }, [scopedSubscriptionCache, weekWindow.since, weekWindow.until]);
+  }, [scopedSubscriptionCache, weekWindow.since, weekWindow.until, scopeDateKey]);
 
   const rowsInViewMonthByDate = useMemo(() => {
     const map = new Map<string, AnyRow[]>();
     for (const row of rowsInViewMonth) {
-      const key = fmtDateKey(row);
+      const key = scopeDateKey(row);
       if (key === 'unknown') continue;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(row);
     }
     return map;
-  }, [rowsInViewMonth]);
+  }, [rowsInViewMonth, scopeDateKey]);
 
   const schedulesInViewMonth = useMemo(() => {
     const nowMs = Date.now();
@@ -1022,7 +1021,9 @@ const WebinarGeekDashboard: React.FC = () => {
             })}
           </div>
           <p className="mt-2 text-[10px] text-slate-500">
-            Click any calendar day to switch to day scope and load invitee detail rows for that invite date.
+            {viewerRole === 'recruiter'
+              ? 'Grouped by booking date. Click any calendar day to switch to day scope and load invitee detail rows for that booking day.'
+              : 'Click any calendar day to switch to day scope and load invitee detail rows for that scheduled session date.'}
           </p>
           <div className="mt-3 rounded-xl border border-indigo-100 bg-indigo-50/40 px-3 py-2">
             <p className="text-[10px] uppercase tracking-wide font-semibold text-indigo-700 mb-1">Upcoming webinar schedules</p>
