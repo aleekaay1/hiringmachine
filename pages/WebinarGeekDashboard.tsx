@@ -524,6 +524,16 @@ const WebinarGeekDashboard: React.FC = () => {
     return `Month · ${monthWindow.title}`;
   }, [scopeMode, weekWindow.title, selectedDayYmd, monthWindow.title]);
 
+  const scopeSummary = useMemo(() => {
+    const invited = rowsForScope.length;
+    const watched = rowsForScope.reduce((sum, row) => (row.watched === true ? sum + 1 : sum), 0);
+    return {
+      invited,
+      watched,
+      watchedPct: pct(watched, invited),
+    };
+  }, [rowsForScope]);
+
   const calendarCells = useMemo(() => {
     const firstDow = new Date(viewYear, viewMonth0, 1).getDay();
     const lastDay = new Date(viewYear, viewMonth0 + 1, 0).getDate();
@@ -1080,6 +1090,23 @@ const WebinarGeekDashboard: React.FC = () => {
             )}
           </div>
         </div>
+
+        {viewerRole === 'recruiter' && scopedSubscriptionCache !== null && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+              <p className="text-[10px] uppercase tracking-wide text-slate-500">Invitees in {scopeTitle.toLowerCase()}</p>
+              <p className="text-xl font-semibold text-slate-900 tabular-nums">{scopeSummary.invited}</p>
+            </div>
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 px-3 py-2.5">
+              <p className="text-[10px] uppercase tracking-wide text-emerald-700">Watched %</p>
+              <p className="text-xl font-semibold text-emerald-900 tabular-nums">{scopeSummary.watchedPct}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+              <p className="text-[10px] uppercase tracking-wide text-slate-500">Marked watched</p>
+              <p className="text-xl font-semibold text-slate-900 tabular-nums">{scopeSummary.watched}</p>
+            </div>
+          </div>
+        )}
 
         {cacheNotice && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-950">{cacheNotice}</div>

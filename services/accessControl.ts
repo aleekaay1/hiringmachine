@@ -159,6 +159,14 @@ function normalizeIdentityToken(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+function splitIdentityWords(value: string): string[] {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .map((w) => w.trim())
+    .filter((w) => w.length >= 2);
+}
+
 export function buildRecruiterScopeTokens(email: string | null | undefined, fullName: string | null | undefined): Set<string> {
   const tokens = new Set<string>();
   const normalizedEmail = String(email || '').trim().toLowerCase();
@@ -176,6 +184,8 @@ export function buildRecruiterScopeTokens(email: string | null | undefined, full
   add(localPart.replace(/[._-]+/g, ''));
   add(name);
   add(name.replace(/\s+/g, ''));
+  for (const word of splitIdentityWords(localPart)) add(word);
+  for (const word of splitIdentityWords(name)) add(word);
 
   return tokens;
 }
@@ -183,5 +193,19 @@ export function buildRecruiterScopeTokens(email: string | null | undefined, full
 export function recruiterOwnsNameKey(nameKey: string | null, tokens: Set<string>): boolean {
   if (!nameKey || tokens.size === 0) return false;
   const normalized = normalizeIdentityToken(nameKey);
-  return tokens.has(normalized);
+  if (!normalized) return false;
+  if (tokens.has(normalized)) return true;
+
+  const words = splitIdentityWords(nameKey);
+  if (words.length > 0) {
+    const matchedWords = words.reduce((count, word) => (tokens.has(word) ? count + 1 : count), 0);
+    if (matchedWords >= 2) return true;
+    if (matchedWords >= 1 && words.length === 1 && words[0].length >= 5) return true;
+  }
+
+  for (const token of tokens) {
+    if (token.length < 6) continue;
+    if (normalized.includes(token) || token.includes(normalized)) return true;
+  }
+  return false;
 }
