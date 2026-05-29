@@ -34,6 +34,7 @@ import {
   type RecruiterLeaderboardEntry,
   type RecruiterWeeklyTargetEntry,
 } from '../services/webinarGeekRecruiterAnalytics';
+import { signInWithGoogle } from '../services/googleAuth';
 import {
   candidateDisplayNameFromRow,
   hrScheduledMsFromRow,
@@ -73,6 +74,7 @@ const CallsAnalytics: React.FC = () => {
   const [email, setEmail] = useState('admin@globelife-paz.com');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -355,8 +357,16 @@ const CallsAnalytics: React.FC = () => {
         email={email}
         password={password}
         authError={authError}
+        googleLoading={googleLoading}
         onEmail={setEmail}
         onPassword={setPassword}
+        onGoogle={async () => {
+          setAuthError(null);
+          setGoogleLoading(true);
+          const { error } = await signInWithGoogle('/calls-analytics');
+          if (error) setAuthError(error);
+          setGoogleLoading(false);
+        }}
         onSubmit={async (e) => {
           e.preventDefault();
           setAuthError(null);
@@ -418,8 +428,10 @@ function CallsAnalyticsLogin(props: {
   email: string;
   password: string;
   authError: string | null;
+  googleLoading: boolean;
   onEmail: (v: string) => void;
   onPassword: (v: string) => void;
+  onGoogle: () => void;
   onSubmit: (e: React.FormEvent) => void;
 }) {
   return (
@@ -441,8 +453,10 @@ function CallsAnalyticsLoginCard(props: {
   email: string;
   password: string;
   authError: string | null;
+  googleLoading: boolean;
   onEmail: (v: string) => void;
   onPassword: (v: string) => void;
+  onGoogle: () => void;
   onSubmit: (e: React.FormEvent) => void;
 }) {
   return (
@@ -464,6 +478,17 @@ function CallsAnalyticsLoginCard(props: {
         />
         <Button fullWidth type="submit">
           Sign in
+        </Button>
+        <div className="relative py-1">
+          <div className="absolute inset-0 flex items-center">
+            <span className="w-full border-t border-slate-200" />
+          </div>
+          <div className="relative flex justify-center text-[10px] uppercase tracking-wide text-slate-400">
+            <span className="bg-white/70 px-2">or</span>
+          </div>
+        </div>
+        <Button fullWidth type="button" variant="outline" onClick={props.onGoogle} disabled={props.googleLoading}>
+          {props.googleLoading ? 'Redirecting...' : 'Continue with Google'}
         </Button>
         {props.authError && <p className="text-sm text-red-600 text-center">{props.authError}</p>}
       </form>

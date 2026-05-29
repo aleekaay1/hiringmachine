@@ -1,6 +1,10 @@
 -- Paste in Supabase SQL Editor
 -- Same as migration: 20260529_220800_multi_user_roles_phase1.sql
 
+-- IMPORTANT:
+-- If your existing enum does not have "leadership" yet, run:
+--   supabase/sql/paste_multi_user_roles_phase1_step1_enum.sql
+-- first, then run this file.
 do $$
 begin
   if not exists (
@@ -18,7 +22,7 @@ begin
       and t.typname = 'app_role'
       and e.enumlabel = 'leadership'
   ) then
-    alter type public.app_role add value 'leadership';
+    raise exception 'Enum value leadership is missing. Run paste_multi_user_roles_phase1_step1_enum.sql first, then rerun this file.';
   end if;
 end
 $$;

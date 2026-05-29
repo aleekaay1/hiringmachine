@@ -1,0 +1,36 @@
+Shared temporary password for all staff accounts:
+PazTemp#2026
+
+Admins
+- reginald_bentajado@globelife-paz.com
+- hr.licensing@globelife-paz.com
+
+Leadership
+- akram@globelife-paz.com
+- walid@globelife-paz.com
+- nicolas@globelife-paz.com
+- nita@globelife-paz.com
+- raman@globelife-paz.com
+- devanshi@globelife-paz.com
+- emilio@globelife-paz.com
+
+Recruiters
+- gamar_baghirli@globelife-paz.com
+- herlyn_desingano@globelife-paz.com
+- hasaan_khalid@globelife-paz.com
+- jonalyn_manuel@globelife-paz.com
+
+Supabase creation checklist
+1. Authentication -> Users -> Add user
+2. Paste email from above
+3. Use the shared temporary password above
+4. Mark email as confirmed
+5. Save
+
+After users are created:
+- Enable Google provider in Supabase Authentication -> Providers -> Google
+- Add your site URL and callback URL:
+  https://<your-project-ref>.supabase.co/auth/v1/callback
+- Run:
+  supabase/sql/paste_multi_user_roles_phase1_step1_enum.sql
+  supabase/sql/paste_multi_user_roles_phase1.sql

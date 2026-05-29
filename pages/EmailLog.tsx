@@ -19,6 +19,7 @@ import {
 } from '../services/wednesdayCampaignRuns';
 import { Candidate } from '../types';
 import { Download, Mail, RefreshCw, Search } from 'lucide-react';
+import { signInWithGoogle } from '../services/googleAuth';
 
 type EmailSendLogRow = {
   id: string;
@@ -305,6 +306,7 @@ const EmailLog: React.FC = () => {
   const [email, setEmail] = useState('admin@globelife-paz.com');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [rows, setRows] = useState<EmailSendLogRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -541,6 +543,14 @@ const EmailLog: React.FC = () => {
       return;
     }
     setIsAuthenticated(true);
+  };
+
+  const handleGoogleLogin = async () => {
+    setAuthError(null);
+    setGoogleLoading(true);
+    const { error } = await signInWithGoogle('/email-log');
+    if (error) setAuthError(error);
+    setGoogleLoading(false);
   };
 
   const filtered = useMemo(() => {
@@ -952,6 +962,17 @@ const EmailLog: React.FC = () => {
             />
             <Button fullWidth type="submit">
               Sign in
+            </Button>
+            <div className="relative py-1">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-[#d9e9fb]" />
+              </div>
+              <div className="relative flex justify-center text-[10px] uppercase tracking-wide text-[#95a6bd]">
+                <span className="bg-white px-2">or</span>
+              </div>
+            </div>
+            <Button fullWidth type="button" variant="outline" onClick={() => void handleGoogleLogin()} disabled={googleLoading}>
+              {googleLoading ? 'Redirecting...' : 'Continue with Google'}
             </Button>
             {authError && <p className="text-sm text-red-600 text-center">{authError}</p>}
           </form>

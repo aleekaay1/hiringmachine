@@ -16,6 +16,7 @@ import {
 } from '../services/liveSessionPipelineSync';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { ChevronDown, ChevronRight, RefreshCw, Users, Video } from 'lucide-react';
+import { signInWithGoogle } from '../services/googleAuth';
 
 const EM_DASH = '\u2014';
 const MIDDLE_DOT = '\u00B7';
@@ -77,6 +78,7 @@ const LiveSessionsDashboard: React.FC = () => {
   const [email, setEmail] = useState('admin@globelife-paz.com');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<LiveSessionsDashboardPayload | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -153,6 +155,14 @@ const LiveSessionsDashboard: React.FC = () => {
     setIsAuthenticated(true);
   };
 
+  const handleGoogleLogin = async () => {
+    setAuthError(null);
+    setGoogleLoading(true);
+    const { error } = await signInWithGoogle('/live-sessions');
+    if (error) setAuthError(error);
+    setGoogleLoading(false);
+  };
+
   const handleSyncPipeline = async () => {
     if (!data) return;
     setSyncError(null);
@@ -202,6 +212,17 @@ const LiveSessionsDashboard: React.FC = () => {
               className="w-full px-4 py-2.5 rounded-2xl border border-[#cfe3f9]"
             />
             <Button fullWidth type="submit">Sign in</Button>
+            <div className="relative py-1">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-[#d9e9fb]" />
+              </div>
+              <div className="relative flex justify-center text-[10px] uppercase tracking-wide text-[#95a6bd]">
+                <span className="bg-white px-2">or</span>
+              </div>
+            </div>
+            <Button fullWidth type="button" variant="outline" onClick={() => void handleGoogleLogin()} disabled={googleLoading}>
+              {googleLoading ? 'Redirecting...' : 'Continue with Google'}
+            </Button>
             {authError && <p className="text-sm text-red-600 text-center">{authError}</p>}
           </form>
         </div>

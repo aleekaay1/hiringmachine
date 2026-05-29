@@ -38,6 +38,7 @@ import { canAccessSection, getCurrentUserProfile, listAllUserProfiles, type AppR
 import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { hasResumeOrLinkedInMaterial } from '../services/linkedinUrl';
 import { listSourceCandidateIdsInPipeline, sendCandidatesToPipelineFromAdmin } from '../services/pipelineService';
+import { signInWithGoogle } from '../services/googleAuth';
 
 const SUGGESTED_TAGS = ['Strong fit', 'Follow up', 'Licensing needed', 'High potential', 'Second interview', 'Offer extended'];
 
@@ -122,6 +123,7 @@ const AdminDashboard: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [sendingToPipeline, setSendingToPipeline] = useState(false);
   const [showAnswers, setShowAnswers] = useState(false);
@@ -386,6 +388,14 @@ const AdminDashboard: React.FC = () => {
       console.error(err);
       setAuthError('Unable to log in. Please try again.');
     }
+  };
+
+  const handleGoogleLogin = async () => {
+    setAuthError(null);
+    setGoogleLoading(true);
+    const { error } = await signInWithGoogle('/admin');
+    if (error) setAuthError(error);
+    setGoogleLoading(false);
   };
 
   const handleLogout = async () => {
@@ -1143,6 +1153,17 @@ const AdminDashboard: React.FC = () => {
               />
             </div>
             <Button fullWidth type="submit">Login</Button>
+            <div className="relative py-1">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-gray-200" />
+              </div>
+              <div className="relative flex justify-center text-[10px] uppercase tracking-wide text-gray-400">
+                <span className="bg-white px-2">or</span>
+              </div>
+            </div>
+            <Button fullWidth type="button" variant="outline" onClick={() => void handleGoogleLogin()} disabled={googleLoading}>
+              {googleLoading ? 'Redirecting...' : 'Continue with Google'}
+            </Button>
             {authError && (
               <p className="text-xs text-center text-red-500 mt-2">{authError}</p>
             )}

@@ -18,7 +18,7 @@ begin
       and t.typname = 'app_role'
       and e.enumlabel = 'leadership'
   ) then
-    alter type public.app_role add value 'leadership';
+    raise exception 'Enum value leadership is missing. Run 20260529_220700_add_leadership_role_enum.sql first.';
   end if;
 end
 $$;

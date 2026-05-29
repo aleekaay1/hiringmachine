@@ -50,6 +50,7 @@ import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { sendEmail } from '../services/emailService';
 import { normalizeMessageIdForHeader, subjectForReply } from '../services/inboundEmailFormat';
 import { appendEmailSignatureToHtml } from '../services/emailSignatureHtml';
+import { signInWithGoogle } from '../services/googleAuth';
 import { ChevronDown, ChevronUp, ExternalLink, FileUp, Logs, Maximize2, Minimize2, Phone, RefreshCw, Search, Settings2, Trash2, Volume2, X } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
@@ -369,6 +370,7 @@ const Pipeline: React.FC = () => {
   const [email, setEmail] = useState('admin@globelife-paz.com');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [googleLoading, setGoogleLoading] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -1250,6 +1252,29 @@ const Pipeline: React.FC = () => {
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-[#cfe3f9]" />
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-[#cfe3f9]" />
             <Button fullWidth type="submit">Sign in</Button>
+            <div className="relative py-1">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-[#d9e9fb]" />
+              </div>
+              <div className="relative flex justify-center text-[10px] uppercase tracking-wide text-[#95a6bd]">
+                <span className="bg-white px-2">or</span>
+              </div>
+            </div>
+            <Button
+              fullWidth
+              type="button"
+              variant="outline"
+              onClick={async () => {
+                setAuthError(null);
+                setGoogleLoading(true);
+                const { error } = await signInWithGoogle('/pipeline');
+                if (error) setAuthError(error);
+                setGoogleLoading(false);
+              }}
+              disabled={googleLoading}
+            >
+              {googleLoading ? 'Redirecting...' : 'Continue with Google'}
+            </Button>
             {authError && <p className="text-sm text-red-600 text-center">{authError}</p>}
           </form>
         </div>
