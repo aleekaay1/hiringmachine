@@ -1,5 +1,6 @@
 import React from 'react';
-import { RefreshCw } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { Moon, RefreshCw, Sun } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import {
@@ -10,6 +11,9 @@ import {
 import { supabase } from '../services/supabaseClient';
 
 type Preset = 'this_week' | 'last_7_days' | 'all';
+type WorkspaceThemeMode = 'dark' | 'light';
+
+const WORKSPACE_THEME_STORAGE_KEY = 'pipeline-recruiter-workspace-theme';
 
 function isoStartOfDay(value: string): string | null {
   if (!value) return null;
@@ -53,6 +57,20 @@ const PipelinePerformance: React.FC = () => {
   const [emailReplies, setEmailReplies] = React.useState(0);
   const [bookedCount, setBookedCount] = React.useState(0);
   const [weeklyRows, setWeeklyRows] = React.useState<Array<{ week: string; calls: number; emails: number; booked: number }>>([]);
+  const [themeMode, setThemeMode] = React.useState<WorkspaceThemeMode>('dark');
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = window.localStorage.getItem(WORKSPACE_THEME_STORAGE_KEY);
+    if (stored === 'dark' || stored === 'light') {
+      setThemeMode(stored);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(WORKSPACE_THEME_STORAGE_KEY, themeMode);
+  }, [themeMode]);
 
   React.useEffect(() => {
     const now = new Date();
@@ -140,79 +158,205 @@ const PipelinePerformance: React.FC = () => {
     void loadMetrics();
   }, [loadMetrics]);
 
+  const isDark = themeMode === 'dark';
+  const tone = React.useMemo(
+    () => ({
+      page: 'relative overflow-hidden rounded-[30px] border p-4 md:p-5 shadow-[0_35px_100px_-45px_rgba(0,0,0,0.7)]',
+      pageTheme: isDark
+        ? 'border-white/10 bg-[#070b18] text-slate-100'
+        : 'border-[#d4e4f7]/70 bg-[#f4f8ff]/80 text-slate-900',
+      orbA: isDark
+        ? 'from-violet-500/30 via-indigo-500/10 to-transparent'
+        : 'from-violet-300/35 via-indigo-200/20 to-transparent',
+      orbB: isDark
+        ? 'from-cyan-500/25 via-sky-500/10 to-transparent'
+        : 'from-cyan-300/35 via-sky-200/25 to-transparent',
+      orbC: isDark
+        ? 'from-fuchsia-500/15 via-blue-500/10 to-transparent'
+        : 'from-fuchsia-200/35 via-blue-200/20 to-transparent',
+      glassPanel: isDark
+        ? 'border-white/12 bg-white/[0.045] backdrop-blur-xl shadow-[0_24px_60px_-42px_rgba(16,24,40,0.9)]'
+        : 'border-white/70 bg-white/70 backdrop-blur-xl shadow-[0_22px_48px_-38px_rgba(37,99,235,0.45)]',
+      panelMuted: isDark ? 'text-slate-300' : 'text-[#365274]',
+      panelLabel: isDark ? 'text-slate-400' : 'text-[#4b6d95]',
+      panelTitle: isDark ? 'text-white' : 'text-[#0B1B34]',
+      input: isDark
+        ? 'border-white/15 bg-white/5 text-slate-100 placeholder:text-slate-500'
+        : 'border-[#bfd6ee] bg-white/70 text-[#13243f] placeholder:text-[#7392b8]',
+      subtle: isDark ? 'bg-white/5 border-white/10' : 'bg-white/80 border-[#cde0f4]',
+      actionButton: isDark
+        ? 'border-white/20 bg-white/10 text-white hover:bg-white/15'
+        : 'border-[#bad4ee] bg-white/75 text-[#0B1B34] hover:bg-white',
+      progressTrack: isDark ? 'bg-white/10' : 'bg-[#e8f1fb]',
+    }),
+    [isDark],
+  );
+
   return (
     <PipelineAuthShell
       title="Recruiter Performance"
       subtitle="Sign in to view your KPI metrics"
       redirectPath="/pipeline/performance"
     >
-      <div className="mx-auto w-full max-w-[1280px] p-4 space-y-4">
-        <div className="rounded-3xl border border-[#d5e5f8] bg-white/80 backdrop-blur-xl p-4 shadow-[0_18px_45px_-28px_rgba(11,27,52,0.35)]">
+      <div className={`mx-auto w-full max-w-[1320px] ${tone.page} ${tone.pageTheme}`}>
+        <div className={`pointer-events-none absolute -top-24 left-[-10%] h-72 w-72 rounded-full bg-gradient-to-br blur-3xl ${tone.orbA}`} />
+        <div className={`pointer-events-none absolute top-40 right-[-8%] h-80 w-80 rounded-full bg-gradient-to-br blur-3xl ${tone.orbB}`} />
+        <div className={`pointer-events-none absolute bottom-[-6rem] left-1/3 h-72 w-72 rounded-full bg-gradient-to-tr blur-3xl ${tone.orbC}`} />
+
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35 }}
+          className={`relative rounded-3xl border p-4 ${tone.glassPanel}`}
+        >
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h1 className="text-lg font-semibold text-[#0B1B34]">Recruiter Performance</h1>
-              <p className="text-xs text-[#365274]">Calls, outbound email, replies, and booked outcomes by date range.</p>
+              <p className={`text-[10px] uppercase tracking-[0.22em] ${tone.panelLabel}`}>Pipeline recruiter studio</p>
+              <h1 className={`text-lg font-semibold ${tone.panelTitle}`}>Recruiter Performance</h1>
+              <p className={`text-xs ${tone.panelMuted}`}>Calls, outbound email, replies, and booked outcomes by date range.</p>
             </div>
-            <Button variant="outline" className="!min-h-0 h-9 px-3 text-xs" onClick={() => void loadMetrics()} disabled={loading}>
-              <RefreshCw size={14} className={loading ? 'mr-1 animate-spin' : 'mr-1'} />
-              Refresh
-            </Button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setThemeMode((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+                className={`inline-flex items-center gap-1 rounded-xl border px-3 py-2 text-xs font-semibold ${tone.actionButton}`}
+                aria-label="Toggle dark and light mode"
+              >
+                {isDark ? <Sun size={13} /> : <Moon size={13} />}
+                {isDark ? 'Light mode' : 'Dark mode'}
+              </button>
+              <Button
+                variant="outline"
+                className={`!min-h-0 h-9 px-3 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
+                onClick={() => void loadMetrics()}
+                disabled={loading}
+              >
+                <RefreshCw size={14} className={loading ? 'mr-1 animate-spin' : 'mr-1'} />
+                Refresh
+              </Button>
+            </div>
           </div>
-        </div>
+        </motion.div>
 
-        <div className="rounded-2xl border border-[#d8e8fa] bg-white p-4 space-y-3">
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.05 }}
+          className={`mt-4 rounded-2xl border p-4 ${tone.glassPanel}`}
+        >
+          <p className={`mb-2 text-[10px] uppercase tracking-[0.18em] ${tone.panelLabel}`}>Date range controls</p>
           <div className="flex flex-wrap items-end gap-2">
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setPreset('this_week')} className={`rounded-lg border px-3 py-1.5 text-xs ${preset === 'this_week' ? 'border-[#8cbbe8] bg-[#e8f3ff] text-[#0B1B34]' : 'border-slate-300 text-slate-600'}`}>This week</button>
-              <button type="button" onClick={() => setPreset('last_7_days')} className={`rounded-lg border px-3 py-1.5 text-xs ${preset === 'last_7_days' ? 'border-[#8cbbe8] bg-[#e8f3ff] text-[#0B1B34]' : 'border-slate-300 text-slate-600'}`}>Last 7 days</button>
-              <button type="button" onClick={() => setPreset('all')} className={`rounded-lg border px-3 py-1.5 text-xs ${preset === 'all' ? 'border-[#8cbbe8] bg-[#e8f3ff] text-[#0B1B34]' : 'border-slate-300 text-slate-600'}`}>All weeks</button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setPreset('this_week')}
+                className={`rounded-lg border px-3 py-1.5 text-xs ${
+                  preset === 'this_week'
+                    ? (isDark ? 'border-cyan-300/45 bg-cyan-300/18 text-cyan-100' : 'border-[#9dc6ef] bg-[#e8f3ff] text-[#0B1B34]')
+                    : tone.input
+                }`}
+              >
+                This week
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreset('last_7_days')}
+                className={`rounded-lg border px-3 py-1.5 text-xs ${
+                  preset === 'last_7_days'
+                    ? (isDark ? 'border-cyan-300/45 bg-cyan-300/18 text-cyan-100' : 'border-[#9dc6ef] bg-[#e8f3ff] text-[#0B1B34]')
+                    : tone.input
+                }`}
+              >
+                Last 7 days
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreset('all')}
+                className={`rounded-lg border px-3 py-1.5 text-xs ${
+                  preset === 'all'
+                    ? (isDark ? 'border-cyan-300/45 bg-cyan-300/18 text-cyan-100' : 'border-[#9dc6ef] bg-[#e8f3ff] text-[#0B1B34]')
+                    : tone.input
+                }`}
+              >
+                All weeks
+              </button>
             </div>
-            <label className="text-xs text-[#365274]">
+            <label className={`text-xs ${tone.panelMuted}`}>
               From
-              <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} disabled={preset === 'all'} className="ml-2 rounded-lg border border-[#c7ddf5] px-2 py-1.5 text-xs" />
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                disabled={preset === 'all'}
+                className={`ml-2 rounded-lg border px-2 py-1.5 text-xs ${tone.input}`}
+              />
             </label>
-            <label className="text-xs text-[#365274]">
+            <label className={`text-xs ${tone.panelMuted}`}>
               To
-              <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} disabled={preset === 'all'} className="ml-2 rounded-lg border border-[#c7ddf5] px-2 py-1.5 text-xs" />
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                disabled={preset === 'all'}
+                className={`ml-2 rounded-lg border px-2 py-1.5 text-xs ${tone.input}`}
+              />
             </label>
           </div>
-          {error && <p className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">{error}</p>}
-        </div>
+          {error && (
+            <p className={`mt-3 rounded-lg border px-2 py-1 text-xs ${isDark ? 'border-red-300/40 bg-red-500/12 text-red-200' : 'border-red-200 bg-red-50 text-red-700'}`}>
+              {error}
+            </p>
+          )}
+        </motion.div>
 
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-2xl border border-[#d8e8fa] bg-white p-4">
-            <p className="text-xs text-[#4c6c92]">Calls made</p>
-            <p className="text-2xl font-semibold text-[#0B1B34]">{callsMade}</p>
+        <motion.div
+          initial={{ opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45, delay: 0.1 }}
+          className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4"
+        >
+          <div className={`rounded-2xl border p-4 ${tone.glassPanel} ${tone.subtle}`}>
+            <p className={`text-[11px] uppercase tracking-wide ${tone.panelLabel}`}>Calls made</p>
+            <p className={`text-2xl font-semibold ${tone.panelTitle}`}>{callsMade}</p>
+            <div className={`mt-2 h-1.5 rounded-full ${tone.progressTrack}`} />
           </div>
-          <div className="rounded-2xl border border-[#d8e8fa] bg-white p-4">
-            <p className="text-xs text-[#4c6c92]">Emails sent</p>
-            <p className="text-2xl font-semibold text-[#0B1B34]">{emailsSent}</p>
+          <div className={`rounded-2xl border p-4 ${tone.glassPanel} ${tone.subtle}`}>
+            <p className={`text-[11px] uppercase tracking-wide ${tone.panelLabel}`}>Emails sent</p>
+            <p className={`text-2xl font-semibold ${tone.panelTitle}`}>{emailsSent}</p>
+            <div className={`mt-2 h-1.5 rounded-full ${tone.progressTrack}`} />
           </div>
-          <div className="rounded-2xl border border-[#d8e8fa] bg-white p-4">
-            <p className="text-xs text-[#4c6c92]">Email replies</p>
-            <p className="text-2xl font-semibold text-[#0B1B34]">{emailReplies}</p>
+          <div className={`rounded-2xl border p-4 ${tone.glassPanel} ${tone.subtle}`}>
+            <p className={`text-[11px] uppercase tracking-wide ${tone.panelLabel}`}>Email replies</p>
+            <p className={`text-2xl font-semibold ${tone.panelTitle}`}>{emailReplies}</p>
+            <div className={`mt-2 h-1.5 rounded-full ${tone.progressTrack}`} />
           </div>
-          <div className="rounded-2xl border border-[#d8e8fa] bg-white p-4">
-            <p className="text-xs text-[#4c6c92]">Booked</p>
-            <p className="text-2xl font-semibold text-[#0B1B34]">{bookedCount}</p>
+          <div className={`rounded-2xl border p-4 ${tone.glassPanel} ${tone.subtle}`}>
+            <p className={`text-[11px] uppercase tracking-wide ${tone.panelLabel}`}>Booked</p>
+            <p className={`text-2xl font-semibold ${tone.panelTitle}`}>{bookedCount}</p>
+            <div className={`mt-2 h-1.5 rounded-full ${tone.progressTrack}`} />
           </div>
-        </div>
+        </motion.div>
 
         {preset !== 'all' && (
-          <div className="rounded-2xl border border-[#d8e8fa] bg-white p-4">
-            <p className="text-sm font-semibold text-[#0B1B34] mb-2">Weekly totals</p>
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.12 }}
+            className={`mt-4 rounded-2xl border p-4 ${tone.glassPanel}`}
+          >
+            <p className={`mb-2 text-sm font-semibold ${tone.panelTitle}`}>Weekly totals</p>
             <div className="space-y-2">
               {weeklyRows.map((row) => (
-                <div key={row.week} className="rounded-xl border border-slate-200 bg-[#f8fbff] px-3 py-2 text-xs flex flex-wrap items-center justify-between gap-2">
-                  <p className="font-semibold text-[#0B1B34]">{row.week}</p>
-                  <p className="text-[#365274]">Calls: {row.calls}</p>
-                  <p className="text-[#365274]">Emails: {row.emails}</p>
-                  <p className="text-[#365274]">Booked: {row.booked}</p>
+                <div key={row.week} className={`rounded-xl border px-3 py-2 text-xs flex flex-wrap items-center justify-between gap-2 ${tone.subtle}`}>
+                  <p className={`font-semibold ${tone.panelTitle}`}>{row.week}</p>
+                  <p className={tone.panelMuted}>Calls: {row.calls}</p>
+                  <p className={tone.panelMuted}>Emails: {row.emails}</p>
+                  <p className={tone.panelMuted}>Booked: {row.booked}</p>
                 </div>
               ))}
-              {!weeklyRows.length && <p className="text-xs text-slate-500">No weekly data in selected range.</p>}
+              {!weeklyRows.length && <p className={`text-xs ${tone.panelMuted}`}>No weekly data in selected range.</p>}
             </div>
-          </div>
+          </motion.div>
         )}
       </div>
     </PipelineAuthShell>

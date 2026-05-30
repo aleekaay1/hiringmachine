@@ -1,5 +1,6 @@
 import React from 'react';
-import { FileUp, RefreshCw } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { FileUp, Moon, RefreshCw, Sun } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import {
@@ -12,6 +13,9 @@ import {
 } from '../services/pipelineService';
 import { supabase } from '../services/supabaseClient';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
+
+type WorkspaceThemeMode = 'dark' | 'light';
+const WORKSPACE_THEME_STORAGE_KEY = 'pipeline-recruiter-workspace-theme';
 
 function stageLabel(stage: PipelineUploadProgress['stage']): string {
   switch (stage) {
@@ -45,6 +49,20 @@ const PipelineUploadsWorkspace: React.FC = () => {
   const [savingTarget, setSavingTarget] = React.useState(false);
   const [progressByIndex, setProgressByIndex] = React.useState<Record<number, PipelineUploadProgress>>({});
   const [candidates, setCandidates] = React.useState<PipelineCandidate[]>([]);
+  const [themeMode, setThemeMode] = React.useState<WorkspaceThemeMode>('dark');
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = window.localStorage.getItem(WORKSPACE_THEME_STORAGE_KEY);
+    if (stored === 'dark' || stored === 'light') {
+      setThemeMode(stored);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(WORKSPACE_THEME_STORAGE_KEY, themeMode);
+  }, [themeMode]);
 
   const loadData = React.useCallback(async () => {
     setLoading(true);
@@ -109,6 +127,41 @@ const PipelineUploadsWorkspace: React.FC = () => {
 
   const todayIso = new Date().toISOString().slice(0, 10);
   const uploadedToday = candidates.filter((row) => row.created_at.slice(0, 10) === todayIso).length;
+  const isDark = themeMode === 'dark';
+  const tone = React.useMemo(
+    () => ({
+      page: 'relative overflow-hidden rounded-[30px] border p-4 md:p-5 shadow-[0_35px_100px_-45px_rgba(0,0,0,0.7)]',
+      pageTheme: isDark
+        ? 'border-white/10 bg-[#070b18] text-slate-100'
+        : 'border-[#d4e4f7]/70 bg-[#f4f8ff]/80 text-slate-900',
+      orbA: isDark
+        ? 'from-violet-500/30 via-indigo-500/10 to-transparent'
+        : 'from-violet-300/35 via-indigo-200/20 to-transparent',
+      orbB: isDark
+        ? 'from-cyan-500/25 via-sky-500/10 to-transparent'
+        : 'from-cyan-300/35 via-sky-200/25 to-transparent',
+      orbC: isDark
+        ? 'from-fuchsia-500/15 via-blue-500/10 to-transparent'
+        : 'from-fuchsia-200/35 via-blue-200/20 to-transparent',
+      glassPanel: isDark
+        ? 'border-white/12 bg-white/[0.045] backdrop-blur-xl shadow-[0_24px_60px_-42px_rgba(16,24,40,0.9)]'
+        : 'border-white/70 bg-white/70 backdrop-blur-xl shadow-[0_22px_48px_-38px_rgba(37,99,235,0.45)]',
+      panelMuted: isDark ? 'text-slate-300' : 'text-[#365274]',
+      panelLabel: isDark ? 'text-slate-400' : 'text-[#4b6d95]',
+      panelTitle: isDark ? 'text-white' : 'text-[#0B1B34]',
+      input: isDark
+        ? 'border-white/15 bg-white/5 text-slate-100 placeholder:text-slate-500'
+        : 'border-[#bfd6ee] bg-white/70 text-[#13243f] placeholder:text-[#7392b8]',
+      subtle: isDark ? 'bg-white/5 border-white/10' : 'bg-white/80 border-[#cde0f4]',
+      actionButton: isDark
+        ? 'border-white/20 bg-white/10 text-white hover:bg-white/15'
+        : 'border-[#bad4ee] bg-white/75 text-[#0B1B34] hover:bg-white',
+      progressTrack: isDark ? 'bg-slate-700/60' : 'bg-slate-200',
+      progressFill: isDark ? 'bg-cyan-400' : 'bg-[#005EB8]',
+      listCard: isDark ? 'border-white/10 bg-white/[0.04]' : 'border-slate-200 bg-[#f8fbff]',
+    }),
+    [isDark],
+  );
 
   return (
     <PipelineAuthShell
@@ -116,18 +169,46 @@ const PipelineUploadsWorkspace: React.FC = () => {
       subtitle="Sign in to manage recruiter uploads"
       redirectPath="/pipeline/uploads"
     >
-      <div className="mx-auto w-full max-w-[1320px] p-4 space-y-4">
-        <div className="rounded-3xl border border-[#d5e5f8] bg-white/80 backdrop-blur-xl p-4 shadow-[0_18px_45px_-28px_rgba(11,27,52,0.35)]">
-          <h1 className="text-lg font-semibold text-[#0B1B34]">Resume Upload Workspace</h1>
-          <p className="text-xs text-[#365274]">Bulk upload resumes + monitor uploaded queue for recruiter workflow.</p>
-        </div>
+      <div className={`mx-auto w-full max-w-[1320px] ${tone.page} ${tone.pageTheme}`}>
+        <div className={`pointer-events-none absolute -top-24 left-[-10%] h-72 w-72 rounded-full bg-gradient-to-br blur-3xl ${tone.orbA}`} />
+        <div className={`pointer-events-none absolute top-40 right-[-8%] h-80 w-80 rounded-full bg-gradient-to-br blur-3xl ${tone.orbB}`} />
+        <div className={`pointer-events-none absolute bottom-[-6rem] left-1/3 h-72 w-72 rounded-full bg-gradient-to-tr blur-3xl ${tone.orbC}`} />
 
-        {error && <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
-        {message && <div className="rounded-xl border border-[#cfe3f9] bg-[#f3f8ff] px-3 py-2 text-xs text-[#365274]">{message}</div>}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.35 }}
+          className={`relative rounded-3xl border p-4 ${tone.glassPanel}`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className={`text-[10px] uppercase tracking-[0.22em] ${tone.panelLabel}`}>Pipeline recruiter studio</p>
+              <h1 className={`text-lg font-semibold ${tone.panelTitle}`}>Resume Upload Workspace</h1>
+              <p className={`text-xs ${tone.panelMuted}`}>Bulk upload resumes + monitor uploaded queue for recruiter workflow.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setThemeMode((prev) => (prev === 'dark' ? 'light' : 'dark'))}
+              className={`inline-flex items-center gap-1 rounded-xl border px-3 py-2 text-xs font-semibold ${tone.actionButton}`}
+              aria-label="Toggle dark and light mode"
+            >
+              {isDark ? <Sun size={13} /> : <Moon size={13} />}
+              {isDark ? 'Light mode' : 'Dark mode'}
+            </button>
+          </div>
+        </motion.div>
 
-        <div className="grid gap-4 xl:grid-cols-[380px_1fr]">
-          <section className="rounded-2xl border border-[#d8e8fa] bg-white p-4 space-y-3">
-            <label className="inline-flex items-center gap-2 rounded-xl border border-[#b8d2ef] bg-white px-3 py-2 text-xs cursor-pointer hover:bg-[#f2f8ff] text-[#0B1B34]">
+        {error && <div className={`mt-4 rounded-xl border px-3 py-2 text-sm ${isDark ? 'border-red-300/40 bg-red-500/12 text-red-200' : 'border-red-200 bg-red-50 text-red-700'}`}>{error}</div>}
+        {message && <div className={`mt-4 rounded-xl border px-3 py-2 text-xs ${isDark ? 'border-cyan-300/30 bg-cyan-500/10 text-cyan-100' : 'border-[#cfe3f9] bg-[#f3f8ff] text-[#365274]'}`}>{message}</div>}
+
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, delay: 0.05 }}
+          className="mt-4 grid gap-4 xl:grid-cols-[380px_1fr]"
+        >
+          <section className={`rounded-2xl border p-4 space-y-3 ${tone.glassPanel}`}>
+            <label className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs cursor-pointer ${tone.actionButton}`}>
               <FileUp size={14} />
               {uploading ? 'Uploading...' : 'Bulk upload resumes'}
               <input
@@ -140,11 +221,11 @@ const PipelineUploadsWorkspace: React.FC = () => {
               />
             </label>
 
-            <div className="rounded-xl border border-[#dce9f8] bg-[#f8fbff] p-3 space-y-2">
-              <p className="text-xs font-semibold text-[#0B1B34]">Daily upload target</p>
+            <div className={`rounded-xl border p-3 space-y-2 ${tone.subtle}`}>
+              <p className={`text-xs font-semibold ${tone.panelTitle}`}>Daily upload target</p>
               <div className="flex items-center gap-2">
                 {[100, 150].map((preset) => (
-                  <button key={preset} type="button" onClick={() => setDailyTarget(preset)} className="rounded-lg border border-[#c7ddf5] bg-white px-2 py-1 text-xs text-[#365274]">{preset}</button>
+                  <button key={preset} type="button" onClick={() => setDailyTarget(preset)} className={`rounded-lg border px-2 py-1 text-xs ${tone.input}`}>{preset}</button>
                 ))}
                 <input
                   type="number"
@@ -152,25 +233,30 @@ const PipelineUploadsWorkspace: React.FC = () => {
                   placeholder="Custom"
                   value={dailyTarget}
                   onChange={(e) => setDailyTarget(e.target.value ? Number(e.target.value) : '')}
-                  className="w-full rounded-lg border border-[#c7ddf5] px-2 py-1.5 text-xs"
+                  className={`w-full rounded-lg border px-2 py-1.5 text-xs ${tone.input}`}
                 />
               </div>
-              <Button variant="outline" className="!min-h-0 h-8 text-xs" onClick={() => void saveTarget()} disabled={savingTarget}>
+              <Button
+                variant="outline"
+                className={`!min-h-0 h-8 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
+                onClick={() => void saveTarget()}
+                disabled={savingTarget}
+              >
                 {savingTarget ? 'Saving...' : 'Save target'}
               </Button>
-              <p className="text-[11px] text-[#4b6f98]">Uploaded today: {uploadedToday} {dailyTarget !== '' ? ` / target ${dailyTarget}` : ''}</p>
+              <p className={`text-[11px] ${tone.panelLabel}`}>Uploaded today: {uploadedToday} {dailyTarget !== '' ? ` / target ${dailyTarget}` : ''}</p>
             </div>
 
             {!!Object.keys(progressByIndex).length && (
               <div className="space-y-1">
                 {Object.values(progressByIndex).sort((a, b) => a.index - b.index).map((progress) => (
-                  <div key={`${progress.index}-${progress.fileName}`} className="rounded-lg border border-slate-200 bg-white px-2 py-2">
+                  <div key={`${progress.index}-${progress.fileName}`} className={`rounded-lg border px-2 py-2 ${tone.listCard}`}>
                     <div className="flex items-center justify-between gap-2">
-                      <p className="text-[11px] text-slate-700 truncate">{progress.fileName}</p>
-                      <span className="text-[10px] text-slate-500">{stageLabel(progress.stage)}</span>
+                      <p className={`text-[11px] truncate ${tone.panelMuted}`}>{progress.fileName}</p>
+                      <span className={`text-[10px] ${tone.panelLabel}`}>{stageLabel(progress.stage)}</span>
                     </div>
-                    <div className="mt-1 h-1.5 rounded-full bg-slate-200 overflow-hidden">
-                      <div className="h-full bg-[#005EB8]" style={{ width: `${Math.max(0, Math.min(100, progress.percent))}%` }} />
+                    <div className={`mt-1 h-1.5 rounded-full overflow-hidden ${tone.progressTrack}`}>
+                      <div className={`h-full ${tone.progressFill}`} style={{ width: `${Math.max(0, Math.min(100, progress.percent))}%` }} />
                     </div>
                   </div>
                 ))}
@@ -178,27 +264,32 @@ const PipelineUploadsWorkspace: React.FC = () => {
             )}
           </section>
 
-          <section className="rounded-2xl border border-[#d8e8fa] bg-white p-4">
+          <section className={`rounded-2xl border p-4 ${tone.glassPanel}`}>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-semibold text-[#0B1B34]">Uploaded list summary</p>
-              <Button variant="outline" className="!min-h-0 h-8 px-3 text-xs" onClick={() => void loadData()} disabled={loading}>
+              <p className={`text-sm font-semibold ${tone.panelTitle}`}>Uploaded list summary</p>
+              <Button
+                variant="outline"
+                className={`!min-h-0 h-8 px-3 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
+                onClick={() => void loadData()}
+                disabled={loading}
+              >
                 <RefreshCw size={13} className={loading ? 'mr-1 animate-spin' : 'mr-1'} />
                 Refresh
               </Button>
             </div>
             <div className="space-y-1.5 max-h-[72vh] overflow-auto">
               {candidates.map((candidate) => (
-                <div key={candidate.id} className="rounded-lg border border-slate-200 bg-[#f8fbff] px-3 py-2">
-                  <p className="text-xs font-semibold text-slate-800">{candidate.full_name || 'Unknown Candidate'}</p>
-                  <p className="text-[10px] text-slate-500">
+                <div key={candidate.id} className={`rounded-lg border px-3 py-2 ${tone.listCard}`}>
+                  <p className={`text-xs font-semibold ${tone.panelTitle}`}>{candidate.full_name || 'Unknown Candidate'}</p>
+                  <p className={`text-[10px] ${tone.panelLabel}`}>
                     {candidate.phone || candidate.email || 'No contact info'} · {formatDateTimeCanadaEastern(candidate.created_at)}
                   </p>
                 </div>
               ))}
-              {!candidates.length && <p className="text-xs text-slate-500">No uploads found yet.</p>}
+              {!candidates.length && <p className={`text-xs ${tone.panelLabel}`}>No uploads found yet.</p>}
             </div>
           </section>
-        </div>
+        </motion.div>
       </div>
     </PipelineAuthShell>
   );
