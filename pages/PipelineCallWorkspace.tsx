@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ExternalLink, Phone, RefreshCw } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, Phone, RefreshCw } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import {
@@ -25,6 +25,7 @@ import {
 import {
   PIPELINE_BOOKED_SUBTYPES,
   PIPELINE_CALL_DISPOSITIONS,
+  journeyStageForCallDisposition,
   type PipelineBookedSubtype,
   type PipelineCallDisposition,
 } from '../services/pipelineCallDispositions';
@@ -51,6 +52,22 @@ type CallbackRow = {
 };
 
 type CandidateBookedOutcomeMap = Map<string, BookedOutcomeBucket>;
+
+const TERMINAL_EXCLUDED_DISPOSITIONS = new Set(['not interested', 'do not call']);
+const RETRY_PRIORITY_ORDER: Record<string, number> = {
+  'callback requested': 0,
+  'no answer': 1,
+  'voicemail left': 2,
+  'busy / line busy': 3,
+};
+
+function normalizeDispositionLabel(value: string | null | undefined): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+function dispositionIsRetry(label: string): boolean {
+  return Object.prototype.hasOwnProperty.call(RETRY_PRIORITY_ORDER, label);
+}
 
 function latestRecordByCandidate(records: PipelineCallRecord[]): Map<string, PipelineCallRecord> {
   const map = new Map<string, PipelineCallRecord>();
@@ -81,6 +98,7 @@ const PipelineCallWorkspace: React.FC = () => {
   const [queueFilter, setQueueFilter] = React.useState<QueueFilter>('all');
   const [agentExtension, setAgentExtension] = React.useState('');
   const [dailyUploadTarget, setDailyUploadTarget] = React.useState<number | ''>('');
+  const [dailyWebinarBookingTarget, setDailyWebinarBookingTarget] = React.useState<number | ''>('');
   const [selectedCandidateId, setSelectedCandidateId] = React.useState<string | null>(null);
   const [disposition, setDisposition] = React.useState<PipelineCallDisposition | ''>('');
   const [bookedSubtype, setBookedSubtype] = React.useState<PipelineBookedSubtype | ''>('');
@@ -97,7 +115,6 @@ const PipelineCallWorkspace: React.FC = () => {
   const [records, setRecords] = React.useState<PipelineCallRecord[]>([]);
   const [todaysCallCount, setTodaysCallCount] = React.useState(0);
   const [bookedOutcomeByCandidate, setBookedOutcomeByCandidate] = React.useState<CandidateBookedOutcomeMap>(new Map());
-  const [passSkippedCandidateIds, setPassSkippedCandidateIds] = React.useState<string[]>([]);
 
   const loadWorkspace = React.useCallback(async () => {
     setLoading(true);
@@ -112,12 +129,11 @@ const PipelineCallWorkspace: React.FC = () => {
       const uid = auth.user?.id ?? null;
       setAgentExtension(settings?.extension || '');
       setDailyUploadTarget(settings?.daily_upload_target ?? '');
-      const openRows = candidateRows
-        .filter((c) => String(c.status || '').toLowerCase() !== 'closed')
-        .sort((a, b) => new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime());
-      setCandidates(openRows);
+      setDailyWebinarBookingTarget(settings?.daily_webinar_booking_target ?? '');
+      const scopedRows = [...candidateRows].sort((a, b) => new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime());
+      setCandidates(scopedRows);
 
-      const candidateIds = openRows.map((c) => c.id);
+      const candidateIds = scopedRows.map((c) => c.id);
       if (candidateIds.length === 0) {
         setResumesByCandidate(new Map());
         setRecords([]);
@@ -157,7 +173,7 @@ const PipelineCallWorkspace: React.FC = () => {
         const rowsByEmail = buildWebinarRowsByEmail(scopedRows);
         const latest = latestRecordByCandidate(callRecordRows);
         const bookedMap = new Map<string, BookedOutcomeBucket>();
-        for (const candidate of openRows) {
+        for (const candidate of scopedRows) {
           const latestRecord = latest.get(candidate.id);
           if (!latestRecord || String(latestRecord.disposition || '').toLowerCase() !== 'booked') continue;
           const meta = readCallRecordMeta(latestRecord);
@@ -172,8 +188,8 @@ const PipelineCallWorkspace: React.FC = () => {
       } catch {
         setBookedOutcomeByCandidate(new Map());
       }
-      if (!selectedCandidateId || !openRows.some((row) => row.id === selectedCandidateId)) {
-        setSelectedCandidateId(openRows[0]?.id ?? null);
+      if (!selectedCandidateId || !scopedRows.some((row) => row.id === selectedCandidateId)) {
+        setSelectedCandidateId(scopedRows[0]?.id ?? null);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -199,16 +215,10 @@ const PipelineCallWorkspace: React.FC = () => {
     return map;
   }, [candidates, latestByCandidate]);
 
-  const baseQueue = React.useMemo(() => {
-    const now = Date.now();
-    const skipped = new Set(passSkippedCandidateIds);
-    const visible = candidates.filter((candidate) => {
-      if (queueFilter !== 'callbacks' && queueFilter !== 'booked_no_show' && queueFilter !== 'booked_didnt_watch' && skipped.has(candidate.id)) {
-        return false;
-      }
+  const filteredCandidates = React.useMemo(() => {
+    return candidates.filter((candidate) => {
       const latest = latestByCandidate.get(candidate.id);
-      if (!latest) return queueFilter === 'all';
-      const d = String(latest.disposition || '').toLowerCase();
+      const d = normalizeDispositionLabel(latest?.disposition);
       if (queueFilter === 'callbacks') {
         return d === 'callback requested' || Boolean(callbackAtByCandidate.get(candidate.id));
       }
@@ -226,26 +236,54 @@ const PipelineCallWorkspace: React.FC = () => {
       }
       return true;
     });
+  }, [candidates, queueFilter, latestByCandidate, callbackAtByCandidate, bookedOutcomeByCandidate]);
 
+  const undisposedQueue = React.useMemo(
+    () =>
+      filteredCandidates.filter(
+        (candidate) =>
+          !latestByCandidate.get(candidate.id) && normalizeDispositionLabel(candidate.status) !== 'closed',
+      ),
+    [filteredCandidates, latestByCandidate],
+  );
+
+  const retryQueue = React.useMemo(() => {
+    return filteredCandidates
+      .filter((candidate) => {
+        if (normalizeDispositionLabel(candidate.status) === 'closed') return false;
+        const latest = latestByCandidate.get(candidate.id);
+        if (!latest) return false;
+        return dispositionIsRetry(normalizeDispositionLabel(latest.disposition));
+      })
+      .sort((a, b) => {
+        const aDisposition = normalizeDispositionLabel(latestByCandidate.get(a.id)?.disposition);
+        const bDisposition = normalizeDispositionLabel(latestByCandidate.get(b.id)?.disposition);
+        const aRank = RETRY_PRIORITY_ORDER[aDisposition] ?? 99;
+        const bRank = RETRY_PRIORITY_ORDER[bDisposition] ?? 99;
+        if (aRank !== bRank) return aRank - bRank;
+        const aAt = new Date(callbackAtByCandidate.get(a.id) || '9999-12-31').getTime();
+        const bAt = new Date(callbackAtByCandidate.get(b.id) || '9999-12-31').getTime();
+        return aAt - bAt;
+      });
+  }, [filteredCandidates, latestByCandidate, callbackAtByCandidate]);
+
+  const isRetryPass = queueFilter === 'all' && undisposedQueue.length === 0 && retryQueue.length > 0;
+
+  const activeQueueRaw = React.useMemo(() => {
+    if (queueFilter === 'all') {
+      return undisposedQueue.length > 0 ? undisposedQueue : retryQueue;
+    }
     if (queueFilter === 'callbacks') {
-      return [...visible].sort((a, b) => {
+      return [...filteredCandidates]
+        .filter((candidate) => normalizeDispositionLabel(candidate.status) !== 'closed')
+        .sort((a, b) => {
         const aAt = new Date(callbackAtByCandidate.get(a.id) || '9999-12-31').getTime();
         const bAt = new Date(callbackAtByCandidate.get(b.id) || '9999-12-31').getTime();
         return aAt - bAt;
       });
     }
-
-    if (queueFilter !== 'all') return visible;
-
-    const dueCallbacks: PipelineCandidate[] = [];
-    const remaining: PipelineCandidate[] = [];
-    for (const candidate of visible) {
-      const callbackAt = callbackAtByCandidate.get(candidate.id);
-      if (callbackAt && new Date(callbackAt).getTime() <= now) dueCallbacks.push(candidate);
-      else remaining.push(candidate);
-    }
-    return [...dueCallbacks, ...remaining];
-  }, [candidates, queueFilter, latestByCandidate, passSkippedCandidateIds, callbackAtByCandidate, bookedOutcomeByCandidate]);
+    return [];
+  }, [queueFilter, undisposedQueue, retryQueue, filteredCandidates, callbackAtByCandidate]);
 
   const queueCap = React.useMemo(() => {
     if (dailyUploadTarget === '' || Number(dailyUploadTarget) <= 0) return null;
@@ -253,19 +291,32 @@ const PipelineCallWorkspace: React.FC = () => {
   }, [dailyUploadTarget, todaysCallCount]);
 
   const queueList = React.useMemo(() => {
-    if (queueCap == null) return baseQueue;
-    return baseQueue.slice(0, queueCap);
-  }, [baseQueue, queueCap]);
+    if (queueCap == null) return activeQueueRaw;
+    return activeQueueRaw.slice(0, queueCap);
+  }, [activeQueueRaw, queueCap]);
+
+  const queueActiveIds = React.useMemo(() => new Set(queueList.map((c) => c.id)), [queueList]);
+
+  const doneList = React.useMemo(() => {
+    return filteredCandidates.filter((candidate) => {
+      const latest = latestByCandidate.get(candidate.id);
+      if (!latest) return false;
+      if (queueActiveIds.has(candidate.id)) return false;
+      const d = normalizeDispositionLabel(latest.disposition);
+      if (queueFilter === 'all' && TERMINAL_EXCLUDED_DISPOSITIONS.has(d)) return true;
+      return true;
+    });
+  }, [filteredCandidates, latestByCandidate, queueActiveIds, queueFilter]);
 
   const queueStateLabel = React.useMemo(() => {
-    if (queueFilter === 'all') return 'All queue (callbacks due first)';
+    if (queueFilter === 'all') return isRetryPass ? 'Retry queue (callbacks/no answer first)' : 'Main pass queue';
     if (queueFilter === 'callbacks') return 'Callback queue';
     if (queueFilter === 'booked_no_show') return 'Booked no show (best-effort)';
     if (queueFilter === 'booked_didnt_watch') return "Booked didn't watch (best-effort)";
     if (queueFilter === 'booked') return 'Booked outcomes';
     if (queueFilter === 'not_interested') return 'Not interested / do not call';
     return 'Queue';
-  }, [queueFilter]);
+  }, [queueFilter, isRetryPass]);
 
   const queueCapStatus = React.useMemo(() => {
     if (queueCap == null) return 'No cap';
@@ -283,16 +334,25 @@ const PipelineCallWorkspace: React.FC = () => {
     if (queueCap != null && queueCap <= 0) {
       return 'Daily queue cap reached. Increase daily target or continue tomorrow.';
     }
-    if (passSkippedCandidateIds.length > 0) {
-      return 'Current pass is complete for this queue. Use "Reset pass" to review skipped candidates again.';
-    }
+    if (queueFilter === 'all' && undisposedQueue.length === 0 && retryQueue.length === 0) return 'Main pass and retry queue are complete.';
     return 'Queue is empty for selected filters/cap.';
-  }, [queueFilter, queueCap, passSkippedCandidateIds.length]);
+  }, [queueFilter, queueCap, undisposedQueue.length, retryQueue.length]);
+
+  const displayList = React.useMemo(() => {
+    const out: PipelineCandidate[] = [];
+    const seen = new Set<string>();
+    for (const row of [...queueList, ...doneList]) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      out.push(row);
+    }
+    return out;
+  }, [queueList, doneList]);
 
   const currentCandidate = React.useMemo(() => {
-    if (!queueList.length) return null;
-    return queueList.find((c) => c.id === selectedCandidateId) || queueList[0];
-  }, [queueList, selectedCandidateId]);
+    if (!displayList.length) return null;
+    return displayList.find((c) => c.id === selectedCandidateId) || queueList[0] || displayList[0];
+  }, [displayList, queueList, selectedCandidateId]);
   const currentPhoneInfo = React.useMemo(
     () => (currentCandidate ? readPipelineCandidatePhone(currentCandidate) : null),
     [currentCandidate],
@@ -308,10 +368,45 @@ const PipelineCallWorkspace: React.FC = () => {
     setPhoneMsg(null);
   }, [currentCandidate?.id, currentPhoneInfo?.effectivePhone]);
 
-  const nextUp = React.useMemo(
-    () => queueList.filter((c) => c.id !== currentCandidate?.id).slice(0, 4),
+  const currentQueueIndex = React.useMemo(
+    () => queueList.findIndex((candidate) => candidate.id === currentCandidate?.id),
     [queueList, currentCandidate?.id],
   );
+
+  const carouselCards = React.useMemo(() => {
+    if (!queueList.length) return [];
+    const fallbackIndex = currentQueueIndex >= 0 ? currentQueueIndex : 0;
+    const start = Math.max(0, fallbackIndex - 1);
+    return queueList.slice(start, start + 4);
+  }, [queueList, currentQueueIndex]);
+
+  const disposedInFilteredCount = React.useMemo(
+    () => filteredCandidates.filter((candidate) => latestByCandidate.has(candidate.id)).length,
+    [filteredCandidates, latestByCandidate],
+  );
+
+  const queueProgressPct = React.useMemo(() => {
+    if (!filteredCandidates.length) return 0;
+    return Math.min(100, Math.round((disposedInFilteredCount / filteredCandidates.length) * 100));
+  }, [disposedInFilteredCount, filteredCandidates.length]);
+
+  const kpiProgressPct = React.useMemo(() => {
+    if (dailyUploadTarget === '' || Number(dailyUploadTarget) <= 0) return 0;
+    return Math.min(100, Math.round((todaysCallCount / Number(dailyUploadTarget)) * 100));
+  }, [dailyUploadTarget, todaysCallCount]);
+
+  const bookedTodayCount = React.useMemo(() => {
+    const todayKey = new Date().toDateString();
+    return records.filter((row) => {
+      if (normalizeDispositionLabel(row.disposition) !== 'booked') return false;
+      return new Date(row.disposed_at).toDateString() === todayKey;
+    }).length;
+  }, [records]);
+
+  const bookedKpiProgressPct = React.useMemo(() => {
+    if (dailyWebinarBookingTarget === '' || Number(dailyWebinarBookingTarget) <= 0) return 0;
+    return Math.min(100, Math.round((bookedTodayCount / Number(dailyWebinarBookingTarget)) * 100));
+  }, [dailyWebinarBookingTarget, bookedTodayCount]);
 
   const callbackRows = React.useMemo<CallbackRow[]>(() => {
     const byCandidate = new Map<string, CallbackRow>();
@@ -364,6 +459,7 @@ const PipelineCallWorkspace: React.FC = () => {
       await savePipelineUserCallSettings({
         extension: agentExtension,
         dailyUploadTarget: dailyUploadTarget === '' ? null : Number(dailyUploadTarget),
+        dailyWebinarBookingTarget: dailyWebinarBookingTarget === '' ? null : Number(dailyWebinarBookingTarget),
       });
       setActionMsg('Call workspace settings saved.');
     } catch (e) {
@@ -480,9 +576,34 @@ const PipelineCallWorkspace: React.FC = () => {
       setComment('');
       setSubmitAttempted(false);
       setShowDispositionModal(false);
-      const currentId = currentCandidate.id;
-      setPassSkippedCandidateIds((prev) => (prev.includes(currentId) ? prev : [...prev, currentId]));
-      await loadWorkspace();
+      const latestSaved: PipelineCallRecord = {
+        ...saved,
+        threecx_metadata: (saved.threecx_metadata && typeof saved.threecx_metadata === 'object')
+          ? (saved.threecx_metadata as Record<string, unknown>)
+          : {},
+      };
+      setRecords((prev) => [latestSaved, ...prev.filter((row) => row.id !== latestSaved.id)]);
+      setCandidates((prev) =>
+        prev
+          .map((row) => {
+            if (row.id !== currentCandidate.id) return row;
+            const nextStatus =
+              disposition === 'Not interested' || disposition === 'Do not call'
+                ? 'closed'
+                : 'in_progress';
+            return {
+              ...row,
+              journey_stage: journeyStageForCallDisposition(disposition),
+              status: nextStatus,
+              updated_at: nowIso,
+            };
+          })
+          .filter((row) => String(row.status || '').toLowerCase() !== 'closed'),
+      );
+      if (disposition === 'Booked') {
+        setBookedOutcomeByCandidate((prev) => new Map(prev).set(currentCandidate.id, 'booked'));
+      }
+      void loadWorkspace();
       if (autoMode) {
         setSelectedCandidateId(null);
       }
@@ -530,8 +651,38 @@ const PipelineCallWorkspace: React.FC = () => {
         {actionMsg && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">{actionMsg}</div>}
 
         <div className="rounded-2xl border border-[#d8e8fa] bg-white/85 px-4 py-3">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-[#2f4f76]">
-            <span className="rounded-full bg-[#edf5ff] px-2.5 py-1 font-semibold text-[#0B1B34]">Queue: {queueList.length}</span>
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded-xl border border-[#dce9f8] bg-white p-2.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#42658d]">Queue progress</p>
+              <p className="text-xs text-[#24486f]">{disposedInFilteredCount} disposed / {filteredCandidates.length} total</p>
+              <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-[#e8f1fb]">
+                <div className="h-full rounded-full bg-[#3182ce]" style={{ width: `${queueProgressPct}%` }} />
+              </div>
+            </div>
+            <div className="rounded-xl border border-[#dce9f8] bg-white p-2.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#42658d]">Today calls KPI</p>
+              <p className="text-xs text-[#24486f]">
+                {todaysCallCount}
+                {dailyUploadTarget === '' ? ' calls' : ` / ${dailyUploadTarget} target`}
+              </p>
+              <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-[#e8f1fb]">
+                <div className="h-full rounded-full bg-emerald-500" style={{ width: `${kpiProgressPct}%` }} />
+              </div>
+            </div>
+            <div className="rounded-xl border border-[#dce9f8] bg-white p-2.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-[#42658d]">Booked KPI</p>
+              <p className="text-xs text-[#24486f]">
+                {bookedTodayCount}
+                {dailyWebinarBookingTarget === '' ? ' booked today' : ` / ${dailyWebinarBookingTarget} target`}
+              </p>
+              <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-[#e8f1fb]">
+                <div className="h-full rounded-full bg-violet-500" style={{ width: `${bookedKpiProgressPct}%` }} />
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[#2f4f76]">
+            <span className="rounded-full bg-[#edf5ff] px-2.5 py-1 font-semibold text-[#0B1B34]">Active queue: {queueList.length}</span>
+            <span className="rounded-full bg-[#f2f6fb] px-2.5 py-1 text-slate-700">Done lane: {doneList.length}</span>
             <span className="rounded-full border border-[#c7ddf5] bg-white px-2.5 py-1">Filter: {queueStateLabel}</span>
             <span className="rounded-full border border-[#c7ddf5] bg-white px-2.5 py-1">Mode: {autoMode ? 'Auto advance' : 'Manual select'}</span>
             <span className="rounded-full border border-[#c7ddf5] bg-white px-2.5 py-1">Cap: {queueCapStatus}</span>
@@ -618,6 +769,16 @@ const PipelineCallWorkspace: React.FC = () => {
                   />
                 </label>
                 <label className="block text-[11px] text-[#365274]">
+                  Daily booked target
+                  <input
+                    type="number"
+                    min={0}
+                    value={dailyWebinarBookingTarget}
+                    onChange={(e) => setDailyWebinarBookingTarget(e.target.value ? Number(e.target.value) : '')}
+                    className="mt-1 w-full rounded-lg border border-[#c7ddf5] px-2 py-1.5 text-xs"
+                  />
+                </label>
+                <label className="block text-[11px] text-[#365274]">
                   Extension
                   <input
                     value={agentExtension}
@@ -644,10 +805,10 @@ const PipelineCallWorkspace: React.FC = () => {
                 <Button
                   variant="outline"
                   className="!min-h-0 h-9 w-full px-3 text-xs"
-                  onClick={() => setPassSkippedCandidateIds([])}
-                  disabled={!passSkippedCandidateIds.length}
+                  onClick={() => setSelectedCandidateId(queueList[0]?.id ?? doneList[0]?.id ?? null)}
+                  disabled={!queueList.length && !doneList.length}
                 >
-                  Reset pass
+                  Focus first card
                 </Button>
               </div>
             </details>
@@ -799,21 +960,91 @@ const PipelineCallWorkspace: React.FC = () => {
               )}
             </div>
 
-            <div>
-              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[#42658d]">Up next</p>
-              <div className="grid gap-1.5 md:grid-cols-2">
-                {nextUp.map((candidate, idx) => (
+            <div className="rounded-xl border border-[#deebf9] bg-[#f8fbff] p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[#42658d]">Queue carousel</p>
+                <div className="flex items-center gap-1">
                   <button
-                    key={candidate.id}
                     type="button"
-                    onClick={() => setSelectedCandidateId(candidate.id)}
-                    className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-50"
+                    onClick={() => {
+                      if (!queueList.length) return;
+                      const index = currentQueueIndex <= 0 ? 0 : currentQueueIndex - 1;
+                      setSelectedCandidateId(queueList[index]?.id || null);
+                    }}
+                    className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={!queueList.length || currentQueueIndex <= 0}
+                    aria-label="Previous queue card"
                   >
-                    <p className="truncate text-xs font-semibold text-slate-800">{candidate.full_name || 'Unknown Candidate'}</p>
-                    <span className="ml-2 text-[10px] text-slate-500">#{idx + 1}</span>
+                    <ChevronLeft size={14} />
                   </button>
-                ))}
-                {!nextUp.length && <p className="text-xs text-slate-500">No next candidates queued.</p>}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!queueList.length) return;
+                      const index = currentQueueIndex < 0 ? 1 : currentQueueIndex + 1;
+                      setSelectedCandidateId(queueList[index]?.id || null);
+                    }}
+                    className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={!queueList.length || currentQueueIndex >= queueList.length - 1}
+                    aria-label="Next queue card"
+                  >
+                    <ChevronRight size={14} />
+                  </button>
+                </div>
+              </div>
+              <div className="grid gap-2 md:grid-cols-4">
+                {carouselCards.map((candidate) => {
+                  const isCenter = candidate.id === currentCandidate?.id;
+                  const latest = latestByCandidate.get(candidate.id);
+                  const dispositionLabel = latest?.disposition || 'Undisposed';
+                  const cardPhoneInfo = readPipelineCandidatePhone(candidate);
+                  return (
+                    <button
+                      key={candidate.id}
+                      type="button"
+                      onClick={() => setSelectedCandidateId(candidate.id)}
+                      className={`rounded-xl border px-3 py-2 text-left transition ${
+                        isCenter
+                          ? 'border-[#7eb3e7] bg-white shadow-[0_8px_22px_-14px_rgba(38,95,165,0.55)]'
+                          : 'border-slate-200 bg-white/90 hover:bg-white'
+                      }`}
+                    >
+                      <p className="truncate text-xs font-semibold text-slate-800">{candidate.full_name || 'Unknown Candidate'}</p>
+                      <p className="mt-1 text-[10px] text-slate-500">{cardPhoneInfo.effectivePhone || 'No phone'}</p>
+                      <span className="mt-1 inline-flex rounded-full bg-[#edf5ff] px-2 py-0.5 text-[10px] font-semibold text-[#285082]">
+                        {dispositionLabel}
+                      </span>
+                    </button>
+                  );
+                })}
+                {!carouselCards.length && <p className="text-xs text-slate-500">No active queue candidates.</p>}
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[#42658d]">Done lane / history</p>
+              <div className="grid gap-1.5 md:grid-cols-2">
+                {doneList.slice(0, 8).map((candidate) => {
+                  const latest = latestByCandidate.get(candidate.id);
+                  return (
+                    <button
+                      key={candidate.id}
+                      type="button"
+                      onClick={() => setSelectedCandidateId(candidate.id)}
+                      className="flex items-center justify-between rounded-lg border border-slate-200 bg-white/80 px-3 py-2 text-left hover:bg-white"
+                    >
+                      <div className="min-w-0 pr-2">
+                        <p className="truncate text-xs font-semibold text-slate-800 blur-[0.3px]">{candidate.full_name || 'Unknown Candidate'}</p>
+                        <p className="truncate text-[10px] text-slate-500">{latest?.disposition || 'Disposed'}</p>
+                      </div>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                        <CheckCircle2 size={11} />
+                        Done
+                      </span>
+                    </button>
+                  );
+                })}
+                {!doneList.length && <p className="text-xs text-slate-500">No disposed cards in this lane yet.</p>}
               </div>
             </div>
 

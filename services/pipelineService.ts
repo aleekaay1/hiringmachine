@@ -1893,25 +1893,6 @@ export async function listPipelineCallRecords(input?: {
   limit?: number;
 }): Promise<PipelineCallRecord[]> {
   const limit = input?.limit ?? 1500;
-  let query = supabase
-    .from('pipeline_call_records')
-    .select('*')
-    .order('disposed_at', { ascending: false })
-    .limit(limit);
-
-  if (input?.candidateIds && input.candidateIds.length > 0) {
-    query = query.in('candidate_id', input.candidateIds);
-  }
-  if (input?.recruiterUserId) {
-    query = query.eq('recruiter_user_id', input.recruiterUserId);
-  }
-  if (input?.fromIso) {
-    query = query.gte('disposed_at', input.fromIso);
-  }
-  if (input?.toIso) {
-    query = query.lte('disposed_at', input.toIso);
-  }
-
   const toIsoString = (value: unknown): string => {
     const str = String(value || '').trim();
     if (!str) return new Date().toISOString();
@@ -1951,35 +1932,69 @@ export async function listPipelineCallRecords(input?: {
       } as PipelineCallRecord;
     });
   };
-
+  let primaryRows: PipelineCallRecord[] = [];
   try {
-    const { data, error } = await query;
-    if (!error) return (data || []) as PipelineCallRecord[];
-    throw error;
-  } catch {
-    // Fallback path when pipeline_call_records query fails in deployed env.
-    let fallback = supabase
-      .from('pipeline_call_logs')
+    let primaryQuery = supabase
+      .from('pipeline_call_records')
       .select('*')
-      .eq('action', 'call_disposition_saved')
-      .order('created_at', { ascending: false })
+      .order('disposed_at', { ascending: false })
       .limit(limit);
     if (input?.candidateIds && input.candidateIds.length > 0) {
-      fallback = fallback.in('candidate_id', input.candidateIds);
+      primaryQuery = primaryQuery.in('candidate_id', input.candidateIds);
     }
     if (input?.recruiterUserId) {
-      fallback = fallback.eq('created_by_user_id', input.recruiterUserId);
+      primaryQuery = primaryQuery.eq('recruiter_user_id', input.recruiterUserId);
     }
     if (input?.fromIso) {
-      fallback = fallback.gte('created_at', input.fromIso);
+      primaryQuery = primaryQuery.gte('disposed_at', input.fromIso);
     }
     if (input?.toIso) {
-      fallback = fallback.lte('created_at', input.toIso);
+      primaryQuery = primaryQuery.lte('disposed_at', input.toIso);
     }
-    const { data: logs, error: logsError } = await fallback;
-    if (logsError) throw logsError;
-    return mapLogsToRecords((logs || []) as PipelineCallLog[]);
+    const { data, error } = await primaryQuery;
+    if (!error) primaryRows = (data || []) as PipelineCallRecord[];
+  } catch {
+    // Ignore primary read failure and keep fallback rows only.
   }
+
+  let fallbackQuery = supabase
+    .from('pipeline_call_logs')
+    .select('*')
+    .eq('action', 'call_disposition_saved')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (input?.candidateIds && input.candidateIds.length > 0) {
+    fallbackQuery = fallbackQuery.in('candidate_id', input.candidateIds);
+  }
+  if (input?.recruiterUserId) {
+    fallbackQuery = fallbackQuery.eq('created_by_user_id', input.recruiterUserId);
+  }
+  if (input?.fromIso) {
+    fallbackQuery = fallbackQuery.gte('created_at', input.fromIso);
+  }
+  if (input?.toIso) {
+    fallbackQuery = fallbackQuery.lte('created_at', input.toIso);
+  }
+
+  const { data: logs, error: logsError } = await fallbackQuery;
+  if (logsError && primaryRows.length === 0) throw logsError;
+  const normalizedFallbackRows = mapLogsToRecords((logs || []) as PipelineCallLog[]);
+
+  const mergedById = new Map<string, PipelineCallRecord>();
+  for (const row of normalizedFallbackRows) mergedById.set(row.id, row);
+  for (const row of primaryRows) {
+    const meta = row.threecx_metadata && typeof row.threecx_metadata === 'object'
+      ? row.threecx_metadata
+      : {};
+    mergedById.set(row.id, {
+      ...row,
+      threecx_metadata: meta as Record<string, unknown>,
+    });
+  }
+
+  return [...mergedById.values()]
+    .sort((a, b) => new Date(b.disposed_at).getTime() - new Date(a.disposed_at).getTime())
+    .slice(0, limit);
 }
 
 export async function listPipelineResumesForCandidates(candidateIds: string[]): Promise<PipelineResume[]> {
