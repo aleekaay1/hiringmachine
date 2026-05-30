@@ -5,6 +5,7 @@ import {
   journeyStageForCallDisposition,
   type PipelineCallDisposition,
 } from './pipelineCallDispositions';
+import { getCurrentUserProfile } from './accessControl';
 
 const PIPELINE_BUCKET = 'pipeline-resumes';
 
@@ -646,6 +647,56 @@ function resumeExtension(resume: PipelineResume): string {
   return dot >= 0 ? name.slice(dot + 1) : '';
 }
 
+const PIPELINE_CANDIDATE_SELECT =
+  'id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at';
+
+type PipelineViewerScope = {
+  userId: string | null;
+  hasFullVisibility: boolean;
+};
+
+async function resolvePipelineViewerScope(): Promise<PipelineViewerScope> {
+  const [{ data: auth }, profile] = await Promise.all([
+    supabase.auth.getUser(),
+    getCurrentUserProfile().catch(() => null),
+  ]);
+  const userId = auth.user?.id ?? null;
+  const role = String(profile?.role || '').trim().toLowerCase();
+  const hasFullVisibility = role === 'admin' || role === 'leadership';
+  return { userId, hasFullVisibility };
+}
+
+function applyPipelineUploaderScope<TQuery extends { eq: (column: string, value: unknown) => TQuery }>(
+  query: TQuery,
+  scope: PipelineViewerScope,
+): TQuery {
+  if (scope.hasFullVisibility) return query;
+  if (!scope.userId) return query.eq('id', '__no_pipeline_access__');
+  return query.eq('uploader_user_id', scope.userId);
+}
+
+async function canAccessPipelineCandidate(candidateId: string): Promise<boolean> {
+  const scope = await resolvePipelineViewerScope();
+  let query = supabase
+    .from('pipeline_candidates')
+    .select('id')
+    .eq('id', candidateId);
+  query = applyPipelineUploaderScope(query, scope);
+  const { data, error } = await query.maybeSingle();
+  if (error) throw error;
+  return Boolean(data?.id);
+}
+
+async function listPipelineCandidatesUnscoped(): Promise<PipelineCandidate[]> {
+  const { data, error } = await supabase
+    .from('pipeline_candidates')
+    .select(PIPELINE_CANDIDATE_SELECT)
+    .order('updated_at', { ascending: false })
+    .limit(2000);
+  if (error) throw error;
+  return (data || []) as PipelineCandidate[];
+}
+
 export function getPipelineResumeDisplayUrl(resume: PipelineResume): string | null {
   return resume.converted_pdf_url || resume.public_url;
 }
@@ -682,11 +733,14 @@ export function getPipelineResumeOpenInNewTabUrl(resume: PipelineResume): string
 }
 
 export async function listPipelineCandidates(): Promise<PipelineCandidate[]> {
-  const { data, error } = await supabase
+  const scope = await resolvePipelineViewerScope();
+  let query = supabase
     .from('pipeline_candidates')
-    .select('id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at')
+    .select(PIPELINE_CANDIDATE_SELECT)
     .order('updated_at', { ascending: false })
     .limit(2000);
+  query = applyPipelineUploaderScope(query, scope);
+  const { data, error } = await query;
   if (error) throw error;
   return (data || []) as PipelineCandidate[];
 }
@@ -908,6 +962,7 @@ export async function markPipelineCandidateTouched(candidateId: string): Promise
 }
 
 export async function listPipelineCandidateActivityTimeline(candidateId: string): Promise<PipelineActivityTimelineItem[]> {
+  if (!(await canAccessPipelineCandidate(candidateId))) return [];
   const [
     { data: notes, error: notesError },
     { data: evals, error: evalError },
@@ -999,7 +1054,7 @@ async function upsertJourneyRowsIntoPipeline(
   sourceOrigin: 'checkin_journey' | 'admin_push',
 ): Promise<{ importedCandidates: number; importedResumes: number }> {
   if (!rows.length) return { importedCandidates: 0, importedResumes: 0 };
-  const existingCandidates = await listPipelineCandidates();
+  const existingCandidates = await listPipelineCandidatesUnscoped();
   const bySourceCandidateId = new Map<string, PipelineCandidate>();
   for (const c of existingCandidates) {
     if (String(c.source || '').trim().toLowerCase() !== 'journey_upload') continue;
@@ -1168,11 +1223,13 @@ export async function listSourceCandidateIdsInPipeline(): Promise<Set<string>> {
 }
 
 export async function getPipelineCandidateBundle(candidateId: string): Promise<PipelineCandidateBundle | null> {
-  const { data: candidate, error: cErr } = await supabase
+  const scope = await resolvePipelineViewerScope();
+  let candidateQuery = supabase
     .from('pipeline_candidates')
-    .select('id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at')
-    .eq('id', candidateId)
-    .maybeSingle();
+    .select(PIPELINE_CANDIDATE_SELECT)
+    .eq('id', candidateId);
+  candidateQuery = applyPipelineUploaderScope(candidateQuery, scope);
+  const { data: candidate, error: cErr } = await candidateQuery.maybeSingle();
   if (cErr) throw cErr;
   if (!candidate) return null;
 
@@ -1258,7 +1315,8 @@ export async function bulkUploadPipelineResumes(
   onProgress?: (progress: PipelineUploadProgress) => void,
 ): Promise<{ created: PipelineCandidate[]; failed: Array<{ file: string; error: string }> }> {
   const { data: auth } = await supabase.auth.getUser();
-  const userId = auth.user?.id ?? null;
+  const userId = auth.user?.id;
+  if (!userId) throw new Error('You must be signed in to upload resumes.');
   const created: PipelineCandidate[] = [];
   const failed: Array<{ file: string; error: string }> = [];
   const total = files.length;
