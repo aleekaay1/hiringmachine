@@ -425,6 +425,62 @@ function mergeCallContextMetadata(
   };
 }
 
+type SupabaseErrorLike = {
+  message?: unknown;
+  details?: unknown;
+  hint?: unknown;
+  code?: unknown;
+};
+
+function normalizeSupabaseError(error: unknown): SupabaseErrorLike | null {
+  if (!error || typeof error !== 'object') return null;
+  return error as SupabaseErrorLike;
+}
+
+export function stringifySupabaseError(error: unknown): string {
+  if (error instanceof Error) {
+    const msg = String(error.message || '').trim();
+    if (msg && msg !== '[object Object]') return msg;
+  }
+
+  const normalized = normalizeSupabaseError(error);
+  if (normalized) {
+    const message = String(normalized.message || '').trim();
+    const details = String(normalized.details || '').trim();
+    const hint = String(normalized.hint || '').trim();
+    const code = String(normalized.code || '').trim();
+    const parts: string[] = [];
+    if (message) parts.push(message);
+    if (details && details !== message) parts.push(`Details: ${details}`);
+    if (hint && hint !== message && hint !== details) parts.push(`Hint: ${hint}`);
+    if (!parts.length && code) parts.push(`Code: ${code}`);
+    if (parts.length) return parts.join(' ');
+  }
+
+  const raw = String(error || '').trim();
+  if (raw && raw !== '[object Object]') return raw;
+  return 'Unexpected error.';
+}
+
+function isCallRecordInsertFallbackEligible(error: unknown): boolean {
+  const normalized = normalizeSupabaseError(error);
+  if (!normalized) return false;
+  const code = String(normalized.code || '').trim().toUpperCase();
+  const combined = `${String(normalized.message || '')} ${String(normalized.details || '')} ${String(normalized.hint || '')}`
+    .toLowerCase();
+  if (code === '23514') return true; // check_violation (commonly Booked constraint drift)
+  if (code === '42703' || code === 'PGRST204') return true; // missing/unknown columns
+  if (code === '42P01') return true; // missing table in not-yet-migrated env
+  return (
+    combined.includes('pipeline_call_records') ||
+    combined.includes('check constraint') ||
+    combined.includes('violates check constraint') ||
+    combined.includes('does not exist') ||
+    combined.includes('schema cache') ||
+    combined.includes('booked')
+  );
+}
+
 export function readCallRecordMeta(record: Pick<PipelineCallRecord, 'threecx_metadata'>): {
   callbackAt: string | null;
   bookedSubtype: string | null;
@@ -1628,6 +1684,24 @@ export async function savePipelineCallDisposition(input: {
   if (input.disposition === 'Booked' && !bookedSubtype) {
     throw new Error('Booked subtype is required.');
   }
+  const requestPayload: Record<string, unknown> = {
+    disposition: input.disposition,
+    dialed_number: input.dialedNumber,
+    dial_started_at: input.dialStartedAt,
+    dial_log_id: input.dialLogId ?? null,
+    comment: input.comment?.trim() || null,
+    callback_at: callbackAt,
+    booked_subtype: bookedSubtype,
+    call_context: input.callContext ?? null,
+  };
+  const threecxMetadata = mergeCallContextMetadata({
+    ...(input.threecxMetadata ?? {}),
+    callback_at: callbackAt,
+    booked_subtype: bookedSubtype,
+  }, input.callContext) ?? {};
+
+  let savedRecord: PipelineCallRecord | null = null;
+  let savedViaFallback = false;
   const { data, error } = await supabase
     .from('pipeline_call_records')
     .insert({
@@ -1641,15 +1715,57 @@ export async function savePipelineCallDisposition(input: {
       dialed_number: input.dialedNumber,
       dial_started_at: input.dialStartedAt,
       disposed_at: disposedAt,
-      threecx_metadata: mergeCallContextMetadata({
-        ...(input.threecxMetadata ?? {}),
-        callback_at: callbackAt,
-        booked_subtype: bookedSubtype,
-      }, input.callContext) ?? {},
+      threecx_metadata: threecxMetadata,
     })
     .select('*')
     .single();
-  if (error) throw error;
+
+  if (error) {
+    if (!isCallRecordInsertFallbackEligible(error)) throw error;
+    const fallbackReason = stringifySupabaseError(error);
+    const fallbackLog = await logPipelineCallAction({
+      candidateId: input.candidateId,
+      resumeId: input.resumeId ?? null,
+      action: 'call_disposition_saved',
+      outcome: 'fallback_saved',
+      requestPayload: {
+        ...requestPayload,
+        persistence_mode: 'pipeline_call_logs_fallback',
+      },
+      responsePayload: {
+        call_record_id: `fallback-${disposedAt}`,
+        persistence_mode: 'pipeline_call_logs_fallback',
+        fallback_reason: fallbackReason,
+      },
+      actorLabel: input.actorLabel ?? null,
+      callContext: input.callContext ?? null,
+    });
+    savedViaFallback = true;
+    savedRecord = {
+      id: `fallback-${fallbackLog.id}`,
+      candidate_id: input.candidateId,
+      resume_id: input.resumeId ?? null,
+      dial_log_id: input.dialLogId ?? null,
+      recruiter_user_id: auth.user?.id ?? null,
+      recruiter_label: input.actorLabel ?? null,
+      disposition: input.disposition,
+      comment: input.comment?.trim() || null,
+      dialed_number: input.dialedNumber,
+      dial_started_at: input.dialStartedAt,
+      disposed_at: disposedAt,
+      threecx_metadata: {
+        ...threecxMetadata,
+        persistence_mode: 'pipeline_call_logs_fallback',
+        fallback_log_id: fallbackLog.id,
+        fallback_reason: fallbackReason,
+      },
+      created_at: fallbackLog.created_at,
+      callback_at: callbackAt,
+      booked_subtype: bookedSubtype,
+    };
+  } else {
+    savedRecord = data as PipelineCallRecord;
+  }
 
   const journeyStage = journeyStageForCallDisposition(input.disposition);
   const status =
@@ -1665,26 +1781,20 @@ export async function savePipelineCallDisposition(input: {
     if (upErr) throw upErr;
   }
 
-  await logPipelineCallAction({
-    candidateId: input.candidateId,
-    resumeId: input.resumeId ?? null,
-    action: 'call_disposition_saved',
-    outcome: 'ok',
-    requestPayload: {
-      disposition: input.disposition,
-      dialed_number: input.dialedNumber,
-      dial_log_id: input.dialLogId ?? null,
-      comment: input.comment?.trim() || null,
-      callback_at: callbackAt,
-      booked_subtype: bookedSubtype,
-      call_context: input.callContext ?? null,
-    },
-    responsePayload: { call_record_id: data.id },
-    actorLabel: input.actorLabel ?? null,
-    callContext: input.callContext ?? null,
-  });
+  if (!savedViaFallback) {
+    await logPipelineCallAction({
+      candidateId: input.candidateId,
+      resumeId: input.resumeId ?? null,
+      action: 'call_disposition_saved',
+      outcome: 'ok',
+      requestPayload,
+      responsePayload: { call_record_id: savedRecord.id },
+      actorLabel: input.actorLabel ?? null,
+      callContext: input.callContext ?? null,
+    });
+  }
 
-  return data as PipelineCallRecord;
+  return savedRecord;
 }
 
 export async function logPipelineCallAction(input: {

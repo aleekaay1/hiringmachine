@@ -4,6 +4,7 @@ import { ExternalLink, Phone, RefreshCw } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import {
+  stringifySupabaseError,
   getPipelineUserCallSettings,
   getPipelineResumeOpenInNewTabUrl,
   isPipelinePhoneInputClean,
@@ -449,7 +450,7 @@ const PipelineCallWorkspace: React.FC = () => {
     setError(null);
     try {
       const nowIso = new Date().toISOString();
-      await savePipelineCallDisposition({
+      const saved = await savePipelineCallDisposition({
         candidateId: currentCandidate.id,
         resumeId: selectedResumes[0]?.id ?? null,
         disposition,
@@ -467,7 +468,12 @@ const PipelineCallWorkspace: React.FC = () => {
           phone_override_applied: Boolean(currentPhoneInfo?.overridePhone),
         },
       });
-      setActionMsg('Disposition saved.');
+      const persistenceMode = String((saved.threecx_metadata as Record<string, unknown> | null)?.persistence_mode || '');
+      setActionMsg(
+        persistenceMode === 'pipeline_call_logs_fallback'
+          ? 'Disposition saved with fallback logging. Primary call-record table was unavailable.'
+          : 'Disposition saved.',
+      );
       setDisposition('');
       setBookedSubtype('');
       setCallbackAtInput('');
@@ -481,7 +487,7 @@ const PipelineCallWorkspace: React.FC = () => {
         setSelectedCandidateId(null);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(stringifySupabaseError(e));
     } finally {
       setSavingDisposition(false);
     }

@@ -29,6 +29,7 @@ import {
   savePipelineCallDisposition,
   savePipelineCandidatePhoneOverride,
   savePipelineEvaluation,
+  stringifySupabaseError,
   syncPipelineIncomingEmails,
   triggerPipelineResumeConversion,
   type PipelineActivityTimelineItem,
@@ -1086,7 +1087,7 @@ const Pipeline: React.FC = () => {
     try {
       const { data } = await supabase.auth.getUser();
       const actorLabel = String(data.user?.user_metadata?.full_name || data.user?.user_metadata?.name || data.user?.email || '').trim() || undefined;
-      await savePipelineCallDisposition({
+      const saved = await savePipelineCallDisposition({
         candidateId: pendingCall.candidateId,
         resumeId: pendingCall.resumeId,
         dialLogId: pendingCall.dialLogId,
@@ -1115,7 +1116,12 @@ const Pipeline: React.FC = () => {
       setCallDispositionBookedSubtype('');
       setCallDispositionCallbackAt('');
       setDialLogWarning(null);
-      setCallActionMsg('Call disposition saved. Dialer unlocked.');
+      const persistenceMode = String((saved.threecx_metadata as Record<string, unknown> | null)?.persistence_mode || '');
+      setCallActionMsg(
+        persistenceMode === 'pipeline_call_logs_fallback'
+          ? 'Call disposition saved with fallback logging. Dialer unlocked.'
+          : 'Call disposition saved. Dialer unlocked.',
+      );
       const refreshId = selectedBundle?.candidate.id || pendingCall.candidateId;
       if (refreshId) {
         await loadSelectedBundle(refreshId);
@@ -1123,7 +1129,7 @@ const Pipeline: React.FC = () => {
         await loadCandidates();
       }
     } catch (e) {
-      setCallDispositionError(e instanceof Error ? e.message : String(e));
+      setCallDispositionError(stringifySupabaseError(e));
     } finally {
       setCallDispositionSaving(false);
     }
