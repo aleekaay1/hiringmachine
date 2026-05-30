@@ -88,6 +88,7 @@ const PipelineCallWorkspace: React.FC = () => {
   const [phoneInput, setPhoneInput] = React.useState('');
   const [savingPhone, setSavingPhone] = React.useState(false);
   const [phoneMsg, setPhoneMsg] = React.useState<string | null>(null);
+  const [showDispositionModal, setShowDispositionModal] = React.useState(false);
 
   const [candidates, setCandidates] = React.useState<PipelineCandidate[]>([]);
   const [resumesByCandidate, setResumesByCandidate] = React.useState<Map<string, PipelineResume[]>>(new Map());
@@ -370,6 +371,7 @@ const PipelineCallWorkspace: React.FC = () => {
     }
     window.open(url, '_blank', 'noopener,noreferrer');
     setActionMsg(`Opened 3CX popup for ${candidate.full_name || 'candidate'}.`);
+    setShowDispositionModal(true);
     try {
       await logPipelineCallAction({
         candidateId: candidate.id,
@@ -454,6 +456,7 @@ const PipelineCallWorkspace: React.FC = () => {
       setBookedSubtype('');
       setCallbackAtInput('');
       setComment('');
+      setShowDispositionModal(false);
       const currentId = currentCandidate.id;
       setPassSkippedCandidateIds((prev) => (prev.includes(currentId) ? prev : [...prev, currentId]));
       await loadWorkspace();
@@ -790,6 +793,83 @@ const PipelineCallWorkspace: React.FC = () => {
             </Button>
           </section>
         </div>
+
+        {showDispositionModal && currentCandidate && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#0b1f3a]/45 p-4">
+            <div className="w-full max-w-xl rounded-2xl border border-[#c7ddf5] bg-white shadow-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs text-[#4c6c92]">Post-call disposition</p>
+                  <h3 className="text-base font-semibold text-[#0B1B34]">{currentCandidate.full_name || 'Candidate'}</h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowDispositionModal(false)}
+                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                >
+                  Close
+                </button>
+              </div>
+
+              <label className="text-xs text-[#365274] block">
+                Disposition
+                <select
+                  value={disposition}
+                  onChange={(e) => setDisposition(e.target.value as PipelineCallDisposition)}
+                  className="mt-1 w-full rounded-lg border border-[#c7ddf5] px-2 py-2 text-xs"
+                >
+                  <option value="">Select disposition</option>
+                  {PIPELINE_CALL_DISPOSITIONS.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+              </label>
+
+              {disposition === 'Booked' && (
+                <label className="text-xs text-[#365274] block">
+                  Booked subtype (required)
+                  <select
+                    value={bookedSubtype}
+                    onChange={(e) => setBookedSubtype(e.target.value as PipelineBookedSubtype)}
+                    className="mt-1 w-full rounded-lg border border-[#c7ddf5] px-2 py-2 text-xs"
+                  >
+                    <option value="">Select subtype</option>
+                    {PIPELINE_BOOKED_SUBTYPES.map((item) => (
+                      <option key={item} value={item}>{item}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              {disposition === 'Callback requested' && (
+                <label className="text-xs text-[#365274] block">
+                  Callback date/time (required)
+                  <input
+                    type="datetime-local"
+                    value={callbackAtInput}
+                    onChange={(e) => setCallbackAtInput(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-[#c7ddf5] px-2 py-2 text-xs"
+                  />
+                </label>
+              )}
+
+              <label className="text-xs text-[#365274] block">
+                Comment
+                <textarea
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  rows={3}
+                  className="mt-1 w-full rounded-lg border border-[#c7ddf5] px-2 py-2 text-xs"
+                  placeholder="Call notes..."
+                />
+              </label>
+
+              <Button className="w-full" onClick={() => void saveDisposition()} disabled={savingDisposition || !currentCandidate}>
+                {savingDisposition ? 'Saving...' : autoMode ? 'Save + auto advance' : 'Save disposition'}
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
     </PipelineAuthShell>
   );

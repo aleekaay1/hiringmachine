@@ -25,7 +25,8 @@ create table if not exists public.pipeline_call_records (
       'Connected',
       'Interested – next step',
       'Scheduled interview',
-      'Do not call'
+      'Do not call',
+      'Booked'
     )
   )
 );

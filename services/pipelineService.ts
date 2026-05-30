@@ -1711,11 +1711,12 @@ export async function listPipelineCallRecords(input?: {
   toIso?: string | null;
   limit?: number;
 }): Promise<PipelineCallRecord[]> {
+  const limit = input?.limit ?? 1500;
   let query = supabase
     .from('pipeline_call_records')
     .select('*')
     .order('disposed_at', { ascending: false })
-    .limit(input?.limit ?? 1500);
+    .limit(limit);
 
   if (input?.candidateIds && input.candidateIds.length > 0) {
     query = query.in('candidate_id', input.candidateIds);
@@ -1730,9 +1731,74 @@ export async function listPipelineCallRecords(input?: {
     query = query.lte('disposed_at', input.toIso);
   }
 
-  const { data, error } = await query;
-  if (error) throw error;
-  return (data || []) as PipelineCallRecord[];
+  const toIsoString = (value: unknown): string => {
+    const str = String(value || '').trim();
+    if (!str) return new Date().toISOString();
+    const d = new Date(str);
+    return Number.isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+  };
+
+  const mapLogsToRecords = (logs: PipelineCallLog[]): PipelineCallRecord[] => {
+    return logs.map((row) => {
+      const req = (row.request_payload && typeof row.request_payload === 'object'
+        ? row.request_payload
+        : {}) as Record<string, unknown>;
+      const res = (row.response_payload && typeof row.response_payload === 'object'
+        ? row.response_payload
+        : {}) as Record<string, unknown>;
+      const disposition = String(req.disposition || row.outcome || 'Connected').trim() || 'Connected';
+      const callbackAt = typeof req.callback_at === 'string' ? req.callback_at : null;
+      const bookedSubtype = typeof req.booked_subtype === 'string' ? req.booked_subtype : null;
+      return {
+        id: String(res.call_record_id || row.id),
+        candidate_id: row.candidate_id,
+        resume_id: row.resume_id,
+        dial_log_id: typeof req.dial_log_id === 'string' ? req.dial_log_id : null,
+        recruiter_user_id: row.created_by_user_id,
+        recruiter_label: row.created_by_label,
+        disposition,
+        comment: typeof req.comment === 'string' ? req.comment : null,
+        dialed_number: String(req.dialed_number || '').trim() || 'unknown',
+        dial_started_at: toIsoString(req.dial_started_at || row.created_at),
+        disposed_at: row.created_at,
+        threecx_metadata: {
+          callback_at: callbackAt,
+          booked_subtype: bookedSubtype,
+          source: 'pipeline_call_logs_fallback',
+        },
+        created_at: row.created_at,
+      } as PipelineCallRecord;
+    });
+  };
+
+  try {
+    const { data, error } = await query;
+    if (!error) return (data || []) as PipelineCallRecord[];
+    throw error;
+  } catch {
+    // Fallback path when pipeline_call_records query fails in deployed env.
+    let fallback = supabase
+      .from('pipeline_call_logs')
+      .select('*')
+      .eq('action', 'call_disposition_saved')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (input?.candidateIds && input.candidateIds.length > 0) {
+      fallback = fallback.in('candidate_id', input.candidateIds);
+    }
+    if (input?.recruiterUserId) {
+      fallback = fallback.eq('created_by_user_id', input.recruiterUserId);
+    }
+    if (input?.fromIso) {
+      fallback = fallback.gte('created_at', input.fromIso);
+    }
+    if (input?.toIso) {
+      fallback = fallback.lte('created_at', input.toIso);
+    }
+    const { data: logs, error: logsError } = await fallback;
+    if (logsError) throw logsError;
+    return mapLogsToRecords((logs || []) as PipelineCallLog[]);
+  }
 }
 
 export async function listPipelineResumesForCandidates(candidateIds: string[]): Promise<PipelineResume[]> {
