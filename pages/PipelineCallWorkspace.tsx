@@ -93,7 +93,8 @@ const QUICK_FILTERS: Array<{ id: QueueFilter; label: string }> = [
 ];
 
 const PipelineCallWorkspace: React.FC = () => {
-  const [loading, setLoading] = React.useState(false);
+  const [initialLoading, setInitialLoading] = React.useState(true);
+  const [refreshing, setRefreshing] = React.useState(false);
   const [savingSettings, setSavingSettings] = React.useState(false);
   const [savingDisposition, setSavingDisposition] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -120,6 +121,12 @@ const PipelineCallWorkspace: React.FC = () => {
   const [records, setRecords] = React.useState<PipelineCallRecord[]>([]);
   const [todaysCallCount, setTodaysCallCount] = React.useState(0);
   const [bookedOutcomeByCandidate, setBookedOutcomeByCandidate] = React.useState<CandidateBookedOutcomeMap>(new Map());
+  const [currentUserId, setCurrentUserId] = React.useState<string | null>(null);
+  const selectedCandidateIdRef = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    selectedCandidateIdRef.current = selectedCandidateId;
+  }, [selectedCandidateId]);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -134,8 +141,9 @@ const PipelineCallWorkspace: React.FC = () => {
     window.localStorage.setItem(WORKSPACE_THEME_STORAGE_KEY, themeMode);
   }, [themeMode]);
 
-  const loadWorkspace = React.useCallback(async () => {
-    setLoading(true);
+  const loadWorkspace = React.useCallback(async (mode: 'initial' | 'refresh' | 'silent' = 'silent') => {
+    if (mode === 'initial') setInitialLoading(true);
+    if (mode === 'refresh') setRefreshing(true);
     setError(null);
     try {
       const [{ data: auth }, profile, settings, candidateRows] = await Promise.all([
@@ -145,13 +153,14 @@ const PipelineCallWorkspace: React.FC = () => {
         listPipelineManualCandidates(),
       ]);
       const uid = auth.user?.id ?? null;
+      setCurrentUserId(uid);
       setAgentExtension(settings?.extension || '');
       setDailyUploadTarget(settings?.daily_upload_target ?? '');
       setDailyWebinarBookingTarget(settings?.daily_webinar_booking_target ?? '');
-      const scopedRows = [...candidateRows].sort((a, b) => new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime());
-      setCandidates(scopedRows);
+      const sortedCandidates = [...candidateRows].sort((a, b) => new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime());
+      setCandidates(sortedCandidates);
 
-      const candidateIds = scopedRows.map((c) => c.id);
+      const candidateIds = sortedCandidates.map((c) => c.id);
       if (candidateIds.length === 0) {
         setResumesByCandidate(new Map());
         setRecords([]);
@@ -161,7 +170,13 @@ const PipelineCallWorkspace: React.FC = () => {
         return;
       }
 
-      const [resumeRows, callRecordRows, todayRows] = await Promise.all([
+      const webinarRowsPromise = loadScopedWebinarRowsForViewer({
+        role: profile?.role ?? null,
+        viewerEmail: auth.user?.email ?? profile?.email ?? null,
+        viewerFullName: profile?.full_name ?? null,
+      }).catch(() => null);
+
+      const [resumeRows, callRecordRows, todayRows, webinarRows] = await Promise.all([
         listPipelineResumesForCandidates(candidateIds),
         listPipelineCallRecords({ candidateIds, limit: 5000 }),
         uid
@@ -172,6 +187,7 @@ const PipelineCallWorkspace: React.FC = () => {
               limit: 5000,
             })
           : Promise.resolve([]),
+        webinarRowsPromise,
       ]);
       const nextMap = new Map<string, PipelineResume[]>();
       for (const resume of resumeRows) {
@@ -182,16 +198,11 @@ const PipelineCallWorkspace: React.FC = () => {
       setResumesByCandidate(nextMap);
       setRecords(callRecordRows);
       setTodaysCallCount(todayRows.length);
-      try {
-        const scopedRows = await loadScopedWebinarRowsForViewer({
-          role: profile?.role ?? null,
-          viewerEmail: auth.user?.email ?? profile?.email ?? null,
-          viewerFullName: profile?.full_name ?? null,
-        });
-        const rowsByEmail = buildWebinarRowsByEmail(scopedRows);
+      if (webinarRows) {
+        const rowsByEmail = buildWebinarRowsByEmail(webinarRows);
         const latest = latestRecordByCandidate(callRecordRows);
         const bookedMap = new Map<string, BookedOutcomeBucket>();
-        for (const candidate of scopedRows) {
+        for (const candidate of sortedCandidates) {
           const latestRecord = latest.get(candidate.id);
           if (!latestRecord || String(latestRecord.disposition || '').toLowerCase() !== 'booked') continue;
           const meta = readCallRecordMeta(latestRecord);
@@ -203,21 +214,23 @@ const PipelineCallWorkspace: React.FC = () => {
           bookedMap.set(candidate.id, classification.bucket);
         }
         setBookedOutcomeByCandidate(bookedMap);
-      } catch {
+      } else {
         setBookedOutcomeByCandidate(new Map());
       }
-      if (!selectedCandidateId || !scopedRows.some((row) => row.id === selectedCandidateId)) {
-        setSelectedCandidateId(scopedRows[0]?.id ?? null);
+      const activeSelectedId = selectedCandidateIdRef.current;
+      if (!activeSelectedId || !sortedCandidates.some((row) => row.id === activeSelectedId)) {
+        setSelectedCandidateId(sortedCandidates[0]?.id ?? null);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      setInitialLoading(false);
+      setRefreshing(false);
     }
-  }, [selectedCandidateId]);
+  }, []);
 
   React.useEffect(() => {
-    void loadWorkspace();
+    void loadWorkspace('initial');
   }, [loadWorkspace]);
 
   const latestByCandidate = React.useMemo(() => latestRecordByCandidate(records), [records]);
@@ -470,6 +483,8 @@ const PipelineCallWorkspace: React.FC = () => {
     submitAttempted && disposition === 'Callback requested' && !callbackAtInput ? 'Callback date/time is required.' : null;
   const dialNumberPreview = normalizeDialDestination(phoneInput || currentCandidate?.phone || '');
   const isDark = themeMode === 'dark';
+  const showLoadingOverlay = initialLoading || refreshing;
+  const loadingOverlayText = initialLoading ? 'Loading call workspace...' : 'Refreshing queue...';
 
   const tone = React.useMemo(
     () => ({
@@ -662,8 +677,19 @@ const PipelineCallWorkspace: React.FC = () => {
       );
       if (disposition === 'Booked') {
         setBookedOutcomeByCandidate((prev) => new Map(prev).set(currentCandidate.id, 'booked'));
+      } else {
+        setBookedOutcomeByCandidate((prev) => {
+          const next = new Map(prev);
+          next.delete(currentCandidate.id);
+          return next;
+        });
       }
-      void loadWorkspace();
+      const alreadyTracked = records.some((row) => row.id === latestSaved.id);
+      const sameRecruiter = !currentUserId || latestSaved.recruiter_user_id === currentUserId;
+      const disposedToday = new Date(latestSaved.disposed_at).toDateString() === new Date().toDateString();
+      if (!alreadyTracked && sameRecruiter && disposedToday) {
+        setTodaysCallCount((prev) => prev + 1);
+      }
       if (autoMode) {
         setSelectedCandidateId(null);
       }
@@ -717,8 +743,13 @@ const PipelineCallWorkspace: React.FC = () => {
               >
                 {autoMode ? 'Auto mode: ON' : 'Auto mode: OFF'}
               </button>
-              <Button variant="outline" className={`!min-h-0 h-9 px-3 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`} onClick={() => void loadWorkspace()} disabled={loading}>
-                <RefreshCw size={14} className={loading ? 'mr-1 animate-spin' : 'mr-1'} />
+              <Button
+                variant="outline"
+                className={`!min-h-0 h-9 px-3 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
+                onClick={() => void loadWorkspace('refresh')}
+                disabled={showLoadingOverlay}
+              >
+                <RefreshCw size={14} className={refreshing ? 'mr-1 animate-spin' : 'mr-1'} />
                 Refresh queue
               </Button>
             </div>
@@ -1197,6 +1228,25 @@ const PipelineCallWorkspace: React.FC = () => {
         </motion.div>
 
         <AnimatePresence>
+          {showLoadingOverlay && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className={`absolute inset-0 z-40 flex items-center justify-center rounded-[30px] backdrop-blur-md ${
+                isDark ? 'bg-[#020617]/50' : 'bg-[#dbeafe]/55'
+              }`}
+            >
+              <div
+                className={`flex min-w-[240px] items-center justify-center gap-2 rounded-2xl border px-5 py-4 text-sm font-semibold ${
+                  tone.glassPanel
+                } ${isDark ? 'text-slate-100' : 'text-[#0B1B34]'}`}
+              >
+                <RefreshCw size={16} className="animate-spin" />
+                <span>{loadingOverlayText}</span>
+              </div>
+            </motion.div>
+          )}
           {showDispositionModal && currentCandidate && (
             <motion.div
               initial={{ opacity: 0 }}
