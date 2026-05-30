@@ -1119,7 +1119,7 @@ const Pipeline: React.FC = () => {
       const persistenceMode = String((saved.threecx_metadata as Record<string, unknown> | null)?.persistence_mode || '');
       setCallActionMsg(
         persistenceMode === 'pipeline_call_logs_fallback'
-          ? 'Call disposition saved with fallback logging. Dialer unlocked.'
+          ? 'Call disposition saved. Dialer unlocked.'
           : 'Call disposition saved. Dialer unlocked.',
       );
       const refreshId = selectedBundle?.candidate.id || pendingCall.candidateId;

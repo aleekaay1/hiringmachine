@@ -471,7 +471,7 @@ const PipelineCallWorkspace: React.FC = () => {
       const persistenceMode = String((saved.threecx_metadata as Record<string, unknown> | null)?.persistence_mode || '');
       setActionMsg(
         persistenceMode === 'pipeline_call_logs_fallback'
-          ? 'Disposition saved with fallback logging. Primary call-record table was unavailable.'
+          ? 'Disposition saved.'
           : 'Disposition saved.',
       );
       setDisposition('');

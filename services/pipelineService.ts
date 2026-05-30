@@ -8,6 +8,7 @@ import {
 import { getCurrentUserProfile } from './accessControl';
 
 const PIPELINE_BUCKET = 'pipeline-resumes';
+let pipelineCallRecordsPrimaryWriteDisabled = false;
 
 export type PipelineJourneyStage =
   | 'new'
@@ -1702,27 +1703,41 @@ export async function savePipelineCallDisposition(input: {
 
   let savedRecord: PipelineCallRecord | null = null;
   let savedViaFallback = false;
-  const { data, error } = await supabase
-    .from('pipeline_call_records')
-    .insert({
-      candidate_id: input.candidateId,
-      resume_id: input.resumeId ?? null,
-      dial_log_id: input.dialLogId ?? null,
-      recruiter_user_id: auth.user?.id ?? null,
-      recruiter_label: input.actorLabel ?? null,
-      disposition: input.disposition,
-      comment: input.comment?.trim() || null,
-      dialed_number: input.dialedNumber,
-      dial_started_at: input.dialStartedAt,
-      disposed_at: disposedAt,
-      threecx_metadata: threecxMetadata,
-    })
-    .select('*')
-    .single();
+  let primaryError: unknown = null;
 
-  if (error) {
-    if (!isCallRecordInsertFallbackEligible(error)) throw error;
-    const fallbackReason = stringifySupabaseError(error);
+  if (!pipelineCallRecordsPrimaryWriteDisabled) {
+    const { data, error } = await supabase
+      .from('pipeline_call_records')
+      .insert({
+        candidate_id: input.candidateId,
+        resume_id: input.resumeId ?? null,
+        dial_log_id: input.dialLogId ?? null,
+        recruiter_user_id: auth.user?.id ?? null,
+        recruiter_label: input.actorLabel ?? null,
+        disposition: input.disposition,
+        comment: input.comment?.trim() || null,
+        dialed_number: input.dialedNumber,
+        dial_started_at: input.dialStartedAt,
+        disposed_at: disposedAt,
+        threecx_metadata: threecxMetadata,
+      })
+      .select('*')
+      .single();
+
+    if (!error) {
+      savedRecord = data as PipelineCallRecord;
+    } else {
+      primaryError = error;
+      if (!isCallRecordInsertFallbackEligible(error)) throw error;
+      // Stop retrying primary inserts for this runtime session to avoid repeated 400 spam.
+      pipelineCallRecordsPrimaryWriteDisabled = true;
+    }
+  }
+
+  if (!savedRecord) {
+    const fallbackReason = primaryError
+      ? stringifySupabaseError(primaryError)
+      : 'Primary call-record write bypassed (fallback mode active).';
     const fallbackLog = await logPipelineCallAction({
       candidateId: input.candidateId,
       resumeId: input.resumeId ?? null,
@@ -1763,8 +1778,6 @@ export async function savePipelineCallDisposition(input: {
       callback_at: callbackAt,
       booked_subtype: bookedSubtype,
     };
-  } else {
-    savedRecord = data as PipelineCallRecord;
   }
 
   const journeyStage = journeyStageForCallDisposition(input.disposition);
