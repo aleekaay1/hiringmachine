@@ -200,7 +200,8 @@ const LiveSessionsDashboard: React.FC = () => {
         r.invited_stage_updated > 0 ? `${r.invited_stage_updated} moved to invited` : null,
         r.attended_rows_updated > 0 ? `${r.attended_rows_updated} marked attended` : null,
         r.assessment_stage_updated > 0 ? `${r.assessment_stage_updated} moved to assessment sent` : null,
-        r.assessment_emails_sent > 0 ? `${r.assessment_emails_sent} leadership emails sent` : null,
+        r.assessment_emails_sent > 0 ? `${r.assessment_emails_sent} leadership assessment email${r.assessment_emails_sent === 1 ? '' : 's'} sent` : null,
+        r.assessment_email_send_failed > 0 ? `${r.assessment_email_send_failed} email send failed` : null,
       ]
         .filter(Boolean)
         .join(` ${MIDDLE_DOT} `) || 'No new pipeline changes.',
@@ -271,9 +272,10 @@ const LiveSessionsDashboard: React.FC = () => {
               className="text-sm"
               onClick={() => void handleSyncPipeline()}
               disabled={loading || syncLoading || !data}
+              title="Update candidate stages and email the leadership assessment to Zoom attendees"
             >
               <Users size={15} className={`mr-1.5 inline ${syncLoading ? 'animate-pulse' : ''}`} />
-              Sync pipeline
+              Sync pipeline & send assessments
             </Button>
           </div>
         </header>

@@ -1,16 +1,21 @@
 /**
  * Applies Calendly invite + Zoom attendance from the live-sessions dashboard to portal candidates:
- * tag "Career session invited", pipeline "Attended Live Session" when Zoom shows attendance.
- * Stage 3 assessment link email is MANUAL ONLY from admin and is not auto-sent here.
+ * - Invited → pipeline "Invited to Live Career Overview Session"
+ * - Attended (Zoom) → "Live Career Overview Session Attended" + automated Leadership Assessment link email (once)
  * Auth: Supabase JWT (same pattern as integrations-zoom-calendly).
  * Deploy: supabase functions deploy sync-live-session-pipeline
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import {
+  pipelineStageAfterAssessmentFormSent,
   pipelineStageAfterLiveSessionAttended,
   pipelineStageAfterLiveSessionInvited,
 } from '../_shared/pipelineStageLiveSession.ts';
+import {
+  sendStage3AssessmentLinkEmail,
+  stage3AssessmentEmailAlreadySent,
+} from '../_shared/sendStage3AssessmentLinkEmail.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -38,6 +43,14 @@ const DEFAULT_ADMIN = {
   questionnaireDisqualified: null as unknown,
 };
 
+type CandidateRow = {
+  id: string;
+  email: string;
+  first_name: string | null;
+  admin_data: unknown;
+  assessment: unknown;
+};
+
 function normEmail(raw: unknown): string {
   return typeof raw === 'string' ? raw.trim().toLowerCase() : '';
 }
@@ -59,20 +72,31 @@ function mergeAdminBase(prev: Record<string, unknown>): Record<string, unknown> 
   return merged;
 }
 
+function isDisqualified(admin: Record<string, unknown>): boolean {
+  return admin.questionnaireDisqualified != null && typeof admin.questionnaireDisqualified === 'object';
+}
+
+function hasSubmittedAssessment(assessment: unknown): boolean {
+  return assessment != null && typeof assessment === 'object';
+}
+
 async function fetchCandidatesByEmails(
   admin: ReturnType<typeof createClient>,
-  emails: string[]
-): Promise<Map<string, { id: string; email: string; admin_data: unknown }>> {
-  const map = new Map<string, { id: string; email: string; admin_data: unknown }>();
+  emails: string[],
+): Promise<Map<string, CandidateRow>> {
+  const map = new Map<string, CandidateRow>();
   const chunk = 200;
   for (let i = 0; i < emails.length; i += chunk) {
     const slice = emails.slice(i, i + chunk);
     if (slice.length === 0) continue;
-    const { data, error } = await admin.from('candidates').select('id, email, admin_data').in('email', slice);
+    const { data, error } = await admin
+      .from('candidates')
+      .select('id, email, first_name, admin_data, assessment')
+      .in('email', slice);
     if (error) throw new Error(`candidates query: ${error.message}`);
     for (const row of data ?? []) {
       const em = normEmail((row as { email?: string }).email);
-      if (em) map.set(em, row as { id: string; email: string; admin_data: unknown });
+      if (em) map.set(em, row as CandidateRow);
     }
   }
   return map;
@@ -91,7 +115,7 @@ Deno.serve(async (req) => {
 
   try {
     const authHeader = req.headers.get('Authorization');
-
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     if (!serviceRole) {
@@ -127,7 +151,7 @@ Deno.serve(async (req) => {
           {
             status: 401,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          }
+          },
         );
       }
     }
@@ -144,6 +168,9 @@ Deno.serve(async (req) => {
     let skippedInviteNoRow = 0;
     let attendedUpdated = 0;
     let attendedSkippedNoRow = 0;
+    let assessmentStageUpdated = 0;
+    let assessmentEmailsSent = 0;
+    let assessmentEmailSendFailed = 0;
 
     for (const email of invitedEmails) {
       const row = byEmail.get(email);
@@ -171,20 +198,48 @@ Deno.serve(async (req) => {
         attendedSkippedNoRow++;
         continue;
       }
+
       const prev = parseAdmin(row.admin_data);
       const merged = mergeAdminBase(prev);
-      const beforeStage = merged.pipelineStage;
-      const newStage = pipelineStageAfterLiveSessionAttended(beforeStage);
-      merged.pipelineStage = newStage;
+      const stageBefore = String(merged.pipelineStage || '');
+      merged.pipelineStage = pipelineStageAfterLiveSessionAttended(merged.pipelineStage);
+
+      const canSendAssessment =
+        !isDisqualified(merged) &&
+        !hasSubmittedAssessment(row.assessment) &&
+        !stage3AssessmentEmailAlreadySent(merged);
+
+      if (canSendAssessment) {
+        try {
+          const logEntry = await sendStage3AssessmentLinkEmail({
+            admin,
+            candidateId: row.id,
+            candidateEmail: row.email,
+            firstName: String(row.first_name || '').trim(),
+          });
+          assessmentEmailsSent++;
+          const prevEmails = Array.isArray(merged.emailsSent) ? merged.emailsSent : [];
+          merged.emailsSent = [...prevEmails, logEntry];
+          const stageAfterSend = pipelineStageAfterAssessmentFormSent(merged.pipelineStage);
+          if (String(stageAfterSend) !== String(merged.pipelineStage)) {
+            assessmentStageUpdated++;
+          }
+          merged.pipelineStage = stageAfterSend;
+        } catch (sendErr) {
+          assessmentEmailSendFailed++;
+          console.error('sync-live-session-pipeline stage3 email', sendErr);
+        }
+      }
 
       const { error: upErr } = await admin.from('candidates').update({ admin_data: merged }).eq('id', row.id);
       if (upErr) {
         console.error('sync-live-session-pipeline attended', upErr);
         continue;
       }
-      attendedUpdated++;
+      if (String(merged.pipelineStage) !== stageBefore) {
+        attendedUpdated++;
+      }
       byEmail.set(email, { ...row, admin_data: merged });
-
     }
 
     return new Response(
@@ -194,18 +249,17 @@ Deno.serve(async (req) => {
         skipped_invite_not_in_portal: skippedInviteNoRow,
         attended_rows_updated: attendedUpdated,
         skipped_attended_not_in_portal: attendedSkippedNoRow,
-        assessment_stage_updated: 0,
-        assessment_emails_sent: 0,
-        assessment_email_send_failed: 0,
-        note: 'Stage 3 assessment link email is manual-only; automation disabled.',
+        assessment_stage_updated: assessmentStageUpdated,
+        assessment_emails_sent: assessmentEmailsSent,
+        assessment_email_send_failed: assessmentEmailSendFailed,
       }),
-      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (e) {
     console.error('sync-live-session-pipeline:', e);
     return new Response(
       JSON.stringify({ error: e instanceof Error ? e.message : 'Sync failed' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
 });
