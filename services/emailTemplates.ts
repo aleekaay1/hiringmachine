@@ -236,10 +236,15 @@ function postCheckinAddToCalendarHtmlForPreview(): string {
   if (!supabaseUrl) {
     return '<p style="font-size:12px;color:#6b7280;"><em>Add to Calendar uses the deployed live-session-calendar function.</em></p>';
   }
-  const icsUrl = liveSessionCalendarIcsUrl(`${supabaseUrl}/functions/v1`);
+  const googleUrl = buildGoogleCalendarUrl(event);
+  const icsUrl = liveSessionCalendarIcsUrl(
+    `${supabaseUrl}/functions/v1`,
+    (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim(),
+  );
   return buildAddToCalendarEmailHtml({
+    primaryUrl: googleUrl,
     icsDownloadUrl: icsUrl,
-    googleUrl: buildGoogleCalendarUrl(event),
+    googleUrl,
     outlookUrl: buildOutlookCalendarUrl(event),
   });
 }

@@ -286,32 +286,67 @@ export function buildOutlookCalendarUrl(event: LiveSessionCalendarEvent): string
 }
 
 export function buildAddToCalendarEmailHtml(input: {
-  icsDownloadUrl: string;
+  primaryUrl: string;
+  icsDownloadUrl?: string;
   googleUrl?: string;
   outlookUrl?: string;
 }): string {
-  const buttonStyle =
-    'display:inline-block;background:#005EB8;color:#ffffff;text-decoration:none;font-weight:600;font-size:15px;line-height:1.2;padding:14px 28px;border-radius:8px;margin:8px 0 4px;';
-  const linkStyle = 'color:#005EB8;text-decoration:underline;font-size:13px;';
-  const fallbacks: string[] = [];
-  if (input.googleUrl) {
-    fallbacks.push(`<a href="${input.googleUrl}" target="_blank" rel="noopener noreferrer" style="${linkStyle}">Google Calendar</a>`);
+  const linkStyle = 'color:#005EB8;text-decoration:underline;font-size:13px;font-family:Arial,Helvetica,sans-serif;';
+  const extras: string[] = [];
+  if (input.icsDownloadUrl) {
+    extras.push(`<a href="${input.icsDownloadUrl}" target="_blank" rel="noopener noreferrer" style="${linkStyle}">Download .ics file</a>`);
   }
   if (input.outlookUrl) {
-    fallbacks.push(`<a href="${input.outlookUrl}" target="_blank" rel="noopener noreferrer" style="${linkStyle}">Outlook</a>`);
+    extras.push(`<a href="${input.outlookUrl}" target="_blank" rel="noopener noreferrer" style="${linkStyle}">Outlook</a>`);
   }
-  const fallbackRow = fallbacks.length
-    ? `<p style="margin:8px 0 0;font-size:12px;color:#4b5563;">Or add via ${fallbacks.join(' · ')}. An .ics file is also attached (repeats every Wednesday).</p>`
-    : `<p style="margin:8px 0 0;font-size:12px;color:#4b5563;">An .ics calendar file is attached for Apple Calendar and other apps.</p>`;
+  const extrasRow = extras.length
+    ? `<p style="margin:10px 0 0;font-size:12px;color:#4b5563;font-family:Arial,Helvetica,sans-serif;line-height:1.45;">Also: ${extras.join(' · ')}. A calendar file is attached to this email.</p>`
+    : `<p style="margin:10px 0 0;font-size:12px;color:#4b5563;font-family:Arial,Helvetica,sans-serif;">A calendar file (.ics) is attached to this email.</p>`;
 
   return `
-<p style="margin:16px 0 8px;">
-  <a href="${input.icsDownloadUrl}" target="_blank" rel="noopener noreferrer" style="${buttonStyle}">Add to Calendar</a>
-</p>
-${fallbackRow}`.trim();
+<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:16px 0 8px;">
+  <tr>
+    <td align="left" bgcolor="#005EB8" style="border-radius:8px;mso-padding-alt:14px 24px;">
+      <!--[if mso]>
+      <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${input.primaryUrl}" style="height:44px;v-text-anchor:middle;width:220px;" arcsize="12%" strokecolor="#005EB8" fillcolor="#005EB8">
+        <w:anchorlock/>
+        <center style="color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;">Add to Calendar</center>
+      </v:roundrect>
+      <![endif]-->
+      <!--[if !mso]><!-->
+      <a href="${input.primaryUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#ffffff;text-decoration:none;border-radius:8px;background-color:#005EB8;border:1px solid #005EB8;">
+        Add to Calendar
+      </a>
+      <!--<![endif]-->
+    </td>
+  </tr>
+</table>
+${extrasRow}`.trim();
 }
 
-export function liveSessionCalendarIcsUrl(supabaseFunctionsBaseUrl: string): string {
-  const base = supabaseFunctionsBaseUrl.replace(/\/$/, '');
-  return `${base}/live-session-calendar`;
+export function liveSessionCalendarIcsUrl(supabaseFunctionsBaseUrl: string, anonKey?: string): string {
+  const base = `${supabaseFunctionsBaseUrl.replace(/\/$/, '')}/live-session-calendar`;
+  const key = String(anonKey || '').trim();
+  if (!key) return base;
+  return `${base}?apikey=${encodeURIComponent(key)}`;
+}
+
+export function buildCalendarEmailAttachments(icsContent: string): Array<{
+  filename: string;
+  content: string;
+  contentType: string;
+  contentDisposition: string;
+  headers?: Record<string, string>;
+}> {
+  return [
+    {
+      filename: 'live-online-career-session.ics',
+      content: icsContent,
+      contentType: 'text/calendar; charset=UTF-8; method=PUBLISH',
+      contentDisposition: 'attachment',
+      headers: {
+        'Content-Class': 'urn:content-classes:calendarmessage',
+      },
+    },
+  ];
 }

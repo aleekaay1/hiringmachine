@@ -13,12 +13,14 @@ import { buildEmailSignatureHtml } from '../_shared/emailSignatureHtml.ts';
 import { ZOOM_MEETING_URL } from '../_shared/hiringUrls.ts';
 import {
   buildAddToCalendarEmailHtml,
+  buildCalendarEmailAttachments,
   buildGoogleCalendarUrl,
   buildIcsContent,
   buildOutlookCalendarUrl,
   resolveLiveSessionCalendar,
   liveSessionCalendarIcsUrl,
 } from '../_shared/calendarInvite.ts';
+import { wrapTransactionalEmailHtml } from '../_shared/emailHtmlShell.ts';
 import {
   buildAssessmentInternalNotificationSubject,
   parseAssessmentNotifyRecipients,
@@ -138,7 +140,14 @@ Deno.serve(async (req) => {
 
     let subject: string;
     let html: string;
-    let calendarAttachment: { filename: string; content: string; contentType: string } | undefined;
+    let mailAttachments: Array<{
+      filename: string;
+      content: string;
+      contentType: string;
+      contentDisposition: string;
+      headers?: Record<string, string>;
+    }> = [];
+    let mailAlternatives: Array<{ contentType: string; content: string; headers?: Record<string, string> }> = [];
 
     if (isPostCheckin) {
       subject = POST_CHECKIN_EMAIL_SUBJECT;
@@ -152,28 +161,37 @@ Deno.serve(async (req) => {
         PUBLIC_LIVE_SESSION_CALENDAR_LOCATION: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_LOCATION') ?? undefined,
       };
       const calendarEvent = resolveLiveSessionCalendar(liveSessionEnv, ZOOM_MEETING_URL);
-      const icsUrl = liveSessionCalendarIcsUrl(`${supabaseUrl}/functions/v1`);
+      const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+      const googleUrl = buildGoogleCalendarUrl(calendarEvent);
+      const icsUrl = liveSessionCalendarIcsUrl(`${supabaseUrl}/functions/v1`, anonKey);
+      const icsContent = buildIcsContent(calendarEvent);
       const addToCalendarHtml = buildAddToCalendarEmailHtml({
+        primaryUrl: googleUrl,
         icsDownloadUrl: icsUrl,
-        googleUrl: buildGoogleCalendarUrl(calendarEvent),
+        googleUrl,
         outlookUrl: buildOutlookCalendarUrl(calendarEvent),
       });
-      calendarAttachment = {
-        filename: 'live-online-career-session.ics',
-        content: buildIcsContent(calendarEvent),
-        contentType: 'text/calendar; charset=utf-8',
-      };
-      html = applyPostCheckinMerge({
-        firstName: firstName || 'there',
-        sessionDate: calendarEvent.displayDate,
-        sessionTime: calendarEvent.displayTime,
-        zoomUrl: ZOOM_MEETING_URL,
-        addToCalendarHtml,
-        emailSignatureHtml: sig,
-      });
+      mailAttachments = buildCalendarEmailAttachments(icsContent);
+      mailAlternatives = [
+        {
+          contentType: 'text/calendar; charset=UTF-8; method=PUBLISH',
+          content: icsContent,
+          headers: { 'Content-Disposition': 'inline; filename="live-online-career-session.ics"' },
+        },
+      ];
+      html = wrapTransactionalEmailHtml(
+        applyPostCheckinMerge({
+          firstName: firstName || 'there',
+          sessionDate: calendarEvent.displayDate,
+          sessionTime: calendarEvent.displayTime,
+          zoomUrl: ZOOM_MEETING_URL,
+          addToCalendarHtml,
+          emailSignatureHtml: sig,
+        }),
+      );
     } else {
       subject = POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT;
-      html = applyPostAssessmentSubmitMerge(candidateName, sig);
+      html = wrapTransactionalEmailHtml(applyPostAssessmentSubmitMerge(candidateName, sig));
     }
 
     const from =
@@ -189,7 +207,8 @@ Deno.serve(async (req) => {
           subject,
           text: html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
           html,
-          ...(calendarAttachment ? { attachments: [calendarAttachment] } : {}),
+          ...(mailAttachments.length ? { attachments: mailAttachments } : {}),
+          ...(mailAlternatives.length ? { alternatives: mailAlternatives } : {}),
         },
         (err: Error | null) => (err ? reject(err) : resolve())
       );

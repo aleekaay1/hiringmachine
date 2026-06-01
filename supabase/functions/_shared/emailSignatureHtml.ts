@@ -23,10 +23,13 @@ const SOCIAL_LINKS = {
 
 export function buildEmailSignatureHtml(_siteOrigin?: string): string {
   return `
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:20px; border-top:1px solid #e5e7eb; padding-top:16px; max-width:520px; font-family:Arial,Helvetica,sans-serif; font-size:12px; color:#374151; line-height:1.55;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:16px;border-top:1px solid #e5e7eb;padding-top:10px;max-width:520px;font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#374151;line-height:1.45;">
   <tr>
-    <td style="padding-bottom:12px;">
-      <img src="${SIGNATURE_LOGO_URL}" alt="Globe Life AIL · Paz Organization" width="140" style="display:block; max-width:140px; height:auto; border:0;" />
+    <td style="padding:0 0 6px 0;font-size:13px;color:#374151;">Best regards,</td>
+  </tr>
+  <tr>
+    <td style="padding:0 0 8px 0;">
+      <img src="${SIGNATURE_LOGO_URL}" alt="Globe Life AIL · Paz Organization" width="132" style="display:block;max-width:132px;height:auto;border:0;" />
     </td>
   </tr>
   <tr>
@@ -39,7 +42,7 @@ export function buildEmailSignatureHtml(_siteOrigin?: string): string {
     </td>
   </tr>
   <tr>
-    <td style="padding-top:14px;">
+    <td style="padding-top:8px;">
       <table role="presentation" cellpadding="0" cellspacing="0" border="0">
         <tr>
           <td style="padding-right:10px;"><a href="${SOCIAL_LINKS.website}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;"><img src="${ICONS.website}" width="26" height="26" alt="Website" style="display:block; border:0;" /></a></td>
