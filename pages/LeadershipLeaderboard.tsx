@@ -20,6 +20,7 @@ import { classifyBookedOutcome, loadScopedWebinarRowsForViewer } from '../servic
 import {
   buildCompositeLeaderboard,
   buildLeaderboardWindows,
+  type LeaderboardRecruiterSeed,
   type LeaderboardPeriod,
   type RecruiterLeaderboardRow,
 } from '../services/pipelineLeaderboard';
@@ -151,12 +152,20 @@ const LeadershipLeaderboard: React.FC = () => {
       const recruiterDirectory = new Map(
         profiles.map((item) => [item.user_id, { fullName: item.full_name, email: item.email ?? null }]),
       );
+      const recruiterSeeds: LeaderboardRecruiterSeed[] = profiles
+        .filter((item) => item.role === 'recruiter')
+        .map((item) => ({
+          recruiterKey: `uid:${item.user_id}`,
+          recruiterUserId: item.user_id,
+          displayName: String(item.full_name || '').trim() || 'Unknown Recruiter',
+        }));
 
       const computed = buildCompositeLeaderboard({
         currentRecords,
         previousRecords,
         candidateEmailMap,
         recruiterDirectory,
+        recruiterSeeds,
         classifyWebinarShow: (bookedSubtype, candidateEmail) => {
           if (bookedSubtype !== 'webinar') return false;
           if (!candidateEmail) return false;
@@ -174,6 +183,7 @@ const LeadershipLeaderboard: React.FC = () => {
         previousRecords: [],
         candidateEmailMap,
         recruiterDirectory,
+        recruiterSeeds,
         classifyWebinarShow: (bookedSubtype, candidateEmail) => {
           if (bookedSubtype !== 'webinar') return false;
           if (!candidateEmail) return false;

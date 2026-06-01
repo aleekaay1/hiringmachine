@@ -33,6 +33,12 @@ export type RecruiterLeaderboardRow = {
   badges: string[];
 };
 
+export type LeaderboardRecruiterSeed = {
+  recruiterKey: string;
+  recruiterUserId: string;
+  displayName: string;
+};
+
 type Aggregate = {
   recruiterKey: string;
   recruiterUserId: string | null;
@@ -172,6 +178,7 @@ function aggregateRecords(
   candidateEmailMap: CandidateEmailMap,
   classifyWebinarShow: (bookedSubtype: string | null, candidateEmail: string | null) => boolean,
   directory: RecruiterDirectory,
+  recruiterSeeds?: LeaderboardRecruiterSeed[],
 ): Aggregate[] {
   const map = new Map<string, Aggregate>();
   for (const record of records) {
@@ -200,6 +207,18 @@ function aggregateRecords(
     if (classifyWebinarShow(bookedSubtype, candidateEmail)) {
       row.webinarShowed += 1;
     }
+  }
+  for (const seed of recruiterSeeds || []) {
+    if (map.has(seed.recruiterKey)) continue;
+    map.set(seed.recruiterKey, {
+      recruiterKey: seed.recruiterKey,
+      recruiterUserId: seed.recruiterUserId,
+      displayName: seed.displayName,
+      calls: 0,
+      booked: 0,
+      webinarBooked: 0,
+      webinarShowed: 0,
+    });
   }
   return [...map.values()];
 }
@@ -287,6 +306,7 @@ export function buildCompositeLeaderboard(input: {
   previousRecords: PipelineCallRecord[];
   candidateEmailMap: CandidateEmailMap;
   recruiterDirectory: RecruiterDirectory;
+  recruiterSeeds?: LeaderboardRecruiterSeed[];
   classifyWebinarShow: (bookedSubtype: string | null, candidateEmail: string | null) => boolean;
 }): RecruiterLeaderboardRow[] {
   const currentRows = toRows(
@@ -295,6 +315,7 @@ export function buildCompositeLeaderboard(input: {
       input.candidateEmailMap,
       input.classifyWebinarShow,
       input.recruiterDirectory,
+      input.recruiterSeeds,
     ),
   );
   const previousRows = toRows(
@@ -303,6 +324,7 @@ export function buildCompositeLeaderboard(input: {
       input.candidateEmailMap,
       input.classifyWebinarShow,
       input.recruiterDirectory,
+      input.recruiterSeeds,
     ),
   );
 
