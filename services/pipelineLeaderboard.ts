@@ -335,6 +335,15 @@ function recruiterKeyForRecord(record: PipelineCallRecord): { recruiterKey: stri
   return { recruiterKey: `label:${labelLower}`, recruiterUserId: null };
 }
 
+/** Recruiter user id when inviter/file tag matches a seeded account (null if unmatched). */
+export function resolveWebinarRowRecruiterUserId(
+  row: AnyRow,
+  seeds: LeaderboardRecruiterSeed[],
+  directory: RecruiterDirectory,
+): string | null {
+  return ownerForWebinarRow(row, seeds, directory)?.recruiterUserId ?? null;
+}
+
 function ownerForWebinarRow(
   row: AnyRow,
   seeds: LeaderboardRecruiterSeed[],

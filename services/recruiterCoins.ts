@@ -1,14 +1,20 @@
 /**
- * Paz Coins — 10 coins per webinar or live session show for the recruiter who booked.
- * Credits shows from the last COIN_LOOKBACK_DAYS (Toronto) and onward on each sync.
+ * Paz Coins — 10 coins per show, using the same WebinarGeek + live-session rules as the leaderboard.
+ * Webinar: inviter file tag + watch signal (not pipeline dispositions).
+ * Live session: Calendly/Zoom attendance matched like leaderboard liveSessionShowed.
  */
+import type { UserProfile } from './accessControl';
 import {
   buildLiveSessionRowsByEmail,
   liveSessionAttendedFromRegistrant,
   pickRegistrantForDisposition,
   type LiveSessionRegistrantRow,
 } from './liveSessionBookedOutcomes';
-import { buildWebinarRowsByEmail, classifyBookedOutcome } from './pipelineBookedOutcomes';
+import {
+  resolveWebinarRowRecruiterUserId,
+  seedsFromProfiles,
+  type LeaderboardRecruiterSeed,
+} from './pipelineLeaderboard';
 import {
   readCallRecordMeta,
   type PipelineCallRecord,
@@ -17,7 +23,7 @@ import { shiftYmdDays, torontoYmdFromDate } from './webinarGeekDates';
 import { fmtHrScheduledDateKey } from './webinarGeekRecruiterAnalytics';
 
 export const COINS_PER_SHOW = 10;
-/** Rolling earn window: backfill this many days on sync, then keep crediting new shows. */
+/** Internal sync window (not shown in UI). */
 export const COIN_LOOKBACK_DAYS = 14;
 
 export type CoinSourceType = 'webinar_show' | 'live_session_show';
@@ -37,6 +43,7 @@ export type CoinEarnWindow = {
 };
 
 type AnyRow = Record<string, unknown>;
+type RecruiterDirectory = Map<string, { fullName: string | null; email: string | null }>;
 
 const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
 
@@ -52,7 +59,6 @@ export function ymdInCoinEarnWindow(ymd: string, window: CoinEarnWindow = coinEa
   return key >= window.sinceYmd && key <= window.untilYmd;
 }
 
-/** ISO lower bound for loading bookings that may have shown inside the earn window. */
 export function coinBookingFetchFromIso(window: CoinEarnWindow = coinEarnWindow()): string {
   const bookingLookbackYmd = shiftYmdDays(window.sinceYmd, -45);
   const [y, m, d] = bookingLookbackYmd.split('-').map(Number);
@@ -65,15 +71,61 @@ export function webinarShowedFromRow(row: AnyRow): boolean {
   return Number.isFinite(sec) && sec > 0 && sec >= HALF_WATCH_SECONDS;
 }
 
-function webinarSubscriptionId(row: AnyRow): string {
-  return String(row.id ?? row.subscription_id ?? '').trim();
+function buildDirectory(profiles: UserProfile[]): RecruiterDirectory {
+  const map: RecruiterDirectory = new Map();
+  for (const p of profiles) {
+    map.set(p.user_id, { fullName: p.full_name ?? null, email: p.email ?? null });
+  }
+  return map;
 }
 
-function showDateYmdForWebinarRow(row: AnyRow): string {
-  return fmtHrScheduledDateKey(row);
+function webinarShowCoinEvents(
+  userId: string,
+  webinarRows: AnyRow[],
+  seeds: LeaderboardRecruiterSeed[],
+  directory: RecruiterDirectory,
+  window: CoinEarnWindow,
+): RecruiterCoinEventDraft[] {
+  const events: RecruiterCoinEventDraft[] = [];
+  const seen = new Set<string>();
+
+  for (const row of webinarRows) {
+    if (!webinarShowedFromRow(row)) continue;
+
+    const ownerId = resolveWebinarRowRecruiterUserId(row, seeds, directory);
+    if (ownerId !== userId) continue;
+
+    const dateKey = fmtHrScheduledDateKey(row);
+    if (!ymdInCoinEarnWindow(dateKey, window)) continue;
+
+    const subId = String(row.id ?? row.subscription_id ?? '').trim();
+    const email = String(row.email || '').trim().toLowerCase();
+    const sourceKey = subId ? `webinar_show:${subId}` : `webinar_show:${dateKey}:${email}`;
+    if (!sourceKey || seen.has(sourceKey)) continue;
+    seen.add(sourceKey);
+
+    const fn = String(row.firstname || '').trim();
+    const sn = String(row.surname || '').trim();
+    const name = `${fn} ${sn}`.trim() || email || 'Webinar guest';
+
+    events.push({
+      userId,
+      sourceType: 'webinar_show',
+      sourceKey,
+      points: COINS_PER_SHOW,
+      label: `Webinar show · ${name}`,
+      earnedAt:
+        (typeof row.watched_true_set_at === 'string' && row.watched_true_set_at) ||
+        (typeof row.created_at === 'string' && row.created_at) ||
+        new Date().toISOString(),
+    });
+  }
+
+  return events;
 }
 
-function liveShowEventsForUser(
+/** Same live-session showed rule as pipelineLeaderboard aggregateCallRecords. */
+function liveSessionShowCoinEvents(
   userId: string,
   records: PipelineCallRecord[],
   candidateEmailById: Map<string, string>,
@@ -84,8 +136,7 @@ function liveShowEventsForUser(
 
   for (const record of records) {
     if (String(record.recruiter_user_id || '').trim() !== userId) continue;
-    const disposition = String(record.disposition || '').trim().toLowerCase();
-    if (disposition !== 'booked') continue;
+    if (String(record.disposition || '').trim().toLowerCase() !== 'booked') continue;
 
     const meta = readCallRecordMeta(record);
     const bookedSubtype = String(record.booked_subtype || meta.bookedSubtype || '').trim().toLowerCase();
@@ -119,67 +170,9 @@ function liveShowEventsForUser(
   return events;
 }
 
-function webinarShowEventsFromBookings(
-  userId: string,
-  records: PipelineCallRecord[],
-  candidateEmailById: Map<string, string>,
-  rowsByEmail: Map<string, AnyRow[]>,
-  window: CoinEarnWindow,
-): RecruiterCoinEventDraft[] {
-  const events: RecruiterCoinEventDraft[] = [];
-
-  for (const record of records) {
-    if (String(record.recruiter_user_id || '').trim() !== userId) continue;
-    const disposition = String(record.disposition || '').trim().toLowerCase();
-    if (disposition !== 'booked') continue;
-
-    const meta = readCallRecordMeta(record);
-    const bookedSubtype = String(record.booked_subtype || meta.bookedSubtype || '').trim().toLowerCase();
-    if (bookedSubtype !== 'webinar') continue;
-
-    const email = candidateEmailById.get(record.candidate_id);
-    if (!email) continue;
-
-    const disposedMs = Date.parse(record.disposed_at || record.created_at);
-    const outcome = classifyBookedOutcome({
-      bookedSubtype: 'webinar',
-      candidateEmail: email,
-      rowsByEmail,
-      disposedAtMs: Number.isFinite(disposedMs) ? disposedMs : Date.now(),
-    });
-    if (!outcome.watchedSignal) continue;
-
-    const matchedRows = (rowsByEmail.get(email) || []).filter((row) => webinarShowedFromRow(row));
-    const showRow = matchedRows[0];
-    const showYmd = showRow ? showDateYmdForWebinarRow(showRow) : torontoYmdFromDate();
-    if (!ymdInCoinEarnWindow(showYmd, window)) continue;
-
-    const recordId = String(record.id || '').trim();
-    if (!recordId) continue;
-
-    const subId = showRow ? webinarSubscriptionId(showRow) : '';
-    const sourceKey = subId ? `webinar_show:${subId}` : `webinar_show:booking:${recordId}`;
-
-    events.push({
-      userId,
-      sourceType: 'webinar_show',
-      sourceKey,
-      points: COINS_PER_SHOW,
-      label: `Webinar show · ${email}`,
-      earnedAt:
-        (showRow && typeof showRow.watched_true_set_at === 'string' && showRow.watched_true_set_at) ||
-        (showRow && typeof showRow.created_at === 'string' && showRow.created_at) ||
-        record.disposed_at ||
-        record.created_at,
-    });
-  }
-
-  return events;
-}
-
-/** Coin earn events for one recruiter (deduped by source_key, last 14 days + future syncs). */
 export function buildRecruiterCoinEventDrafts(input: {
   userId: string;
+  profiles: UserProfile[];
   webinarRows: AnyRow[];
   callRecords: PipelineCallRecord[];
   candidateEmailById: Map<string, string>;
@@ -187,18 +180,13 @@ export function buildRecruiterCoinEventDrafts(input: {
   earnWindow?: CoinEarnWindow;
 }): RecruiterCoinEventDraft[] {
   const window = input.earnWindow ?? coinEarnWindow();
-  const rowsByEmail = buildWebinarRowsByEmail(input.webinarRows);
+  const seeds = seedsFromProfiles(input.profiles);
+  const directory = buildDirectory(input.profiles);
   const liveSessionByEmail = buildLiveSessionRowsByEmail(input.liveRegistrants);
 
   const merged = [
-    ...webinarShowEventsFromBookings(
-      input.userId,
-      input.callRecords,
-      input.candidateEmailById,
-      rowsByEmail,
-      window,
-    ),
-    ...liveShowEventsForUser(
+    ...webinarShowCoinEvents(input.userId, input.webinarRows, seeds, directory, window),
+    ...liveSessionShowCoinEvents(
       input.userId,
       input.callRecords,
       input.candidateEmailById,

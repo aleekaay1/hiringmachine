@@ -2,11 +2,7 @@
 // Deploy: supabase functions deploy sync-recruiter-coins
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import {
-  COIN_LOOKBACK_DAYS,
-  syncAllEligibleRecruiterCoins,
-  syncRecruiterCoinsForUser,
-} from '../_shared/recruiterCoins.ts';
+import { syncAllEligibleRecruiterCoins, syncRecruiterCoinsForUser } from '../_shared/recruiterCoins.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -96,7 +92,8 @@ Deno.serve(async (req) => {
           ok: true,
           syncAll: true,
           usersSynced: bulk.usersSynced,
-          lookbackDays: COIN_LOOKBACK_DAYS,
+          ledgerReady: !bulk.ledgerMissing,
+          ledgerMissing: bulk.ledgerMissing,
           coinsPerShow: 10,
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
@@ -110,8 +107,8 @@ Deno.serve(async (req) => {
         ok: true,
         balance: result.balance,
         totalEvents: result.totalEvents,
-        creditedInWindow: result.creditedInWindow,
-        lookbackDays: COIN_LOOKBACK_DAYS,
+        ledgerReady: result.ledgerReady,
+        ledgerMissing: result.ledgerMissing,
         coinsPerShow: 10,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },

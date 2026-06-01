@@ -4,11 +4,12 @@ import { torontoYmdFromDate } from './webinarGeekDates';
 const TABLE = 'user_dashboard_day_notes';
 const LS_PREFIX = 'pohiring_dashboard_note_v1';
 
-function isMissingTableError(error: { code?: string; message?: string } | null): boolean {
+function isMissingTableError(error: { code?: string; message?: string; details?: string } | null): boolean {
   if (!error) return false;
-  if (error.code === 'PGRST205') return true;
-  const m = error.message || '';
-  return /user_dashboard_day_notes/i.test(m) && /schema cache|does not exist/i.test(m);
+  if (error.code === 'PGRST205' || error.code === 'PGRST116') return true;
+  const m = `${error.message || ''} ${error.details || ''}`;
+  if (/404/.test(m) || /not found/i.test(m)) return true;
+  return /user_dashboard_day_notes/i.test(m) && /schema cache|does not exist|relation/i.test(m);
 }
 
 function localKey(userId: string, noteDate: string): string {

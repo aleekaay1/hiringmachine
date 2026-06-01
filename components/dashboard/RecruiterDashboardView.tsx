@@ -4,8 +4,6 @@ import { loadRecruiterPersonalMetrics, type RecruiterPersonalMetrics } from '../
 import { DayNotesPanel, GoalRow, QuickLinkCard, StatTile } from './DashboardWidgets';
 import RecruiterCoinsPanel from './RecruiterCoinsPanel';
 import { loadRecruiterCoinWallet, type RecruiterCoinWallet } from '../../services/recruiterCoinService';
-import { COINS_PER_SHOW } from '../../services/recruiterCoins';
-
 function pct(n: number): string {
   return `${Math.round(n * 100)}%`;
 }
@@ -49,11 +47,6 @@ const RecruiterDashboardView: React.FC<{ profile: UserProfile }> = ({ profile })
     );
   }
 
-  const periodShowCoins =
-    metrics != null
-      ? (metrics.webinarShowed + metrics.liveSessionShowed) * COINS_PER_SHOW
-      : null;
-
   return (
     <>
       <RecruiterCoinsPanel wallet={wallet} loading={!wallet && !error} />
@@ -83,11 +76,6 @@ const RecruiterDashboardView: React.FC<{ profile: UserProfile }> = ({ profile })
         </div>
         <p className="mt-2 text-[10px] text-[#6a839f]">
           Upload progress updates in the uploads workspace. Booking goal compares to your week total above until daily tracking is added.
-          {periodShowCoins != null && periodShowCoins > 0 ? (
-            <span className="block mt-1 text-amber-800/90">
-              This period: {metrics!.webinarShowed + metrics!.liveSessionShowed} shows ≈ {periodShowCoins} coins at {COINS_PER_SHOW} per show (lifetime balance in your wallet above).
-            </span>
-          ) : null}
         </p>
       </div>
 

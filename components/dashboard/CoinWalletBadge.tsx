@@ -45,7 +45,7 @@ const CoinWalletBadge: React.FC<CoinWalletBadgeProps> = ({
   return (
     <div
       className={`inline-flex items-center gap-2 rounded-2xl border border-amber-200/80 bg-gradient-to-r from-amber-50 via-yellow-50 to-amber-100/90 px-3 py-2 shadow-[0_4px_18px_-8px_rgba(180,120,0,0.45)] ${className}`}
-      title={`Paz Coins — ${COINS_PER_SHOW} coins per webinar or live session show. Redeem for rewards coming soon.`}
+      title={`Paz Coins — ${COINS_PER_SHOW} per show. Save them up for rewards coming soon.`}
     >
       <span className="relative flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-amber-300 to-amber-500 shadow-inner">
         <Coins size={18} className="text-amber-950" strokeWidth={2.25} />
