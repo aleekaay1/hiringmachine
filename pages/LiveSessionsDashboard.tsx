@@ -298,9 +298,10 @@ const LiveSessionsDashboard: React.FC = () => {
           </span>
           {data && (
             <span className="text-[#9ba8ba]">
-              {data.from_cache ? 'Saved in database' : 'Refreshed from Zoom + Calendly'}
+              {data.from_cache ? 'Loaded from database' : 'Full refresh saved to database'}
               {MIDDLE_DOT} {data.from_cache ? 'last saved' : 'synced'}{' '}
               {formatDateTimeCanadaEastern(data.generated_at)}
+              {!data.from_cache ? ` ${MIDDLE_DOT} replaces all past & upcoming sessions` : ''}
             </span>
           )}
         </div>
@@ -310,7 +311,7 @@ const LiveSessionsDashboard: React.FC = () => {
           subtitle="Scheduled on Calendly (blue)."
           sessions={upcomingSessions}
           loading={loading}
-          emptyText="No upcoming sessions saved yet. Use Refresh from Zoom + Calendly."
+          emptyText="No upcoming sessions in the database. Click Refresh from Zoom + Calendly to fetch and save."
           expandedKey={expandedKey}
           onToggle={(key) => setExpandedKey((k) => (k === key ? null : key))}
         />
@@ -320,7 +321,7 @@ const LiveSessionsDashboard: React.FC = () => {
           subtitle="Calendly registrations (blue) + Zoom attendance (green)."
           sessions={pastSessions}
           loading={loading}
-          emptyText="No past sessions saved yet. Use Refresh from Zoom + Calendly."
+          emptyText="No past sessions in the database. Click Refresh from Zoom + Calendly to fetch and save."
           expandedKey={expandedKey}
           onToggle={(key) => setExpandedKey((k) => (k === key ? null : key))}
         />

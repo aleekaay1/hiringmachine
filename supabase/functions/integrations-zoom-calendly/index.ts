@@ -30,7 +30,6 @@ import { DateTime } from 'npm:luxon@3.5.0';
 import {
   createServiceRoleClient,
   loadLiveSessionsRegistryPayload,
-  mergeSyncedWithStoredRegistry,
   persistLiveSessionsRegistry,
   reclassifySessionsByStart,
 } from '../_shared/liveSessionsRegistry.ts';
@@ -1673,15 +1672,21 @@ Deno.serve(async (req) => {
         syncedAt: generatedAt,
         nowMs,
       });
-      const stored = await loadLiveSessionsRegistryPayload(admin);
-      if (stored) {
-        const merged = mergeSyncedWithStoredRegistry(finalPast, finalUpcoming, stored, nowMs);
-        responsePast = merged.pastMeetings;
-        responseUpcoming = merged.upcomingMeetings;
-        registryResult = {
-          ...registryResult,
-          sessions: responsePast.length + responseUpcoming.length,
-        };
+      if (registryResult.ok) {
+        const stored = await loadLiveSessionsRegistryPayload(admin);
+        if (stored) {
+          const recl = reclassifySessionsByStart(
+            stored.past_meetings,
+            stored.upcoming_meetings,
+            nowMs,
+          );
+          responsePast = recl.pastMeetings;
+          responseUpcoming = recl.upcomingMeetings;
+          registryResult = {
+            ...registryResult,
+            sessions: responsePast.length + responseUpcoming.length,
+          };
+        }
       }
     }
 

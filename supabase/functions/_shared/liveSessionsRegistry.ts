@@ -130,6 +130,12 @@ export async function persistLiveSessionsRegistry(
     }, { onConflict: 'session_date' });
     if (occErr) throw occErr;
 
+    const { error: clearRegErr } = await admin
+      .from('live_session_registrants')
+      .delete()
+      .eq('session_date', sessionDate);
+    if (clearRegErr) throw clearRegErr;
+
     if (invitees.length === 0) return;
 
     const rows = invitees.map((i) => {
@@ -156,9 +162,7 @@ export async function persistLiveSessionsRegistry(
     }).filter(Boolean) as Record<string, unknown>[];
 
     registrantCount += rows.length;
-    const { error: regErr } = await admin.from('live_session_registrants').upsert(rows, {
-      onConflict: 'session_date,email',
-    });
+    const { error: regErr } = await admin.from('live_session_registrants').insert(rows);
     if (regErr) throw regErr;
   };
 
@@ -180,6 +184,21 @@ export async function persistLiveSessionsRegistry(
       if (!dateKey) continue;
       seenDates.add(dateKey);
       await upsertSession(dateKey, 'upcoming', row.zoom, row.calendly, null, row.invitees);
+    }
+
+    const { data: existingOcc, error: listErr } = await admin
+      .from('live_session_occurrences')
+      .select('session_date');
+    if (listErr) throw listErr;
+    const staleDates = (existingOcc ?? [])
+      .map((row) => String((row as { session_date?: string }).session_date || ''))
+      .filter((d) => d && !seenDates.has(d));
+    const chunk = 80;
+    for (let i = 0; i < staleDates.length; i += chunk) {
+      const slice = staleDates.slice(i, i + chunk);
+      if (!slice.length) continue;
+      const { error: delErr } = await admin.from('live_session_occurrences').delete().in('session_date', slice);
+      if (delErr) throw delErr;
     }
 
     return { ok: true, sessions: seenDates.size, registrants: registrantCount };
@@ -329,7 +348,10 @@ function torontoDateKeyFromRow(
   return torontoDateKey(ms, calendly?.start_time ?? zoom.start_time);
 }
 
-/** After a live sync, return full history: fresh rows win per date; older DB-only dates are kept. */
+/**
+ * @deprecated Sync now fully replaces the registry in the database. Kept for reference/tests only.
+ * Previously merged fresh API rows with older DB rows (caused stale sessions to reappear).
+ */
 export function mergeSyncedWithStoredRegistry(
   syncedPast: RegistryPastRow[],
   syncedUpcoming: RegistryUpcomingRow[],
