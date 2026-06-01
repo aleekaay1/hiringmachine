@@ -146,12 +146,25 @@ function displayNameForRecord(
   record: PipelineCallRecord,
   directory: RecruiterDirectory,
 ): string {
+  const nameFromEmail = (email: string): string | null => {
+    const local = String(email || '').trim().toLowerCase().split('@')[0] || '';
+    if (!local) return null;
+    const parts = local.split(/[._-]+/g).filter(Boolean);
+    if (!parts.length) return null;
+    return parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+  };
   const userId = String(record.recruiter_user_id || '').trim();
   if (userId && directory.has(userId)) {
     const row = directory.get(userId)!;
-    return String(row.fullName || row.email || '').trim() || 'Unknown Recruiter';
+    const full = String(row.fullName || '').trim();
+    if (full) return full;
+    const fromEmail = row.email ? nameFromEmail(row.email) : null;
+    return fromEmail || 'Unknown Recruiter';
   }
-  return String(record.recruiter_label || '').trim() || 'Unknown Recruiter';
+  const label = String(record.recruiter_label || '').trim();
+  if (label && !label.includes('@')) return label;
+  const fallbackEmail = label.includes('@') ? label : '';
+  return (fallbackEmail ? nameFromEmail(fallbackEmail) : null) || 'Unknown Recruiter';
 }
 
 function aggregateRecords(
