@@ -2,6 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, History, Moon, Phone, RefreshCw, Sun } from 'lucide-react';
+import CandidateProfileEditor from '../components/pipeline/CandidateProfileEditor';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import {
@@ -527,6 +528,29 @@ const PipelineCallWorkspace: React.FC = () => {
     [isDark],
   );
 
+  const handleProfileSaved = React.useCallback((updated: PipelineCandidate) => {
+    setCandidates((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
+    setPhoneInput(String(updated.phone || '').trim());
+    setPhoneMsg(null);
+  }, []);
+
+  const goToNextCandidate = () => {
+    if (!queueList.length) {
+      setActionMsg('No candidates left in the active queue.');
+      return;
+    }
+    if (currentQueueIndex < 0) {
+      setSelectedCandidateId(queueList[0].id);
+      return;
+    }
+    if (currentQueueIndex >= queueList.length - 1) {
+      setActionMsg('You are on the last candidate in the active queue.');
+      return;
+    }
+    setSelectedCandidateId(queueList[currentQueueIndex + 1].id);
+    setActionMsg(null);
+  };
+
   const saveSettings = async () => {
     setSavingSettings(true);
     setActionMsg(null);
@@ -691,7 +715,12 @@ const PipelineCallWorkspace: React.FC = () => {
         setTodaysCallCount((prev) => prev + 1);
       }
       if (autoMode) {
-        setSelectedCandidateId(null);
+        const idx = queueList.findIndex((c) => c.id === currentCandidate.id);
+        if (idx >= 0 && idx < queueList.length - 1) {
+          setSelectedCandidateId(queueList[idx + 1].id);
+        } else {
+          setSelectedCandidateId(queueList.find((c) => c.id !== currentCandidate.id)?.id ?? null);
+        }
       }
     } catch (e) {
       setError(stringifySupabaseError(e));
@@ -951,10 +980,33 @@ const PipelineCallWorkspace: React.FC = () => {
                         {currentPhoneInfo?.effectivePhone || 'No phone'} {currentCandidate.email ? `· ${currentCandidate.email}` : ''}
                       </p>
                     </div>
-                    <Button className={`!min-h-0 h-10 px-4 text-sm ${isDark ? '!bg-cyan-400/20 !text-cyan-100 hover:!bg-cyan-400/30 !border !border-cyan-200/35' : ''}`} onClick={() => void placeCall(currentCandidate, phoneInput)}>
-                      <Phone size={14} className="mr-1" />
-                      Place call
-                    </Button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="outline"
+                        className={`!min-h-0 h-10 px-3 text-sm ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
+                        onClick={goToNextCandidate}
+                        disabled={!queueList.length}
+                      >
+                        <ChevronRight size={14} className="mr-1" />
+                        Next candidate
+                      </Button>
+                      <Button
+                        className={`!min-h-0 h-10 px-4 text-sm ${isDark ? '!bg-cyan-400/20 !text-cyan-100 hover:!bg-cyan-400/30 !border !border-cyan-200/35' : ''}`}
+                        onClick={() => void placeCall(currentCandidate, phoneInput)}
+                      >
+                        <Phone size={14} className="mr-1" />
+                        Place call
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    <CandidateProfileEditor
+                      candidate={currentCandidate}
+                      tone={tone}
+                      isDark={isDark}
+                      onSaved={handleProfileSaved}
+                    />
                   </div>
 
                   <details className={`mt-3 rounded-xl border p-3 ${tone.subtle}`}>

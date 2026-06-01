@@ -47,6 +47,26 @@ export interface PipelineCandidateProfile {
   work_summary: string | null;
 }
 
+export function readPipelineCandidateProfile(candidate: PipelineCandidate | null): PipelineCandidateProfile {
+  const meta = candidate?.metadata && typeof candidate.metadata === 'object' ? candidate.metadata : {};
+  const profile = (meta as Record<string, unknown>).ocr_profile;
+  const obj = profile && typeof profile === 'object' ? (profile as Record<string, unknown>) : {};
+  return {
+    current_title: typeof obj.current_title === 'string' ? obj.current_title : null,
+    location: typeof obj.location === 'string' ? obj.location : null,
+    total_experience_years: typeof obj.total_experience_years === 'string' ? obj.total_experience_years : null,
+    education_highest: typeof obj.education_highest === 'string' ? obj.education_highest : null,
+    skills_summary: typeof obj.skills_summary === 'string' ? obj.skills_summary : null,
+    work_summary: typeof obj.work_summary === 'string' ? obj.work_summary : null,
+  };
+}
+
+export function readPipelineCandidateTextExcerpt(candidate: PipelineCandidate | null): string {
+  const meta = candidate?.metadata && typeof candidate.metadata === 'object' ? candidate.metadata : {};
+  const raw = (meta as Record<string, unknown>).ocr_text_excerpt;
+  return typeof raw === 'string' ? raw : '';
+}
+
 export interface PipelineResume {
   id: string;
   candidate_id: string;
