@@ -52,6 +52,107 @@ export function parseIsoDate(value: string | undefined | null): Date | null {
   return new Date(ms);
 }
 
+type Ymd = { year: number; month: number; day: number };
+
+function easternParts(now: Date): Ymd & { weekday: number; hour: number; minute: number } {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: LIVE_SESSION_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const parts = dtf.formatToParts(now);
+  const map: Record<string, string> = {};
+  for (const p of parts) {
+    if (p.type !== 'literal') map[p.type] = p.value;
+  }
+  const weekdayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    weekday: weekdayMap[map.weekday] ?? 0,
+    hour: Number(map.hour),
+    minute: Number(map.minute),
+  };
+}
+
+function addDaysYmd(ymd: Ymd, days: number): Ymd {
+  const d = new Date(Date.UTC(ymd.year, ymd.month - 1, ymd.day + days));
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
+}
+
+export function zonedWallClockToUtc(ymd: Ymd, hour: number, minute: number, timeZone = LIVE_SESSION_TIMEZONE): Date {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  });
+  const readParts = (ms: number) => {
+    const got: Record<string, string> = {};
+    for (const p of dtf.formatToParts(new Date(ms))) {
+      if (p.type !== 'literal') got[p.type] = p.value;
+    }
+    return {
+      year: Number(got.year),
+      month: Number(got.month),
+      day: Number(got.day),
+      hour: Number(got.hour),
+      minute: Number(got.minute),
+    };
+  };
+  let ts = Date.UTC(ymd.year, ymd.month - 1, ymd.day, hour, minute);
+  for (let i = 0; i < 4; i += 1) {
+    const got = readParts(ts);
+    const desired = Date.UTC(ymd.year, ymd.month - 1, ymd.day, hour, minute);
+    const actual = Date.UTC(got.year, got.month - 1, got.day, got.hour, got.minute);
+    ts += desired - actual;
+  }
+  return new Date(ts);
+}
+
+const WEDNESDAY_WEEKDAY = 3;
+const LIVE_SESSION_START_HOUR = 11;
+const LIVE_SESSION_START_MINUTE = 30;
+const LIVE_SESSION_DURATION_MIN = 30;
+
+export function fallbackNextWednesdayLiveSession(
+  zoomUrl: string,
+  env: Record<string, string | undefined> = {},
+  now = new Date(),
+): ResolvedLiveSession {
+  const parts = easternParts(now);
+  const minutesNow = parts.hour * 60 + parts.minute;
+  const sessionStartMinutes = LIVE_SESSION_START_HOUR * 60 + LIVE_SESSION_START_MINUTE;
+  let daysUntil = (WEDNESDAY_WEEKDAY - parts.weekday + 7) % 7;
+  if (daysUntil === 0 && minutesNow >= sessionStartMinutes + LIVE_SESSION_DURATION_MIN) {
+    daysUntil = 7;
+  }
+  const targetYmd = addDaysYmd(
+    { year: parts.year, month: parts.month, day: parts.day },
+    daysUntil,
+  );
+  const start = zonedWallClockToUtc(targetYmd, LIVE_SESSION_START_HOUR, LIVE_SESSION_START_MINUTE);
+  const end = new Date(start.getTime() + LIVE_SESSION_DURATION_MIN * 60 * 1000);
+  const labels = formatSessionDisplayLabels(start, end);
+  const sessionDate = `${targetYmd.year}-${String(targetYmd.month).padStart(2, '0')}-${String(targetYmd.day).padStart(2, '0')}`;
+  return {
+    ...buildEventFields(env, zoomUrl, start, end),
+    displayDate: env.PUBLIC_LIVE_SESSION_DISPLAY_DATE?.trim() || labels.displayDate,
+    displayTime: env.PUBLIC_LIVE_SESSION_DISPLAY_TIME?.trim() || labels.displayTime,
+    sessionDate,
+  };
+}
+
 export function formatSessionDisplayLabels(start: Date, end: Date): { displayDate: string; displayTime: string } {
   const displayDate = new Intl.DateTimeFormat('en-US', {
     timeZone: LIVE_SESSION_TIMEZONE,
@@ -116,7 +217,7 @@ export function resolveLiveSessionCalendar(
   env: Record<string, string | undefined>,
   zoomUrl: string,
   occurrence: LiveSessionOccurrenceRecord | null = null,
-): ResolvedLiveSession | null {
+): ResolvedLiveSession {
   const envStart = parseIsoDate(env.PUBLIC_LIVE_SESSION_START_ISO);
   const envEnd = parseIsoDate(env.PUBLIC_LIVE_SESSION_END_ISO);
   if (envStart && envEnd && envEnd.getTime() > envStart.getTime()) {
@@ -131,7 +232,7 @@ export function resolveLiveSessionCalendar(
   if (occurrence) {
     return resolvedCalendarFromOccurrence(occurrence, zoomUrl, env);
   }
-  return null;
+  return fallbackNextWednesdayLiveSession(zoomUrl, env);
 }
 
 export function buildIcsContent(
@@ -191,43 +292,10 @@ export function buildOutlookCalendarUrl(event: LiveSessionCalendarEvent): string
   return `https://outlook.live.com/calendar/0/deeplink/compose?${params.toString()}`;
 }
 
-export function buildAddToCalendarEmailHtml(input: {
-  primaryUrl: string;
-  icsDownloadUrl?: string;
-  outlookUrl?: string;
-}): string {
+export function buildAddToCalendarEmailHtml(input: { primaryUrl: string }): string {
   const btnColor = '#1a73e8';
   const href = input.primaryUrl.replace(/"/g, '&quot;');
-  const button = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0 10px;">
-  <tr>
-    <td align="left" style="border-radius:6px;background-color:${btnColor};">
-      <a href="${href}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:11px 22px;font-family:Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:500;line-height:20px;color:#ffffff;text-decoration:none;border-radius:6px;background-color:${btnColor};border:1px solid ${btnColor};mso-padding-alt:11px 22px;">
-        Add to Calendar
-      </a>
-    </td>
-  </tr>
-</table>`;
-
-  const linkStyle =
-    'color:#1a73e8;text-decoration:underline;font-size:12px;font-family:Roboto,Helvetica,Arial,sans-serif;';
-  const extras: string[] = [];
-  if (input.outlookUrl) {
-    const outlookHref = input.outlookUrl.replace(/"/g, '&quot;');
-    extras.push(
-      `<a href="${outlookHref}" target="_blank" rel="noopener noreferrer" style="${linkStyle}">Open in Outlook</a>`,
-    );
-  }
-  if (input.icsDownloadUrl) {
-    const icsHref = input.icsDownloadUrl.replace(/"/g, '&quot;');
-    extras.push(
-      `<a href="${icsHref}" target="_blank" rel="noopener noreferrer" style="${linkStyle}">Download calendar file</a>`,
-    );
-  }
-  const extrasRow = extras.length
-    ? `<p style="margin:0 0 4px;font-size:12px;color:#5f6368;font-family:Roboto,Helvetica,Arial,sans-serif;line-height:1.5;">${extras.join(' &nbsp;&middot;&nbsp; ')}</p>`
-    : '';
-
-  return `${button}${extrasRow}`.trim();
+  return `<p style="margin:16px 0 8px;"><a href="${href}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 18px;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:bold;color:#ffffff;text-decoration:none;background-color:${btnColor};border-radius:4px;">Add to Calendar</a></p>`;
 }
 
 export function liveSessionCalendarIcsUrl(

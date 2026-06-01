@@ -2,6 +2,11 @@ import type { UserProfile } from './accessControl';
 import { loadLeaderboardSnapshot } from './pipelineLeaderboardCache';
 import { loadScopedWebinarRowsForViewer } from './pipelineBookedOutcomes';
 import {
+  buildLiveSessionRowsByEmail,
+  loadCandidateEmailsById,
+  loadLiveSessionRegistrantsForMatching,
+} from './liveSessionBookedOutcomes';
+import {
   buildCompositeLeaderboard,
   buildLeaderboardWindows,
   seedsFromProfiles,
@@ -21,6 +26,8 @@ export type RecruiterPersonalMetrics = {
   bookedCalls: number;
   webinarBooked: number;
   webinarShowed: number;
+  liveSessionBooked: number;
+  liveSessionShowed: number;
   showRatio: number;
   score: number;
   rank: number | null;
@@ -44,7 +51,7 @@ export async function loadRecruiterPersonalMetrics(profile: UserProfile): Promis
   const windows = buildLeaderboardWindows('last7');
   const userId = profile.user_id;
 
-  const [records, settings, snapshot, webinarRows] = await Promise.all([
+  const [records, settings, snapshot, webinarRows, liveRegistrants] = await Promise.all([
     listPipelineCallRecords({
       recruiterUserId: userId,
       fromIso: windows.current.fromIso,
@@ -58,7 +65,12 @@ export async function loadRecruiterPersonalMetrics(profile: UserProfile): Promis
       viewerEmail: profile.email ?? null,
       viewerFullName: profile.full_name,
     }),
+    loadLiveSessionRegistrantsForMatching().catch(() => []),
   ]);
+  const candidateEmailById = await loadCandidateEmailsById(
+    [...new Set(records.map((r) => r.candidate_id).filter(Boolean))],
+  ).catch(() => new Map<string, string>());
+  const liveSessionByEmail = buildLiveSessionRowsByEmail(liveRegistrants);
 
   const sinceYmd = windows.current.sinceYmd;
   const untilYmd = windows.current.untilYmd;
@@ -81,6 +93,8 @@ export async function loadRecruiterPersonalMetrics(profile: UserProfile): Promis
   let rank: number | null = null;
   let rankDelta = 0;
   let score = 0;
+  let liveSessionBooked = 0;
+  let liveSessionShowed = 0;
 
   if (snapshot.data?.rows.length) {
     const mine = snapshot.data.rows.find((r) => r.recruiterUserId === userId);
@@ -90,6 +104,8 @@ export async function loadRecruiterPersonalMetrics(profile: UserProfile): Promis
       score = mine.score;
       webinarBooked = mine.webinarBooked;
       webinarShowed = mine.webinarShowed;
+      liveSessionBooked = mine.liveSessionBooked ?? 0;
+      liveSessionShowed = mine.liveSessionShowed ?? 0;
     }
   } else {
     const directory = new Map([[userId, { fullName: profile.full_name, email: profile.email ?? null }]]);
@@ -102,6 +118,8 @@ export async function loadRecruiterPersonalMetrics(profile: UserProfile): Promis
       previousRecords: [],
       recruiterDirectory: directory,
       recruiterSeeds: seeds,
+      candidateEmailById,
+      liveSessionByEmail,
       restrictToUserIds: [userId],
     });
     const mine = rows[0];
@@ -109,8 +127,16 @@ export async function loadRecruiterPersonalMetrics(profile: UserProfile): Promis
       rank = mine.rank;
       rankDelta = mine.rankDelta;
       score = mine.score;
+      webinarBooked = mine.webinarBooked;
+      webinarShowed = mine.webinarShowed;
+      liveSessionBooked = mine.liveSessionBooked;
+      liveSessionShowed = mine.liveSessionShowed;
     }
   }
+
+  const totalBooked = webinarBooked + liveSessionBooked;
+  const totalShowed = webinarShowed + liveSessionShowed;
+  const combinedShowRatio = totalBooked > 0 ? totalShowed / totalBooked : showRatio;
 
   return {
     windowLabel: windows.current.label,
@@ -118,7 +144,9 @@ export async function loadRecruiterPersonalMetrics(profile: UserProfile): Promis
     bookedCalls,
     webinarBooked,
     webinarShowed,
-    showRatio,
+    liveSessionBooked,
+    liveSessionShowed,
+    showRatio: combinedShowRatio,
     score,
     rank,
     rankDelta,

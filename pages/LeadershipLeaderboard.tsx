@@ -20,6 +20,11 @@ import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import { getCurrentUserProfile, listAllUserProfiles, type AppRole } from '../services/accessControl';
 import { loadScopedWebinarRowsForViewer } from '../services/pipelineBookedOutcomes';
+import {
+  buildLiveSessionRowsByEmail,
+  loadCandidateEmailsById,
+  loadLiveSessionRegistrantsForMatching,
+} from '../services/liveSessionBookedOutcomes';
 import { loadLeaderboardSnapshot, saveLeaderboardSnapshot } from '../services/pipelineLeaderboardCache';
 import {
   buildCompositeLeaderboard,
@@ -180,8 +185,15 @@ function PersonPerformanceBlock({
         </p>
         <div className="mt-2 flex flex-wrap gap-1.5">
           <StatChip icon={TrendingUp} label="Show rate" value={`${pct(row.showRatio)}%`} tone={tone === 'gold' ? 'gold' : 'default'} />
-          <StatChip icon={CalendarCheck} label="Booked" value={row.webinarBooked} tone={tone === 'gold' ? 'gold' : 'default'} />
-          <StatChip icon={UserCheck} label="Attended" value={row.webinarShowed} tone={tone === 'gold' ? 'gold' : 'default'} />
+          <StatChip
+            icon={CalendarCheck}
+            label="Webinar booked"
+            value={row.webinarBooked}
+            tone={tone === 'gold' ? 'gold' : 'default'}
+          />
+          <StatChip icon={UserCheck} label="Webinar shows" value={row.webinarShowed} tone={tone === 'gold' ? 'gold' : 'default'} />
+          <StatChip icon={CalendarCheck} label="Live booked" value={row.liveSessionBooked} tone="muted" />
+          <StatChip icon={UserCheck} label="Live shows" value={row.liveSessionShowed} tone="muted" />
         </div>
         <p className={`mt-2 inline-flex items-center gap-1 text-sm font-semibold ${subClass}`}>
           <Star size={14} className={tone === 'gold' ? 'text-[#9b6b00]' : 'text-[#2f6ea8]'} aria-hidden />
@@ -336,14 +348,23 @@ const LeadershipLeaderboard: React.FC = () => {
         }),
       ]);
 
-      const [scopedWebinarRows, profiles] = await Promise.all([
+      const candidateIds = [
+        ...new Set(
+          [...currentRecords, ...previousRecords].map((r) => r.candidate_id).filter(Boolean),
+        ),
+      ];
+
+      const [scopedWebinarRows, profiles, liveRegistrants, candidateEmailById] = await Promise.all([
         loadScopedWebinarRowsForViewer({
           role: 'admin',
           viewerEmail: null,
           viewerFullName: null,
         }),
         listAllUserProfiles().catch(() => []),
+        loadLiveSessionRegistrantsForMatching().catch(() => []),
+        loadCandidateEmailsById(candidateIds).catch(() => new Map<string, string>()),
       ]);
+      const liveSessionByEmail = buildLiveSessionRowsByEmail(liveRegistrants);
 
       const recruiterDirectory = new Map<string, { fullName: string | null; email: string | null }>(
         profiles.map((item) => [item.user_id, { fullName: item.full_name, email: item.email ?? null }]),
@@ -359,6 +380,8 @@ const LeadershipLeaderboard: React.FC = () => {
         previousRecords,
         recruiterDirectory,
         recruiterSeeds,
+        candidateEmailById,
+        liveSessionByEmail,
         excludedUserIds,
       });
       const previousComputed = buildCompositeLeaderboard({
@@ -372,6 +395,8 @@ const LeadershipLeaderboard: React.FC = () => {
         previousRecords: [],
         recruiterDirectory,
         recruiterSeeds,
+        candidateEmailById,
+        liveSessionByEmail,
         excludedUserIds,
       });
 
@@ -658,14 +683,16 @@ const LeadershipLeaderboard: React.FC = () => {
                         </div>
                         <div className="mt-3 grid gap-2 sm:grid-cols-2">
                           <div className="rounded-xl border border-[#dfeaf8] bg-[#f9fcff] px-2.5 py-2">
-                            <p className="text-[10px] uppercase tracking-wide text-[#6d86a3]">Booked</p>
-                            <p className="text-lg font-semibold tabular-nums text-[#0B1B34]">{row.webinarBooked}</p>
+                            <p className="text-[10px] uppercase tracking-wide text-[#6d86a3]">Webinar booked / shows</p>
+                            <p className="text-lg font-semibold tabular-nums text-[#0B1B34]">
+                              {row.webinarBooked} / {row.webinarShowed}
+                            </p>
                           </div>
                           <div className="rounded-xl border border-[#dfeaf8] bg-[#f9fcff] px-2.5 py-2">
-                            <p className="text-[10px] uppercase tracking-wide text-[#6d86a3]">Shows</p>
+                            <p className="text-[10px] uppercase tracking-wide text-[#6d86a3]">Live booked / shows</p>
                             <p className="text-lg font-semibold tabular-nums text-[#0B1B34]">
-                              {row.webinarShowed}
-                              <span className="ml-1.5 text-xs font-medium text-[#5c7594]">({pct(row.showRatio)}% rate)</span>
+                              {row.liveSessionBooked} / {row.liveSessionShowed}
+                              <span className="ml-1.5 text-xs font-medium text-[#5c7594]">({pct(row.showRatio)}% combined)</span>
                             </p>
                           </div>
                         </div>

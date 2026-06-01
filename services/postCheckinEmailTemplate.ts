@@ -20,6 +20,7 @@ export const POST_CHECKIN_EMAIL_BODY_HTML = `
 <p>Please join at least 5 minutes early, have your camera on, and be prepared to take notes in a distraction-free environment.</p>
 <p>This is a live interactive session and late entries will not be accommodated.</p>
 <p>We look forward to meeting you.</p>
+<p>Best regards,</p>
 {{emailSignature}}
 `.trim();
 

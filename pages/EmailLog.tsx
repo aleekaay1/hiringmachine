@@ -283,6 +283,7 @@ const EmailLog: React.FC = () => {
   const [previousRuns, setPreviousRuns] = useState<WednesdayCampaignRunWithRecipients[]>([]);
   const [previousRunsLoading, setPreviousRunsLoading] = useState(false);
   const [previousRunsError, setPreviousRunsError] = useState<string | null>(null);
+  const [previousRunsStorageReady, setPreviousRunsStorageReady] = useState(true);
   const [selectedPreviousRunId, setSelectedPreviousRunId] = useState<string>('');
   const [wednesdaySentCandidateIds, setWednesdaySentCandidateIds] = useState<Set<string>>(new Set());
   const [wednesdaySentEmails, setWednesdaySentEmails] = useState<Set<string>>(new Set());
@@ -338,6 +339,7 @@ const EmailLog: React.FC = () => {
     setPreviousRunsLoading(true);
     try {
       const runs = await listWednesdayCampaignRuns(60);
+      setPreviousRunsStorageReady(true);
       setPreviousRuns(runs);
       setSelectedPreviousRunId((prev) => {
         const target = preferredRunId || prev;
@@ -345,7 +347,14 @@ const EmailLog: React.FC = () => {
         return runs[0]?.run.id || '';
       });
     } catch (err) {
-      setPreviousRunsError(err instanceof Error ? err.message : 'Failed to load previous runs.');
+      const msg = err instanceof Error ? err.message : 'Failed to load previous runs.';
+      if (/not set up on this Supabase project/i.test(msg)) {
+        setPreviousRunsStorageReady(false);
+        setPreviousRuns([]);
+        setPreviousRunsError(null);
+      } else {
+        setPreviousRunsError(msg);
+      }
     } finally {
       setPreviousRunsLoading(false);
     }
@@ -408,7 +417,7 @@ const EmailLog: React.FC = () => {
       if (!token) {
         throw new Error('Your session expired. Please sign in again.');
       }
-      const dashboard = await fetchLiveSessionsDashboard(token, sync ? { sync: true } : { readCache: true });
+      const dashboard = await fetchLiveSessionsDashboard(token, sync ? { sync: true } : undefined);
       if (!dashboard.ok) {
         throw new Error(dashboard.error || 'Failed to load Calendly sessions.');
       }
@@ -1039,6 +1048,7 @@ const EmailLog: React.FC = () => {
             </div>
           )}
 
+          {previousRunsStorageReady && (
           <div className="rounded-xl border border-[#d6deea] p-3 bg-[#fcfdff] space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -1110,6 +1120,7 @@ const EmailLog: React.FC = () => {
               </details>
             )}
           </div>
+          )}
 
           <div className="rounded-xl border border-[#d6deea] overflow-hidden">
             <div className="px-4 py-3 bg-[#f8fbff] border-b border-[#d6deea] flex flex-wrap items-center justify-between gap-2">

@@ -1,4 +1,10 @@
 import { buildRecruiterScopeTokens, recruiterOwnsNameKey, type UserProfile } from './accessControl';
+import {
+  buildLiveSessionRowsByEmail,
+  liveSessionAttendedFromRegistrant,
+  pickRegistrantForDisposition,
+  type LiveSessionRegistrantRow,
+} from './liveSessionBookedOutcomes';
 import { readCallRecordMeta, type PipelineCallRecord } from './pipelineService';
 import {
   fridayWeekBoundsFromYmd,
@@ -125,6 +131,7 @@ export type RecruiterLeaderboardRow = {
   webinarBooked: number;
   webinarShowed: number;
   liveSessionBooked: number;
+  liveSessionShowed: number;
   showRatio: number;
   showRatioSmoothed: number;
   bookedNorm: number;
@@ -148,6 +155,7 @@ type Aggregate = {
   webinarBooked: number;
   webinarShowed: number;
   liveSessionBooked: number;
+  liveSessionShowed: number;
 };
 
 function utcRangeFromTorontoYmd(sinceYmd: string, untilYmd: string): { from: Date; to: Date } {
@@ -379,6 +387,7 @@ function emptyAggregate(
     webinarBooked: 0,
     webinarShowed: 0,
     liveSessionBooked: 0,
+    liveSessionShowed: 0,
   };
 }
 
@@ -412,6 +421,8 @@ function aggregateCallRecords(
   records: PipelineCallRecord[],
   directory: RecruiterDirectory,
   seeds: LeaderboardRecruiterSeed[],
+  candidateEmailById: Map<string, string>,
+  liveSessionByEmail: Map<string, LiveSessionRegistrantRow[]>,
 ): Map<string, Aggregate> {
   const map = new Map<string, Aggregate>();
 
@@ -440,6 +451,18 @@ function aggregateCallRecords(
     const bookedSubtype = String(record.booked_subtype || meta.bookedSubtype || '').trim().toLowerCase();
     if (bookedSubtype === 'live session') {
       agg.liveSessionBooked += 1;
+      const email = candidateEmailById.get(record.candidate_id);
+      if (email) {
+        const liveRows = liveSessionByEmail.get(email) || [];
+        const disposedMs = Date.parse(record.disposed_at || record.created_at);
+        const match = pickRegistrantForDisposition(
+          liveRows,
+          Number.isFinite(disposedMs) ? disposedMs : Date.now(),
+        );
+        if (match && liveSessionAttendedFromRegistrant(match)) {
+          agg.liveSessionShowed += 1;
+        }
+      }
       agg.booked = agg.webinarBooked + agg.liveSessionBooked;
     }
   }
@@ -465,6 +488,7 @@ function mergeAggregates(webinarMap: Map<string, Aggregate>, callMap: Map<string
         ...webinar,
         calls: calls.calls,
         liveSessionBooked: calls.liveSessionBooked,
+        liveSessionShowed: calls.liveSessionShowed,
         booked: webinar.webinarBooked + calls.liveSessionBooked,
       });
       continue;
@@ -481,29 +505,37 @@ function mergeAggregates(webinarMap: Map<string, Aggregate>, callMap: Map<string
   return merged;
 }
 
-function showRatioFromCounts(webinarShowed: number, webinarBooked: number): number {
-  if (webinarBooked <= 0) return 0;
-  return webinarShowed / webinarBooked;
+function showRatioFromCounts(totalShowed: number, totalBooked: number): number {
+  if (totalBooked <= 0) return 0;
+  return totalShowed / totalBooked;
 }
 
-function showRatioSmoothed(webinarShowed: number, webinarBooked: number): number {
-  if (webinarBooked <= 0) return 0;
-  return (webinarShowed + 2) / (webinarBooked + 4);
+function showRatioSmoothed(totalShowed: number, totalBooked: number): number {
+  if (totalBooked <= 0) return 0;
+  return (totalShowed + 2) / (totalBooked + 4);
 }
 
 function toRows(aggregates: Aggregate[]): RecruiterLeaderboardRow[] {
   if (aggregates.length === 0) return [];
 
-  const maxWebinarBooked = Math.max(1, ...aggregates.map((a) => a.webinarBooked));
-  const maxWebinarShowed = Math.max(1, ...aggregates.map((a) => a.webinarShowed));
+  const maxTotalBooked = Math.max(
+    1,
+    ...aggregates.map((a) => a.webinarBooked + a.liveSessionBooked),
+  );
+  const maxTotalShowed = Math.max(
+    1,
+    ...aggregates.map((a) => a.webinarShowed + a.liveSessionShowed),
+  );
 
   const rows = aggregates.map((agg) => {
-    const showRatio = showRatioFromCounts(agg.webinarShowed, agg.webinarBooked);
-    const smoothed = showRatioSmoothed(agg.webinarShowed, agg.webinarBooked);
-    const lowSampleFactor = Math.min(1, agg.webinarBooked / 8);
+    const totalBooked = agg.webinarBooked + agg.liveSessionBooked;
+    const totalShowed = agg.webinarShowed + agg.liveSessionShowed;
+    const showRatio = showRatioFromCounts(totalShowed, totalBooked);
+    const smoothed = showRatioSmoothed(totalShowed, totalBooked);
+    const lowSampleFactor = Math.min(1, totalBooked / 8);
     const showQuality = smoothed * (0.55 + 0.45 * lowSampleFactor);
-    const bookedNorm = agg.webinarBooked / maxWebinarBooked;
-    const showedNorm = agg.webinarShowed / maxWebinarShowed;
+    const bookedNorm = totalBooked / maxTotalBooked;
+    const showedNorm = totalShowed / maxTotalShowed;
     const score = 100 * (0.5 * showQuality + 0.3 * bookedNorm + 0.2 * showedNorm);
     const callsNorm = 0;
 
@@ -516,6 +548,7 @@ function toRows(aggregates: Aggregate[]): RecruiterLeaderboardRow[] {
       webinarBooked: agg.webinarBooked,
       webinarShowed: agg.webinarShowed,
       liveSessionBooked: agg.liveSessionBooked,
+      liveSessionShowed: agg.liveSessionShowed,
       showRatio,
       showRatioSmoothed: smoothed,
       bookedNorm,
@@ -533,8 +566,12 @@ function toRows(aggregates: Aggregate[]): RecruiterLeaderboardRow[] {
 
   rows.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
-    if (b.webinarBooked !== a.webinarBooked) return b.webinarBooked - a.webinarBooked;
-    if (b.webinarShowed !== a.webinarShowed) return b.webinarShowed - a.webinarShowed;
+    const bookedA = a.webinarBooked + a.liveSessionBooked;
+    const bookedB = b.webinarBooked + b.liveSessionBooked;
+    if (bookedB !== bookedA) return bookedB - bookedA;
+    const showedA = a.webinarShowed + a.liveSessionShowed;
+    const showedB = b.webinarShowed + b.liveSessionShowed;
+    if (showedB !== showedA) return showedB - showedA;
     return a.displayName.localeCompare(b.displayName);
   });
 
@@ -549,7 +586,8 @@ function labelsForRow(row: RecruiterLeaderboardRow): string[] {
   const badges: string[] = [];
   if (row.rank === 1) badges.push(LEADERBOARD_BADGE_TOP_PERFORMER);
   if (row.rankDelta >= 2) badges.push(LEADERBOARD_BADGE_FAST_CLIMBER);
-  if (row.showRatioSmoothed >= 0.65 && row.webinarBooked >= 8) badges.push(LEADERBOARD_BADGE_CONSISTENT_CLOSER);
+  const totalBooked = row.webinarBooked + row.liveSessionBooked;
+  if (row.showRatioSmoothed >= 0.65 && totalBooked >= 8) badges.push(LEADERBOARD_BADGE_CONSISTENT_CLOSER);
   return badges;
 }
 
@@ -603,6 +641,8 @@ export function buildCompositeLeaderboard(input: {
   previousRecords: PipelineCallRecord[];
   recruiterDirectory: RecruiterDirectory;
   recruiterSeeds?: LeaderboardRecruiterSeed[];
+  candidateEmailById?: Map<string, string>;
+  liveSessionByEmail?: Map<string, LiveSessionRegistrantRow[]>;
   /** When set, only these user ids are included (recruiter self-view). */
   restrictToUserIds?: string[] | null;
   excludedUserIds?: Set<string>;
@@ -612,13 +652,16 @@ export function buildCompositeLeaderboard(input: {
   const currentWebinar = filterWebinarRowsInWindow(input.webinarRows, input.currentWindow);
   const previousWebinar = filterWebinarRowsInWindow(input.webinarRows, input.previousWindow);
 
+  const emailById = input.candidateEmailById ?? new Map<string, string>();
+  const liveByEmail = input.liveSessionByEmail ?? new Map<string, LiveSessionRegistrantRow[]>();
+
   const currentMerged = mergeAggregates(
     aggregateWebinarRows(currentWebinar, seeds, input.recruiterDirectory),
-    aggregateCallRecords(input.currentRecords, input.recruiterDirectory, seeds),
+    aggregateCallRecords(input.currentRecords, input.recruiterDirectory, seeds, emailById, liveByEmail),
   );
   const previousMerged = mergeAggregates(
     aggregateWebinarRows(previousWebinar, seeds, input.recruiterDirectory),
-    aggregateCallRecords(input.previousRecords, input.recruiterDirectory, seeds),
+    aggregateCallRecords(input.previousRecords, input.recruiterDirectory, seeds, emailById, liveByEmail),
   );
 
   let currentRows = toRows(filterAggregates(currentMerged, excludedUserIds));

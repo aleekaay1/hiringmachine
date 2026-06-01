@@ -30,6 +30,7 @@ import { DateTime } from 'npm:luxon@3.5.0';
 import {
   createServiceRoleClient,
   loadLiveSessionsRegistryPayload,
+  mergeSyncedWithStoredRegistry,
   persistLiveSessionsRegistry,
   reclassifySessionsByStart,
 } from '../_shared/liveSessionsRegistry.ts';
@@ -993,28 +994,21 @@ Deno.serve(async (req) => {
     if (readCacheOnly && serviceRoleEarly) {
       const adminCache = createServiceRoleClient(supabaseUrl, serviceRoleEarly);
       const cached = await loadLiveSessionsRegistryPayload(adminCache);
-      const cacheMaxAgeMs = Math.max(
-        60_000,
-        Number(Deno.env.get('LIVE_SESSIONS_CACHE_MAX_AGE_MS') ?? String(6 * 60 * 60 * 1000)),
-      );
-      const cacheFresh =
-        cached &&
-        Number.isFinite(Date.parse(cached.generated_at)) &&
-        Date.now() - Date.parse(cached.generated_at) <= cacheMaxAgeMs;
-      if (cached && cacheFresh) {
-        return new Response(JSON.stringify({
-          ok: true,
-          generated_at: cached.generated_at,
-          from_cache: true,
-          calendly_configured: true,
-          zoom_user: { id: '', email: Deno.env.get('ZOOM_HOST_USER_EMAIL')?.trim() ?? '' },
-          calendly_user: null,
-          past_meetings: cached.past_meetings,
-          upcoming_meetings: cached.upcoming_meetings,
-          calendly_events_in_range: cached.past_meetings.length + cached.upcoming_meetings.length,
-          registry: { ok: true, from_cache: true },
-        }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-      }
+      const recl = cached
+        ? reclassifySessionsByStart(cached.past_meetings, cached.upcoming_meetings, Date.now())
+        : { pastMeetings: [], upcomingMeetings: [] };
+      return new Response(JSON.stringify({
+        ok: true,
+        generated_at: cached?.generated_at ?? new Date().toISOString(),
+        from_cache: true,
+        calendly_configured: !!Deno.env.get('CALENDLY_API_TOKEN')?.trim(),
+        zoom_user: { id: '', email: Deno.env.get('ZOOM_HOST_USER_EMAIL')?.trim() ?? '' },
+        calendly_user: null,
+        past_meetings: recl.pastMeetings,
+        upcoming_meetings: recl.upcomingMeetings,
+        calendly_events_in_range: recl.pastMeetings.length + recl.upcomingMeetings.length,
+        registry: { ok: true, from_cache: true, sessions: recl.pastMeetings.length + recl.upcomingMeetings.length },
+      }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     // Config
@@ -1668,6 +1662,9 @@ Deno.serve(async (req) => {
       registrants: 0,
       error: 'missing_service_role',
     };
+    let responsePast = finalPast;
+    let responseUpcoming = finalUpcoming;
+
     if (serviceRole) {
       const admin = createServiceRoleClient(supabaseUrl, serviceRole);
       registryResult = await persistLiveSessionsRegistry(admin, {
@@ -1676,7 +1673,20 @@ Deno.serve(async (req) => {
         syncedAt: generatedAt,
         nowMs,
       });
+      const stored = await loadLiveSessionsRegistryPayload(admin);
+      if (stored) {
+        const merged = mergeSyncedWithStoredRegistry(finalPast, finalUpcoming, stored, nowMs);
+        responsePast = merged.pastMeetings;
+        responseUpcoming = merged.upcomingMeetings;
+        registryResult = {
+          ...registryResult,
+          sessions: responsePast.length + responseUpcoming.length,
+        };
+      }
     }
+
+    responsePayload.past_meetings = responsePast;
+    responsePayload.upcoming_meetings = responseUpcoming;
 
     const archiveResult = await persistSnapshot({
       supabaseUrl, serviceRole, generatedAtIso: generatedAt,

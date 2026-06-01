@@ -47,8 +47,17 @@ const RecruiterDashboardView: React.FC<{ profile: UserProfile }> = ({ profile })
         <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           <StatTile label="Rank" value={metrics.rank != null ? `#${metrics.rank}` : '—'} sub={metrics.rankDelta !== 0 ? `${metrics.rankDelta > 0 ? '+' : ''}${metrics.rankDelta} vs last period` : undefined} />
           <StatTile label="Score" value={metrics.score.toFixed(1)} />
-          <StatTile label="Booked" value={metrics.webinarBooked} sub={`${metrics.webinarShowed} attended`} />
-          <StatTile label="Show rate" value={pct(metrics.showRatio)} />
+          <StatTile
+            label="Webinar booked"
+            value={metrics.webinarBooked}
+            sub={`${metrics.webinarShowed} showed`}
+          />
+          <StatTile
+            label="Live session"
+            value={metrics.liveSessionBooked}
+            sub={`${metrics.liveSessionShowed} showed`}
+          />
+          <StatTile label="Combined show rate" value={pct(metrics.showRatio)} />
           <StatTile label="Calls" value={metrics.calls} sub={`${metrics.bookedCalls} booked on calls`} />
         </div>
         <div className="mt-3 grid gap-2 sm:grid-cols-2">

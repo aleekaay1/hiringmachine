@@ -36,6 +36,11 @@ import { buildThreeCxWebclientUrl } from '../services/threeCxService';
 import { supabase } from '../services/supabaseClient';
 import { getCurrentUserProfile } from '../services/accessControl';
 import {
+  LIVE_SESSION_BOOKED_OUTCOME_RULE_LABEL,
+  buildLiveSessionRowsByEmail,
+  loadLiveSessionRegistrantsForMatching,
+} from '../services/liveSessionBookedOutcomes';
+import {
   BOOKED_OUTCOME_RULE_LABEL,
   buildWebinarRowsByEmail,
   classifyBookedOutcome,
@@ -200,8 +205,9 @@ const PipelineCallWorkspace: React.FC = () => {
         viewerEmail: auth.user?.email ?? profile?.email ?? null,
         viewerFullName: profile?.full_name ?? null,
       }).catch(() => null);
+      const liveRegistrantsPromise = loadLiveSessionRegistrantsForMatching().catch(() => []);
 
-      const [resumeRows, callRecordRows, todayRows, webinarRows] = await Promise.all([
+      const [resumeRows, callRecordRows, todayRows, webinarRows, liveRegistrants] = await Promise.all([
         listPipelineResumesForCandidates(candidateIds),
         listPipelineCallRecords({ candidateIds, limit: 5000 }),
         uid
@@ -213,6 +219,7 @@ const PipelineCallWorkspace: React.FC = () => {
             })
           : Promise.resolve([]),
         webinarRowsPromise,
+        liveRegistrantsPromise,
       ]);
       const nextMap = new Map<string, PipelineResume[]>();
       for (const resume of resumeRows) {
@@ -223,25 +230,25 @@ const PipelineCallWorkspace: React.FC = () => {
       setResumesByCandidate(nextMap);
       setRecords(callRecordRows);
       setTodaysCallCount(todayRows.length);
-      if (webinarRows) {
-        const rowsByEmail = buildWebinarRowsByEmail(webinarRows);
-        const latest = latestRecordByCandidate(callRecordRows);
-        const bookedMap = new Map<string, BookedOutcomeBucket>();
-        for (const candidate of sortedCandidates) {
-          const latestRecord = latest.get(candidate.id);
-          if (!latestRecord || String(latestRecord.disposition || '').toLowerCase() !== 'booked') continue;
-          const meta = readCallRecordMeta(latestRecord);
-          const classification = classifyBookedOutcome({
-            bookedSubtype: meta.bookedSubtype,
-            candidateEmail: candidate.email,
-            rowsByEmail,
-          });
-          bookedMap.set(candidate.id, classification.bucket);
-        }
-        setBookedOutcomeByCandidate(bookedMap);
-      } else {
-        setBookedOutcomeByCandidate(new Map());
+      const rowsByEmail = webinarRows ? buildWebinarRowsByEmail(webinarRows) : new Map();
+      const liveSessionByEmail = buildLiveSessionRowsByEmail(liveRegistrants);
+      const latest = latestRecordByCandidate(callRecordRows);
+      const bookedMap = new Map<string, BookedOutcomeBucket>();
+      for (const candidate of sortedCandidates) {
+        const latestRecord = latest.get(candidate.id);
+        if (!latestRecord || String(latestRecord.disposition || '').toLowerCase() !== 'booked') continue;
+        const meta = readCallRecordMeta(latestRecord);
+        const disposedMs = Date.parse(latestRecord.disposed_at || latestRecord.created_at);
+        const classification = classifyBookedOutcome({
+          bookedSubtype: meta.bookedSubtype || latestRecord.booked_subtype,
+          candidateEmail: candidate.email,
+          rowsByEmail,
+          liveSessionByEmail,
+          disposedAtMs: Number.isFinite(disposedMs) ? disposedMs : null,
+        });
+        bookedMap.set(candidate.id, classification.bucket);
       }
+      setBookedOutcomeByCandidate(bookedMap);
       const activeSelectedId = selectedCandidateIdRef.current;
       if (!activeSelectedId || !sortedCandidates.some((row) => row.id === activeSelectedId)) {
         setSelectedCandidateId(sortedCandidates[0]?.id ?? null);
@@ -957,7 +964,11 @@ const PipelineCallWorkspace: React.FC = () => {
                   key={item.id}
                   type="button"
                   onClick={() => setQueueFilter(item.id)}
-                  title={item.id === 'booked_no_show' || item.id === 'booked_didnt_watch' ? BOOKED_OUTCOME_RULE_LABEL : undefined}
+                  title={
+                    item.id === 'booked_no_show' || item.id === 'booked_didnt_watch'
+                      ? `${BOOKED_OUTCOME_RULE_LABEL} ${LIVE_SESSION_BOOKED_OUTCOME_RULE_LABEL}`
+                      : undefined
+                  }
                   className={`mb-1 w-full rounded-lg border px-2 py-2 text-left text-xs ${
                     queueFilter === item.id
                       ? (isDark ? 'border-cyan-300/45 bg-cyan-300/18 text-cyan-100' : 'border-[#9dc6ef] bg-[#e8f3ff] text-[#0B1B34]')

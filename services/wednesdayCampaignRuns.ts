@@ -2,6 +2,17 @@ import { supabase } from './supabaseClient';
 
 export const WEDNESDAY_CAMPAIGN_TRIGGER_LABEL = 'manual_wednesday_live_overview';
 
+export function isWednesdayCampaignRunsTableMissing(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const e = error as { code?: string; message?: string; details?: string };
+  const msg = `${e.message ?? ''} ${e.details ?? ''}`;
+  return (
+    e.code === 'PGRST205' ||
+    (/relation|does not exist|schema cache/i.test(msg) &&
+      /pipeline_wednesday_campaign/i.test(msg))
+  );
+}
+
 export type WednesdayCampaignRecipientSendStatus = 'pending' | 'sent' | 'failed' | 'skipped';
 
 export interface WednesdayCampaignRunSnapshotRecipientInput {
@@ -258,7 +269,14 @@ export async function listWednesdayCampaignRuns(limit = 50): Promise<WednesdayCa
     .eq('trigger_label', WEDNESDAY_CAMPAIGN_TRIGGER_LABEL)
     .order('created_at', { ascending: false })
     .limit(limit);
-  if (runsError) throw runsError;
+  if (runsError) {
+    if (isWednesdayCampaignRunsTableMissing(runsError)) {
+      throw new Error(
+        'Campaign run history tables are not set up on this Supabase project. Run supabase/sql/paste_pipeline_wednesday_campaign_runs.sql in the SQL editor, then refresh.',
+      );
+    }
+    throw runsError;
+  }
 
   const runs = (runsData || []) as WednesdayCampaignRun[];
   if (!runs.length) return [];

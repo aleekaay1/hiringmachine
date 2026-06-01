@@ -2,17 +2,14 @@ import { buildEmailSignatureHtml } from './emailSignatureHtml';
 import {
   buildAddToCalendarEmailHtml,
   buildGoogleCalendarUrl,
-  buildOutlookCalendarUrl,
   resolveLiveSessionCalendar,
-  liveSessionCalendarIcsUrl,
   type LiveSessionOccurrenceRecord,
 } from './calendarInvite';
+import { ALEX_PAZ_ORG_INTRO_PARAGRAPHS_HTML } from './pazOrganizationIntroEmail';
 import { POST_CHECKIN_EMAIL_SUBJECT, POST_CHECKIN_EMAIL_BODY_HTML } from './postCheckinEmailTemplate';
 import {
   DEFAULT_ASSESSMENT_LOOKUP_URL,
   LIVE_SESSION_RESCHEDULE_CALENDLY_URL,
-  POST_CHECKIN_DEFAULT_SESSION_DATE,
-  POST_CHECKIN_DEFAULT_SESSION_TIME,
   ZOOM_MEETING_URL,
 } from './hiringUrls';
 
@@ -75,6 +72,7 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
     bodyHtml: `
 <p>Hi {{firstName}},</p>
 <p>Thank you for attending our live online career session.</p>
+${ALEX_PAZ_ORG_INTRO_PARAGRAPHS_HTML}
 <p>Your next step is to complete the <strong>Leadership &amp; Career Assessment</strong> using the link below:</p>
 <p><strong>{{Assessment Link}}</strong></p>
 <p>We are currently moving forward with candidates who demonstrate responsiveness, professionalism, and consistency throughout the process.</p>
@@ -226,7 +224,6 @@ export const POST_ASSESSMENT_SUBMIT_TEMPLATE: EmailTemplate = {
 };
 
 function postCheckinAddToCalendarHtmlForPreview(occurrence?: LiveSessionOccurrenceRecord | null): string {
-  const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() || '';
   const event = resolveLiveSessionCalendar(
     {
       PUBLIC_LIVE_SESSION_START_ISO: (import.meta.env.VITE_PUBLIC_LIVE_SESSION_START_ISO as string | undefined)?.trim(),
@@ -235,30 +232,11 @@ function postCheckinAddToCalendarHtmlForPreview(occurrence?: LiveSessionOccurren
     ZOOM_MEETING_URL,
     occurrence ?? null,
   );
-  if (!event) {
-    return '<p style="font-size:12px;color:#6b7280;"><em>Session date and time will be filled from the next scheduled live session when the email is sent.</em></p>';
-  }
-  if (!supabaseUrl) {
-    return '<p style="font-size:12px;color:#6b7280;"><em>Add to Calendar uses the deployed live-session-calendar function.</em></p>';
-  }
-  const googleUrl = buildGoogleCalendarUrl(event);
-  const icsUrl = liveSessionCalendarIcsUrl(
-    `${supabaseUrl}/functions/v1`,
-    (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim(),
-    event.sessionDate,
-  );
-  return buildAddToCalendarEmailHtml({
-    primaryUrl: googleUrl,
-    icsDownloadUrl: icsUrl,
-    outlookUrl: buildOutlookCalendarUrl(event),
-  });
+  return buildAddToCalendarEmailHtml({ primaryUrl: buildGoogleCalendarUrl(event) });
 }
 
 function postCheckinSessionLabelsForPreview(occurrence?: LiveSessionOccurrenceRecord | null): { date: string; time: string } {
   const resolved = resolveLiveSessionCalendar({}, ZOOM_MEETING_URL, occurrence ?? null);
-  if (!resolved) {
-    return { date: POST_CHECKIN_DEFAULT_SESSION_DATE, time: POST_CHECKIN_DEFAULT_SESSION_TIME };
-  }
   return { date: resolved.displayDate, time: resolved.displayTime };
 }
 

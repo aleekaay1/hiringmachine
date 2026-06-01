@@ -7,6 +7,7 @@ import {
   type LiveSessionCalendarEvent,
   type ResolvedLiveSession,
   LIVE_SESSION_TIMEZONE,
+  fallbackNextWednesdayLiveSession,
 } from './calendarInvite.ts';
 
 export type LiveSessionOccurrenceRecord = {
@@ -92,7 +93,7 @@ export function resolveLiveSessionCalendarFromOccurrence(
   env: Record<string, string | undefined>,
   zoomUrl: string,
   occurrence: LiveSessionOccurrenceRecord | null,
-): ResolvedLiveSession | null {
+): ResolvedLiveSession {
   const envStart = parseIsoDate(env.PUBLIC_LIVE_SESSION_START_ISO);
   const envEnd = parseIsoDate(env.PUBLIC_LIVE_SESSION_END_ISO);
   if (envStart && envEnd && envEnd.getTime() > envStart.getTime()) {
@@ -109,7 +110,7 @@ export function resolveLiveSessionCalendarFromOccurrence(
     return resolvedCalendarFromOccurrence(occurrence, zoomUrl, env);
   }
 
-  return null;
+  return fallbackNextWednesdayLiveSession(zoomUrl, env);
 }
 
 export async function fetchOccurrenceBySessionDate(

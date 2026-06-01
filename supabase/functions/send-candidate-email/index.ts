@@ -11,14 +11,7 @@ import {
 } from '../_shared/postAssessmentSubmitEmailTemplate.ts';
 import { buildEmailSignatureHtml } from '../_shared/emailSignatureHtml.ts';
 import { ZOOM_MEETING_URL } from '../_shared/hiringUrls.ts';
-import {
-  buildAddToCalendarEmailHtml,
-  buildCalendarEmailAttachments,
-  buildGoogleCalendarUrl,
-  buildIcsContent,
-  buildOutlookCalendarUrl,
-  liveSessionCalendarIcsUrl,
-} from '../_shared/calendarInvite.ts';
+import { buildAddToCalendarEmailHtml, buildGoogleCalendarUrl } from '../_shared/calendarInvite.ts';
 import {
   fetchNextUpcomingOccurrence,
   fetchOccurrenceBySessionDate,
@@ -144,15 +137,6 @@ Deno.serve(async (req) => {
 
     let subject: string;
     let html: string;
-    let mailAttachments: Array<{
-      filename: string;
-      content: string;
-      contentType: string;
-      contentDisposition: string;
-      headers?: Record<string, string>;
-    }> = [];
-    let mailAlternatives: Array<{ contentType: string; content: string; headers?: Record<string, string> }> = [];
-
     if (isPostCheckin) {
       subject = POST_CHECKIN_EMAIL_SUBJECT;
       const liveSessionEnv = {
@@ -170,52 +154,17 @@ Deno.serve(async (req) => {
         ? await fetchOccurrenceBySessionDate(admin, liveSessionDate)
         : await fetchNextUpcomingOccurrence(admin);
       const calendarEvent = resolveLiveSessionCalendarFromOccurrence(liveSessionEnv, ZOOM_MEETING_URL, occurrence);
-      if (!calendarEvent) {
-        return new Response(
-          JSON.stringify({
-            error: 'No upcoming live session found',
-            detail: 'missing_live_session_occurrence',
-          }),
-          {
-            status: 503,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          },
-        );
-      }
-      const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
-      const googleUrl = buildGoogleCalendarUrl(calendarEvent);
-      const icsUrl = liveSessionCalendarIcsUrl(
-        `${supabaseUrl}/functions/v1`,
-        anonKey,
-        calendarEvent.sessionDate,
-      );
-      const icsUid = calendarEvent.sessionDate
-        ? `live-session-${calendarEvent.sessionDate}@paz-organization`
-        : 'live-session@paz-organization';
-      const icsContent = buildIcsContent(calendarEvent, icsUid);
       const addToCalendarHtml = buildAddToCalendarEmailHtml({
-        primaryUrl: googleUrl,
-        icsDownloadUrl: icsUrl,
-        outlookUrl: buildOutlookCalendarUrl(calendarEvent),
+        primaryUrl: buildGoogleCalendarUrl(calendarEvent),
       });
-      mailAttachments = buildCalendarEmailAttachments(icsContent);
-      mailAlternatives = [
-        {
-          contentType: 'text/calendar; charset=UTF-8; method=PUBLISH',
-          content: icsContent,
-          headers: { 'Content-Disposition': 'inline; filename="live-online-career-session.ics"' },
-        },
-      ];
-      html = wrapTransactionalEmailHtml(
-        applyPostCheckinMerge({
-          firstName: firstName || 'there',
-          sessionDate: calendarEvent.displayDate,
-          sessionTime: calendarEvent.displayTime,
-          zoomUrl: ZOOM_MEETING_URL,
-          addToCalendarHtml,
-          emailSignatureHtml: sig,
-        }),
-      );
+      html = applyPostCheckinMerge({
+        firstName: firstName || 'there',
+        sessionDate: calendarEvent.displayDate,
+        sessionTime: calendarEvent.displayTime,
+        zoomUrl: ZOOM_MEETING_URL,
+        addToCalendarHtml,
+        emailSignatureHtml: sig,
+      });
     } else {
       subject = POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT;
       html = wrapTransactionalEmailHtml(applyPostAssessmentSubmitMerge(candidateName, sig));
@@ -234,8 +183,6 @@ Deno.serve(async (req) => {
           subject,
           text: html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
           html,
-          ...(mailAttachments.length ? { attachments: mailAttachments } : {}),
-          ...(mailAlternatives.length ? { alternatives: mailAlternatives } : {}),
         },
         (err: Error | null) => (err ? reject(err) : resolve())
       );

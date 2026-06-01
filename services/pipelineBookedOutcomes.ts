@@ -1,4 +1,10 @@
 import type { AppRole } from './accessControl';
+import {
+  buildLiveSessionRowsByEmail,
+  liveSessionAttendedFromRegistrant,
+  pickRegistrantForDisposition,
+  type LiveSessionRegistrantRow,
+} from './liveSessionBookedOutcomes';
 import { filterRowsForRecruiterOwnership } from './recruiterDataScope';
 import { loadWebinarGeekDashboardCache } from './webinarGeekDashboardCache';
 
@@ -58,9 +64,69 @@ export function classifyBookedOutcome(input: {
   bookedSubtype: string | null | undefined;
   candidateEmail: string | null | undefined;
   rowsByEmail: Map<string, AnyRow[]>;
+  liveSessionByEmail?: Map<string, LiveSessionRegistrantRow[]>;
+  disposedAtMs?: number | null;
 }): BookedOutcomeClassification {
   const subtype = String(input.bookedSubtype || '').trim().toLowerCase();
   const email = normalizeEmail(input.candidateEmail);
+
+  if (subtype === 'live session') {
+    if (!email) {
+      return {
+        bucket: 'booked',
+        matchedRows: 0,
+        matchedEmail: null,
+        maxWatchSeconds: 0,
+        watchedSignal: false,
+        reason: 'Candidate has no email for live session matching.',
+      };
+    }
+    const liveRows = input.liveSessionByEmail?.get(email) || [];
+    if (!liveRows.length) {
+      return {
+        bucket: 'booked',
+        matchedRows: 0,
+        matchedEmail: email,
+        maxWatchSeconds: 0,
+        watchedSignal: false,
+        reason: 'No Calendly registration found for this email yet (sync Live Sessions).',
+      };
+    }
+    const disposedMs =
+      typeof input.disposedAtMs === 'number' && Number.isFinite(input.disposedAtMs)
+        ? input.disposedAtMs
+        : Date.now();
+    const match = pickRegistrantForDisposition(liveRows, disposedMs);
+    if (!match) {
+      return {
+        bucket: 'booked',
+        matchedRows: liveRows.length,
+        matchedEmail: email,
+        maxWatchSeconds: 0,
+        watchedSignal: false,
+        reason: 'Could not resolve session date for live registration.',
+      };
+    }
+    if (liveSessionAttendedFromRegistrant(match)) {
+      return {
+        bucket: 'booked',
+        matchedRows: liveRows.length,
+        matchedEmail: email,
+        maxWatchSeconds: 0,
+        watchedSignal: true,
+        reason: `Zoom attendance matched for session ${match.session_date}.`,
+      };
+    }
+    return {
+      bucket: 'booked_no_show',
+      matchedRows: liveRows.length,
+      matchedEmail: email,
+      maxWatchSeconds: 0,
+      watchedSignal: false,
+      reason: `Registered for ${match.session_date} but no Zoom attendance on sync.`,
+    };
+  }
+
   if (subtype !== 'webinar') {
     return {
       bucket: 'booked',
@@ -68,7 +134,7 @@ export function classifyBookedOutcome(input: {
       matchedEmail: email || null,
       maxWatchSeconds: 0,
       watchedSignal: false,
-      reason: 'Booked subtype is not Webinar.',
+      reason: 'Booked subtype is not Webinar or Live Session.',
     };
   }
   if (!email) {
@@ -125,4 +191,6 @@ export function classifyBookedOutcome(input: {
 }
 
 export const BOOKED_OUTCOME_RULE_LABEL =
-  'Booked(Webinar) is mapped by candidate email to cached WebinarGeek rows: watched=true or >=24 min stays Booked; 1-23 min => Booked didn\'t watch; 0 min/no watch signal => Booked no show; no match or non-Webinar subtype stays Booked.';
+  'Booked (Webinar): email → WebinarGeek watch signal. Booked (Live Session): email → Calendly/Zoom sync (attended_zoom = showed). See live session rule on filter tooltips.';
+
+export { buildLiveSessionRowsByEmail, loadLiveSessionRegistrantsForMatching };

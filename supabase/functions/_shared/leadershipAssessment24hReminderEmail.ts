@@ -2,6 +2,7 @@
  * Automated 24h post–check-in reminder: complete Leadership Assessment (no “session attended” claim).
  */
 import { buildEmailSignatureHtml } from './emailSignatureHtml.ts';
+import { ALEX_PAZ_ORG_INTRO_PARAGRAPHS_HTML } from './pazOrganizationIntroEmail.ts';
 
 export const LEADERSHIP_ASSESSMENT_REMINDER_24H_SUBJECT = 'Reminder: Complete your Leadership Assessment';
 
@@ -14,6 +15,7 @@ export function buildLeadershipAssessmentReminder24hHtml(
   const link = `<a href="${assessmentLookupUrl}" target="_blank" rel="noopener noreferrer">${assessmentLookupUrl}</a>`;
   return `
 <p>Hi ${fn},</p>
+${ALEX_PAZ_ORG_INTRO_PARAGRAPHS_HTML}
 <p>This is a friendly reminder to complete your <strong>Leadership &amp; Career Assessment</strong> if you have not already done so.</p>
 <p>Please use the link below. The same email address you used at check-in is required to access your record:</p>
 <p><strong>${link}</strong></p>

@@ -389,29 +389,6 @@ export async function fetchCalendlyProbe(
   return { ok: true, data: json };
 }
 
-const LIVE_SESSIONS_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-
-function dashboardHasSessions(payload: LiveSessionsDashboardPayload): boolean {
-  return payload.past_meetings.length + payload.upcoming_meetings.length > 0;
-}
-
-function dashboardCacheIsFresh(payload: LiveSessionsDashboardPayload): boolean {
-  const generated = Date.parse(payload.generated_at);
-  if (!Number.isFinite(generated)) return false;
-  return Date.now() - generated <= LIVE_SESSIONS_CACHE_MAX_AGE_MS;
-}
-
-/** Registry/cache rows saved before Zoom scopes were fixed often have invitees but zero joiners. */
-function dashboardNeedsAttendanceRefresh(payload: LiveSessionsDashboardPayload): boolean {
-  for (const row of payload.past_meetings) {
-    const invited = row.stats?.invited_count ?? row.invitees?.length ?? 0;
-    const zoomCount = row.stats?.zoom_participant_count ?? row.participants?.length ?? 0;
-    const matched = row.stats?.attended_matched_count ?? 0;
-    if (invited > 0 && zoomCount === 0 && matched === 0) return true;
-  }
-  return false;
-}
-
 async function fetchLiveSessionsDashboardRaw(
   accessToken: string,
   mode: 'sync' | 'read_cache' | 'live',
@@ -443,30 +420,12 @@ async function fetchLiveSessionsDashboardRaw(
 
 export async function fetchLiveSessionsDashboard(
   accessToken: string,
-  options?: { sync?: boolean; readCache?: boolean },
+  options?: { sync?: boolean },
 ): Promise<{ ok: true; data: LiveSessionsDashboardPayload } | { ok: false; error: string }> {
   if (options?.sync) {
     return fetchLiveSessionsDashboardRaw(accessToken, 'sync');
   }
-
-  if (options?.readCache === false) {
-    return fetchLiveSessionsDashboardRaw(accessToken, 'live');
-  }
-
-  const cached = await fetchLiveSessionsDashboardRaw(accessToken, 'read_cache');
-  if (
-    cached.ok &&
-    dashboardHasSessions(cached.data) &&
-    dashboardCacheIsFresh(cached.data) &&
-    !dashboardNeedsAttendanceRefresh(cached.data)
-  ) {
-    return cached;
-  }
-
-  const live = await fetchLiveSessionsDashboardRaw(accessToken, 'sync');
-  if (live.ok) return live;
-  if (cached.ok && dashboardHasSessions(cached.data)) return cached;
-  return live;
+  return fetchLiveSessionsDashboardRaw(accessToken, 'read_cache');
 }
 
 const TORONTO = 'America/Toronto';

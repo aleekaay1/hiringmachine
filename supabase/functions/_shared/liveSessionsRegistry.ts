@@ -321,6 +321,52 @@ export function createServiceRoleClient(supabaseUrl: string, serviceRole: string
 }
 
 /** Calendly start time decides upcoming vs past (not Zoom clock). */
+function torontoDateKeyFromRow(
+  zoom: ZoomMeta,
+  calendly: CalendlyMeta,
+): string {
+  const ms = sessionStartMs(zoom, calendly);
+  return torontoDateKey(ms, calendly?.start_time ?? zoom.start_time);
+}
+
+/** After a live sync, return full history: fresh rows win per date; older DB-only dates are kept. */
+export function mergeSyncedWithStoredRegistry(
+  syncedPast: RegistryPastRow[],
+  syncedUpcoming: RegistryUpcomingRow[],
+  stored: {
+    past_meetings: RegistryPastRow[];
+    upcoming_meetings: RegistryUpcomingRow[];
+  },
+  nowMs: number,
+): { pastMeetings: RegistryPastRow[]; upcomingMeetings: RegistryUpcomingRow[] } {
+  const pastByDate = new Map<string, RegistryPastRow>();
+  const upcomingByDate = new Map<string, RegistryUpcomingRow>();
+
+  for (const row of stored.past_meetings) {
+    const key = torontoDateKeyFromRow(row.zoom, row.calendly);
+    if (key) pastByDate.set(key, row);
+  }
+  for (const row of syncedPast) {
+    const key = torontoDateKeyFromRow(row.zoom, row.calendly);
+    if (key) pastByDate.set(key, row);
+  }
+
+  for (const row of stored.upcoming_meetings) {
+    const key = torontoDateKeyFromRow(row.zoom, row.calendly);
+    if (key) upcomingByDate.set(key, row);
+  }
+  for (const row of syncedUpcoming) {
+    const key = torontoDateKeyFromRow(row.zoom, row.calendly);
+    if (key) upcomingByDate.set(key, row);
+  }
+
+  return reclassifySessionsByStart(
+    [...pastByDate.values()],
+    [...upcomingByDate.values()],
+    nowMs,
+  );
+}
+
 export function reclassifySessionsByStart(
   pastMeetings: RegistryPastRow[],
   upcomingMeetings: RegistryUpcomingRow[],
