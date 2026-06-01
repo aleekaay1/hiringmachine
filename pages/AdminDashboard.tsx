@@ -35,7 +35,14 @@ import {
 import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare, ChevronDown, ChevronUp, Linkedin } from 'lucide-react';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
-import { canAccessSection, getCurrentUserProfile, listAllUserProfiles, type AppRole, type UserProfile as StaffUserProfile } from '../services/accessControl';
+import {
+  canAccessSection,
+  defaultRouteForRole,
+  getCurrentUserProfile,
+  listAllUserProfiles,
+  type AppRole,
+  type UserProfile as StaffUserProfile,
+} from '../services/accessControl';
 import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { hasResumeOrLinkedInMaterial } from '../services/linkedinUrl';
 import { listSourceCandidateIdsInPipeline, sendCandidatesToPipelineFromAdmin } from '../services/pipelineService';
@@ -115,6 +122,8 @@ function formatEmailLogType(type: string | undefined): string {
   return map[type] ?? type;
 }
 
+const CANDIDATES_PAGE_SIZE = 25;
+
 const AdminDashboard: React.FC = () => {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
@@ -145,6 +154,7 @@ const AdminDashboard: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sourceIdsInPipeline, setSourceIdsInPipeline] = useState<Set<string>>(new Set());
   const [hideAlreadyInPipeline, setHideAlreadyInPipeline] = useState(false);
+  const [candidateListPage, setCandidateListPage] = useState(1);
   const [bulkStage, setBulkStage] = useState<PipelineStage | ''>('');
   const [nextStepEdit, setNextStepEdit] = useState('');
   const [reportStaffEmail, setReportStaffEmail] = useState('');
@@ -270,6 +280,23 @@ const AdminDashboard: React.FC = () => {
     return list;
   }, [candidates, searchQuery, pipelineFilter, hideAlreadyInPipeline, sourceIdsInPipeline]);
 
+  const candidateListPageCount = Math.max(1, Math.ceil(filteredCandidates.length / CANDIDATES_PAGE_SIZE));
+
+  const paginatedCandidates = useMemo(() => {
+    const start = (candidateListPage - 1) * CANDIDATES_PAGE_SIZE;
+    return filteredCandidates.slice(start, start + CANDIDATES_PAGE_SIZE);
+  }, [filteredCandidates, candidateListPage]);
+
+  useEffect(() => {
+    setCandidateListPage(1);
+  }, [searchQuery, pipelineFilter, hideAlreadyInPipeline]);
+
+  useEffect(() => {
+    if (candidateListPage > candidateListPageCount) {
+      setCandidateListPage(candidateListPageCount);
+    }
+  }, [candidateListPage, candidateListPageCount]);
+
   const leadershipPendingQueue = useMemo(() => {
     const now = Date.now();
     return candidates
@@ -385,6 +412,7 @@ const AdminDashboard: React.FC = () => {
       setIsAuthenticated(true);
       const profile = await getCurrentUserProfile();
       setRole(profile?.role ?? null);
+      navigate(defaultRouteForRole(profile?.role ?? null), { replace: true });
     } catch (err) {
       console.error(err);
       setAuthError('Unable to log in. Please try again.');
@@ -394,7 +422,7 @@ const AdminDashboard: React.FC = () => {
   const handleGoogleLogin = async () => {
     setAuthError(null);
     setGoogleLoading(true);
-    const { error } = await signInWithGoogle('/dashboard');
+    const { error } = await signInWithGoogle('/home');
     if (error) setAuthError(error);
     setGoogleLoading(false);
   };
@@ -1183,7 +1211,11 @@ const AdminDashboard: React.FC = () => {
 
   return (
     <Layout isAdmin>
-      <div className="w-full p-5 lg:p-6 space-y-5">
+      <div
+        className={`w-full p-5 lg:p-6 flex flex-col flex-1 min-h-0 ${
+          effectiveAdminView === 'candidates' && !selectedCandidate ? 'gap-4' : 'space-y-5'
+        }`}
+      >
         {!(effectiveAdminView === 'candidates' && selectedCandidate) && (
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-5 py-3 flex items-center justify-between">
           <div>
@@ -1384,7 +1416,7 @@ const AdminDashboard: React.FC = () => {
           </div>
         )}
         {!selectedCandidate && (
-        <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm">
+        <div className="shrink-0 rounded-2xl border border-[#d6deea] bg-white shadow-sm">
           <div className="px-5 py-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2 text-xs bg-[#f9fbff]">
             {PIPELINE_STAGES.map((s) => (
               <button
@@ -1409,9 +1441,13 @@ const AdminDashboard: React.FC = () => {
           </div>
         )}
 
-        <div className="grid grid-cols-1 gap-5">
+        <div className={`grid grid-cols-1 gap-5 ${selectedCandidate ? '' : 'flex flex-col flex-1 min-h-0'}`}>
           {/* Candidate List */}
-          <div className={`${selectedCandidate ? 'hidden' : 'flex'} bg-white rounded-2xl shadow-sm border border-[#d6deea] overflow-hidden h-[calc(100vh-210px)] flex-col`}>
+          <div
+            className={`${
+              selectedCandidate ? 'hidden' : 'flex'
+            } bg-white rounded-2xl shadow-sm border border-[#d6deea] overflow-hidden flex-1 min-h-[min(720px,calc(100dvh-14rem))] flex-col`}
+          >
             <div className="p-4 border-b border-gray-100 bg-white space-y-3">
               <div className="relative">
                 <Search className="absolute left-3 top-2.5 text-gray-400" size={16} />
@@ -1506,7 +1542,7 @@ const AdminDashboard: React.FC = () => {
                 </div>
               )}
             </div>
-            <div className="overflow-y-auto flex-grow">
+            <div className="flex-1 min-h-0 overflow-y-auto">
               <div className="grid grid-cols-[34px,1.1fr,0.8fr,1.15fr,0.9fr,1.15fr,0.8fr,0.6fr,0.85fr] items-center gap-2 px-4 py-2 border-b border-gray-100 bg-[#f8fbff] text-[11px] font-semibold text-gray-500 uppercase tracking-wide sticky top-0 z-10">
                 <input type="checkbox" checked={filteredCandidates.length > 0 && filteredCandidates.every(c => selectedIds.has(c.id))} onChange={selectAll} className="rounded border-gray-300 text-[#005EB8]" />
                 <span>Candidate Name</span>
@@ -1518,7 +1554,10 @@ const AdminDashboard: React.FC = () => {
                 <span>Score</span>
                 <span>Resume / LinkedIn</span>
               </div>
-              {filteredCandidates.map(c => {
+              {filteredCandidates.length === 0 && (
+                <div className="px-4 py-12 text-center text-sm text-gray-500">No candidates match your filters.</div>
+              )}
+              {paginatedCandidates.map(c => {
                 const admin = getAdminData(c);
                 const activity = latestCandidateActivity(c);
                 return (
@@ -1594,6 +1633,42 @@ const AdminDashboard: React.FC = () => {
                 );
               })}
             </div>
+            {filteredCandidates.length > 0 && (
+              <div className="shrink-0 border-t border-gray-100 bg-[#f9fbff] px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm">
+                <p className="text-gray-600">
+                  Showing{' '}
+                  <span className="font-semibold text-gray-900">
+                    {(candidateListPage - 1) * CANDIDATES_PAGE_SIZE + 1}–
+                    {Math.min(candidateListPage * CANDIDATES_PAGE_SIZE, filteredCandidates.length)}
+                  </span>{' '}
+                  of <span className="font-semibold text-gray-900">{filteredCandidates.length}</span>
+                  {filteredCandidates.length !== candidates.length && (
+                    <span className="text-gray-500"> (filtered from {candidates.length})</span>
+                  )}
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={candidateListPage <= 1}
+                    onClick={() => setCandidateListPage((p) => Math.max(1, p - 1))}
+                    className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-xs text-gray-600 tabular-nums px-1">
+                    Page {candidateListPage} of {candidateListPageCount}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={candidateListPage >= candidateListPageCount}
+                    onClick={() => setCandidateListPage((p) => Math.min(candidateListPageCount, p + 1))}
+                    className="px-3 py-1.5 rounded-lg border border-gray-300 text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Candidate Detail */}

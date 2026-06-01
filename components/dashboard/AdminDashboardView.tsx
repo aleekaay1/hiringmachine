@@ -2,7 +2,7 @@ import React from 'react';
 import type { UserProfile } from '../../services/accessControl';
 import { listAllUserProfiles } from '../../services/accessControl';
 import { loadAdminOverviewMetrics, type LeadershipTeamMetrics } from '../../services/dashboardPersonalMetrics';
-import { DayNotesPanel, QuickLinkCard, StatTile } from './DashboardWidgets';
+import { DayNotesPanel, formatLeaderboardRefreshed, QuickLinkCard, RecruiterStandingsBoard, StatTile } from './DashboardWidgets';
 
 const AdminDashboardView: React.FC<{ profile: UserProfile }> = ({ profile }) => {
   const [metrics, setMetrics] = React.useState<LeadershipTeamMetrics | null>(null);
@@ -32,6 +32,8 @@ const AdminDashboardView: React.FC<{ profile: UserProfile }> = ({ profile }) => 
     <>
       <div className="rounded-3xl border border-[#d9e5f6] bg-white/80 p-4 backdrop-blur-xl">
         <p className="text-[10px] uppercase tracking-[0.2em] text-[#2f6ea8]">Organization snapshot</p>
+        <p className="mt-1 text-xs text-[#5c7594]">{metrics.windowLabel}</p>
+        <p className="text-[11px] text-[#6a839f]">{formatLeaderboardRefreshed(metrics.refreshedAt)}</p>
         <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
           <StatTile label="Recruiters" value={roleCounts.recruiter || 0} />
           <StatTile label="Leadership" value={roleCounts.leadership || 0} />
@@ -45,6 +47,8 @@ const AdminDashboardView: React.FC<{ profile: UserProfile }> = ({ profile }) => 
           <StatTile label="Team calls" value={metrics.totalCalls} />
         </div>
       </div>
+
+      <RecruiterStandingsBoard rows={metrics.topPerformers} />
 
       <div className="grid gap-4 lg:grid-cols-[1.35fr_1fr]">
         <div>

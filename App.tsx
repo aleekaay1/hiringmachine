@@ -43,7 +43,7 @@ const App: React.FC = () => {
         <Route path="/not-eligible" element={<NotEligible />} />
         <Route path="/home" element={<RoleHome />} />
         <Route path="/dashboard" element={<AdminDashboard />} />
-        <Route path="/admin" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/admin" element={<Navigate to="/home" replace />} />
         <Route path="/live-sessions" element={<LiveSessionsDashboard />} />
         <Route path="/webinar-geek" element={<WebinarGeekDashboard />} />
         <Route path="/calls-analytics" element={<CallsAnalytics />} />

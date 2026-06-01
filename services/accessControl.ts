@@ -176,18 +176,9 @@ export function canAccessSection(role: AppRole | null, section: AppSection): boo
   return section === 'overview' || section === 'leaderboard' || section === 'home';
 }
 
-export function defaultRouteForRole(role: AppRole | null): string {
-  if (
-    role === 'recruiter' ||
-    role === 'leadership' ||
-    role === 'admin' ||
-    role === 'webinar' ||
-    role === 'hr' ||
-    role === 'viewer'
-  ) {
-    return '/home';
-  }
-  return '/dashboard?view=overview';
+/** Post-login landing: role-based workspace at /home (not legacy CRM overview). */
+export function defaultRouteForRole(_role: AppRole | null): string {
+  return '/home';
 }
 
 export async function listAllUserProfiles(): Promise<UserProfile[]> {

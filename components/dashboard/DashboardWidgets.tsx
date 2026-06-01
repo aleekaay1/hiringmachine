@@ -1,7 +1,55 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
+import type { RecruiterLeaderboardRow } from '../../services/pipelineLeaderboard';
 import { DashboardStickyNotesPanel } from './DashboardStickyNotesPanel';
+
+export function formatLeaderboardRefreshed(iso: string | null): string {
+  if (!iso) return 'Refresh the leaderboard for latest team numbers';
+  return `Board updated ${new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`;
+}
+
+export function RecruiterStandingsBoard({
+  rows,
+  title = 'Recruiter standings (saved board)',
+}: {
+  rows: RecruiterLeaderboardRow[];
+  title?: string;
+}) {
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="rounded-3xl border border-[#d9e5f6] bg-white/80 p-4 backdrop-blur-xl">
+      <p className="text-sm font-semibold text-[#0B1B34]">{title}</p>
+      <div className="mt-2 overflow-x-auto">
+        <table className="w-full min-w-[520px] text-left text-xs">
+          <thead className="text-[#6d86a3]">
+            <tr>
+              <th className="pb-2 pr-3 font-medium">#</th>
+              <th className="pb-2 pr-3 font-medium">Name</th>
+              <th className="pb-2 pr-3 font-medium">Booked</th>
+              <th className="pb-2 pr-3 font-medium">Attended</th>
+              <th className="pb-2 pr-3 font-medium">Calls</th>
+              <th className="pb-2 font-medium">Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.recruiterKey} className="border-t border-[#eef4fb] text-[#35567a]">
+                <td className="py-2 pr-3 font-semibold text-[#0B1B34]">{row.rank}</td>
+                <td className="py-2 pr-3">{row.displayName}</td>
+                <td className="py-2 pr-3 tabular-nums">{row.webinarBooked}</td>
+                <td className="py-2 pr-3 tabular-nums">{row.webinarShowed}</td>
+                <td className="py-2 pr-3 tabular-nums">{row.calls}</td>
+                <td className="py-2 tabular-nums">{row.score.toFixed(1)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 export function StatTile({
   label,
