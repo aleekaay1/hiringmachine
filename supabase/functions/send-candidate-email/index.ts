@@ -17,9 +17,13 @@ import {
   buildGoogleCalendarUrl,
   buildIcsContent,
   buildOutlookCalendarUrl,
-  resolveLiveSessionCalendar,
   liveSessionCalendarIcsUrl,
 } from '../_shared/calendarInvite.ts';
+import {
+  fetchNextUpcomingOccurrence,
+  fetchOccurrenceBySessionDate,
+  resolveLiveSessionCalendarFromOccurrence,
+} from '../_shared/liveSessionOccurrenceCalendar.ts';
 import { wrapTransactionalEmailHtml } from '../_shared/emailHtmlShell.ts';
 import {
   buildAssessmentInternalNotificationSubject,
@@ -160,15 +164,38 @@ Deno.serve(async (req) => {
         PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION') ?? undefined,
         PUBLIC_LIVE_SESSION_CALENDAR_LOCATION: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_LOCATION') ?? undefined,
       };
-      const calendarEvent = resolveLiveSessionCalendar(liveSessionEnv, ZOOM_MEETING_URL);
+      const liveSessionDate =
+        typeof body?.liveSessionDate === 'string' ? body.liveSessionDate.trim() : '';
+      const occurrence = /^\d{4}-\d{2}-\d{2}$/.test(liveSessionDate)
+        ? await fetchOccurrenceBySessionDate(admin, liveSessionDate)
+        : await fetchNextUpcomingOccurrence(admin);
+      const calendarEvent = resolveLiveSessionCalendarFromOccurrence(liveSessionEnv, ZOOM_MEETING_URL, occurrence);
+      if (!calendarEvent) {
+        return new Response(
+          JSON.stringify({
+            error: 'No upcoming live session found',
+            detail: 'missing_live_session_occurrence',
+          }),
+          {
+            status: 503,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          },
+        );
+      }
       const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
       const googleUrl = buildGoogleCalendarUrl(calendarEvent);
-      const icsUrl = liveSessionCalendarIcsUrl(`${supabaseUrl}/functions/v1`, anonKey);
-      const icsContent = buildIcsContent(calendarEvent);
+      const icsUrl = liveSessionCalendarIcsUrl(
+        `${supabaseUrl}/functions/v1`,
+        anonKey,
+        calendarEvent.sessionDate,
+      );
+      const icsUid = calendarEvent.sessionDate
+        ? `live-session-${calendarEvent.sessionDate}@paz-organization`
+        : 'live-session@paz-organization';
+      const icsContent = buildIcsContent(calendarEvent, icsUid);
       const addToCalendarHtml = buildAddToCalendarEmailHtml({
         primaryUrl: googleUrl,
         icsDownloadUrl: icsUrl,
-        googleUrl,
         outlookUrl: buildOutlookCalendarUrl(calendarEvent),
       });
       mailAttachments = buildCalendarEmailAttachments(icsContent);

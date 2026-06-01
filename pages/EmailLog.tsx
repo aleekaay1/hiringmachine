@@ -8,6 +8,7 @@ import { sendEmail } from '../services/emailService';
 import { mergeTemplate } from '../services/emailTemplates';
 import { getSiteOriginForEmail } from '../services/emailSignature';
 import { fetchLiveSessionsDashboard, type PastMeetingRow, type UpcomingMeetingRow } from '../services/liveSessionsIntegrations';
+import { sessionLabelsFromStartIso } from '../services/liveSessionOccurrences';
 import {
   createWednesdayCampaignRunSnapshot,
   finalizeWednesdayCampaignRunCounts,
@@ -68,7 +69,8 @@ type WednesdaySessionOption = {
   key: string;
   title: string;
   startTimeIso: string;
-  startMinutesEt: number | null;
+  sessionDateKey: string;
+  durationMinutes: number;
   label: string;
   invitees: CalendlyInviteeLite[];
 };
@@ -90,8 +92,8 @@ type WednesdaySentTracking = {
 const WEDNESDAY_MANUAL_TRIGGER = 'manual_wednesday_live_overview';
 const EMAIL_SEND_LOGS_PAGE_SIZE = 1000;
 const TARGET_SESSION_TITLE = 'Live Online Career Session';
-const TARGET_SESSION_START_MINUTES_ET = 11 * 60 + 30;
-const TARGET_SESSION_MATCH_WINDOW_MINUTES = 90;
+const SESSION_PICKER_PAST_DAYS = 7;
+const SESSION_PICKER_FUTURE_DAYS = 90;
 const WEDNESDAY_REMINDER_SUBJECT_DEFAULT = 'Reminder: Live Overview Session Starts in 30 Minutes';
 const WEDNESDAY_REMINDER_BODY_DEFAULT = `
 <p>Hi {{firstName}},</p>
@@ -151,42 +153,24 @@ function easternDateKey(iso: string): string {
   }).format(new Date(parsed));
 }
 
-function easternMinutes(iso: string): number | null {
-  const parsed = Date.parse(iso);
-  if (!Number.isFinite(parsed)) return null;
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
-    .formatToParts(new Date(parsed))
-    .reduce<Record<string, string>>((acc, part) => {
-      acc[part.type] = part.value;
-      return acc;
-    }, {});
-  const hh = Number(parts.hour);
-  const mm = Number(parts.minute);
-  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
-  return hh * 60 + mm;
-}
-
-function deriveSessionOptions(
-  rows: Array<PastMeetingRow | UpcomingMeetingRow>,
-  targetDateKeyEt: string
-): WednesdaySessionOption[] {
+function deriveSessionOptions(rows: Array<PastMeetingRow | UpcomingMeetingRow>): WednesdaySessionOption[] {
+  const nowMs = Date.now();
+  const minMs = nowMs - SESSION_PICKER_PAST_DAYS * 24 * 60 * 60 * 1000;
+  const maxMs = nowMs + SESSION_PICKER_FUTURE_DAYS * 24 * 60 * 60 * 1000;
   const byKey = new Map<string, WednesdaySessionOption>();
   for (const row of rows) {
     const title = String(row.calendly?.name || row.zoom.topic || '').trim();
     const startTimeIso = String(row.calendly?.start_time || row.zoom.start_time || '').trim();
     if (!title || !startTimeIso) continue;
-    if (easternDateKey(startTimeIso) !== targetDateKeyEt) continue;
     if (!title.toLowerCase().includes(TARGET_SESSION_TITLE.toLowerCase())) continue;
-    const startMinutesEt = easternMinutes(startTimeIso);
-    if (startMinutesEt == null || Math.abs(startMinutesEt - TARGET_SESSION_START_MINUTES_ET) > TARGET_SESSION_MATCH_WINDOW_MINUTES) {
-      continue;
-    }
+    const startMs = Date.parse(startTimeIso);
+    if (!Number.isFinite(startMs) || startMs < minMs || startMs > maxMs) continue;
 
+    const sessionDateKey = easternDateKey(startTimeIso);
+    const durationMinutes =
+      typeof row.zoom?.duration_minutes === 'number' && row.zoom.duration_minutes > 0
+        ? row.zoom.duration_minutes
+        : 30;
     const key = `${title}|${startTimeIso}|${row.calendly?.uri || row.zoom.uuid || 'session'}`;
     const inviteesRaw = row.invitees || [];
     const invitees = inviteesRaw
@@ -206,54 +190,26 @@ function deriveSessionOptions(
         } as CalendlyInviteeLite;
       })
       .filter((inv): inv is CalendlyInviteeLite => Boolean(inv));
+    const dateLabel = sessionLabelsFromStartIso(startTimeIso, durationMinutes);
+    const shortDate = dateLabel?.date || sessionDateKey;
     byKey.set(key, {
       key,
       title,
       startTimeIso,
-      startMinutesEt,
-      label: `${title} - ${formatDateTimeCanadaEastern(startTimeIso)}`,
+      sessionDateKey,
+      durationMinutes,
+      label: `${shortDate} · ${title} · ${formatDateTimeCanadaEastern(startTimeIso)}`,
       invitees,
     });
   }
 
-  return [...byKey.values()].sort((a, b) => {
-    const aMin = a.startMinutesEt ?? Number.POSITIVE_INFINITY;
-    const bMin = b.startMinutesEt ?? Number.POSITIVE_INFINITY;
-    const aDist = Math.abs(aMin - TARGET_SESSION_START_MINUTES_ET);
-    const bDist = Math.abs(bMin - TARGET_SESSION_START_MINUTES_ET);
-    if (aDist !== bDist) return aDist - bDist;
-    return a.startTimeIso.localeCompare(b.startTimeIso);
-  });
+  return [...byKey.values()].sort((a, b) => a.startTimeIso.localeCompare(b.startTimeIso));
 }
 
-function getCurrentEasternDateLabel(now: Date = new Date()): string {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(now);
-}
-
-function easternTimeLabelForIso(iso: string): string {
-  const parsed = Date.parse(iso);
-  if (!Number.isFinite(parsed)) return '11:30 AM Eastern Time (ET)';
-  return (
-    new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    }).format(new Date(parsed)) + ' Eastern Time (ET)'
-  );
-}
-
-function buildWednesdayManualMergeExtras(sessionStartIso?: string, now: Date = new Date()): Record<string, string> {
-  const parsed = sessionStartIso ? Date.parse(sessionStartIso) : NaN;
-  const baseDate = Number.isFinite(parsed) ? new Date(parsed) : now;
-  const sessionDate = getCurrentEasternDateLabel(baseDate);
-  const sessionTime = sessionStartIso ? easternTimeLabelForIso(sessionStartIso) : '11:30 AM Eastern Time (ET)';
+function buildSessionManualMergeExtras(sessionStartIso?: string, durationMinutes = 30): Record<string, string> {
+  const labels = sessionStartIso ? sessionLabelsFromStartIso(sessionStartIso, durationMinutes) : null;
+  const sessionDate = labels?.date ?? '—';
+  const sessionTime = labels?.time ?? '—';
   return {
     '{{Date}}': sessionDate,
     '{{sessionDate}}': sessionDate,
@@ -457,12 +413,11 @@ const EmailLog: React.FC = () => {
         throw new Error(dashboard.error || 'Failed to load Calendly sessions.');
       }
 
-      const nowEt = easternDateKey(new Date().toISOString());
       const rowsCombined: Array<PastMeetingRow | UpcomingMeetingRow> = [
         ...dashboard.data.upcoming_meetings,
         ...dashboard.data.past_meetings,
       ];
-      const nextSessionOptions = deriveSessionOptions(rowsCombined, nowEt);
+      const nextSessionOptions = deriveSessionOptions(rowsCombined);
       const selectedKeyFromState = selectedSessionKeyRef.current;
       const resolvedSelectedKey =
         selectedKeyFromState && nextSessionOptions.some((option) => option.key === selectedKeyFromState)
@@ -659,7 +614,7 @@ const EmailLog: React.FC = () => {
       campaignSubjectDraft,
       ensureEmailSignaturePlaceholder(campaignBodyDraft),
       previewRecipient?.mergeCandidate || fallback,
-      buildWednesdayManualMergeExtras(selectedSession?.startTimeIso),
+      buildSessionManualMergeExtras(selectedSession?.startTimeIso, selectedSession?.durationMinutes),
       { siteOrigin: getSiteOriginForEmail() }
     );
   }, [campaignBodyDraft, campaignSubjectDraft, previewRecipient, selectedSession?.startTimeIso]);
@@ -779,7 +734,7 @@ const EmailLog: React.FC = () => {
         draftSubject,
         ensureEmailSignaturePlaceholder(draftBody),
         recipient.mergeCandidate,
-        buildWednesdayManualMergeExtras(selectedSession?.startTimeIso),
+        buildSessionManualMergeExtras(selectedSession?.startTimeIso, selectedSession?.durationMinutes),
         { siteOrigin: getSiteOriginForEmail() }
       );
       const response = await sendEmail(token, {
@@ -1029,7 +984,7 @@ const EmailLog: React.FC = () => {
             <div>
               <h2 className="text-base font-semibold text-[#0B1B34]">Wednesday Live Overview Send</h2>
               <p className="text-sm text-[#5c6b82]">
-                Manual campaign: fetch invitees from Calendly for today&apos;s 11:30 AM ET Live Online Career Session.
+                Manual campaign: fetch Calendly invitees and choose which session date to use in reminder emails.
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -1057,13 +1012,13 @@ const EmailLog: React.FC = () => {
 
           {!campaignSourceError && sessionOptions.length === 0 && !campaignSourceLoading && (
             <div className="rounded-xl border border-[#d6deea] bg-[#f8fbff] text-[#334155] text-sm px-4 py-3">
-              No matching Calendly session found for &quot;{TARGET_SESSION_TITLE}&quot; today at 11:30 AM ET.
+              No matching Calendly sessions found for &quot;{TARGET_SESSION_TITLE}&quot; in the next {SESSION_PICKER_FUTURE_DAYS} days.
             </div>
           )}
 
           {sessionOptions.length > 0 && (
             <div className="rounded-xl border border-[#d6deea] p-3 bg-[#fcfdff] space-y-2">
-              <div className="text-xs font-semibold text-[#5c6b82]">Calendly session occurrence</div>
+              <div className="text-xs font-semibold text-[#5c6b82]">Session date (Calendly occurrence)</div>
               <select
                 value={selectedSessionKey}
                 onChange={(e) => setSelectedSessionKey(e.target.value)}

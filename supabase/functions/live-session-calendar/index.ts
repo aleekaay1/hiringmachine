@@ -1,9 +1,15 @@
 // Serves a downloadable .ics for the Live Online Career Session (post–check-in email "Add to Calendar").
 // Deploy: supabase functions deploy live-session-calendar
-// Secrets: PUBLIC_LIVE_SESSION_START_ISO, PUBLIC_LIVE_SESSION_END_ISO (required for a valid invite)
+// Query: ?sessionDate=YYYY-MM-DD (optional; default = next upcoming occurrence)
 
-import { buildIcsContent, resolveLiveSessionCalendar } from '../_shared/calendarInvite.ts';
+import { createClient } from 'npm:@supabase/supabase-js@2';
+import { buildIcsContent } from '../_shared/calendarInvite.ts';
 import { ZOOM_MEETING_URL } from '../_shared/hiringUrls.ts';
+import {
+  fetchNextUpcomingOccurrence,
+  fetchOccurrenceBySessionDate,
+  resolveLiveSessionCalendarFromOccurrence,
+} from '../_shared/liveSessionOccurrenceCalendar.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -20,20 +26,46 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const event = resolveLiveSessionCalendar(
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    if (!serviceRole) {
+      return new Response('Server misconfiguration', { status: 500, headers: corsHeaders });
+    }
+
+    const url = new URL(req.url);
+    const sessionDateParam = url.searchParams.get('sessionDate')?.trim() || '';
+
+    const admin = createClient(supabaseUrl, serviceRole);
+    const occurrence = /^\d{4}-\d{2}-\d{2}$/.test(sessionDateParam)
+      ? await fetchOccurrenceBySessionDate(admin, sessionDateParam)
+      : await fetchNextUpcomingOccurrence(admin);
+
+    const event = resolveLiveSessionCalendarFromOccurrence(
       {
         PUBLIC_LIVE_SESSION_START_ISO: Deno.env.get('PUBLIC_LIVE_SESSION_START_ISO') ?? undefined,
         PUBLIC_LIVE_SESSION_END_ISO: Deno.env.get('PUBLIC_LIVE_SESSION_END_ISO') ?? undefined,
         PUBLIC_LIVE_SESSION_DISPLAY_DATE: Deno.env.get('PUBLIC_LIVE_SESSION_DISPLAY_DATE') ?? undefined,
         PUBLIC_LIVE_SESSION_DISPLAY_TIME: Deno.env.get('PUBLIC_LIVE_SESSION_DISPLAY_TIME') ?? undefined,
         PUBLIC_LIVE_SESSION_CALENDAR_TITLE: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_TITLE') ?? undefined,
-        PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION') ?? undefined,
+        PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION:
+          Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION') ?? undefined,
         PUBLIC_LIVE_SESSION_CALENDAR_LOCATION: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_LOCATION') ?? undefined,
       },
       ZOOM_MEETING_URL,
+      occurrence,
     );
 
-    const ics = buildIcsContent(event);
+    if (!event) {
+      return new Response('No live session scheduled', {
+        status: 404,
+        headers: { ...corsHeaders, 'Content-Type': 'text/plain; charset=utf-8' },
+      });
+    }
+
+    const icsUid = event.sessionDate
+      ? `live-session-${event.sessionDate}@paz-organization`
+      : 'live-session@paz-organization';
+    const ics = buildIcsContent(event, icsUid);
     return new Response(ics, {
       status: 200,
       headers: {

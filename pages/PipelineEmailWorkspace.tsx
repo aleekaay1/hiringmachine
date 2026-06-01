@@ -12,17 +12,31 @@ import {
   type PipelineIncomingEmailLog,
 } from '../services/pipelineService';
 import { sendEmail } from '../services/emailService';
-import { appendEmailSignatureToHtml } from '../services/emailSignatureHtml';
+import { appendEmailSignatureToHtml, SIGNATURE_LOGO_URL } from '../services/emailSignatureHtml';
 import { normalizeMessageIdForHeader, subjectForReply } from '../services/inboundEmailFormat';
 import { supabase } from '../services/supabaseClient';
 import { EMAIL_TEMPLATES, mergeTemplate } from '../services/emailTemplates';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
+import { fetchNextUpcomingLiveSession } from '../services/liveSessionOccurrences';
 
 type WorkspaceThemeMode = 'dark' | 'light';
+type ComposeView = 'write' | 'preview';
 const WORKSPACE_THEME_STORAGE_KEY = 'pipeline-recruiter-workspace-theme';
 
 function plainToHtml(text: string): string {
-  return text.split('\n').map((line) => `<p>${line || '&nbsp;'}</p>`).join('');
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return escaped.split('\n').map((line) => `<p style="margin:0 0 12px;">${line || '&nbsp;'}</p>`).join('');
+}
+
+function wrapEmailPreviewShell(innerHtml: string): string {
+  return `<div style="margin:0;padding:16px;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;">
+<div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:8px;padding:24px;font-size:14px;line-height:1.55;color:#1f2937;">
+${innerHtml}
+</div>
+</div>`;
 }
 
 const PipelineEmailWorkspace: React.FC = () => {
@@ -42,7 +56,10 @@ const PipelineEmailWorkspace: React.FC = () => {
   const [templateId, setTemplateId] = React.useState('');
   const [toEmail, setToEmail] = React.useState('');
   const [subject, setSubject] = React.useState('');
-  const [body, setBody] = React.useState('');
+  const [bodyPlain, setBodyPlain] = React.useState('');
+  const [bodyHtml, setBodyHtml] = React.useState('');
+  const [useHtmlCompose, setUseHtmlCompose] = React.useState(false);
+  const [composeView, setComposeView] = React.useState<ComposeView>('write');
   const [sending, setSending] = React.useState(false);
   const [message, setMessage] = React.useState<string | null>(null);
   const [inReplyTo, setInReplyTo] = React.useState<string | null>(null);
@@ -108,7 +125,10 @@ const PipelineEmailWorkspace: React.FC = () => {
     if (!selectedCandidate) return;
     setToEmail(selectedCandidate.email || '');
     setSubject('Quick follow-up from Paz Organization');
-    setBody(`Hi ${(selectedCandidate.full_name || '').trim() || 'there'},\n\n`);
+    setBodyPlain(`Hi ${(selectedCandidate.full_name || '').trim() || 'there'},\n\n`);
+    setBodyHtml('');
+    setUseHtmlCompose(false);
+    setComposeView('write');
     setInReplyTo(null);
     setReferences(null);
   }, [selectedCandidate?.id]);
@@ -172,13 +192,15 @@ const PipelineEmailWorkspace: React.FC = () => {
     [filteredOutbox, selectedOutboxId],
   );
 
-  const applyTemplateToCompose = () => {
+  const applyTemplateToCompose = async () => {
     if (!selectedCandidate || !templateId) return;
     const template = EMAIL_TEMPLATES.find((item) => item.id === templateId);
     if (!template) return;
     const nameParts = String(selectedCandidate.full_name || '').trim().split(/\s+/);
     const firstName = nameParts[0] || '';
     const lastName = nameParts.slice(1).join(' ');
+    const liveSessionOccurrence =
+      templateId === 'stage2_post_checkin' ? await fetchNextUpcomingLiveSession() : null;
     const merged = mergeTemplate(
       template.subject,
       template.bodyHtml,
@@ -189,22 +211,32 @@ const PipelineEmailWorkspace: React.FC = () => {
         phone: selectedCandidate.phone || '',
       },
       undefined,
-      { siteOrigin: window.location.origin },
+      { siteOrigin: window.location.origin, liveSessionOccurrence },
     );
-    const plain = merged.bodyHtml
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/p>/gi, '\n')
-      .replace(/<[^>]+>/g, '')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
     setSubject(merged.subject);
-    setBody(plain);
-    setMessage(`Template applied: ${template.name}`);
+    setBodyHtml(merged.bodyHtml);
+    setBodyPlain('');
+    setUseHtmlCompose(true);
+    setComposeView('preview');
+    setMessage(`Template applied: ${template.name}. Use Preview to see the final email.`);
   };
 
+  const composedHtmlForSend = React.useMemo(() => {
+    const core = useHtmlCompose ? bodyHtml.trim() : plainToHtml(bodyPlain.trim());
+    if (!core) return '';
+    if (core.includes(SIGNATURE_LOGO_URL) || core.includes('{{emailSignature}}')) return core.replace(/\{\{emailSignature\}\}/g, '');
+    return appendEmailSignatureToHtml(core);
+  }, [bodyHtml, bodyPlain, useHtmlCompose]);
+
+  const previewHtml = React.useMemo(
+    () => (composedHtmlForSend ? wrapEmailPreviewShell(composedHtmlForSend) : ''),
+    [composedHtmlForSend],
+  );
+
   const sendFromWorkspace = async () => {
-    if (!selectedCandidate || !toEmail.trim() || !subject.trim() || !body.trim()) {
-      setMessage('To, subject, and body are required.');
+    const hasBody = useHtmlCompose ? bodyHtml.trim().length > 0 : bodyPlain.trim().length > 0;
+    if (!selectedCandidate || !toEmail.trim() || !subject.trim() || !hasBody) {
+      setMessage('To, subject, and message are required.');
       return;
     }
     setSending(true);
@@ -213,34 +245,15 @@ const PipelineEmailWorkspace: React.FC = () => {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
       if (!token) throw new Error('Not authenticated.');
-      const nameParts = String(selectedCandidate.full_name || '').trim().split(/\s+/);
-      const firstName = nameParts[0] || '';
-      const lastName = nameParts.slice(1).join(' ');
-      const template = EMAIL_TEMPLATES.find((item) => item.id === templateId);
-      const mergedTemplate = template
-        ? mergeTemplate(
-            template.subject,
-            template.bodyHtml,
-            {
-              firstName,
-              lastName,
-              email: selectedCandidate.email || '',
-              phone: selectedCandidate.phone || '',
-            },
-            undefined,
-            { siteOrigin: window.location.origin },
-          )
-        : null;
       const result = await sendEmail(token, {
         to: toEmail.trim(),
-        subject: subject.trim() || mergedTemplate?.subject || template?.subject || '',
-        bodyHtml: body.trim()
-          ? appendEmailSignatureToHtml(plainToHtml(body))
-          : (mergedTemplate?.bodyHtml || ''),
+        subject: subject.trim(),
+        bodyHtml: composedHtmlForSend,
         candidateId: selectedCandidate.id,
         trigger: 'pipeline_email_workspace',
         inReplyTo: inReplyTo || undefined,
         references: references || undefined,
+        attachLiveSessionCalendar: templateId === 'stage2_post_checkin',
       });
       if (!('ok' in result)) throw new Error(result.error || 'Failed to send email.');
       setMessage('Email sent.');
@@ -361,7 +374,7 @@ const PipelineEmailWorkspace: React.FC = () => {
           initial={{ opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.45, delay: 0.1 }}
-          className="mt-4 grid gap-4 xl:grid-cols-[1fr_1fr_380px]"
+          className="mt-4 grid gap-4 lg:grid-cols-2"
         >
           <section className={`rounded-2xl border p-3 space-y-2 ${tone.glassPanel}`}>
             <div className="flex items-center justify-between">
@@ -375,7 +388,7 @@ const PipelineEmailWorkspace: React.FC = () => {
                 {loading ? 'Refreshing...' : 'Refresh'}
               </Button>
             </div>
-            <div className="space-y-1.5 max-h-[64vh] overflow-auto">
+            <div className="space-y-1.5 max-h-[42vh] min-h-[200px] overflow-auto">
               {filteredInbox.map((log) => (
                 <button
                   key={log.id}
@@ -385,7 +398,10 @@ const PipelineEmailWorkspace: React.FC = () => {
                     setSelectedCandidateId(log.candidate_id || '');
                     setToEmail(String(log.from_email || '').trim());
                     setSubject(subjectForReply(log.subject));
-                    setBody(`Hi ${(candidateNameById.get(log.candidate_id || '') || 'there').trim()},\n\n`);
+                    setBodyPlain(`Hi ${(candidateNameById.get(log.candidate_id || '') || 'there').trim()},\n\n`);
+                    setBodyHtml('');
+                    setUseHtmlCompose(false);
+                    setComposeView('write');
                     const mid = normalizeMessageIdForHeader(log.message_id);
                     setInReplyTo(mid);
                     setReferences(mid);
@@ -423,7 +439,7 @@ const PipelineEmailWorkspace: React.FC = () => {
 
           <section className={`rounded-2xl border p-3 space-y-2 ${tone.glassPanel}`}>
             <p className={`text-xs font-semibold ${tone.panelTitle}`}>Outbox ({filteredOutbox.length})</p>
-            <div className="space-y-1.5 max-h-[64vh] overflow-auto">
+            <div className="space-y-1.5 max-h-[42vh] min-h-[200px] overflow-auto">
               {filteredOutbox.map((log) => (
                 <button
                   key={log.id}
@@ -451,64 +467,195 @@ const PipelineEmailWorkspace: React.FC = () => {
               )}
             </div>
           </section>
+        </motion.div>
 
-          <section className={`rounded-2xl border p-4 space-y-2 ${tone.glassPanel}`}>
-            <p className={`text-sm font-semibold ${tone.panelTitle}`}>Compose</p>
-            <label className={`text-[11px] block ${tone.panelMuted}`}>
-              Candidate
-              <select
-                value={selectedCandidateId}
-                onChange={(e) => setSelectedCandidateId(e.target.value)}
-                className={`mt-1 w-full rounded-lg border px-2 py-2 text-xs ${tone.input}`}
+        <motion.section
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45, delay: 0.15 }}
+          className={`mt-4 rounded-2xl border p-4 md:p-5 space-y-4 ${tone.glassPanel}`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className={`text-[10px] uppercase tracking-[0.18em] ${tone.panelLabel}`}>Compose</p>
+              <h2 className={`text-base font-semibold ${tone.panelTitle}`}>New message</h2>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setComposeView('write')}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+                  composeView === 'write' ? tone.selectedCard : tone.neutralCard
+                }`}
               >
-                {candidates.map((candidate) => (
-                  <option key={candidate.id} value={candidate.id}>
-                    {candidate.full_name || 'Unknown Candidate'} ({candidate.email || candidate.phone || 'no contact'})
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className={`text-[11px] block ${tone.panelMuted}`}>
-              Template (optional)
-              <div className="mt-1 flex gap-2">
-                <select value={templateId} onChange={(e) => setTemplateId(e.target.value)} className={`w-full rounded-lg border px-2 py-2 text-xs ${tone.input}`}>
-                  <option value="">No template</option>
-                  {EMAIL_TEMPLATES.map((template) => (
-                    <option key={template.id} value={template.id}>{template.name}</option>
-                  ))}
-                </select>
-                <Button
-                  variant="outline"
-                  className={`!min-h-0 h-9 px-2 text-xs whitespace-nowrap ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
-                  onClick={applyTemplateToCompose}
-                  disabled={!templateId || !selectedCandidate}
-                >
-                  Apply
-                </Button>
-              </div>
-            </label>
-            <input value={toEmail} onChange={(e) => setToEmail(e.target.value)} placeholder="To" className={`rounded-lg border px-2 py-2 text-xs ${tone.input}`} />
-            <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" className={`rounded-lg border px-2 py-2 text-xs ${tone.input}`} />
-            <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={8} className={`rounded-lg border px-2 py-2 text-xs ${tone.input}`} placeholder="Write message..." />
-            <div className="flex items-center justify-between">
-              <p className={`text-[11px] ${tone.panelLabel}`}>Template merge + signature path reused on send.</p>
-              <Button className="!min-h-0 h-8 px-3 text-xs" onClick={() => void sendFromWorkspace()} disabled={sending || !selectedCandidate}>
-                {sending ? 'Sending...' : 'Send'}
+                Write
+              </button>
+              <button
+                type="button"
+                onClick={() => setComposeView('preview')}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+                  composeView === 'preview' ? tone.selectedCard : tone.neutralCard
+                }`}
+              >
+                Preview
+              </button>
+              <Button
+                className="!min-h-0 h-9 px-4 text-xs"
+                onClick={() => void sendFromWorkspace()}
+                disabled={sending || !selectedCandidate}
+              >
+                {sending ? 'Sending…' : 'Send email'}
               </Button>
             </div>
-            {message && <p className={`text-xs ${tone.panelMuted}`}>{message}</p>}
-            {selectedOutbox && (
-              <div className={`rounded-lg border p-2.5 text-[11px] ${tone.subtle} ${tone.panelMuted}`}>
-                <p className={`font-semibold ${tone.panelTitle}`}>Selected outbox detail</p>
-                <p>To: {selectedOutbox.to_email}</p>
-                <p>Status: {selectedOutbox.status}</p>
-                <p>Candidate: {candidateNameById.get(selectedOutbox.candidate_id || '') || 'Unmapped'}</p>
-                <p>When: {formatDateTimeCanadaEastern(selectedOutbox.created_at)}</p>
-                {selectedOutbox.error_message && <p className="text-red-700 mt-1">{selectedOutbox.error_message}</p>}
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="compose-candidate" className={`mb-1 block text-xs font-semibold ${tone.panelTitle}`}>
+                  Candidate
+                </label>
+                <select
+                  id="compose-candidate"
+                  value={selectedCandidateId}
+                  onChange={(e) => setSelectedCandidateId(e.target.value)}
+                  className={`w-full rounded-xl border px-3 py-2.5 text-sm ${tone.input}`}
+                >
+                  {candidates.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.full_name || 'Unknown Candidate'} ({candidate.email || candidate.phone || 'no contact'})
+                    </option>
+                  ))}
+                </select>
               </div>
-            )}
-          </section>
-        </motion.div>
+
+              <div>
+                <label htmlFor="compose-template" className={`mb-1 block text-xs font-semibold ${tone.panelTitle}`}>
+                  Email template
+                </label>
+                <div className="flex gap-2">
+                  <select
+                    id="compose-template"
+                    value={templateId}
+                    onChange={(e) => setTemplateId(e.target.value)}
+                    className={`w-full rounded-xl border px-3 py-2.5 text-sm ${tone.input}`}
+                  >
+                    <option value="">None — write your own message</option>
+                    {EMAIL_TEMPLATES.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    variant="outline"
+                    className={`!min-h-0 shrink-0 h-10 px-3 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
+                    onClick={() => void applyTemplateToCompose()}
+                    disabled={!templateId || !selectedCandidate}
+                  >
+                    Apply template
+                  </Button>
+                </div>
+                {useHtmlCompose && (
+                  <p className={`mt-1.5 text-xs ${tone.panelMuted}`}>
+                    Rich HTML template loaded — calendar button and formatting are preserved on send.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label htmlFor="compose-to" className={`mb-1 block text-xs font-semibold ${tone.panelTitle}`}>
+                  To (email)
+                </label>
+                <input
+                  id="compose-to"
+                  type="email"
+                  value={toEmail}
+                  onChange={(e) => setToEmail(e.target.value)}
+                  className={`w-full rounded-xl border px-3 py-2.5 text-sm ${tone.input}`}
+                  placeholder="candidate@example.com"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="compose-subject" className={`mb-1 block text-xs font-semibold ${tone.panelTitle}`}>
+                  Subject
+                </label>
+                <input
+                  id="compose-subject"
+                  type="text"
+                  value={subject}
+                  onChange={(e) => setSubject(e.target.value)}
+                  className={`w-full rounded-xl border px-3 py-2.5 text-sm ${tone.input}`}
+                  placeholder="Email subject line"
+                />
+              </div>
+
+              {composeView === 'write' && (
+                <div>
+                  <label htmlFor="compose-body" className={`mb-1 block text-xs font-semibold ${tone.panelTitle}`}>
+                    Message
+                  </label>
+                  {useHtmlCompose ? (
+                    <div className={`rounded-xl border px-3 py-3 text-sm ${tone.subtle} ${tone.panelMuted}`}>
+                      This email uses an HTML template with buttons and styling. Switch to{' '}
+                      <button
+                        type="button"
+                        className="underline font-semibold"
+                        onClick={() => setComposeView('preview')}
+                      >
+                        Preview
+                      </button>{' '}
+                      to review it, or pick another template.
+                    </div>
+                  ) : (
+                    <textarea
+                      id="compose-body"
+                      value={bodyPlain}
+                      onChange={(e) => setBodyPlain(e.target.value)}
+                      rows={14}
+                      className={`w-full min-h-[280px] rounded-xl border px-3 py-3 text-sm leading-relaxed resize-y ${tone.input}`}
+                      placeholder="Write your message here…"
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col min-h-[360px]">
+              <p className={`mb-2 text-xs font-semibold ${tone.panelTitle}`}>
+                {composeView === 'preview' ? 'Email preview' : 'Live preview'}
+              </p>
+              <div
+                className={`flex-1 overflow-auto rounded-xl border ${isDark ? 'border-white/10 bg-white' : 'border-slate-200 bg-white'}`}
+              >
+                {previewHtml ? (
+                  <iframe
+                    title="Email preview"
+                    srcDoc={previewHtml}
+                    className="w-full min-h-[360px] h-full border-0 rounded-xl bg-white"
+                    sandbox=""
+                  />
+                ) : (
+                  <div className={`flex min-h-[360px] items-center justify-center px-6 text-center text-sm ${tone.panelMuted}`}>
+                    Add a message or apply a template to see how the email will look.
+                  </div>
+                )}
+              </div>
+              {selectedOutbox && (
+                <div className={`mt-3 rounded-xl border p-3 text-xs ${tone.subtle} ${tone.panelMuted}`}>
+                  <p className={`font-semibold ${tone.panelTitle}`}>Last selected outbox</p>
+                  <p>To: {selectedOutbox.to_email}</p>
+                  <p>Status: {selectedOutbox.status}</p>
+                  <p>When: {formatDateTimeCanadaEastern(selectedOutbox.created_at)}</p>
+                  {selectedOutbox.error_message && <p className="text-red-600 mt-1">{selectedOutbox.error_message}</p>}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {message && <p className={`text-sm ${tone.panelMuted}`}>{message}</p>}
+        </motion.section>
       </div>
     </PipelineAuthShell>
   );

@@ -5,6 +5,16 @@
 import nodemailer from 'npm:nodemailer@6.9.10';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { insertEmailSendLog } from '../_shared/emailSendLog.ts';
+import {
+  buildCalendarEmailAttachments,
+  buildIcsContent,
+} from '../_shared/calendarInvite.ts';
+import { ZOOM_MEETING_URL } from '../_shared/hiringUrls.ts';
+import {
+  fetchNextUpcomingOccurrence,
+  fetchOccurrenceBySessionDate,
+  resolveLiveSessionCalendarFromOccurrence,
+} from '../_shared/liveSessionOccurrenceCalendar.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -118,6 +128,47 @@ Deno.serve(async (req) => {
       encoding: 'base64';
       contentType?: string;
     }>;
+
+    const attachLiveSessionCalendar = body?.attachLiveSessionCalendar === true;
+    const liveSessionDate =
+      typeof body?.liveSessionDate === 'string' ? body.liveSessionDate.trim() : '';
+    if (attachLiveSessionCalendar) {
+      const serviceRoleForCalendar = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.trim();
+      if (serviceRoleForCalendar) {
+        const calendarAdmin = createClient(supabaseUrl, serviceRoleForCalendar);
+        const occurrence = /^\d{4}-\d{2}-\d{2}$/.test(liveSessionDate)
+          ? await fetchOccurrenceBySessionDate(calendarAdmin, liveSessionDate)
+          : await fetchNextUpcomingOccurrence(calendarAdmin);
+        const calendarEvent = resolveLiveSessionCalendarFromOccurrence(
+          {
+            PUBLIC_LIVE_SESSION_START_ISO: Deno.env.get('PUBLIC_LIVE_SESSION_START_ISO') ?? undefined,
+            PUBLIC_LIVE_SESSION_END_ISO: Deno.env.get('PUBLIC_LIVE_SESSION_END_ISO') ?? undefined,
+            PUBLIC_LIVE_SESSION_DISPLAY_DATE: Deno.env.get('PUBLIC_LIVE_SESSION_DISPLAY_DATE') ?? undefined,
+            PUBLIC_LIVE_SESSION_DISPLAY_TIME: Deno.env.get('PUBLIC_LIVE_SESSION_DISPLAY_TIME') ?? undefined,
+            PUBLIC_LIVE_SESSION_CALENDAR_TITLE: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_TITLE') ?? undefined,
+            PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION:
+              Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION') ?? undefined,
+            PUBLIC_LIVE_SESSION_CALENDAR_LOCATION:
+              Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_LOCATION') ?? undefined,
+          },
+          ZOOM_MEETING_URL,
+          occurrence,
+        );
+        if (calendarEvent) {
+          const icsUid = calendarEvent.sessionDate
+            ? `live-session-${calendarEvent.sessionDate}@paz-organization`
+            : 'live-session@paz-organization';
+          const icsContent = buildIcsContent(calendarEvent, icsUid);
+          for (const att of buildCalendarEmailAttachments(icsContent)) {
+            attachments.push({
+              filename: att.filename,
+              content: att.content,
+              contentType: att.contentType,
+            });
+          }
+        }
+      }
+    }
 
     const transport = getTransport();
     try {

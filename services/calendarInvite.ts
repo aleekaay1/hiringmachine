@@ -1,7 +1,6 @@
 /**
  * Live session calendar invites (ICS + provider links) for post–check-in email.
- * Default schedule: every Wednesday 11:30 AM Eastern (1 hour).
- * Optional Supabase override: PUBLIC_LIVE_SESSION_START_ISO / PUBLIC_LIVE_SESSION_END_ISO
+ * Times come from live_session_occurrences (Calendly/Zoom sync) unless env ISO overrides are set.
  */
 
 export type LiveSessionCalendarEvent = {
@@ -14,9 +13,19 @@ export type LiveSessionCalendarEvent = {
   recurringWeekly?: boolean;
 };
 
+export type LiveSessionOccurrenceRecord = {
+  session_date: string;
+  session_start_at: string;
+  status?: string;
+  calendly_event_name?: string | null;
+  calendly_start_at?: string | null;
+  zoom_duration_minutes?: number | null;
+};
+
 export type ResolvedLiveSession = LiveSessionCalendarEvent & {
   displayDate: string;
   displayTime: string;
+  sessionDate?: string | null;
 };
 
 export const LIVE_SESSION_TIMEZONE = 'America/New_York';
@@ -120,25 +129,7 @@ export function zonedWallClockToUtc(ymd: Ymd, hour: number, minute: number, time
   return new Date(ts);
 }
 
-/** Next upcoming Wednesday 11:30 AM Eastern (or today if still before start). */
-export function getNextWednesdayLiveSessionBounds(now = new Date()): {
-  start: Date;
-  end: Date;
-  displayDate: string;
-  displayTime: string;
-} {
-  const ep = easternParts(now);
-  let daysAhead = (LIVE_SESSION_WEEKDAY - ep.weekday + 7) % 7;
-  if (daysAhead === 0) {
-    const beforeStart =
-      ep.hour < LIVE_SESSION_START_HOUR ||
-      (ep.hour === LIVE_SESSION_START_HOUR && ep.minute < LIVE_SESSION_START_MINUTE);
-    if (!beforeStart) daysAhead = 7;
-  }
-  const sessionYmd = addDaysYmd({ year: ep.year, month: ep.month, day: ep.day }, daysAhead);
-  const start = zonedWallClockToUtc(sessionYmd, LIVE_SESSION_START_HOUR, LIVE_SESSION_START_MINUTE);
-  const end = new Date(start.getTime() + LIVE_SESSION_DURATION_MINUTES * 60 * 1000);
-
+export function formatSessionDisplayLabels(start: Date, end: Date): { displayDate: string; displayTime: string } {
   const displayDate = new Intl.DateTimeFormat('en-US', {
     timeZone: LIVE_SESSION_TIMEZONE,
     weekday: 'long',
@@ -146,7 +137,6 @@ export function getNextWednesdayLiveSessionBounds(now = new Date()): {
     day: 'numeric',
     year: 'numeric',
   }).format(start);
-
   const timeFmt = new Intl.DateTimeFormat('en-US', {
     timeZone: LIVE_SESSION_TIMEZONE,
     hour: 'numeric',
@@ -154,8 +144,7 @@ export function getNextWednesdayLiveSessionBounds(now = new Date()): {
     hour12: true,
   });
   const displayTime = `${timeFmt.format(start)} – ${timeFmt.format(end)} Eastern (ET)`;
-
-  return { start, end, displayDate, displayTime };
+  return { displayDate, displayTime };
 }
 
 function buildEventFields(
@@ -163,12 +152,11 @@ function buildEventFields(
   zoomUrl: string,
   start: Date,
   end: Date,
-  recurringWeekly: boolean,
 ): LiveSessionCalendarEvent {
   const title = env.PUBLIC_LIVE_SESSION_CALENDAR_TITLE?.trim() || DEFAULT_TITLE;
   const description =
     env.PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION?.trim() ||
-    `Live Online Career Session hosted by Alex Paz.\n\nJoin Zoom: ${zoomUrl}\n\nEvery Wednesday at 11:30 AM Eastern. Please join at least 5 minutes early.`;
+    `Live Online Career Session hosted by Alex Paz.\n\nJoin Zoom: ${zoomUrl}\n\nPlease join at least 5 minutes early.`;
 
   return {
     title,
@@ -177,64 +165,54 @@ function buildEventFields(
     zoomUrl,
     start,
     end,
-    recurringWeekly,
+    recurringWeekly: false,
   };
 }
 
-/** Env ISO override, else next Wednesday 11:30 AM ET (weekly). */
+export function resolvedCalendarFromOccurrence(
+  occ: LiveSessionOccurrenceRecord,
+  zoomUrl: string,
+  env: Record<string, string | undefined> = {},
+): ResolvedLiveSession {
+  const start = new Date(occ.session_start_at);
+  const durationMin =
+    occ.zoom_duration_minutes && Number(occ.zoom_duration_minutes) > 0
+      ? Number(occ.zoom_duration_minutes)
+      : 30;
+  const end = new Date(start.getTime() + durationMin * 60 * 1000);
+  const labels = formatSessionDisplayLabels(start, end);
+  return {
+    ...buildEventFields(env, zoomUrl, start, end),
+    displayDate: env.PUBLIC_LIVE_SESSION_DISPLAY_DATE?.trim() || labels.displayDate,
+    displayTime: env.PUBLIC_LIVE_SESSION_DISPLAY_TIME?.trim() || labels.displayTime,
+    sessionDate: occ.session_date,
+  };
+}
+
+/** Env ISO override, else synced occurrence from Calendly/Zoom registry. */
 export function resolveLiveSessionCalendar(
   env: Record<string, string | undefined>,
   zoomUrl: string,
-  now = new Date(),
-): ResolvedLiveSession {
-  const start = parseIsoDate(env.PUBLIC_LIVE_SESSION_START_ISO);
-  const end = parseIsoDate(env.PUBLIC_LIVE_SESSION_END_ISO);
-  if (start && end && end.getTime() > start.getTime()) {
-    const displayDate =
-      env.PUBLIC_LIVE_SESSION_DISPLAY_DATE?.trim() ||
-      new Intl.DateTimeFormat('en-US', {
-        timeZone: LIVE_SESSION_TIMEZONE,
-        weekday: 'long',
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric',
-      }).format(start);
-    const timeFmt = new Intl.DateTimeFormat('en-US', {
-      timeZone: LIVE_SESSION_TIMEZONE,
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
-    const displayTime =
-      env.PUBLIC_LIVE_SESSION_DISPLAY_TIME?.trim() ||
-      `${timeFmt.format(start)} – ${timeFmt.format(end)} Eastern (ET)`;
+  occurrence: LiveSessionOccurrenceRecord | null = null,
+): ResolvedLiveSession | null {
+  const envStart = parseIsoDate(env.PUBLIC_LIVE_SESSION_START_ISO);
+  const envEnd = parseIsoDate(env.PUBLIC_LIVE_SESSION_END_ISO);
+  if (envStart && envEnd && envEnd.getTime() > envStart.getTime()) {
+    const labels = formatSessionDisplayLabels(envStart, envEnd);
     return {
-      ...buildEventFields(env, zoomUrl, start, end, false),
-      displayDate,
-      displayTime,
+      ...buildEventFields(env, zoomUrl, envStart, envEnd),
+      displayDate: env.PUBLIC_LIVE_SESSION_DISPLAY_DATE?.trim() || labels.displayDate,
+      displayTime: env.PUBLIC_LIVE_SESSION_DISPLAY_TIME?.trim() || labels.displayTime,
+      sessionDate: env.PUBLIC_LIVE_SESSION_DATE?.trim() || null,
     };
   }
-
-  const next = getNextWednesdayLiveSessionBounds(now);
-  const displayDate = env.PUBLIC_LIVE_SESSION_DISPLAY_DATE?.trim() || next.displayDate;
-  const displayTime = env.PUBLIC_LIVE_SESSION_DISPLAY_TIME?.trim() || next.displayTime;
-  return {
-    ...buildEventFields(env, zoomUrl, next.start, next.end, true),
-    displayDate,
-    displayTime,
-  };
+  if (occurrence) {
+    return resolvedCalendarFromOccurrence(occurrence, zoomUrl, env);
+  }
+  return null;
 }
 
-/** @deprecated Use resolveLiveSessionCalendar */
-export function getLiveSessionCalendarEventFromEnv(
-  env: Record<string, string | undefined>,
-  zoomUrl: string,
-): LiveSessionCalendarEvent | null {
-  const resolved = resolveLiveSessionCalendar(env, zoomUrl);
-  return resolved;
-}
-
-export function buildIcsContent(event: LiveSessionCalendarEvent, uid = 'live-session-weekly@paz-organization'): string {
+export function buildIcsContent(event: LiveSessionCalendarEvent, uid = 'live-session@paz-organization'): string {
   const stamp = formatIcsUtc(new Date());
   const dtStart = formatIcsUtc(event.start);
   const dtEnd = formatIcsUtc(event.end);
@@ -242,8 +220,6 @@ export function buildIcsContent(event: LiveSessionCalendarEvent, uid = 'live-ses
   const description = escapeIcsText(event.description);
   const location = escapeIcsText(event.location);
   const url = escapeIcsText(event.zoomUrl);
-  const rrule = event.recurringWeekly ? ['RRULE:FREQ=WEEKLY;BYDAY=WE'] : [];
-
   return [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
@@ -255,7 +231,6 @@ export function buildIcsContent(event: LiveSessionCalendarEvent, uid = 'live-ses
     `DTSTAMP:${stamp}`,
     `DTSTART:${dtStart}`,
     `DTEND:${dtEnd}`,
-    ...rrule,
     `SUMMARY:${summary}`,
     `DESCRIPTION:${description}`,
     `LOCATION:${location}`,
@@ -276,9 +251,6 @@ export function buildGoogleCalendarUrl(event: LiveSessionCalendarEvent): string 
     details: event.description,
     location: event.location,
   });
-  if (event.recurringWeekly) {
-    params.set('recur', 'RRULE:FREQ=WEEKLY;BYDAY=WE');
-  }
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
 
@@ -293,51 +265,60 @@ export function buildOutlookCalendarUrl(event: LiveSessionCalendarEvent): string
   return `https://outlook.live.com/calendar/0/deeplink/compose?${params.toString()}`;
 }
 
+/** Single calendar CTA — one anchor only (avoids Gmail/Outlook duplicating MSO + non-MSO branches). */
 export function buildAddToCalendarEmailHtml(input: {
-  /** Primary click target (Google Calendar works in all major clients). */
+  /** Google Calendar “template” URL — works in Gmail, Apple Mail, and most clients. */
   primaryUrl: string;
   icsDownloadUrl?: string;
-  googleUrl?: string;
   outlookUrl?: string;
 }): string {
-  const linkStyle = 'color:#005EB8;text-decoration:underline;font-size:13px;font-family:Arial,Helvetica,sans-serif;';
-  const extras: string[] = [];
-  if (input.icsDownloadUrl) {
-    extras.push(`<a href="${input.icsDownloadUrl}" target="_blank" rel="noopener noreferrer" style="${linkStyle}">Download .ics file</a>`);
-  }
-  if (input.outlookUrl) {
-    extras.push(`<a href="${input.outlookUrl}" target="_blank" rel="noopener noreferrer" style="${linkStyle}">Outlook</a>`);
-  }
-  const extrasRow = extras.length
-    ? `<p style="margin:10px 0 0;font-size:12px;color:#4b5563;font-family:Arial,Helvetica,sans-serif;line-height:1.45;">Also: ${extras.join(' · ')}. A calendar file is attached to this email.</p>`
-    : `<p style="margin:10px 0 0;font-size:12px;color:#4b5563;font-family:Arial,Helvetica,sans-serif;">A calendar file (.ics) is attached to this email.</p>`;
-
-  return `
-<table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin:16px 0 8px;">
+  const btnColor = '#1a73e8';
+  const href = input.primaryUrl.replace(/"/g, '&quot;');
+  const button = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0 10px;">
   <tr>
-    <td align="left" bgcolor="#005EB8" style="border-radius:8px;mso-padding-alt:14px 24px;">
-      <!--[if mso]>
-      <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${input.primaryUrl}" style="height:44px;v-text-anchor:middle;width:220px;" arcsize="12%" strokecolor="#005EB8" fillcolor="#005EB8">
-        <w:anchorlock/>
-        <center style="color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;">Add to Calendar</center>
-      </v:roundrect>
-      <![endif]-->
-      <!--[if !mso]><!-->
-      <a href="${input.primaryUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 24px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;color:#ffffff;text-decoration:none;border-radius:8px;background-color:#005EB8;border:1px solid #005EB8;">
+    <td align="left" style="border-radius:6px;background-color:${btnColor};">
+      <a href="${href}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:11px 22px;font-family:Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:500;line-height:20px;color:#ffffff;text-decoration:none;border-radius:6px;background-color:${btnColor};border:1px solid ${btnColor};mso-padding-alt:11px 22px;">
         Add to Calendar
       </a>
-      <!--<![endif]-->
     </td>
   </tr>
-</table>
-${extrasRow}`.trim();
+</table>`;
+
+  const linkStyle =
+    'color:#1a73e8;text-decoration:underline;font-size:12px;font-family:Roboto,Helvetica,Arial,sans-serif;';
+  const extras: string[] = [];
+  if (input.outlookUrl) {
+    const outlookHref = input.outlookUrl.replace(/"/g, '&quot;');
+    extras.push(
+      `<a href="${outlookHref}" target="_blank" rel="noopener noreferrer" style="${linkStyle}">Open in Outlook</a>`,
+    );
+  }
+  if (input.icsDownloadUrl) {
+    const icsHref = input.icsDownloadUrl.replace(/"/g, '&quot;');
+    extras.push(
+      `<a href="${icsHref}" target="_blank" rel="noopener noreferrer" style="${linkStyle}">Download calendar file</a>`,
+    );
+  }
+  const extrasRow = extras.length
+    ? `<p style="margin:0 0 4px;font-size:12px;color:#5f6368;font-family:Roboto,Helvetica,Arial,sans-serif;line-height:1.5;">${extras.join(' &nbsp;&middot;&nbsp; ')}</p>`
+    : '';
+
+  return `${button}${extrasRow}`.trim();
 }
 
-export function liveSessionCalendarIcsUrl(supabaseFunctionsBaseUrl: string, anonKey?: string): string {
+export function liveSessionCalendarIcsUrl(
+  supabaseFunctionsBaseUrl: string,
+  anonKey?: string,
+  sessionDate?: string | null,
+): string {
   const base = `${supabaseFunctionsBaseUrl.replace(/\/$/, '')}/live-session-calendar`;
+  const params = new URLSearchParams();
   const key = String(anonKey || '').trim();
-  if (!key) return base;
-  return `${base}?apikey=${encodeURIComponent(key)}`;
+  if (key) params.set('apikey', key);
+  const date = String(sessionDate || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) params.set('sessionDate', date);
+  const qs = params.toString();
+  return qs ? `${base}?${qs}` : base;
 }
 
 export function buildCalendarEmailAttachments(icsContent: string): Array<{

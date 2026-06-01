@@ -1494,6 +1494,10 @@ export async function bulkUploadPipelineResumes(
 }
 
 export async function deletePipelineCandidate(candidateId: string): Promise<void> {
+  const allowed = await canAccessPipelineCandidate(candidateId);
+  if (!allowed) {
+    throw new Error('You do not have permission to delete this upload.');
+  }
   const { data: resumes, error: rErr } = await supabase
     .from('pipeline_resumes')
     .select('storage_bucket,storage_path')
@@ -1512,8 +1516,14 @@ export async function deletePipelineCandidate(candidateId: string): Promise<void
       await supabase.storage.from(bucket).remove(paths);
     }
   }
-  const { error } = await supabase.from('pipeline_candidates').delete().eq('id', candidateId);
+  const { error, count } = await supabase
+    .from('pipeline_candidates')
+    .delete({ count: 'exact' })
+    .eq('id', candidateId);
   if (error) throw error;
+  if (count === 0) {
+    throw new Error('Delete was blocked or the upload was already removed.');
+  }
 }
 
 export async function bulkDeletePipelineCandidates(candidateIds: string[]): Promise<void> {

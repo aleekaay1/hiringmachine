@@ -13,6 +13,7 @@ import { sendEmail } from '../services/emailService';
 import { EMAIL_TEMPLATES, mergeTemplate, type CrmEmailTemplateId } from '../services/emailTemplates';
 import { appendEmailSignatureToHtml, getSiteOriginForEmail, CC_EMAIL_ALEX, SIGNATURE_LOGO_URL } from '../services/emailSignature';
 import { getAssessmentLookupUrlForClient } from '../services/hiringUrls';
+import { fetchNextUpcomingLiveSession } from '../services/liveSessionOccurrences';
 import {
   OPEN_ENDED_QUESTIONS,
   PERSONALITY_QUESTIONS,
@@ -890,7 +891,7 @@ const AdminDashboard: React.FC = () => {
     updateAdminData(prev => ({ ...prev, resumeReviewedAt: new Date().toISOString() }));
   };
 
-  const openEmailModal = (mode: CrmEmailTemplateId | 'compose') => {
+  const openEmailModal = async (mode: CrmEmailTemplateId | 'compose') => {
     setEmailModalMode(mode);
     setEmailError(null);
     setEmailPreviewTab('edit');
@@ -906,8 +907,11 @@ const AdminDashboard: React.FC = () => {
           mode === 'stage3_assessment_link' || mode === 'stage3_assessment_link_post_overview'
             ? { '{{assessmentLookupUrl}}': getAssessmentLookupUrlForClient() }
             : undefined;
+        const liveSessionOccurrence =
+          mode === 'stage2_post_checkin' ? await fetchNextUpcomingLiveSession() : null;
         const { subject, bodyHtml } = mergeTemplate(template.subject, template.bodyHtml, selectedCandidate, extras, {
           siteOrigin: origin,
+          liveSessionOccurrence,
         });
         setEmailSubject(subject);
         setEmailBody(bodyHtml);
@@ -998,6 +1002,7 @@ const AdminDashboard: React.FC = () => {
       bodyText,
       trigger,
       candidateId: selectedCandidate.id,
+      attachLiveSessionCalendar: emailModalMode === 'stage2_post_checkin',
     });
     setEmailSending(false);
     if ('ok' in result && result.ok) {

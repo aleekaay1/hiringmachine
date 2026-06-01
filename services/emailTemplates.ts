@@ -5,6 +5,7 @@ import {
   buildOutlookCalendarUrl,
   resolveLiveSessionCalendar,
   liveSessionCalendarIcsUrl,
+  type LiveSessionOccurrenceRecord,
 } from './calendarInvite';
 import { POST_CHECKIN_EMAIL_SUBJECT, POST_CHECKIN_EMAIL_BODY_HTML } from './postCheckinEmailTemplate';
 import {
@@ -224,7 +225,7 @@ export const POST_ASSESSMENT_SUBMIT_TEMPLATE: EmailTemplate = {
   `.trim(),
 };
 
-function postCheckinAddToCalendarHtmlForPreview(): string {
+function postCheckinAddToCalendarHtmlForPreview(occurrence?: LiveSessionOccurrenceRecord | null): string {
   const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() || '';
   const event = resolveLiveSessionCalendar(
     {
@@ -232,7 +233,11 @@ function postCheckinAddToCalendarHtmlForPreview(): string {
       PUBLIC_LIVE_SESSION_END_ISO: (import.meta.env.VITE_PUBLIC_LIVE_SESSION_END_ISO as string | undefined)?.trim(),
     },
     ZOOM_MEETING_URL,
+    occurrence ?? null,
   );
+  if (!event) {
+    return '<p style="font-size:12px;color:#6b7280;"><em>Session date and time will be filled from the next scheduled live session when the email is sent.</em></p>';
+  }
   if (!supabaseUrl) {
     return '<p style="font-size:12px;color:#6b7280;"><em>Add to Calendar uses the deployed live-session-calendar function.</em></p>';
   }
@@ -240,17 +245,20 @@ function postCheckinAddToCalendarHtmlForPreview(): string {
   const icsUrl = liveSessionCalendarIcsUrl(
     `${supabaseUrl}/functions/v1`,
     (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim(),
+    event.sessionDate,
   );
   return buildAddToCalendarEmailHtml({
     primaryUrl: googleUrl,
     icsDownloadUrl: icsUrl,
-    googleUrl,
     outlookUrl: buildOutlookCalendarUrl(event),
   });
 }
 
-function postCheckinSessionLabelsForPreview(): { date: string; time: string } {
-  const resolved = resolveLiveSessionCalendar({}, ZOOM_MEETING_URL);
+function postCheckinSessionLabelsForPreview(occurrence?: LiveSessionOccurrenceRecord | null): { date: string; time: string } {
+  const resolved = resolveLiveSessionCalendar({}, ZOOM_MEETING_URL, occurrence ?? null);
+  if (!resolved) {
+    return { date: POST_CHECKIN_DEFAULT_SESSION_DATE, time: POST_CHECKIN_DEFAULT_SESSION_TIME };
+  }
   return { date: resolved.displayDate, time: resolved.displayTime };
 }
 
@@ -259,10 +267,10 @@ export function mergeTemplate(
   bodyHtml: string,
   candidate: { firstName: string; lastName: string; email: string; phone: string },
   extras?: Record<string, string>,
-  options?: { siteOrigin?: string }
+  options?: { siteOrigin?: string; liveSessionOccurrence?: LiveSessionOccurrenceRecord | null }
 ): { subject: string; bodyHtml: string } {
   const candidateName = `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim();
-  const sessionLabels = postCheckinSessionLabelsForPreview();
+  const sessionLabels = postCheckinSessionLabelsForPreview(options?.liveSessionOccurrence);
   const map: Record<string, string> = {
     '{{firstName}}': candidate.firstName || '',
     '{{lastName}}': candidate.lastName || '',
@@ -276,7 +284,7 @@ export function mergeTemplate(
     '{{sessionDate}}': sessionLabels.date,
     '{{sessionTime}}': sessionLabels.time,
     '{{calendlyRescheduleUrl}}': LIVE_SESSION_RESCHEDULE_CALENDLY_URL,
-    '{{addToCalendarHtml}}': postCheckinAddToCalendarHtmlForPreview(),
+    '{{addToCalendarHtml}}': postCheckinAddToCalendarHtmlForPreview(options?.liveSessionOccurrence),
     ...(extras || {}),
   };
   const signature = buildEmailSignatureHtml(options?.siteOrigin);

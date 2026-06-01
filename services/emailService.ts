@@ -23,6 +23,10 @@ export interface SendEmailParams {
   inReplyTo?: string;
   /** Space-separated list of prior Message-IDs in the thread. */
   references?: string;
+  /** Attach .ics for the next (or selected) live session — resolved server-side. */
+  attachLiveSessionCalendar?: boolean;
+  /** YYYY-MM-DD session_date from live_session_occurrences (optional). */
+  liveSessionDate?: string;
 }
 
 /** Send email via Edge Function. Requires auth token. */
@@ -54,6 +58,8 @@ export async function sendEmail(
       candidateId: params.candidateId?.trim() || undefined,
       inReplyTo: params.inReplyTo?.trim() || undefined,
       references: params.references?.trim() || undefined,
+      attachLiveSessionCalendar: params.attachLiveSessionCalendar === true ? true : undefined,
+      liveSessionDate: params.liveSessionDate?.trim() || undefined,
       attachments:
         params.attachments?.map((a) => ({
           filename: a.filename,
