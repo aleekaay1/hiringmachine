@@ -1,7 +1,13 @@
+import { buildRecruiterScopeTokens, recruiterOwnsNameKey, type UserProfile } from './accessControl';
 import { readCallRecordMeta, type PipelineCallRecord } from './pipelineService';
+import { eventMsToTorontoYmd } from './webinarGeekDates';
+import { nameKeyFromRow } from './webinarGeekInviters';
+import { fmtHrScheduledDateKey } from './webinarGeekRecruiterAnalytics';
 
-type CandidateEmailMap = Map<string, string>;
+type AnyRow = Record<string, unknown>;
 type RecruiterDirectory = Map<string, { fullName: string | null; email: string | null }>;
+
+const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
 
 export type LeaderboardWindow = {
   fromIso: string;
@@ -11,14 +17,22 @@ export type LeaderboardWindow = {
 
 export type LeaderboardPeriod = 'last7' | 'last30' | 'thisMonth';
 
+export type LeaderboardRecruiterSeed = {
+  recruiterKey: string;
+  recruiterUserId: string;
+  displayName: string;
+};
+
 export type RecruiterLeaderboardRow = {
   recruiterKey: string;
   recruiterUserId: string | null;
   displayName: string;
   calls: number;
+  /** Webinar bookings (WebinarGeek) + live-session bookings (call dispositions). */
   booked: number;
   webinarBooked: number;
   webinarShowed: number;
+  liveSessionBooked: number;
   showRatio: number;
   showRatioSmoothed: number;
   bookedNorm: number;
@@ -33,12 +47,6 @@ export type RecruiterLeaderboardRow = {
   badges: string[];
 };
 
-export type LeaderboardRecruiterSeed = {
-  recruiterKey: string;
-  recruiterUserId: string;
-  displayName: string;
-};
-
 type Aggregate = {
   recruiterKey: string;
   recruiterUserId: string | null;
@@ -47,6 +55,7 @@ type Aggregate = {
   booked: number;
   webinarBooked: number;
   webinarShowed: number;
+  liveSessionBooked: number;
 };
 
 function startOfDayUtc(value: Date): Date {
@@ -128,17 +137,53 @@ export function buildLeaderboardWindows(period: LeaderboardPeriod, now = new Dat
   };
 }
 
-function showRatioFromCounts(webinarShowed: number, webinarBooked: number, booked: number, calls: number): number {
-  if (webinarBooked > 0) return webinarShowed / webinarBooked;
-  if (calls <= 0) return 0;
-  return booked / calls;
+function windowTorontoYmdBounds(fromIso: string, toIso: string): { sinceYmd: string; untilYmd: string } {
+  return {
+    sinceYmd: eventMsToTorontoYmd(new Date(fromIso).getTime()),
+    untilYmd: eventMsToTorontoYmd(new Date(toIso).getTime()),
+  };
 }
 
-function showRatioSmoothed(webinarShowed: number, webinarBooked: number, booked: number, calls: number): number {
-  if (webinarBooked > 0) {
-    return (webinarShowed + 2) / (webinarBooked + 4);
+function filterWebinarRowsInWindow(rows: AnyRow[], fromIso: string, toIso: string): AnyRow[] {
+  const { sinceYmd, untilYmd } = windowTorontoYmdBounds(fromIso, toIso);
+  return rows.filter((row) => {
+    const key = fmtHrScheduledDateKey(row);
+    if (key === 'unknown') return false;
+    return key >= sinceYmd && key <= untilYmd;
+  });
+}
+
+function watchSecondsFromRow(row: AnyRow): number {
+  const sec = Number(row.watch_duration || 0);
+  return Number.isFinite(sec) && sec > 0 ? sec : 0;
+}
+
+function webinarShowedFromRow(row: AnyRow): boolean {
+  if (row.watched === true) return true;
+  return watchSecondsFromRow(row) >= HALF_WATCH_SECONDS;
+}
+
+function displayNameFromEmail(email: string): string | null {
+  const local = String(email || '').trim().toLowerCase().split('@')[0] || '';
+  if (!local) return null;
+  const parts = local.split(/[._-]+/g).filter(Boolean);
+  if (!parts.length) return null;
+  return parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+}
+
+function displayNameForRecord(record: PipelineCallRecord, directory: RecruiterDirectory): string {
+  const userId = String(record.recruiter_user_id || '').trim();
+  if (userId && directory.has(userId)) {
+    const row = directory.get(userId)!;
+    const full = String(row.fullName || '').trim();
+    if (full) return full;
+    const fromEmail = row.email ? displayNameFromEmail(row.email) : null;
+    return fromEmail || 'Unknown Recruiter';
   }
-  return (booked + 1) / (calls + 5);
+  const label = String(record.recruiter_label || '').trim();
+  if (label && !label.includes('@')) return label;
+  const fallbackEmail = label.includes('@') ? label : '';
+  return (fallbackEmail ? displayNameFromEmail(fallbackEmail) : null) || 'Unknown Recruiter';
 }
 
 function recruiterKeyForRecord(record: PipelineCallRecord): { recruiterKey: string; recruiterUserId: string | null } {
@@ -148,93 +193,183 @@ function recruiterKeyForRecord(record: PipelineCallRecord): { recruiterKey: stri
   return { recruiterKey: `label:${label.toLowerCase()}`, recruiterUserId: null };
 }
 
-function displayNameForRecord(
-  record: PipelineCallRecord,
+function ownerForWebinarRow(
+  row: AnyRow,
+  seeds: LeaderboardRecruiterSeed[],
   directory: RecruiterDirectory,
-): string {
-  const nameFromEmail = (email: string): string | null => {
-    const local = String(email || '').trim().toLowerCase().split('@')[0] || '';
-    if (!local) return null;
-    const parts = local.split(/[._-]+/g).filter(Boolean);
-    if (!parts.length) return null;
-    return parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
-  };
-  const userId = String(record.recruiter_user_id || '').trim();
-  if (userId && directory.has(userId)) {
-    const row = directory.get(userId)!;
-    const full = String(row.fullName || '').trim();
-    if (full) return full;
-    const fromEmail = row.email ? nameFromEmail(row.email) : null;
-    return fromEmail || 'Unknown Recruiter';
+): { recruiterKey: string; recruiterUserId: string | null; displayName: string } | null {
+  const key = nameKeyFromRow(row);
+  if (!key) return null;
+
+  for (const seed of seeds) {
+    const profile = directory.get(seed.recruiterUserId);
+    const tokens = buildRecruiterScopeTokens(profile?.email ?? null, profile?.fullName ?? seed.displayName);
+    if (recruiterOwnsNameKey(key, tokens)) {
+      return {
+        recruiterKey: seed.recruiterKey,
+        recruiterUserId: seed.recruiterUserId,
+        displayName: seed.displayName,
+      };
+    }
   }
-  const label = String(record.recruiter_label || '').trim();
-  if (label && !label.includes('@')) return label;
-  const fallbackEmail = label.includes('@') ? label : '';
-  return (fallbackEmail ? nameFromEmail(fallbackEmail) : null) || 'Unknown Recruiter';
+
+  const label = String(row.custom_field ?? '').trim();
+  const displayName =
+    label
+      .replace(/^(cooper|rms)[_\-\s]+/i, '')
+      .replace(/\.(pdf|docx?|rtf|txt|png|jpe?g|webp)$/i, '')
+      .replace(/_/g, ' ')
+      .trim() || key;
+
+  return {
+    recruiterKey: `name:${key}`,
+    recruiterUserId: null,
+    displayName: displayName
+      .split(/\s+/)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(' '),
+  };
 }
 
-function aggregateRecords(
-  records: PipelineCallRecord[],
-  candidateEmailMap: CandidateEmailMap,
-  classifyWebinarShow: (bookedSubtype: string | null, candidateEmail: string | null) => boolean,
+function emptyAggregate(
+  recruiterKey: string,
+  recruiterUserId: string | null,
+  displayName: string,
+): Aggregate {
+  return {
+    recruiterKey,
+    recruiterUserId,
+    displayName,
+    calls: 0,
+    booked: 0,
+    webinarBooked: 0,
+    webinarShowed: 0,
+    liveSessionBooked: 0,
+  };
+}
+
+function aggregateWebinarRows(
+  rows: AnyRow[],
+  seeds: LeaderboardRecruiterSeed[],
   directory: RecruiterDirectory,
-  recruiterSeeds?: LeaderboardRecruiterSeed[],
-): Aggregate[] {
+): Map<string, Aggregate> {
   const map = new Map<string, Aggregate>();
+
+  for (const seed of seeds) {
+    map.set(seed.recruiterKey, emptyAggregate(seed.recruiterKey, seed.recruiterUserId, seed.displayName));
+  }
+
+  for (const row of rows) {
+    const owner = ownerForWebinarRow(row, seeds, directory);
+    if (!owner) continue;
+    if (!map.has(owner.recruiterKey)) {
+      map.set(owner.recruiterKey, emptyAggregate(owner.recruiterKey, owner.recruiterUserId, owner.displayName));
+    }
+    const agg = map.get(owner.recruiterKey)!;
+    agg.webinarBooked += 1;
+    if (webinarShowedFromRow(row)) agg.webinarShowed += 1;
+    agg.booked = agg.webinarBooked + agg.liveSessionBooked;
+  }
+
+  return map;
+}
+
+function aggregateCallRecords(
+  records: PipelineCallRecord[],
+  directory: RecruiterDirectory,
+  seeds: LeaderboardRecruiterSeed[],
+): Map<string, Aggregate> {
+  const map = new Map<string, Aggregate>();
+
   for (const record of records) {
     const { recruiterKey, recruiterUserId } = recruiterKeyForRecord(record);
     if (!map.has(recruiterKey)) {
-      map.set(recruiterKey, {
+      const seed = seeds.find((s) => s.recruiterKey === recruiterKey);
+      map.set(
         recruiterKey,
-        recruiterUserId,
-        displayName: displayNameForRecord(record, directory),
-        calls: 0,
-        booked: 0,
-        webinarBooked: 0,
-        webinarShowed: 0,
-      });
+        emptyAggregate(
+          recruiterKey,
+          recruiterUserId,
+          seed?.displayName || displayNameForRecord(record, directory),
+        ),
+      );
     }
-    const row = map.get(recruiterKey)!;
-    row.calls += 1;
+    const agg = map.get(recruiterKey)!;
+    agg.calls += 1;
+
     const disposition = String(record.disposition || '').trim().toLowerCase();
     if (disposition !== 'booked') continue;
-    row.booked += 1;
+
     const meta = readCallRecordMeta(record);
     const bookedSubtype = String(record.booked_subtype || meta.bookedSubtype || '').trim().toLowerCase();
-    if (bookedSubtype !== 'webinar') continue;
-    row.webinarBooked += 1;
-    const candidateEmail = candidateEmailMap.get(record.candidate_id) || null;
-    if (classifyWebinarShow(bookedSubtype, candidateEmail)) {
-      row.webinarShowed += 1;
+    if (bookedSubtype === 'live session') {
+      agg.liveSessionBooked += 1;
+      agg.booked = agg.webinarBooked + agg.liveSessionBooked;
     }
   }
-  for (const seed of recruiterSeeds || []) {
-    if (map.has(seed.recruiterKey)) continue;
-    map.set(seed.recruiterKey, {
-      recruiterKey: seed.recruiterKey,
-      recruiterUserId: seed.recruiterUserId,
-      displayName: seed.displayName,
-      calls: 0,
-      booked: 0,
-      webinarBooked: 0,
-      webinarShowed: 0,
-    });
+
+  for (const seed of seeds) {
+    if (!map.has(seed.recruiterKey)) {
+      map.set(seed.recruiterKey, emptyAggregate(seed.recruiterKey, seed.recruiterUserId, seed.displayName));
+    }
   }
-  return [...map.values()];
+
+  return map;
+}
+
+function mergeAggregates(webinarMap: Map<string, Aggregate>, callMap: Map<string, Aggregate>): Aggregate[] {
+  const keys = new Set([...webinarMap.keys(), ...callMap.keys()]);
+  const merged: Aggregate[] = [];
+
+  for (const key of keys) {
+    const webinar = webinarMap.get(key);
+    const calls = callMap.get(key);
+    if (webinar && calls) {
+      merged.push({
+        ...webinar,
+        calls: calls.calls,
+        liveSessionBooked: calls.liveSessionBooked,
+        booked: webinar.webinarBooked + calls.liveSessionBooked,
+      });
+      continue;
+    }
+    if (webinar) {
+      merged.push({ ...webinar, booked: webinar.webinarBooked + webinar.liveSessionBooked });
+      continue;
+    }
+    if (calls) {
+      merged.push({ ...calls, booked: calls.webinarBooked + calls.liveSessionBooked });
+    }
+  }
+
+  return merged;
+}
+
+function showRatioFromCounts(webinarShowed: number, webinarBooked: number): number {
+  if (webinarBooked <= 0) return 0;
+  return webinarShowed / webinarBooked;
+}
+
+function showRatioSmoothed(webinarShowed: number, webinarBooked: number): number {
+  if (webinarBooked <= 0) return 0;
+  return (webinarShowed + 2) / (webinarBooked + 4);
 }
 
 function toRows(aggregates: Aggregate[]): RecruiterLeaderboardRow[] {
   if (aggregates.length === 0) return [];
-  const maxBooked = Math.max(1, ...aggregates.map((a) => a.booked));
+
+  const maxWebinarBooked = Math.max(1, ...aggregates.map((a) => a.webinarBooked));
   const maxCalls = Math.max(1, ...aggregates.map((a) => a.calls));
+
   const rows = aggregates.map((agg) => {
-    const showRatio = showRatioFromCounts(agg.webinarShowed, agg.webinarBooked, agg.booked, agg.calls);
-    const smoothed = showRatioSmoothed(agg.webinarShowed, agg.webinarBooked, agg.booked, agg.calls);
-    const lowSampleFactor = Math.min(1, agg.calls / 15);
+    const showRatio = showRatioFromCounts(agg.webinarShowed, agg.webinarBooked);
+    const smoothed = showRatioSmoothed(agg.webinarShowed, agg.webinarBooked);
+    const lowSampleFactor = Math.min(1, agg.webinarBooked / 12);
     const qualityComponent = smoothed * (0.55 + 0.45 * lowSampleFactor);
-    const bookedNorm = agg.booked / maxBooked;
+    const bookedNorm = agg.webinarBooked / maxWebinarBooked;
     const callsNorm = agg.calls / maxCalls;
-    const score = 100 * ((0.5 * qualityComponent) + (0.3 * bookedNorm) + (0.2 * callsNorm));
+    const score = 100 * (0.55 * qualityComponent + 0.3 * bookedNorm + 0.15 * callsNorm);
+
     return {
       recruiterKey: agg.recruiterKey,
       recruiterUserId: agg.recruiterUserId,
@@ -243,6 +378,7 @@ function toRows(aggregates: Aggregate[]): RecruiterLeaderboardRow[] {
       booked: agg.booked,
       webinarBooked: agg.webinarBooked,
       webinarShowed: agg.webinarShowed,
+      liveSessionBooked: agg.liveSessionBooked,
       showRatio,
       showRatioSmoothed: smoothed,
       bookedNorm,
@@ -260,7 +396,8 @@ function toRows(aggregates: Aggregate[]): RecruiterLeaderboardRow[] {
 
   rows.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
-    if (b.booked !== a.booked) return b.booked - a.booked;
+    if (b.webinarBooked !== a.webinarBooked) return b.webinarBooked - a.webinarBooked;
+    if (b.webinarShowed !== a.webinarShowed) return b.webinarShowed - a.webinarShowed;
     if (b.calls !== a.calls) return b.calls - a.calls;
     return a.displayName.localeCompare(b.displayName);
   });
@@ -268,6 +405,7 @@ function toRows(aggregates: Aggregate[]): RecruiterLeaderboardRow[] {
   rows.forEach((row, index) => {
     row.rank = index + 1;
   });
+
   return rows;
 }
 
@@ -275,7 +413,7 @@ function labelsForRow(row: RecruiterLeaderboardRow): string[] {
   const badges: string[] = [];
   if (row.rank === 1) badges.push('Top Performer');
   if (row.rankDelta >= 2) badges.push('Fast Climber');
-  if (row.showRatioSmoothed >= 0.65 && row.calls >= 15) badges.push('Consistent Closer');
+  if (row.showRatioSmoothed >= 0.65 && row.webinarBooked >= 8) badges.push('Consistent Closer');
   return badges;
 }
 
@@ -301,33 +439,7 @@ function movementLabel(
   return { passedLabel: null, overtakenByLabel: null };
 }
 
-export function buildCompositeLeaderboard(input: {
-  currentRecords: PipelineCallRecord[];
-  previousRecords: PipelineCallRecord[];
-  candidateEmailMap: CandidateEmailMap;
-  recruiterDirectory: RecruiterDirectory;
-  recruiterSeeds?: LeaderboardRecruiterSeed[];
-  classifyWebinarShow: (bookedSubtype: string | null, candidateEmail: string | null) => boolean;
-}): RecruiterLeaderboardRow[] {
-  const currentRows = toRows(
-    aggregateRecords(
-      input.currentRecords,
-      input.candidateEmailMap,
-      input.classifyWebinarShow,
-      input.recruiterDirectory,
-      input.recruiterSeeds,
-    ),
-  );
-  const previousRows = toRows(
-    aggregateRecords(
-      input.previousRecords,
-      input.candidateEmailMap,
-      input.classifyWebinarShow,
-      input.recruiterDirectory,
-      input.recruiterSeeds,
-    ),
-  );
-
+function applyMovement(currentRows: RecruiterLeaderboardRow[], previousRows: RecruiterLeaderboardRow[]): RecruiterLeaderboardRow[] {
   const previousRankByKey = new Map<string, number>();
   previousRows.forEach((row) => previousRankByKey.set(row.recruiterKey, row.rank));
 
@@ -335,6 +447,7 @@ export function buildCompositeLeaderboard(input: {
     row.previousRank = previousRankByKey.get(row.recruiterKey) ?? null;
     row.rankDelta = row.previousRank ? row.previousRank - row.rank : 0;
   });
+
   currentRows.forEach((row) => {
     const movement = movementLabel(row, previousRows, currentRows);
     row.passedLabel = movement.passedLabel;
@@ -346,3 +459,49 @@ export function buildCompositeLeaderboard(input: {
   return currentRows;
 }
 
+export function buildCompositeLeaderboard(input: {
+  webinarRows: AnyRow[];
+  currentWindow: LeaderboardWindow;
+  previousWindow: LeaderboardWindow;
+  currentRecords: PipelineCallRecord[];
+  previousRecords: PipelineCallRecord[];
+  recruiterDirectory: RecruiterDirectory;
+  recruiterSeeds?: LeaderboardRecruiterSeed[];
+  /** When set, only these user ids are included (recruiter self-view). */
+  restrictToUserIds?: string[] | null;
+}): RecruiterLeaderboardRow[] {
+  const seeds = input.recruiterSeeds || [];
+  const currentWebinar = filterWebinarRowsInWindow(input.webinarRows, input.currentWindow.fromIso, input.currentWindow.toIso);
+  const previousWebinar = filterWebinarRowsInWindow(input.webinarRows, input.previousWindow.fromIso, input.previousWindow.toIso);
+
+  const currentMerged = mergeAggregates(
+    aggregateWebinarRows(currentWebinar, seeds, input.recruiterDirectory),
+    aggregateCallRecords(input.currentRecords, input.recruiterDirectory, seeds),
+  );
+  const previousMerged = mergeAggregates(
+    aggregateWebinarRows(previousWebinar, seeds, input.recruiterDirectory),
+    aggregateCallRecords(input.previousRecords, input.recruiterDirectory, seeds),
+  );
+
+  let currentRows = toRows(currentMerged);
+  let previousRows = toRows(previousMerged);
+
+  const restrict = input.restrictToUserIds?.filter(Boolean);
+  if (restrict?.length) {
+    const allowed = new Set(restrict);
+    currentRows = currentRows.filter((row) => row.recruiterUserId && allowed.has(row.recruiterUserId));
+    previousRows = previousRows.filter((row) => row.recruiterUserId && allowed.has(row.recruiterUserId));
+  }
+
+  return applyMovement(currentRows, previousRows);
+}
+
+export function seedsFromProfiles(profiles: UserProfile[]): LeaderboardRecruiterSeed[] {
+  return profiles
+    .filter((item) => item.role === 'recruiter' || item.role === 'webinar' || item.role === 'leadership')
+    .map((item) => ({
+      recruiterKey: `uid:${item.user_id}`,
+      recruiterUserId: item.user_id,
+      displayName: String(item.full_name || '').trim() || String(item.email || '').split('@')[0] || 'Unknown',
+    }));
+}

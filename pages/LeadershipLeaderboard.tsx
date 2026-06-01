@@ -16,11 +16,11 @@ import {
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import { getCurrentUserProfile, listAllUserProfiles, type AppRole } from '../services/accessControl';
-import { classifyBookedOutcome, loadScopedWebinarRowsForViewer } from '../services/pipelineBookedOutcomes';
+import { loadScopedWebinarRowsForViewer } from '../services/pipelineBookedOutcomes';
 import {
   buildCompositeLeaderboard,
   buildLeaderboardWindows,
-  type LeaderboardRecruiterSeed,
+  seedsFromProfiles,
   type LeaderboardPeriod,
   type RecruiterLeaderboardRow,
 } from '../services/pipelineLeaderboard';
@@ -120,82 +120,45 @@ const LeadershipLeaderboard: React.FC = () => {
           limit: 6000,
         }),
       ]);
-      const candidateIds = [...new Set([...currentRecords, ...previousRecords].map((r) => r.candidate_id).filter(Boolean))];
-
-      const [scopedWebinarRows, candidateRows, profiles] = await Promise.all([
+      const [scopedWebinarRows, profiles] = await Promise.all([
         loadScopedWebinarRowsForViewer({
           role: 'admin',
           viewerEmail: null,
           viewerFullName: null,
         }),
-        (async () => {
-          if (!candidateIds.length) return [];
-          const { data, error: candidateError } = await supabase
-            .from('pipeline_candidates')
-            .select('id,email')
-            .in('id', candidateIds)
-            .limit(7000);
-          if (candidateError) throw candidateError;
-          return (data || []) as Array<{ id: string; email: string | null }>;
-        })(),
         listAllUserProfiles().catch(() => []),
       ]);
 
-      const rowsByEmail = new Map<string, Array<Record<string, unknown>>>();
-      for (const row of scopedWebinarRows as Array<Record<string, unknown>>) {
-        const email = String(row.email || '').trim().toLowerCase();
-        if (!email) continue;
-        if (!rowsByEmail.has(email)) rowsByEmail.set(email, []);
-        rowsByEmail.get(email)!.push(row);
-      }
-      const candidateEmailMap = new Map(candidateRows.map((row) => [row.id, String(row.email || '').trim().toLowerCase()]));
-      const recruiterDirectory = new Map(
+      const recruiterDirectory = new Map<string, { fullName: string | null; email: string | null }>(
         profiles.map((item) => [item.user_id, { fullName: item.full_name, email: item.email ?? null }]),
       );
-      const recruiterSeeds: LeaderboardRecruiterSeed[] = profiles
-        .filter((item) => item.role === 'recruiter')
-        .map((item) => ({
-          recruiterKey: `uid:${item.user_id}`,
-          recruiterUserId: item.user_id,
-          displayName: String(item.full_name || '').trim() || 'Unknown Recruiter',
-        }));
+      const recruiterSeeds = seedsFromProfiles(profiles);
 
       const computed = buildCompositeLeaderboard({
+        webinarRows: scopedWebinarRows as Array<Record<string, unknown>>,
+        currentWindow: windows.current,
+        previousWindow: windows.previous,
         currentRecords,
         previousRecords,
-        candidateEmailMap,
         recruiterDirectory,
         recruiterSeeds,
-        classifyWebinarShow: (bookedSubtype, candidateEmail) => {
-          if (bookedSubtype !== 'webinar') return false;
-          if (!candidateEmail) return false;
-          const result = classifyBookedOutcome({
-            bookedSubtype,
-            candidateEmail,
-            rowsByEmail,
-          });
-          return result.watchedSignal;
-        },
       });
       setRows(computed);
-      const previousComputed = buildCompositeLeaderboard({
-        currentRecords: previousRecords,
-        previousRecords: [],
-        candidateEmailMap,
-        recruiterDirectory,
-        recruiterSeeds,
-        classifyWebinarShow: (bookedSubtype, candidateEmail) => {
-          if (bookedSubtype !== 'webinar') return false;
-          if (!candidateEmail) return false;
-          const result = classifyBookedOutcome({
-            bookedSubtype,
-            candidateEmail,
-            rowsByEmail,
-          });
-          return result.watchedSignal;
-        },
-      });
-      setPreviousRows(previousComputed);
+      setPreviousRows(
+        buildCompositeLeaderboard({
+          webinarRows: scopedWebinarRows as Array<Record<string, unknown>>,
+          currentWindow: windows.previous,
+          previousWindow: {
+            fromIso: windows.previous.fromIso,
+            toIso: windows.previous.fromIso,
+            label: windows.previous.label,
+          },
+          currentRecords: previousRecords,
+          previousRecords: [],
+          recruiterDirectory,
+          recruiterSeeds,
+        }),
+      );
       setLastUpdated(new Date().toISOString());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -229,7 +192,7 @@ const LeadershipLeaderboard: React.FC = () => {
   const topPerformer = rows[0] || null;
   const previousTopPerformer = previousRows[0] || null;
   const formulaCopy =
-    'Score = 100 x (0.50 x quality + 0.30 x bookedNorm + 0.20 x callsNorm), with quality = smoothed show ratio x (0.55 + 0.45 x lowSampleFactor).';
+    'Score = 100 x (0.55 x quality + 0.30 x webinarBookedNorm + 0.15 x callsNorm), with quality = smoothed WebinarGeek show ratio x (0.55 + 0.45 x lowSampleFactor).';
 
   return (
     <PipelineAuthShell
@@ -255,7 +218,7 @@ const LeadershipLeaderboard: React.FC = () => {
                   Calls Performance Leaderboard
                 </h1>
                 <p className="mt-1 max-w-3xl text-xs text-[#4f6886]">
-                  Composite ranking balances conversion quality, booked outcomes, and activity volume. Low sample sizes are soft-normalized before ranking.
+                  Rankings use WebinarGeek bookings and show rates as the primary signal (same cache as the WebinarGeek page). Live-session bookings come from call dispositions; dial volume is a bonus factor.
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -310,7 +273,7 @@ const LeadershipLeaderboard: React.FC = () => {
                       {topPerformer.displayName}
                     </p>
                     <p className="text-xs text-[#6d5a39]">
-                      Score {topPerformer.score.toFixed(2)} · Ratio {pct(topPerformer.showRatio)}% · Booked {topPerformer.booked} · Calls {topPerformer.calls}
+                      Score {topPerformer.score.toFixed(2)} · WG show {pct(topPerformer.showRatio)}% · WG booked {topPerformer.webinarBooked} · Shows {topPerformer.webinarShowed} · Calls {topPerformer.calls}
                     </p>
                   </div>
                   <div className="inline-flex items-center gap-2 rounded-full border border-[#f0ce8f] bg-[#ffecc5] px-3 py-1.5 text-xs font-semibold text-[#7e5400]">
@@ -331,7 +294,7 @@ const LeadershipLeaderboard: React.FC = () => {
                     {previousTopPerformer.displayName}
                   </p>
                   <p className="text-xs text-[#4f6886]">
-                    Score {previousTopPerformer.score.toFixed(2)} · Ratio {pct(previousTopPerformer.showRatio)}% · Booked {previousTopPerformer.booked} · Calls {previousTopPerformer.calls}
+                    Score {previousTopPerformer.score.toFixed(2)} · WG show {pct(previousTopPerformer.showRatio)}% · WG booked {previousTopPerformer.webinarBooked} · Shows {previousTopPerformer.webinarShowed}
                   </p>
                 </div>
               ) : (
@@ -359,7 +322,7 @@ const LeadershipLeaderboard: React.FC = () => {
                     Rank #{viewerRow.rank} · {viewerRow.displayName}
                   </h2>
                   <p className="mt-1 text-xs text-[#4f6886]">
-                    Score {viewerRow.score.toFixed(2)} · Ratio {pct(viewerRow.showRatio)}% · Booked {viewerRow.booked} · Calls {viewerRow.calls}
+                    Score {viewerRow.score.toFixed(2)} · WG show {pct(viewerRow.showRatio)}% · WG booked {viewerRow.webinarBooked} · Shows {viewerRow.webinarShowed} · Calls {viewerRow.calls}
                   </p>
                 </div>
                 <div className="flex flex-col items-end gap-2">
@@ -393,7 +356,7 @@ const LeadershipLeaderboard: React.FC = () => {
                   {shownRows.map((row, index) => {
                     const isViewer = viewerRow?.recruiterKey === row.recruiterKey;
                     const callProgress = clamp((row.calls / GOALS.calls) * 100);
-                    const bookedProgress = clamp((row.booked / GOALS.booked) * 100);
+                    const bookedProgress = clamp((row.webinarBooked / GOALS.booked) * 100);
                     const showRateProgress = clamp((row.showRatio / GOALS.showRate) * 100);
                     return (
                       <motion.article
@@ -422,7 +385,8 @@ const LeadershipLeaderboard: React.FC = () => {
                                 {row.displayName}
                               </p>
                               <p className="text-[11px] text-[#5c7594]">
-                                Ratio {pct(row.showRatio)}% · Booked {row.booked} · Calls {row.calls} · Score {row.score.toFixed(2)}
+                                WG show {pct(row.showRatio)}% · WG booked {row.webinarBooked} · Shows {row.webinarShowed}
+                                {row.liveSessionBooked > 0 ? ` · Live ${row.liveSessionBooked}` : ''} · Calls {row.calls} · Score {row.score.toFixed(2)}
                               </p>
                               <div className="mt-1 flex flex-wrap gap-1">
                                 {isViewer && (
@@ -451,8 +415,8 @@ const LeadershipLeaderboard: React.FC = () => {
                             </div>
                           </div>
                           <div className="rounded-xl border border-[#dfeaf8] bg-[#f9fcff] px-2.5 py-2">
-                            <p className="text-[10px] uppercase tracking-wide text-[#6d86a3]">Booked Goal</p>
-                            <p className="text-[11px] text-[#35567a]">{row.booked}/{GOALS.booked}</p>
+                            <p className="text-[10px] uppercase tracking-wide text-[#6d86a3]">Webinar booked</p>
+                            <p className="text-[11px] text-[#35567a]">{row.webinarBooked}/{GOALS.booked}</p>
                             <div className="mt-1 h-1.5 rounded-full bg-[#dfeaf8]">
                               <div className="h-full rounded-full bg-[#ad8cff]" style={{ width: `${bookedProgress}%` }} />
                             </div>
@@ -484,7 +448,7 @@ const LeadershipLeaderboard: React.FC = () => {
             </div>
             <div className="rounded-2xl border border-[#d9e5f6] bg-white/80 p-3">
               <p className="inline-flex items-center gap-1 text-xs font-semibold text-[#2c8a62]"><Medal size={14} /> Consistent Closer</p>
-              <p className="mt-1 text-[11px] text-[#5c7594]">Smoothed show ratio ≥ 65% with minimum volume.</p>
+              <p className="mt-1 text-[11px] text-[#5c7594]">Smoothed WebinarGeek show ratio ≥ 65% with at least 8 bookings.</p>
             </div>
           </div>
 
