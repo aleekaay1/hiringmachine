@@ -46,6 +46,7 @@ import {
 import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { hasResumeOrLinkedInMaterial } from '../services/linkedinUrl';
 import { listSourceCandidateIdsInPipeline, sendCandidatesToPipelineFromAdmin } from '../services/pipelineService';
+import { syncRecruiterCoinsAfterCandidateHired } from '../services/recruiterCoinService';
 import { signInWithGoogle } from '../services/googleAuth';
 
 const SUGGESTED_TAGS = ['Strong fit', 'Follow up', 'Licensing needed', 'High potential', 'Second interview', 'Offer extended'];
@@ -884,12 +885,17 @@ const AdminDashboard: React.FC = () => {
     updateAdminData(prev => ({ ...prev, pipelineStage: stage }));
   };
 
-  const handleFinalDecisionChange = (decision: 'Hired' | 'Not Hired') => {
-    updateAdminData(prev => ({
+  const handleFinalDecisionChange = async (decision: 'Hired' | 'Not Hired') => {
+    if (!selectedCandidate) return;
+    const candidateId = selectedCandidate.id;
+    await updateAdminData(prev => ({
       ...prev,
       pipelineStage: 'Final decision',
       finalDecision: decision,
     }));
+    if (decision === 'Hired') {
+      void syncRecruiterCoinsAfterCandidateHired(candidateId);
+    }
   };
 
   const handleRatingChange = (rating: number) => {

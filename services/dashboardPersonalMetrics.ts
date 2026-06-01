@@ -37,15 +37,72 @@ export type RecruiterPersonalMetrics = {
   settings: PipelineUserCallSettings | null;
 };
 
+export type AdminPerformerBar = {
+  name: string;
+  booked: number;
+  showed: number;
+  calls: number;
+  score: number;
+};
+
 export type LeadershipTeamMetrics = {
   windowLabel: string;
   teamSize: number;
   totalWebinarBooked: number;
   totalWebinarShowed: number;
+  totalLiveBooked: number;
+  totalLiveShowed: number;
   totalCalls: number;
+  /** Combined webinar + live bookings */
+  totalBooked: number;
+  /** 0–100, combined show rate */
+  showRatePct: number;
   topPerformers: RecruiterLeaderboardRow[];
+  performerBars: AdminPerformerBar[];
   refreshedAt: string | null;
 };
+
+function summarizeLeaderboardRows(rows: RecruiterLeaderboardRow[]): Omit<
+  LeadershipTeamMetrics,
+  'windowLabel' | 'topPerformers' | 'performerBars' | 'refreshedAt'
+> {
+  const totalWebinarBooked = rows.reduce((s, r) => s + r.webinarBooked, 0);
+  const totalWebinarShowed = rows.reduce((s, r) => s + r.webinarShowed, 0);
+  const totalLiveBooked = rows.reduce((s, r) => s + (r.liveSessionBooked ?? 0), 0);
+  const totalLiveShowed = rows.reduce((s, r) => s + (r.liveSessionShowed ?? 0), 0);
+  const totalBooked = totalWebinarBooked + totalLiveBooked;
+  const totalShowed = totalWebinarShowed + totalLiveShowed;
+  const showRatePct = totalBooked > 0 ? Math.round((100 * totalShowed) / totalBooked) : 0;
+
+  return {
+    teamSize: rows.length,
+    totalWebinarBooked,
+    totalWebinarShowed,
+    totalLiveBooked,
+    totalLiveShowed,
+    totalCalls: rows.reduce((s, r) => s + r.calls, 0),
+    totalBooked,
+    showRatePct,
+  };
+}
+
+function performerBarsFromRows(rows: RecruiterLeaderboardRow[], limit = 6): AdminPerformerBar[] {
+  return [...rows]
+    .sort((a, b) => {
+      const bookedA = a.webinarBooked + (a.liveSessionBooked ?? 0);
+      const bookedB = b.webinarBooked + (b.liveSessionBooked ?? 0);
+      if (bookedB !== bookedA) return bookedB - bookedA;
+      return b.score - a.score;
+    })
+    .slice(0, limit)
+    .map((r) => ({
+      name: r.displayName,
+      booked: r.webinarBooked + (r.liveSessionBooked ?? 0),
+      showed: r.webinarShowed + (r.liveSessionShowed ?? 0),
+      calls: r.calls,
+      score: r.score,
+    }));
+}
 
 export async function loadRecruiterPersonalMetrics(profile: UserProfile): Promise<RecruiterPersonalMetrics> {
   const windows = buildLeaderboardWindows('last7');
@@ -162,13 +219,12 @@ export async function loadLeadershipTeamMetrics(): Promise<LeadershipTeamMetrics
   const rows = snapshot.data?.rows ?? [];
 
   if (rows.length > 0) {
+    const summary = summarizeLeaderboardRows(rows);
     return {
       windowLabel: snapshot.data?.windowLabel || windows.current.label,
-      teamSize: rows.length,
-      totalWebinarBooked: rows.reduce((s, r) => s + r.webinarBooked, 0),
-      totalWebinarShowed: rows.reduce((s, r) => s + r.webinarShowed, 0),
-      totalCalls: rows.reduce((s, r) => s + r.calls, 0),
+      ...summary,
       topPerformers: rows.slice(0, 8),
+      performerBars: performerBarsFromRows(rows),
       refreshedAt: snapshot.data?.fetchedAt ?? null,
     };
   }
@@ -180,8 +236,13 @@ export async function loadLeadershipTeamMetrics(): Promise<LeadershipTeamMetrics
     teamSize: recruiters.length,
     totalWebinarBooked: 0,
     totalWebinarShowed: 0,
+    totalLiveBooked: 0,
+    totalLiveShowed: 0,
     totalCalls: 0,
+    totalBooked: 0,
+    showRatePct: 0,
     topPerformers: [],
+    performerBars: [],
     refreshedAt: null,
   };
 }

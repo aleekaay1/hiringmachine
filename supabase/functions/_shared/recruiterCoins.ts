@@ -4,9 +4,10 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
 export const COINS_PER_SHOW = 10;
+export const COINS_PER_HIRE = 50;
 export const COIN_LOOKBACK_DAYS = 90;
 
-export type CoinSourceType = 'webinar_show' | 'live_session_show';
+export type CoinSourceType = 'webinar_show' | 'live_session_show' | 'candidate_hired';
 
 export type RecruiterCoinEventDraft = {
   userId: string;
@@ -407,6 +408,243 @@ export function buildRecruiterCoinEventDrafts(input: {
   return events.sort((a, b) => new Date(b.earnedAt).getTime() - new Date(a.earnedAt).getTime());
 }
 
+type PipelineCandidateHireRow = {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  journey_stage: string | null;
+  metadata: Record<string, unknown> | null;
+  updated_at: string | null;
+};
+
+type CrmCandidateHireRow = {
+  id: string;
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  admin_data: Record<string, unknown> | null;
+  updated_at: string | null;
+};
+
+function isCrmCandidateHired(adminData: Record<string, unknown> | null | undefined): boolean {
+  return String(adminData?.finalDecision || '').trim().toLowerCase() === 'hired';
+}
+
+function isPipelineCandidateHired(journeyStage: string | null | undefined): boolean {
+  return String(journeyStage || '').trim().toLowerCase() === 'hired';
+}
+
+function sourceCandidateIdFromPipeline(metadata: Record<string, unknown> | null | undefined): string {
+  return String(metadata?.source_candidate_id || '').trim();
+}
+
+function displayNameForHire(pipeline: PipelineCandidateHireRow, crm: CrmCandidateHireRow | null): string {
+  if (crm) {
+    const name = `${String(crm.first_name || '').trim()} ${String(crm.last_name || '').trim()}`.trim();
+    if (name) return name;
+    const email = normalizeEmail(crm.email);
+    if (email) return email;
+  }
+  const pipeName = String(pipeline.full_name || '').trim();
+  if (pipeName) return pipeName;
+  return normalizeEmail(pipeline.email) || 'Candidate';
+}
+
+function hireEarnedAt(pipeline: PipelineCandidateHireRow, crm: CrmCandidateHireRow | null): string {
+  if (crm?.updated_at) return crm.updated_at;
+  if (pipeline.updated_at) return pipeline.updated_at;
+  return new Date().toISOString();
+}
+
+function candidateHireCoinEvents(
+  userId: string,
+  bookedPipelineIds: Set<string>,
+  pipelines: PipelineCandidateHireRow[],
+  crmById: Map<string, CrmCandidateHireRow>,
+  crmByEmail: Map<string, CrmCandidateHireRow>,
+): RecruiterCoinEventDraft[] {
+  if (!bookedPipelineIds.size || !pipelines.length) return [];
+
+  const events: RecruiterCoinEventDraft[] = [];
+  const seenSourceKeys = new Set<string>();
+
+  for (const pipeline of pipelines) {
+    if (!bookedPipelineIds.has(pipeline.id)) continue;
+
+    const crmId = sourceCandidateIdFromPipeline(pipeline.metadata);
+    const crm =
+      (crmId ? crmById.get(crmId) : null) ??
+      crmByEmail.get(normalizeEmail(pipeline.email)) ??
+      null;
+
+    const hired =
+      isPipelineCandidateHired(pipeline.journey_stage) ||
+      (crm ? isCrmCandidateHired(crm.admin_data) : false);
+    if (!hired) continue;
+
+    const stableCrmId = crm?.id || crmId || null;
+    const sourceKey = stableCrmId
+      ? `candidate_hire:crm:${stableCrmId}`
+      : `candidate_hire:pipeline:${pipeline.id}`;
+    if (seenSourceKeys.has(sourceKey)) continue;
+    seenSourceKeys.add(sourceKey);
+
+    events.push({
+      userId,
+      sourceType: 'candidate_hired',
+      sourceKey,
+      points: COINS_PER_HIRE,
+      label: `Candidate hired · ${displayNameForHire(pipeline, crm)}`,
+      earnedAt: hireEarnedAt(pipeline, crm),
+    });
+  }
+
+  return events;
+}
+
+async function loadHireAttributionForUser(
+  admin: SupabaseClient,
+  userId: string,
+): Promise<{
+  bookedPipelineIds: Set<string>;
+  pipelines: PipelineCandidateHireRow[];
+  crmById: Map<string, CrmCandidateHireRow>;
+  crmByEmail: Map<string, CrmCandidateHireRow>;
+}> {
+  const bookedPipelineIds = new Set<string>();
+  const { data: bookedCalls, error: bookedErr } = await admin
+    .from('pipeline_call_records')
+    .select('candidate_id')
+    .eq('recruiter_user_id', userId)
+    .ilike('disposition', 'booked')
+    .order('disposed_at', { ascending: true })
+    .limit(12000);
+  if (bookedErr && !isLedgerMissingError(bookedErr.message)) throw bookedErr;
+
+  for (const row of bookedCalls || []) {
+    const cid = String((row as { candidate_id?: string }).candidate_id || '').trim();
+    if (cid) bookedPipelineIds.add(cid);
+  }
+
+  if (!bookedPipelineIds.size) {
+    return { bookedPipelineIds, pipelines: [], crmById: new Map(), crmByEmail: new Map() };
+  }
+
+  const pipelines: PipelineCandidateHireRow[] = [];
+  const pipeIds = [...bookedPipelineIds];
+  const chunk = 200;
+  for (let i = 0; i < pipeIds.length; i += chunk) {
+    const slice = pipeIds.slice(i, i + chunk);
+    const { data, error } = await admin
+      .from('pipeline_candidates')
+      .select('id, full_name, email, journey_stage, metadata, updated_at')
+      .in('id', slice);
+    if (error) throw error;
+    pipelines.push(...((data || []) as PipelineCandidateHireRow[]));
+  }
+
+  const crmIds = new Set<string>();
+  const crmEmails = new Set<string>();
+  for (const p of pipelines) {
+    const sid = sourceCandidateIdFromPipeline(p.metadata);
+    if (sid) crmIds.add(sid);
+    const em = normalizeEmail(p.email);
+    if (em) crmEmails.add(em);
+  }
+
+  const crmById = new Map<string, CrmCandidateHireRow>();
+  const crmByEmail = new Map<string, CrmCandidateHireRow>();
+
+  const idList = [...crmIds];
+  for (let i = 0; i < idList.length; i += chunk) {
+    const slice = idList.slice(i, i + chunk);
+    if (!slice.length) continue;
+    const { data, error } = await admin
+      .from('candidates')
+      .select('id, email, first_name, last_name, admin_data, updated_at')
+      .in('id', slice);
+    if (error) throw error;
+    for (const row of (data || []) as CrmCandidateHireRow[]) {
+      crmById.set(row.id, row);
+      const em = normalizeEmail(row.email);
+      if (em) crmByEmail.set(em, row);
+    }
+  }
+
+  const emailList = [...crmEmails].filter((em) => !crmByEmail.has(em));
+  for (let i = 0; i < emailList.length; i += chunk) {
+    const slice = emailList.slice(i, i + chunk);
+    if (!slice.length) continue;
+    const { data, error } = await admin
+      .from('candidates')
+      .select('id, email, first_name, last_name, admin_data, updated_at')
+      .in('email', slice);
+    if (error) throw error;
+    for (const row of (data || []) as CrmCandidateHireRow[]) {
+      if (!crmById.has(row.id)) crmById.set(row.id, row);
+      const em = normalizeEmail(row.email);
+      if (em && !crmByEmail.has(em)) crmByEmail.set(em, row);
+    }
+  }
+
+  return { bookedPipelineIds, pipelines, crmById, crmByEmail };
+}
+
+/** First recruiter who dispositioned Booked on the linked pipeline candidate. */
+export async function resolveBookerUserIdForAssessmentCandidate(
+  admin: SupabaseClient,
+  assessmentCandidateId: string,
+): Promise<string | null> {
+  const assessmentId = String(assessmentCandidateId || '').trim();
+  if (!assessmentId) return null;
+
+  const { data: assessment, error: aErr } = await admin
+    .from('candidates')
+    .select('id, email')
+    .eq('id', assessmentId)
+    .maybeSingle();
+  if (aErr || !assessment) return null;
+
+  const email = normalizeEmail((assessment as { email?: string }).email);
+
+  let pipelineId: string | null = null;
+  const { data: bySource, error: sourceErr } = await admin
+    .from('pipeline_candidates')
+    .select('id')
+    .filter('metadata->>source_candidate_id', 'eq', assessmentId)
+    .limit(5);
+  if (!sourceErr && bySource?.length) {
+    pipelineId = String((bySource[0] as { id?: string }).id || '').trim() || null;
+  }
+
+  if (!pipelineId && email) {
+    const { data: byEmail, error: emailErr } = await admin
+      .from('pipeline_candidates')
+      .select('id')
+      .eq('email', (assessment as { email?: string }).email)
+      .limit(5);
+    if (!emailErr && byEmail?.length) {
+      pipelineId = String((byEmail[0] as { id?: string }).id || '').trim() || null;
+    }
+  }
+  if (!pipelineId) return null;
+
+  const { data: bookedCalls, error: cErr } = await admin
+    .from('pipeline_call_records')
+    .select('recruiter_user_id, disposed_at')
+    .eq('candidate_id', pipelineId)
+    .ilike('disposition', 'booked')
+    .order('disposed_at', { ascending: true })
+    .limit(50);
+  if (cErr) return null;
+
+  for (const row of bookedCalls || []) {
+    const uid = String((row as { recruiter_user_id?: string }).recruiter_user_id || '').trim();
+    if (uid) return uid;
+  }
+  return null;
+}
+
 export async function syncRecruiterCoinsForUser(
   admin: SupabaseClient,
   userId: string,
@@ -491,7 +729,7 @@ export async function syncRecruiterCoinsForUser(
     const slice = candidateIds.slice(i, i + chunk);
     if (!slice.length) continue;
     const { data: candidates, error: cErr } = await admin
-      .from('candidates')
+      .from('pipeline_candidates')
       .select('id, email')
       .in('id', slice);
     if (cErr) throw cErr;
@@ -502,9 +740,11 @@ export async function syncRecruiterCoinsForUser(
     }
   }
 
+  const hireAttribution = await loadHireAttributionForUser(admin, userId);
+
   const targetProfile = profileRows.find((p) => p.user_id === userId);
 
-  const drafts = buildRecruiterCoinEventDrafts({
+  const showDrafts = buildRecruiterCoinEventDrafts({
     userId,
     userEmail: targetProfile?.email ?? null,
     userFullName: targetProfile?.full_name ?? null,
@@ -514,6 +754,20 @@ export async function syncRecruiterCoinsForUser(
     liveRegistrants: (liveRows || []) as LiveSessionRegistrantRow[],
     earnWindow,
   });
+
+  const hireDrafts = candidateHireCoinEvents(
+    userId,
+    hireAttribution.bookedPipelineIds,
+    hireAttribution.pipelines,
+    hireAttribution.crmById,
+    hireAttribution.crmByEmail,
+  );
+
+  const draftMap = new Map<string, RecruiterCoinEventDraft>();
+  for (const d of [...showDrafts, ...hireDrafts]) {
+    draftMap.set(d.sourceKey, d);
+  }
+  const drafts = [...draftMap.values()];
 
   for (const draft of drafts) {
     const { error: insErr } = await admin.from('recruiter_coin_ledger').upsert(

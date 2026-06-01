@@ -88,6 +88,13 @@ export async function syncMyRecruiterCoins(): Promise<{
   };
 }
 
+/** After admin marks a CRM candidate Hired, credit the recruiter who dispositioned Booked (if any). */
+export async function syncRecruiterCoinsAfterCandidateHired(assessmentCandidateId: string): Promise<void> {
+  const id = assessmentCandidateId.trim();
+  if (!id) return;
+  await postRecruiterCoinSync({ assessmentCandidateId: id });
+}
+
 export async function syncAllRecruiterCoins(): Promise<{
   ok: boolean;
   usersSynced?: number;

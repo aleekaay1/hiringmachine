@@ -2,7 +2,13 @@
 // Deploy: supabase functions deploy sync-recruiter-coins
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { syncAllEligibleRecruiterCoins, syncRecruiterCoinsForUser } from '../_shared/recruiterCoins.ts';
+import {
+  COINS_PER_HIRE,
+  COINS_PER_SHOW,
+  resolveBookerUserIdForAssessmentCandidate,
+  syncAllEligibleRecruiterCoins,
+  syncRecruiterCoinsForUser,
+} from '../_shared/recruiterCoins.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -72,6 +78,38 @@ Deno.serve(async (req) => {
 
     const admin = createClient(supabaseUrl, serviceRole);
 
+    const assessmentCandidateId =
+      typeof body?.assessmentCandidateId === 'string' ? body.assessmentCandidateId.trim() : '';
+
+    if (assessmentCandidateId) {
+      const bookerId = await resolveBookerUserIdForAssessmentCandidate(admin, assessmentCandidateId);
+      if (!bookerId) {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            credited: false,
+            reason: 'no_booking_recruiter',
+            ledgerReady: true,
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        );
+      }
+      const result = await syncRecruiterCoinsForUser(admin, bookerId);
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          creditedUserId: bookerId,
+          balance: result.balance,
+          totalEvents: result.totalEvents,
+          ledgerReady: result.ledgerReady,
+          ledgerMissing: result.ledgerMissing,
+          coinsPerShow: COINS_PER_SHOW,
+          coinsPerHire: COINS_PER_HIRE,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+
     const syncAll = body?.syncAll === true;
     if (syncAll) {
       const { data: actorProfile } = await authClient
@@ -94,7 +132,8 @@ Deno.serve(async (req) => {
           usersSynced: bulk.usersSynced,
           ledgerReady: !bulk.ledgerMissing,
           ledgerMissing: bulk.ledgerMissing,
-          coinsPerShow: 10,
+          coinsPerShow: COINS_PER_SHOW,
+          coinsPerHire: COINS_PER_HIRE,
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
@@ -109,7 +148,8 @@ Deno.serve(async (req) => {
         totalEvents: result.totalEvents,
         ledgerReady: result.ledgerReady,
         ledgerMissing: result.ledgerMissing,
-        coinsPerShow: 10,
+        coinsPerShow: COINS_PER_SHOW,
+        coinsPerHire: COINS_PER_HIRE,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );

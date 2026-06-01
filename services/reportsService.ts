@@ -26,10 +26,9 @@ import {
   pickRegistrantForDisposition,
 } from './liveSessionBookedOutcomes';
 import {
-  listPipelineCallLogs,
   listPipelineCallRecords,
+  listPipelineEmailSendLogsByCandidates,
   listPipelineIncomingEmailLogsByCandidates,
-  type PipelineCallLog,
   type PipelineCallRecord,
 } from './pipelineService';
 import { loadRecruiterCoinBalanceMap } from './recruiterCoinService';
@@ -57,15 +56,6 @@ export type ReportCallRow = {
   dialedNumber: string;
   comment: string | null;
   recruiterLabel: string | null;
-};
-
-export type ReportCallLogRow = {
-  id: string;
-  createdAt: string;
-  action: string;
-  outcome: string | null;
-  candidateId: string;
-  detail: string;
 };
 
 export type ReportWebinarRow = {
@@ -108,7 +98,6 @@ export type RecruiterReportSummary = {
   liveBooked: number;
   liveShowed: number;
   pazCoins: number;
-  callLogs: number;
 };
 
 export type RecruiterReportBundle = {
@@ -117,7 +106,6 @@ export type RecruiterReportBundle = {
   range: ReportDateRange;
   summary: RecruiterReportSummary;
   calls: ReportCallRow[];
-  callLogs: ReportCallLogRow[];
   webinarsBooked: ReportWebinarRow[];
   webinarShows: ReportWebinarRow[];
   liveSessions: ReportLiveSessionRow[];
@@ -370,6 +358,7 @@ export async function listReportableStaff(): Promise<UserProfile[]> {
 export async function refreshReportSourcesFromRemote(): Promise<{
   ok: boolean;
   webinarCount: number;
+  fetchedAt?: string;
   error?: string;
 }> {
   const { data: sessionData } = await supabase.auth.getSession();
@@ -410,7 +399,7 @@ export async function refreshReportSourcesFromRemote(): Promise<{
     fetchLabel: label,
   });
 
-  return { ok: true, webinarCount: rows.length };
+  return { ok: true, webinarCount: rows.length, fetchedAt: new Date().toISOString() };
 }
 
 async function loadWebinarRows(): Promise<{ rows: AnyRow[]; fetchedAt: string | null }> {
@@ -427,16 +416,10 @@ export async function loadRecruiterReport(
 ): Promise<RecruiterReportBundle> {
   const userId = profile.user_id;
 
-  const [{ rows: webinarAll, fetchedAt }, callRecords, callLogs, coinMap, liveRegs] = await Promise.all([
+  const [{ rows: webinarAll, fetchedAt }, callRecords, coinMap, liveRegs] = await Promise.all([
     loadWebinarRows(),
     listPipelineCallRecords({
       recruiterUserId: userId,
-      fromIso: range.fromIso,
-      toIso: range.toIso,
-      limit: 8000,
-    }),
-    listPipelineCallLogs({
-      createdByUserId: userId,
       fromIso: range.fromIso,
       toIso: range.toIso,
       limit: 8000,
@@ -475,42 +458,31 @@ export async function loadRecruiterReport(
     recruiterLabel: row.recruiter_label,
   }));
 
-  const callLogRows: ReportCallLogRow[] = callLogs.map((row: PipelineCallLog) => {
-    const req =
-      row.request_payload && typeof row.request_payload === 'object'
-        ? (row.request_payload as Record<string, unknown>)
-        : {};
-    return {
-      id: row.id,
-      createdAt: row.created_at,
-      action: row.action,
-      outcome: row.outcome,
-      candidateId: row.candidate_id,
-      detail: JSON.stringify(req).slice(0, 240),
-    };
-  });
-
   const candidateIds = [...new Set(callRecords.map((r) => r.candidate_id).filter(Boolean))];
   const candidateEmailById = await loadCandidateEmailsById(candidateIds);
   const liveByEmail = buildLiveSessionRowsByEmail(liveRegs);
   const live = buildLiveSessionsForRecruiter(callRecords, candidateEmailById, liveByEmail, range);
 
-  const emailSentLogs = callLogs.filter((l) => l.action === 'email_sent');
-  const inbound = await listPipelineIncomingEmailLogsByCandidates(candidateIds, {
-    fromIso: range.fromIso,
-    toIso: range.toIso,
-  });
+  const [emailSentLogs, inbound] = await Promise.all([
+    listPipelineEmailSendLogsByCandidates(candidateIds, {
+      fromIso: range.fromIso,
+      toIso: range.toIso,
+      limit: 3000,
+    }),
+    listPipelineIncomingEmailLogsByCandidates(candidateIds, {
+      fromIso: range.fromIso,
+      toIso: range.toIso,
+    }),
+  ]);
 
   const emails: ReportEmailRow[] = [
     ...emailSentLogs.map((row) => ({
       id: row.id,
       at: row.created_at,
       direction: 'sent' as const,
-      subject: String(
-        (row.request_payload as Record<string, unknown> | null)?.subject || row.outcome || 'Email sent',
-      ),
-      toOrFrom: String((row.request_payload as Record<string, unknown> | null)?.to_email || ''),
-      status: row.outcome || 'sent',
+      subject: row.subject || 'Email sent',
+      toOrFrom: row.to_email,
+      status: row.status || 'sent',
     })),
     ...inbound.map((row) => ({
       id: row.id,
@@ -529,18 +501,17 @@ export async function loadRecruiterReport(
     generatedAt: new Date().toISOString(),
     range,
     summary: {
-      ...callStats,
+      totalCalls: callStats.totalCalls,
+      bookedCalls: 0,
       emailsSent: emailSentLogs.length,
       emailReplies: inbound.length,
       webinarBooked: webinarsBooked.length,
       webinarShowed: webinarShows.length,
-      liveBooked: live.booked,
-      liveShowed: live.showed,
+      liveBooked: 0,
+      liveShowed: 0,
       pazCoins: coinMap.get(userId) ?? Number(profile.points || 0),
-      callLogs: callLogRows.length,
     },
     calls,
-    callLogs: callLogRows,
     webinarsBooked,
     webinarShows,
     liveSessions: live.rows,
@@ -556,23 +527,12 @@ export async function loadTeamReportCards(
   profiles: UserProfile[],
   range: ReportDateRange,
 ): Promise<StaffReportCard[]> {
-  const [{ rows: webinarAll }, allCalls, coinMap] = await Promise.all([
+  const [{ rows: webinarAll }, coinMap] = await Promise.all([
     loadWebinarRows(),
-    listPipelineCallRecords({ fromIso: range.fromIso, toIso: range.toIso, limit: 12000 }),
     loadRecruiterCoinBalanceMap(),
   ]);
 
-  const callsByUser = new Map<string, PipelineCallRecord[]>();
-  for (const call of allCalls) {
-    const uid = String(call.recruiter_user_id || '').trim();
-    if (!uid) continue;
-    const list = callsByUser.get(uid) || [];
-    list.push(call);
-    callsByUser.set(uid, list);
-  }
-
   return profiles.map((profile) => {
-    const calls = callsByUser.get(profile.user_id) || [];
     const scopedWebinar = filterRowsForRecruiterOwnership(
       webinarAll,
       profile.email ?? null,
@@ -588,24 +548,19 @@ export async function loadTeamReportCards(
         webinarShowedFromRow(row) &&
         ymdInRange(fmtWebinarSessionDateKey(row), range.sinceYmd, range.untilYmd),
     );
-    const stats = summarizeCalls(calls);
-    const liveBooked = calls.filter(
-      (r) =>
-        String(r.disposition || '').toLowerCase() === 'booked' && readBookedSubtype(r) === 'live session',
-    ).length;
 
     return {
       profile,
       summary: {
-        ...stats,
+        totalCalls: 0,
+        bookedCalls: 0,
         emailsSent: 0,
         emailReplies: 0,
         webinarBooked: webinarsBookedCount,
         webinarShowed: webinarShows.length,
-        liveBooked,
+        liveBooked: 0,
         liveShowed: 0,
         pazCoins: coinMap.get(profile.user_id) ?? Number(profile.points || 0),
-        callLogs: 0,
       },
     };
   });

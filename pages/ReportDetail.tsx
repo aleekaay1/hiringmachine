@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
-import { AdminOnlyGate } from '../components/reports/AdminOnlyGate';
+import { useAdminSessionOnce } from '../components/reports/useAdminSessionOnce';
 import { ReportDataTable } from '../components/reports/ReportDataTable';
 import { ReportDateRangeBar } from '../components/reports/ReportDateRangeBar';
 import { ReportExpandableSection } from '../components/reports/ReportExpandableSection';
@@ -27,6 +27,10 @@ import {
   type ReportDatePreset,
 } from '../services/reportsService';
 import { exportRecruiterReportCsv, exportRecruiterReportPdf } from '../services/reportsExport';
+import {
+  loadUserReportSnapshot,
+  saveUserReportSnapshot,
+} from '../services/reportsSnapshotCache';
 import { torontoYmdFromDate } from '../services/webinarGeekDates';
 import { profileInitials } from '../services/webinarGeekRecruiterAnalytics';
 
@@ -36,7 +40,13 @@ function formatIso(iso: string): string {
   return formatDateTimeCanadaEastern(ms);
 }
 
+function formatRefreshedAt(iso: string | null): string {
+  if (!iso) return 'Not saved yet';
+  return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
 const ReportDetail: React.FC = () => {
+  useAdminSessionOnce();
   const { userId } = useParams<{ userId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -52,7 +62,8 @@ const ReportDetail: React.FC = () => {
   const [refreshing, setRefreshing] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [report, setReport] = React.useState<RecruiterReportBundle | null>(null);
-  const [openSections, setOpenSections] = React.useState<Set<string>>(new Set(['calls']));
+  const [openSections, setOpenSections] = React.useState<Set<string>>(new Set(['webinarBooked']));
+  const [lastUpdated, setLastUpdated] = React.useState<string | null>(null);
 
   const range = React.useMemo(
     () =>
@@ -73,25 +84,41 @@ const ReportDetail: React.FC = () => {
     setSearchParams(params, { replace: true });
   }, [preset, customSince, customUntil, setSearchParams]);
 
-  const loadReport = React.useCallback(async () => {
-    if (!userId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const profiles = await listAllUserProfiles();
-      const profile = profiles.find((p) => p.user_id === userId);
-      if (!profile || !isReportableRole(profile.role)) {
-        throw new Error('Team member not found or not available for reports.');
+  const loadReport = React.useCallback(
+    async (opts?: { forceCompute?: boolean }) => {
+      if (!userId) return;
+      setLoading(true);
+      setError(null);
+      try {
+        const profiles = await listAllUserProfiles();
+        const profile = profiles.find((p) => p.user_id === userId);
+        if (!profile || !isReportableRole(profile.role)) {
+          throw new Error('Team member not found or not available for reports.');
+        }
+
+        if (!opts?.forceCompute) {
+          const cached = await loadUserReportSnapshot(userId, range);
+          if (!cached.tableMissing && cached.payload) {
+            const bundle = cached.payload as RecruiterReportBundle;
+            setReport(bundle);
+            setLastUpdated(cached.fetchedAt);
+            return;
+          }
+        }
+
+        const bundle = await loadRecruiterReport(profile, range);
+        const saved = await saveUserReportSnapshot(userId, range, bundle);
+        setReport(bundle);
+        setLastUpdated(saved.fetchedAt);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setReport(null);
+      } finally {
+        setLoading(false);
       }
-      const bundle = await loadRecruiterReport(profile, range);
-      setReport(bundle);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setReport(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [userId, range]);
+    },
+    [userId, range],
+  );
 
   React.useEffect(() => {
     void loadReport();
@@ -112,7 +139,7 @@ const ReportDetail: React.FC = () => {
     try {
       const result = await refreshReportSourcesFromRemote();
       if (!result.ok) throw new Error(result.error || 'Refresh failed');
-      await loadReport();
+      await loadReport({ forceCompute: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -124,7 +151,6 @@ const ReportDetail: React.FC = () => {
 
   return (
     <Layout isAdmin>
-      <AdminOnlyGate>
         <div className="mx-auto w-full min-w-0 max-w-5xl p-4 md:p-6 space-y-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -147,23 +173,26 @@ const ReportDetail: React.FC = () => {
                 </p>
               )}
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                disabled={!report}
-                onClick={() => report && exportRecruiterReportCsv(report)}
-              >
-                <FileSpreadsheet size={15} className="mr-1" />
-                CSV
-              </Button>
-              <Button variant="outline" disabled={!report} onClick={() => report && exportRecruiterReportPdf(report)}>
-                <FileText size={15} className="mr-1" />
-                PDF
-              </Button>
-              <Button onClick={() => void handleRefresh()} disabled={refreshing}>
-                <RefreshCw size={15} className={refreshing ? 'mr-1 animate-spin' : 'mr-1'} />
-                Refresh data
-              </Button>
+            <div className="flex flex-col items-end gap-0.5">
+              <div className="flex flex-wrap gap-2 justify-end">
+                <Button
+                  variant="outline"
+                  disabled={!report}
+                  onClick={() => report && exportRecruiterReportCsv(report)}
+                >
+                  <FileSpreadsheet size={15} className="mr-1" />
+                  CSV
+                </Button>
+                <Button variant="outline" disabled={!report} onClick={() => report && exportRecruiterReportPdf(report)}>
+                  <FileText size={15} className="mr-1" />
+                  PDF
+                </Button>
+                <Button onClick={() => void handleRefresh()} disabled={refreshing}>
+                  <RefreshCw size={15} className={refreshing ? 'mr-1 animate-spin' : 'mr-1'} />
+                  Refresh data
+                </Button>
+              </div>
+              <p className="text-[9px] text-[#8aa3be]">Saved {formatRefreshedAt(lastUpdated)}</p>
             </div>
           </div>
 
@@ -206,14 +235,12 @@ const ReportDetail: React.FC = () => {
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
                   {[
-                    { label: 'Calls', value: report.summary.totalCalls, icon: PhoneCall },
-                    { label: 'Booked', value: report.summary.bookedCalls, icon: PhoneCall },
                     { label: 'Webinar booked', value: report.summary.webinarBooked, icon: Video },
                     { label: 'Webinar shows', value: report.summary.webinarShowed, icon: UserCheck },
-                    { label: 'Live booked', value: report.summary.liveBooked, icon: Video },
-                    { label: 'Live shows', value: report.summary.liveShowed, icon: UserCheck },
                     { label: 'Emails sent', value: report.summary.emailsSent, icon: Mail },
                     { label: 'Paz coins', value: report.summary.pazCoins, icon: FileText },
+                    { label: 'Dial activity', value: report.summary.totalCalls, icon: PhoneCall },
+                    { label: 'Email replies', value: report.summary.emailReplies, icon: Mail },
                   ].map((item) => {
                     const Icon = item.icon;
                     return (
@@ -254,32 +281,6 @@ const ReportDetail: React.FC = () => {
                       candidateId: r.candidateId,
                       dialedNumber: r.dialedNumber,
                       comment: r.comment || '—',
-                    }))}
-                  />
-                </ReportExpandableSection>
-
-                <ReportExpandableSection
-                  title="Call activity logs"
-                  subtitle="Pipeline log entries (dispositions, emails, etc.)"
-                  count={report.callLogs.length}
-                  open={openSections.has('logs')}
-                  onToggle={() => toggleSection('logs')}
-                >
-                  <ReportDataTable
-                    columns={[
-                      { key: 'createdAt', label: 'When' },
-                      { key: 'action', label: 'Action' },
-                      { key: 'outcome', label: 'Outcome' },
-                      { key: 'candidateId', label: 'Candidate' },
-                      { key: 'detail', label: 'Detail' },
-                    ]}
-                    rows={report.callLogs.map((r) => ({
-                      id: r.id,
-                      createdAt: formatIso(r.createdAt),
-                      action: r.action,
-                      outcome: r.outcome || '—',
-                      candidateId: r.candidateId,
-                      detail: r.detail,
                     }))}
                   />
                 </ReportExpandableSection>
@@ -395,7 +396,6 @@ const ReportDetail: React.FC = () => {
             </>
           )}
         </div>
-      </AdminOnlyGate>
     </Layout>
   );
 };

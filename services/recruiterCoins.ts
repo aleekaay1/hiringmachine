@@ -19,10 +19,11 @@ import {
 } from './webinarGeekRecruiterAnalytics';
 
 export const COINS_PER_SHOW = 10;
+export const COINS_PER_HIRE = 50;
 /** Internal rolling window for crediting shows on sync. */
 export const COIN_LOOKBACK_DAYS = 90;
 
-export type CoinSourceType = 'webinar_show' | 'live_session_show';
+export type CoinSourceType = 'webinar_show' | 'live_session_show' | 'candidate_hired';
 
 export type RecruiterCoinEventDraft = {
   userId: string;
@@ -166,6 +167,110 @@ function liveSessionShowCoinEvents(
   return events;
 }
 
+export type PipelineCandidateHireRow = {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  journey_stage: string | null;
+  metadata: Record<string, unknown> | null;
+  updated_at: string | null;
+};
+
+export type CrmCandidateHireRow = {
+  id: string;
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  admin_data: Record<string, unknown> | null;
+  updated_at: string | null;
+};
+
+function normalizeHireEmail(value: string | null | undefined): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+export function isCrmCandidateHired(adminData: Record<string, unknown> | null | undefined): boolean {
+  return String(adminData?.finalDecision || '').trim().toLowerCase() === 'hired';
+}
+
+export function isPipelineCandidateHired(journeyStage: string | null | undefined): boolean {
+  return String(journeyStage || '').trim().toLowerCase() === 'hired';
+}
+
+function sourceCandidateIdFromPipeline(metadata: Record<string, unknown> | null | undefined): string {
+  return String(metadata?.source_candidate_id || '').trim();
+}
+
+function displayNameForHire(
+  pipeline: PipelineCandidateHireRow,
+  crm: CrmCandidateHireRow | null,
+): string {
+  if (crm) {
+    const name = `${String(crm.first_name || '').trim()} ${String(crm.last_name || '').trim()}`.trim();
+    if (name) return name;
+    const email = normalizeHireEmail(crm.email);
+    if (email) return email;
+  }
+  const pipeName = String(pipeline.full_name || '').trim();
+  if (pipeName) return pipeName;
+  const email = normalizeHireEmail(pipeline.email);
+  return email || 'Candidate';
+}
+
+function hireEarnedAt(pipeline: PipelineCandidateHireRow, crm: CrmCandidateHireRow | null): string {
+  if (crm?.updated_at) return crm.updated_at;
+  if (pipeline.updated_at) return pipeline.updated_at;
+  return new Date().toISOString();
+}
+
+/** 50 coins when a pipeline candidate this recruiter booked is hired (CRM or pipeline journey). */
+export function candidateHireCoinEvents(
+  userId: string,
+  bookedPipelineIds: Set<string>,
+  pipelines: PipelineCandidateHireRow[],
+  crmById: Map<string, CrmCandidateHireRow>,
+  crmByEmail: Map<string, CrmCandidateHireRow>,
+): RecruiterCoinEventDraft[] {
+  if (!bookedPipelineIds.size || !pipelines.length) return [];
+
+  const events: RecruiterCoinEventDraft[] = [];
+  const seenSourceKeys = new Set<string>();
+
+  for (const pipeline of pipelines) {
+    if (!bookedPipelineIds.has(pipeline.id)) continue;
+
+    const crmId = sourceCandidateIdFromPipeline(pipeline.metadata);
+    const crm =
+      (crmId ? crmById.get(crmId) : null) ??
+      crmByEmail.get(normalizeHireEmail(pipeline.email)) ??
+      null;
+
+    const hired =
+      isPipelineCandidateHired(pipeline.journey_stage) ||
+      (crm ? isCrmCandidateHired(crm.admin_data) : false);
+    if (!hired) continue;
+
+    const stableCrmId = crm?.id || crmId || null;
+    const sourceKey = stableCrmId
+      ? `candidate_hire:crm:${stableCrmId}`
+      : `candidate_hire:pipeline:${pipeline.id}`;
+    if (seenSourceKeys.has(sourceKey)) continue;
+    seenSourceKeys.add(sourceKey);
+
+    const name = displayNameForHire(pipeline, crm);
+    events.push({
+      userId,
+      sourceType: 'candidate_hired',
+      sourceKey,
+      points: COINS_PER_HIRE,
+      label: `Candidate hired · ${name}`,
+      earnedAt: hireEarnedAt(pipeline, crm),
+    });
+  }
+
+  return events;
+}
+
 export function buildRecruiterCoinEventDrafts(input: {
   userId: string;
   userEmail: string | null;
@@ -175,6 +280,10 @@ export function buildRecruiterCoinEventDrafts(input: {
   candidateEmailById: Map<string, string>;
   liveRegistrants: LiveSessionRegistrantRow[];
   earnWindow?: CoinEarnWindow;
+  bookedPipelineIds?: Set<string>;
+  hirePipelines?: PipelineCandidateHireRow[];
+  hireCrmById?: Map<string, CrmCandidateHireRow>;
+  hireCrmByEmail?: Map<string, CrmCandidateHireRow>;
 }): RecruiterCoinEventDraft[] {
   const window = input.earnWindow ?? coinEarnWindow();
   const liveSessionByEmail = buildLiveSessionRowsByEmail(input.liveRegistrants);
@@ -193,6 +302,13 @@ export function buildRecruiterCoinEventDrafts(input: {
       input.candidateEmailById,
       liveSessionByEmail,
       window,
+    ),
+    ...candidateHireCoinEvents(
+      input.userId,
+      input.bookedPipelineIds ?? new Set(),
+      input.hirePipelines ?? [],
+      input.hireCrmById ?? new Map(),
+      input.hireCrmByEmail ?? new Map(),
     ),
   ];
 

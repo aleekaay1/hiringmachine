@@ -4,7 +4,7 @@
 create table if not exists public.recruiter_coin_ledger (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
-  source_type text not null check (source_type in ('webinar_show', 'live_session_show')),
+  source_type text not null check (source_type in ('webinar_show', 'live_session_show', 'candidate_hired')),
   source_key text not null,
   points integer not null default 10 check (points > 0),
   label text,
@@ -29,7 +29,7 @@ using (
 );
 
 comment on table public.recruiter_coin_ledger is
-  'Paz Coins earn events (10 per webinar/live show). Balance cached on user_profiles.points.';
+  'Paz Coins earn events: 10 per webinar/live show, 50 when a booked candidate is hired. Balance cached on user_profiles.points.';
 
 -- Leaderboard: any signed-in user can read team coin balances.
 create or replace function public.list_recruiter_coin_balances()
