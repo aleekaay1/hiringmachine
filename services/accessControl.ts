@@ -21,6 +21,7 @@ export type AppSection =
   | 'home'
   | 'hr-dashboard'
   | 'email-log'
+  | 'reports'
   | 'superdashboard';
 
 export interface UserProfile {
@@ -122,6 +123,7 @@ const ADMIN_DATA_SECTIONS: AppSection[] = [
   'analytics',
   'settings',
   'email-log',
+  'reports',
   'hr-dashboard',
   'pipeline-performance',
   'pipeline-settings',

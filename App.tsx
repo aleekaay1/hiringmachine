@@ -25,6 +25,8 @@ import PipelineEmailWorkspace from './pages/PipelineEmailWorkspace';
 import PipelineUploadsWorkspace from './pages/PipelineUploadsWorkspace';
 import PipelineSettings from './pages/PipelineSettings';
 import RoleHome from './pages/RoleHome';
+import Reports from './pages/Reports';
+import ReportDetail from './pages/ReportDetail';
 
 const App: React.FC = () => {
   return (
@@ -59,6 +61,8 @@ const App: React.FC = () => {
         <Route path="/superdashboard" element={<Navigate to="/home" replace />} />
         <Route path="/qr" element={<QrCodes />} />
         <Route path="/email-log" element={<EmailLog />} />
+        <Route path="/reports" element={<Reports />} />
+        <Route path="/reports/:userId" element={<ReportDetail />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
