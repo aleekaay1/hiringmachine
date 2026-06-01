@@ -1,10 +1,12 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { FileUp, Moon, RefreshCw, Sun } from 'lucide-react';
+import { FileUp, Moon, RefreshCw, Search, Sun, Trash2 } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import {
+  bulkDeletePipelineCandidates,
   bulkUploadPipelineResumes,
+  deletePipelineCandidate,
   getPipelineUserCallSettings,
   listPipelineManualCandidates,
   savePipelineUserCallSettings,
@@ -16,6 +18,15 @@ import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 
 type WorkspaceThemeMode = 'dark' | 'light';
 const WORKSPACE_THEME_STORAGE_KEY = 'pipeline-recruiter-workspace-theme';
+
+function candidateDisplayName(candidate: PipelineCandidate): string {
+  return candidate.full_name?.trim() || 'Unknown Candidate';
+}
+
+function candidateFileLabel(candidate: PipelineCandidate): string {
+  const metadata = candidate.metadata && typeof candidate.metadata === 'object' ? candidate.metadata : {};
+  return String((metadata as Record<string, unknown>).original_file_name || '').trim();
+}
 
 function stageLabel(stage: PipelineUploadProgress['stage']): string {
   switch (stage) {
@@ -49,6 +60,9 @@ const PipelineUploadsWorkspace: React.FC = () => {
   const [savingTarget, setSavingTarget] = React.useState(false);
   const [progressByIndex, setProgressByIndex] = React.useState<Record<number, PipelineUploadProgress>>({});
   const [candidates, setCandidates] = React.useState<PipelineCandidate[]>([]);
+  const [search, setSearch] = React.useState('');
+  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(() => new Set());
+  const [deleting, setDeleting] = React.useState(false);
   const [themeMode, setThemeMode] = React.useState<WorkspaceThemeMode>('dark');
 
   React.useEffect(() => {
@@ -125,8 +139,83 @@ const PipelineUploadsWorkspace: React.FC = () => {
     }
   };
 
+  const filteredCandidates = React.useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return candidates;
+    return candidates.filter((candidate) => {
+      const fileLabel = candidateFileLabel(candidate).toLowerCase();
+      return (
+        candidateDisplayName(candidate).toLowerCase().includes(q) ||
+        String(candidate.phone || '').toLowerCase().includes(q) ||
+        String(candidate.email || '').toLowerCase().includes(q) ||
+        fileLabel.includes(q)
+      );
+    });
+  }, [candidates, search]);
+
+  const toggleSelectedId = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllVisible = () => {
+    setSelectedIds(new Set(filteredCandidates.map((row) => row.id)));
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
+
+  const deleteOne = async (candidate: PipelineCandidate) => {
+    const label = candidateDisplayName(candidate);
+    const fileLabel = candidateFileLabel(candidate);
+    const detail = fileLabel ? `${label} (${fileLabel})` : label;
+    const ok = window.confirm(`Delete upload for ${detail}? This removes the resume file and related pipeline data.`);
+    if (!ok) return;
+    setDeleting(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await deletePipelineCandidate(candidate.id);
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(candidate.id);
+        return next;
+      });
+      setMessage(`Deleted ${detail}.`);
+      await loadData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const bulkDeleteSelected = async () => {
+    if (!selectedIds.size) return;
+    const ok = window.confirm(`Delete ${selectedIds.size} selected upload(s) and related data? This cannot be undone.`);
+    if (!ok) return;
+    const count = selectedIds.size;
+    setDeleting(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await bulkDeletePipelineCandidates(Array.from(selectedIds));
+      setSelectedIds(new Set());
+      setMessage(`Deleted ${count} upload(s).`);
+      await loadData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const todayIso = new Date().toISOString().slice(0, 10);
   const uploadedToday = candidates.filter((row) => row.created_at.slice(0, 10) === todayIso).length;
+  const busy = loading || uploading || deleting;
   const isDark = themeMode === 'dark';
   const tone = React.useMemo(
     () => ({
@@ -265,28 +354,114 @@ const PipelineUploadsWorkspace: React.FC = () => {
           </section>
 
           <section className={`rounded-2xl border p-4 ${tone.glassPanel}`}>
-            <div className="flex items-center justify-between mb-2">
-              <p className={`text-sm font-semibold ${tone.panelTitle}`}>Uploaded list summary</p>
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <p className={`text-sm font-semibold ${tone.panelTitle}`}>Uploaded resumes</p>
               <Button
                 variant="outline"
                 className={`!min-h-0 h-8 px-3 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
                 onClick={() => void loadData()}
-                disabled={loading}
+                disabled={busy}
               >
                 <RefreshCw size={13} className={loading ? 'mr-1 animate-spin' : 'mr-1'} />
                 Refresh
               </Button>
             </div>
+
+            <div className="mb-3 space-y-2">
+              <div className="relative">
+                <Search size={14} className={`absolute left-2.5 top-1/2 -translate-y-1/2 ${tone.panelLabel}`} />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search name, file, phone, email"
+                  className={`w-full rounded-lg border pl-8 pr-3 py-2 text-xs ${tone.input}`}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className={`text-[11px] ${tone.panelMuted}`}>
+                  Showing {filteredCandidates.length} of {candidates.length}
+                </p>
+                <button
+                  type="button"
+                  onClick={selectAllVisible}
+                  disabled={!filteredCandidates.length || busy}
+                  className={`rounded-lg border px-2 py-1 text-[11px] font-medium disabled:opacity-50 ${tone.actionButton}`}
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  disabled={!selectedIds.size || busy}
+                  className={`rounded-lg border px-2 py-1 text-[11px] font-medium disabled:opacity-50 ${tone.actionButton}`}
+                >
+                  Clear
+                </button>
+                <Button
+                  variant="outline"
+                  className={`!min-h-0 h-7 px-2 text-[11px] ${isDark ? '!border-red-300/40 !bg-red-500/10 !text-red-100 hover:!bg-red-500/20' : '!border-red-200 !text-red-700 hover:!bg-red-50'}`}
+                  onClick={() => void bulkDeleteSelected()}
+                  disabled={!selectedIds.size || busy}
+                >
+                  <Trash2 size={12} className="mr-1" />
+                  Delete {selectedIds.size || 'selected'}
+                </Button>
+              </div>
+            </div>
+
             <div className="space-y-1.5 max-h-[72vh] overflow-auto">
-              {candidates.map((candidate) => (
-                <div key={candidate.id} className={`rounded-lg border px-3 py-2 ${tone.listCard}`}>
-                  <p className={`text-xs font-semibold ${tone.panelTitle}`}>{candidate.full_name || 'Unknown Candidate'}</p>
-                  <p className={`text-[10px] ${tone.panelLabel}`}>
-                    {candidate.phone || candidate.email || 'No contact info'} · {formatDateTimeCanadaEastern(candidate.created_at)}
-                  </p>
-                </div>
-              ))}
-              {!candidates.length && <p className={`text-xs ${tone.panelLabel}`}>No uploads found yet.</p>}
+              {filteredCandidates.map((candidate) => {
+                const fileLabel = candidateFileLabel(candidate);
+                const checked = selectedIds.has(candidate.id);
+                return (
+                  <div
+                    key={candidate.id}
+                    className={`rounded-lg border px-3 py-2 ${tone.listCard} ${checked ? (isDark ? 'ring-1 ring-cyan-400/50' : 'ring-1 ring-[#8bc3ff]') : ''}`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleSelectedId(candidate.id)}
+                        disabled={busy}
+                        className="mt-1 rounded border-slate-300"
+                        aria-label={`Select ${candidateDisplayName(candidate)}`}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className={`text-xs font-semibold truncate ${tone.panelTitle}`}>{candidateDisplayName(candidate)}</p>
+                        {fileLabel && (
+                          <p className={`text-[11px] truncate ${tone.panelMuted}`} title={fileLabel}>
+                            {fileLabel}
+                          </p>
+                        )}
+                        <p className={`text-[10px] ${tone.panelLabel}`}>
+                          {candidate.phone || candidate.email || 'No contact info'} ·{' '}
+                          {formatDateTimeCanadaEastern(candidate.created_at)}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void deleteOne(candidate)}
+                        disabled={busy}
+                        className={`shrink-0 inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium disabled:opacity-50 ${
+                          isDark
+                            ? 'border-red-300/40 bg-red-500/10 text-red-100 hover:bg-red-500/20'
+                            : 'border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
+                        }`}
+                        title="Delete this upload"
+                      >
+                        <Trash2 size={12} />
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+              {!loading && !filteredCandidates.length && (
+                <p className={`text-xs ${tone.panelLabel}`}>
+                  {candidates.length ? 'No uploads match your search.' : 'No uploads found yet.'}
+                </p>
+              )}
             </div>
           </section>
         </motion.div>
