@@ -1,5 +1,14 @@
 import { supabase } from './supabaseClient';
-import { COINS_PER_SHOW, type RecruiterCoinLedgerRow } from './recruiterCoins';
+import { filterRowsForRecruiterOwnership } from './recruiterDataScope';
+import { loadWebinarGeekDashboardCache } from './webinarGeekDashboardCache';
+import {
+  COINS_PER_SHOW,
+  coinEarnWindow,
+  coinShowDateYmdForWebinarRow,
+  webinarShowedFromRow,
+  ymdInCoinEarnWindow,
+  type RecruiterCoinLedgerRow,
+} from './recruiterCoins';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -103,11 +112,43 @@ export async function loadMyCoinLedgerRecent(limit = 8): Promise<RecruiterCoinLe
   return (data || []) as RecruiterCoinLedgerRow[];
 }
 
-export async function loadRecruiterCoinWallet(profileBalance: number): Promise<RecruiterCoinWallet> {
+export async function estimateCoinBalanceFromWebinarCache(
+  userEmail: string | null,
+  userFullName: string | null,
+): Promise<number> {
+  const { data } = await loadWebinarGeekDashboardCache();
+  const rows = data?.subscriptions || [];
+  if (!rows.length) return 0;
+
+  const window = coinEarnWindow();
+  const scoped = filterRowsForRecruiterOwnership(rows, userEmail, userFullName);
+  let shows = 0;
+  for (const row of scoped) {
+    if (!webinarShowedFromRow(row)) continue;
+    if (!ymdInCoinEarnWindow(coinShowDateYmdForWebinarRow(row), window)) continue;
+    shows += 1;
+  }
+  return shows * COINS_PER_SHOW;
+}
+
+export async function loadRecruiterCoinWallet(input: {
+  profileBalance?: number;
+  email?: string | null;
+  fullName?: string | null;
+}): Promise<RecruiterCoinWallet> {
+  const profileBalance = Number(input.profileBalance || 0);
   const sync = await syncMyRecruiterCoins();
   const ledgerMissing = sync.ledgerMissing;
   const ledgerReady = sync.ledgerReady && !ledgerMissing;
-  const balance = ledgerReady ? sync.balance : Number(profileBalance || 0);
+
+  let balance = ledgerReady ? sync.balance : profileBalance;
+  if (balance <= 0) {
+    const estimated = await estimateCoinBalanceFromWebinarCache(
+      input.email ?? null,
+      input.fullName ?? null,
+    ).catch(() => 0);
+    if (estimated > balance) balance = estimated;
+  }
 
   let recentEvents: RecruiterCoinLedgerRow[] = [];
   if (ledgerReady) {

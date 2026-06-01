@@ -91,7 +91,12 @@ const DashboardShell: React.FC<DashboardShellProps> = ({ profile, loading, child
               </div>
               <div className="flex flex-wrap items-start justify-end gap-3">
                 {profile && profile.role !== 'viewer' && profile.role !== 'hr' ? (
-                  <CoinWalletBadge profileBalance={profile.points} role={profile.role} />
+                  <CoinWalletBadge
+                    profileBalance={profile.points}
+                    profileEmail={profile.email}
+                    profileFullName={profile.full_name}
+                    role={profile.role}
+                  />
                 ) : null}
                 <LiveClock />
               </div>

@@ -4,16 +4,20 @@ import { loadRecruiterCoinWallet, syncAllRecruiterCoins } from '../../services/r
 import type { AppRole } from '../../services/accessControl';
 import { COINS_PER_SHOW } from '../../services/recruiterCoins';
 
-const BACKFILL_SESSION_KEY = 'paz_coins_team_backfill_v2';
+const BACKFILL_SESSION_KEY = 'paz_coins_team_backfill_v3';
 
 type CoinWalletBadgeProps = {
   profileBalance?: number | null;
+  profileEmail?: string | null;
+  profileFullName?: string | null;
   role?: AppRole | null;
   className?: string;
 };
 
 const CoinWalletBadge: React.FC<CoinWalletBadgeProps> = ({
   profileBalance = 0,
+  profileEmail = null,
+  profileFullName = null,
   role = null,
   className = '',
 }) => {
@@ -30,7 +34,11 @@ const CoinWalletBadge: React.FC<CoinWalletBadgeProps> = ({
         await syncAllRecruiterCoins().catch(() => undefined);
         sessionStorage.setItem(BACKFILL_SESSION_KEY, '1');
       }
-      const wallet = await loadRecruiterCoinWallet(Number(profileBalance || 0));
+      const wallet = await loadRecruiterCoinWallet({
+        profileBalance: Number(profileBalance || 0),
+        email: profileEmail,
+        fullName: profileFullName,
+      });
       if (cancelled) return;
       setBalance(wallet.balance);
       setSyncing(false);
@@ -40,7 +48,7 @@ const CoinWalletBadge: React.FC<CoinWalletBadgeProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [profileBalance, role]);
+  }, [profileBalance, profileEmail, profileFullName, role]);
 
   return (
     <div

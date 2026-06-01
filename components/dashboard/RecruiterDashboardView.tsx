@@ -17,7 +17,11 @@ const RecruiterDashboardView: React.FC<{ profile: UserProfile }> = ({ profile })
     let cancelled = false;
     void Promise.all([
       loadRecruiterPersonalMetrics(profile),
-      loadRecruiterCoinWallet(Number(profile.points || 0)),
+      loadRecruiterCoinWallet({
+        profileBalance: Number(profile.points || 0),
+        email: profile.email,
+        fullName: profile.full_name,
+      }),
     ])
       .then(([data, coinWallet]) => {
         if (!cancelled) {

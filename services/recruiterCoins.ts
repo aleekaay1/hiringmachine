@@ -1,9 +1,7 @@
 /**
- * Paz Coins — 10 coins per show, using the same WebinarGeek + live-session rules as the leaderboard.
- * Webinar: inviter file tag + watch signal (not pipeline dispositions).
- * Live session: Calendly/Zoom attendance matched like leaderboard liveSessionShowed.
+ * Paz Coins — 10 coins per show (WebinarGeek + live session rules aligned with rankings).
  */
-import type { UserProfile } from './accessControl';
+import { filterRowsForRecruiterOwnership } from './recruiterDataScope';
 import {
   buildLiveSessionRowsByEmail,
   liveSessionAttendedFromRegistrant,
@@ -11,20 +9,18 @@ import {
   type LiveSessionRegistrantRow,
 } from './liveSessionBookedOutcomes';
 import {
-  resolveWebinarRowRecruiterUserId,
-  seedsFromProfiles,
-  type LeaderboardRecruiterSeed,
-} from './pipelineLeaderboard';
-import {
   readCallRecordMeta,
   type PipelineCallRecord,
 } from './pipelineService';
 import { shiftYmdDays, torontoYmdFromDate } from './webinarGeekDates';
-import { fmtHrScheduledDateKey } from './webinarGeekRecruiterAnalytics';
+import {
+  fmtHrScheduledDateKey,
+  fmtWebinarSessionDateKey,
+} from './webinarGeekRecruiterAnalytics';
 
 export const COINS_PER_SHOW = 10;
-/** Internal sync window (not shown in UI). */
-export const COIN_LOOKBACK_DAYS = 14;
+/** Internal rolling window for crediting shows on sync. */
+export const COIN_LOOKBACK_DAYS = 90;
 
 export type CoinSourceType = 'webinar_show' | 'live_session_show';
 
@@ -43,7 +39,6 @@ export type CoinEarnWindow = {
 };
 
 type AnyRow = Record<string, unknown>;
-type RecruiterDirectory = Map<string, { fullName: string | null; email: string | null }>;
 
 const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
 
@@ -60,7 +55,7 @@ export function ymdInCoinEarnWindow(ymd: string, window: CoinEarnWindow = coinEa
 }
 
 export function coinBookingFetchFromIso(window: CoinEarnWindow = coinEarnWindow()): string {
-  const bookingLookbackYmd = shiftYmdDays(window.sinceYmd, -45);
+  const bookingLookbackYmd = shiftYmdDays(window.sinceYmd, -60);
   const [y, m, d] = bookingLookbackYmd.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d, 5, 0, 0)).toISOString();
 }
@@ -71,36 +66,38 @@ export function webinarShowedFromRow(row: AnyRow): boolean {
   return Number.isFinite(sec) && sec > 0 && sec >= HALF_WATCH_SECONDS;
 }
 
-function buildDirectory(profiles: UserProfile[]): RecruiterDirectory {
-  const map: RecruiterDirectory = new Map();
-  for (const p of profiles) {
-    map.set(p.user_id, { fullName: p.full_name ?? null, email: p.email ?? null });
+/** When the show happened (watch/session), not invite upload date. */
+export function coinShowDateYmdForWebinarRow(row: AnyRow): string {
+  const watchedRaw = row.watched_true_set_at;
+  if (typeof watchedRaw === 'string' && watchedRaw.trim()) {
+    const ms = Date.parse(watchedRaw);
+    if (Number.isFinite(ms)) return torontoYmdFromDate(new Date(ms));
   }
-  return map;
+  const sessionKey = fmtWebinarSessionDateKey(row);
+  if (sessionKey !== 'unknown') return sessionKey;
+  return fmtHrScheduledDateKey(row);
 }
 
 function webinarShowCoinEvents(
   userId: string,
-  webinarRows: AnyRow[],
-  seeds: LeaderboardRecruiterSeed[],
-  directory: RecruiterDirectory,
+  allWebinarRows: AnyRow[],
+  userEmail: string | null,
+  userFullName: string | null,
   window: CoinEarnWindow,
 ): RecruiterCoinEventDraft[] {
+  const scopedRows = filterRowsForRecruiterOwnership(allWebinarRows, userEmail, userFullName);
   const events: RecruiterCoinEventDraft[] = [];
   const seen = new Set<string>();
 
-  for (const row of webinarRows) {
+  for (const row of scopedRows) {
     if (!webinarShowedFromRow(row)) continue;
 
-    const ownerId = resolveWebinarRowRecruiterUserId(row, seeds, directory);
-    if (ownerId !== userId) continue;
-
-    const dateKey = fmtHrScheduledDateKey(row);
-    if (!ymdInCoinEarnWindow(dateKey, window)) continue;
+    const showYmd = coinShowDateYmdForWebinarRow(row);
+    if (!ymdInCoinEarnWindow(showYmd, window)) continue;
 
     const subId = String(row.id ?? row.subscription_id ?? '').trim();
     const email = String(row.email || '').trim().toLowerCase();
-    const sourceKey = subId ? `webinar_show:${subId}` : `webinar_show:${dateKey}:${email}`;
+    const sourceKey = subId ? `webinar_show:${subId}` : `webinar_show:${showYmd}:${email}`;
     if (!sourceKey || seen.has(sourceKey)) continue;
     seen.add(sourceKey);
 
@@ -124,7 +121,6 @@ function webinarShowCoinEvents(
   return events;
 }
 
-/** Same live-session showed rule as pipelineLeaderboard aggregateCallRecords. */
 function liveSessionShowCoinEvents(
   userId: string,
   records: PipelineCallRecord[],
@@ -172,7 +168,8 @@ function liveSessionShowCoinEvents(
 
 export function buildRecruiterCoinEventDrafts(input: {
   userId: string;
-  profiles: UserProfile[];
+  userEmail: string | null;
+  userFullName: string | null;
   webinarRows: AnyRow[];
   callRecords: PipelineCallRecord[];
   candidateEmailById: Map<string, string>;
@@ -180,12 +177,16 @@ export function buildRecruiterCoinEventDrafts(input: {
   earnWindow?: CoinEarnWindow;
 }): RecruiterCoinEventDraft[] {
   const window = input.earnWindow ?? coinEarnWindow();
-  const seeds = seedsFromProfiles(input.profiles);
-  const directory = buildDirectory(input.profiles);
   const liveSessionByEmail = buildLiveSessionRowsByEmail(input.liveRegistrants);
 
   const merged = [
-    ...webinarShowCoinEvents(input.userId, input.webinarRows, seeds, directory, window),
+    ...webinarShowCoinEvents(
+      input.userId,
+      input.webinarRows,
+      input.userEmail,
+      input.userFullName,
+      window,
+    ),
     ...liveSessionShowCoinEvents(
       input.userId,
       input.callRecords,

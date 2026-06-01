@@ -4,7 +4,7 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
 export const COINS_PER_SHOW = 10;
-export const COIN_LOOKBACK_DAYS = 14;
+export const COIN_LOOKBACK_DAYS = 90;
 
 export type CoinSourceType = 'webinar_show' | 'live_session_show';
 
@@ -100,34 +100,121 @@ function webinarShowedFromRow(row: AnyRow): boolean {
   return Number.isFinite(sec) && sec > 0 && sec >= HALF_WATCH_SECONDS;
 }
 
-function fmtHrScheduledDateKey(row: AnyRow): string {
-  const ms = Date.parse(String(row.created_at || ''));
-  if (!Number.isFinite(ms)) return 'unknown';
-  const dtf = new Intl.DateTimeFormat('en-CA', {
+const RESUME_EXT_RE = /\.(pdf|docx?|rtf|txt|png|jpe?g|webp)$/i;
+
+function eventMsToTorontoYmd(ms: number): string {
+  const p = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Toronto',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  });
-  const parts = dtf.formatToParts(new Date(ms));
-  const map: Record<string, string> = {};
-  for (const p of parts) {
-    if (p.type !== 'literal') map[p.type] = p.value;
+  }).formatToParts(new Date(ms));
+  const y = p.find((x) => x.type === 'year')?.value ?? '1970';
+  const mo = p.find((x) => x.type === 'month')?.value ?? '01';
+  const da = p.find((x) => x.type === 'day')?.value ?? '01';
+  return `${y}-${mo}-${da}`;
+}
+
+function formatInviteeNameFromFileTail(tail: string): string {
+  const cleaned = String(tail ?? '')
+    .trim()
+    .replace(RESUME_EXT_RE, '')
+    .replace(/[^a-zA-Z0-9\s'-]/g, ' ')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return '';
+  return cleaned
+    .split(' ')
+    .map((w) => {
+      const t = w.trim();
+      if (!t) return '';
+      if (t.length <= 2) return t.toUpperCase();
+      return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+    })
+    .filter(Boolean)
+    .join(' ');
+}
+
+function parseInviterCustomField(raw: string): { inviteeLabel: string | null } {
+  const s = String(raw ?? '').trim();
+  if (!s || s.toLowerCase() === 'registration_page') return { inviteeLabel: null };
+  const lower = s.toLowerCase();
+  for (const prefix of INVITER_FILE_PREFIXES) {
+    if (lower.startsWith(`${prefix}_`) || lower.startsWith(`${prefix}-`)) {
+      const tail = s.slice(prefix.length + 1).trim();
+      const inviteeLabel = tail ? formatInviteeNameFromFileTail(tail) || null : null;
+      return { inviteeLabel };
+    }
   }
-  return `${map.year}-${map.month}-${map.day}`;
+  return { inviteeLabel: null };
 }
 
 function nameKeyFromRow(row: AnyRow): string | null {
-  const raw = String(row.custom_field || '').trim();
+  const label = parseInviterCustomField(String(row.custom_field || '')).inviteeLabel;
+  if (!label) return null;
+  return label.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function fallbackNameKeyFromCustomField(row: AnyRow): string | null {
+  const raw = String(row.custom_field ?? '').trim();
   if (!raw) return null;
-  const lower = raw.toLowerCase();
-  for (const prefix of INVITER_FILE_PREFIXES) {
-    if (lower.startsWith(`${prefix}_`) || lower.startsWith(`${prefix}-`)) {
-      const tail = raw.slice(prefix.length + 1).trim();
-      return tail.replace(/[^a-z0-9]/gi, '').toLowerCase() || null;
-    }
+  const m = raw.match(/^(cooper|rms)[_\-\s]+(.+)$/i);
+  if (!m) return null;
+  const parsed = formatInviteeNameFromFileTail(m[2] || '');
+  if (!parsed) return null;
+  return parsed.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function filterRowsForRecruiterOwnership(
+  rows: AnyRow[],
+  userEmail: string | null,
+  userFullName: string | null,
+): AnyRow[] {
+  if (!rows.length) return [];
+  const tokens = buildRecruiterScopeTokens(userEmail, userFullName);
+  if (tokens.size === 0) return [];
+  return rows.filter((row) => {
+    const key = nameKeyFromRow(row) ?? fallbackNameKeyFromCustomField(row);
+    return recruiterOwnsNameKey(key, tokens);
+  });
+}
+
+function asUnixMs(value: unknown): number | null {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n > 1e12 ? n : n * 1000;
+}
+
+function fmtHrScheduledDateKey(row: AnyRow): string {
+  const registration =
+    row.registration && typeof row.registration === 'object'
+      ? (row.registration as AnyRow)
+      : null;
+  const ms =
+    asUnixMs(registration?.created_at) ??
+    asUnixMs(row.created_at) ??
+    asUnixMs(row.hr_scheduled_at);
+  if (!ms) return 'unknown';
+  return eventMsToTorontoYmd(ms);
+}
+
+function fmtWebinarSessionDateKey(row: AnyRow): string {
+  const broadcast = row.broadcast && typeof row.broadcast === 'object' ? (row.broadcast as AnyRow) : null;
+  const ms = asUnixMs(broadcast?.date) ?? asUnixMs(row.watched_true_set_at);
+  if (!ms) return 'unknown';
+  return eventMsToTorontoYmd(ms);
+}
+
+function coinShowDateYmdForWebinarRow(row: AnyRow): string {
+  const watchedRaw = row.watched_true_set_at;
+  if (typeof watchedRaw === 'string' && watchedRaw.trim()) {
+    const ms = Date.parse(watchedRaw);
+    if (Number.isFinite(ms)) return eventMsToTorontoYmd(ms);
   }
-  return raw.replace(/[^a-z0-9]/gi, '').toLowerCase() || null;
+  const sessionKey = fmtWebinarSessionDateKey(row);
+  if (sessionKey !== 'unknown') return sessionKey;
+  return fmtHrScheduledDateKey(row);
 }
 
 function normalizeIdentityToken(value: string): string {
@@ -149,42 +236,35 @@ function buildRecruiterScopeTokens(email: string | null, fullName: string | null
   const name = String(fullName || '').trim().toLowerCase();
   add(name);
   add(name.replace(/\s+/g, ''));
+  for (const word of splitIdentityWords(localPart)) add(word);
+  for (const word of splitIdentityWords(name)) add(word);
   return tokens;
 }
 
 function recruiterOwnsNameKey(nameKey: string | null, tokens: Set<string>): boolean {
   if (!nameKey || tokens.size === 0) return false;
   const normalized = normalizeIdentityToken(nameKey);
+  if (!normalized) return false;
   if (tokens.has(normalized)) return true;
+  const words = splitIdentityWords(nameKey);
+  if (words.length > 0) {
+    const matchedWords = words.reduce((count, word) => (tokens.has(word) ? count + 1 : count), 0);
+    if (matchedWords >= 2) return true;
+    if (matchedWords >= 1 && words.length === 1 && words[0].length >= 5) return true;
+  }
   for (const token of tokens) {
-    if (token.length >= 6 && (normalized.includes(token) || token.includes(normalized))) return true;
+    if (token.length < 6) continue;
+    if (normalized.includes(token) || token.includes(normalized)) return true;
   }
   return false;
 }
 
-function seedsFromProfiles(profiles: UserProfileRow[]) {
-  return profiles
-    .filter((p) => p.role === 'recruiter' || p.role === 'webinar' || p.role === 'leadership')
-    .filter((p) => p.role !== 'admin')
-    .map((p) => ({
-      recruiterUserId: p.user_id,
-      displayName: String(p.full_name || '').trim() || String(p.email || '').split('@')[0] || 'Team member',
-    }));
-}
-
-function resolveWebinarRowRecruiterUserId(
-  row: AnyRow,
-  seeds: ReturnType<typeof seedsFromProfiles>,
-  directory: Map<string, { fullName: string | null; email: string | null }>,
-): string | null {
-  const key = nameKeyFromRow(row);
-  if (!key) return null;
-  for (const seed of seeds) {
-    const profile = directory.get(seed.recruiterUserId);
-    const tokens = buildRecruiterScopeTokens(profile?.email ?? null, profile?.fullName ?? seed.displayName);
-    if (recruiterOwnsNameKey(key, tokens)) return seed.recruiterUserId;
-  }
-  return null;
+function splitIdentityWords(value: string): string[] {
+  return value
+    .trim()
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .filter((w) => w.length >= 2);
 }
 
 function buildLiveSessionRowsByEmail(rows: LiveSessionRegistrantRow[]): Map<string, LiveSessionRegistrantRow[]> {
@@ -243,7 +323,8 @@ function isLedgerMissingError(message: string): boolean {
 
 export function buildRecruiterCoinEventDrafts(input: {
   userId: string;
-  profiles: UserProfileRow[];
+  userEmail: string | null;
+  userFullName: string | null;
   webinarRows: AnyRow[];
   callRecords: PipelineCallRecord[];
   candidateEmailById: Map<string, string>;
@@ -251,25 +332,25 @@ export function buildRecruiterCoinEventDrafts(input: {
   earnWindow?: { sinceYmd: string; untilYmd: string };
 }): RecruiterCoinEventDraft[] {
   const window = input.earnWindow ?? coinEarnWindow();
-  const seeds = seedsFromProfiles(input.profiles);
-  const directory = new Map(
-    input.profiles.map((p) => [p.user_id, { fullName: p.full_name, email: p.email }]),
-  );
   const liveSessionByEmail = buildLiveSessionRowsByEmail(input.liveRegistrants);
   const events: RecruiterCoinEventDraft[] = [];
   const seen = new Set<string>();
 
-  for (const row of input.webinarRows) {
-    if (!webinarShowedFromRow(row)) continue;
-    const ownerId = resolveWebinarRowRecruiterUserId(row, seeds, directory);
-    if (ownerId !== input.userId) continue;
+  const scopedWebinar = filterRowsForRecruiterOwnership(
+    input.webinarRows,
+    input.userEmail,
+    input.userFullName,
+  );
 
-    const dateKey = fmtHrScheduledDateKey(row);
-    if (!ymdInCoinEarnWindow(dateKey, window)) continue;
+  for (const row of scopedWebinar) {
+    if (!webinarShowedFromRow(row)) continue;
+
+    const showYmd = coinShowDateYmdForWebinarRow(row);
+    if (!ymdInCoinEarnWindow(showYmd, window)) continue;
 
     const subId = String(row.id ?? row.subscription_id ?? '').trim();
     const email = normalizeEmail(String(row.email || ''));
-    const sourceKey = subId ? `webinar_show:${subId}` : `webinar_show:${dateKey}:${email}`;
+    const sourceKey = subId ? `webinar_show:${subId}` : `webinar_show:${showYmd}:${email}`;
     if (!sourceKey || seen.has(sourceKey)) continue;
     seen.add(sourceKey);
 
@@ -337,7 +418,7 @@ export async function syncRecruiterCoinsForUser(
 }> {
   const earnWindow = coinEarnWindow();
   const bookingFromIso = coinBookingFetchFromIso(earnWindow);
-  const liveSinceYmd = shiftYmdDays(earnWindow.sinceYmd, -14);
+  const liveSinceYmd = shiftYmdDays(earnWindow.sinceYmd, -60);
 
   const { data: profiles, error: profileErr } = await admin
     .from('user_profiles')
@@ -421,9 +502,12 @@ export async function syncRecruiterCoinsForUser(
     }
   }
 
+  const targetProfile = profileRows.find((p) => p.user_id === userId);
+
   const drafts = buildRecruiterCoinEventDrafts({
     userId,
-    profiles: profileRows,
+    userEmail: targetProfile?.email ?? null,
+    userFullName: targetProfile?.full_name ?? null,
     webinarRows,
     callRecords,
     candidateEmailById,
