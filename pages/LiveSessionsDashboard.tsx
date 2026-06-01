@@ -199,9 +199,15 @@ const LiveSessionsDashboard: React.FC = () => {
     const h = result.data;
     const parts = [
       h.zoom_ok ? 'Zoom OAuth OK' : `Zoom OAuth failed: ${h.zoom_error ?? 'unknown'}`,
-      typeof h.zoom_past_instances_count === 'number'
-        ? `Past PMI instances: ${h.zoom_past_instances_count}`
+      h.zoom_pmi_meeting_ids_configured?.length
+        ? `Meeting id(s): ${h.zoom_pmi_meeting_ids_configured.join(', ')}`
         : null,
+      h.zoom_join_url_meeting_id ? `Join link id: ${h.zoom_join_url_meeting_id}` : null,
+      h.zoom_past_instances_by_meeting_id
+        ? `Past instances: ${Object.entries(h.zoom_past_instances_by_meeting_id).map(([id, n]) => `${id}=${n}`).join(', ')}`
+        : typeof h.zoom_past_instances_count === 'number'
+          ? `Past PMI instances: ${h.zoom_past_instances_count}`
+          : null,
       h.zoom_participants_probe_ok
         ? `Participant API OK (${h.zoom_participants_probe_count ?? 0} on latest instance)`
         : `Participant API: ${h.zoom_participants_probe_error ?? 'failed'}`,

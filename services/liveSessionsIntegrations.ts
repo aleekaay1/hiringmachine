@@ -241,6 +241,9 @@ export interface IntegrationHealthPayload {
   zoom_participants_probe_error?: string | null;
   zoom_participants_probe_count?: number;
   zoom_pmi_meeting_id?: string | null;
+  zoom_pmi_meeting_ids_configured?: string[];
+  zoom_past_instances_by_meeting_id?: Record<string, number>;
+  zoom_join_url_meeting_id?: string | null;
   zoom_scopes_recommended?: string[];
   calendly_configured: boolean;
   calendly_ok: boolean | null;

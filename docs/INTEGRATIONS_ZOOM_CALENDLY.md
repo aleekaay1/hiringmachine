@@ -90,7 +90,7 @@ Add the **required** Zoom secrets below. Optionally add Calendly and/or filters 
 | `ZOOM_CLIENT_ID` | Yes | Zoom app **Client ID** |
 | `ZOOM_CLIENT_SECRET` | Yes | Zoom app **Client Secret** |
 | `ZOOM_HOST_USER_EMAIL` | Yes | Host’s Zoom login email (plain text, no quotes) |
-| `ZOOM_LIVE_SESSION_MEETING_ID` | No | Digits-only Zoom meeting id for live overview. If unset, no meeting-id filtering is applied. Set `*` or `any` to explicitly disable PMI / join-URL filtering. |
+| `ZOOM_LIVE_SESSION_MEETING_ID` | No | Digits-only Zoom **PMI** id for past instances + attendance (comma-separated if multiple). **Default:** parsed from app join link `6478311787` in `hiringUrls`. Set in Supabase secrets if your PMI differs. |
 | `ZOOM_LIVE_SESSION_TOPIC_REQUIRES_MEETING_ID` | No | `1` or `true`: when PMI filter is on, Zoom **topic** must also contain that meeting id as text (embed the id in the topic if needed). |
 | `ZOOM_LIVE_SESSION_STRICT_TIME_SLOTS` | No | Only rows whose start in **America/Toronto** is **Tuesday 18:00–19:00** or **Wednesday 11:30–12:30**. **Default OFF**; set `1` / `true` to enable strict time-slot filtering. |
 | `ZOOM_LIVE_SESSION_TOPIC_FILTER` | No | Zoom **meeting topic** substring filter — see below |

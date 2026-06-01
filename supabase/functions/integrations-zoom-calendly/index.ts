@@ -39,6 +39,7 @@ import {
   zoomPastInstancesForMeetingId,
   type ZoomParticipant,
 } from '../_shared/zoomAttendance.ts';
+import { ZOOM_MEETING_URL } from '../_shared/hiringUrls.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -69,8 +70,32 @@ const ZOOM_TOPIC_KEYWORDS = [
   'live career session',
   'career overview session',
 ];
-/** Recurring Zoom PMI for Wednesday Live Online Career Session */
-const TARGET_MEETINGS = [{ id: '85950683062', weekday: 3, slot: WEDNESDAY_LIVE_SLOT }] as const;
+type TargetMeetingDef = { id: string; weekday: number; slot: SlotDef };
+
+/** PMI / recurring meeting id(s) — env override, else digits from ZOOM_MEETING_URL join link (6478311787). */
+function meetingIdFromJoinUrl(url: string): string | null {
+  const m = url.match(/\/j\/(\d{9,12})/i) ?? url.match(/[?&]meetingId=(\d+)/i);
+  return m?.[1] ?? null;
+}
+
+function resolveConfiguredMeetingIds(): string[] {
+  const raw = Deno.env.get('ZOOM_LIVE_SESSION_MEETING_ID')?.trim();
+  if (raw && !['*', 'any'].includes(raw.toLowerCase())) {
+    const ids = raw.split(/[,|]/).map((s) => s.replace(/\D/g, '')).filter(Boolean);
+    if (ids.length > 0) return [...new Set(ids)];
+  }
+  const fromUrl = meetingIdFromJoinUrl(ZOOM_MEETING_URL);
+  if (fromUrl) return [fromUrl];
+  return ['6478311787'];
+}
+
+function getTargetMeetings(): TargetMeetingDef[] {
+  return resolveConfiguredMeetingIds().map((id) => ({
+    id,
+    weekday: WEDNESDAY_LIVE_SLOT.weekday,
+    slot: WEDNESDAY_LIVE_SLOT,
+  }));
+}
 
 /** Keywords in the Zoom meeting topic that identify it as a live overview session PMI room. */
 const PMI_TOPIC_KEYWORDS = ['personal meeting room', 'alex paz', 'career overview', 'career session', 'live overview'];
@@ -126,14 +151,14 @@ function zoomTopicMatchesLiveSession(topic: string): boolean {
 }
 
 /**
- * True when this Zoom row is our Wednesday live session PMI (85950683062) or a matching topic.
+ * True when this Zoom row is our Wednesday live session PMI or a matching topic.
  * PMI topics are often "Personal Meeting Room" — do not require live-session keywords on topic.
  */
 function isTargetLiveMeeting(m: ZoomRawMeeting, dt: DateTime | null, toleranceMin = 20): SlotDef | null {
   if (!dt?.isValid) return null;
   const id = meetingIdOf(m);
   const topic = String(m.topic ?? '');
-  const target = TARGET_MEETINGS.find((t) => t.id === id);
+  const target = getTargetMeetings().find((t) => t.id === id);
   if (!target || dt.weekday !== target.weekday) return null;
 
   const tol = Math.max(toleranceMin, 45);
@@ -292,7 +317,31 @@ function pickZoomInstanceForTorontoDate(
   return best;
 }
 
-const TARGET_MEETING_IDS = TARGET_MEETINGS.map((t) => t.id);
+async function discoverLiveSessionMeetingIds(
+  token: string,
+  userId: string,
+  lookbackDays: number,
+  slotToleranceMin: number,
+): Promise<string[]> {
+  const ids = new Set(resolveConfiguredMeetingIds());
+  const past = await zoomListMeetings(token, userId, 'past');
+  const cutoff = Date.now() - lookbackDays * 86400_000;
+  for (const m of past) {
+    const ms = parseZoomStartMs(m);
+    if (!Number.isFinite(ms) || ms < cutoff) continue;
+    const dt = DateTime.fromMillis(ms, { zone: TZ });
+    if (!dt.isValid) continue;
+    const topic = String(m.topic ?? '');
+    const matches =
+      isTargetLiveMeeting(m, dt, slotToleranceMin) !== null ||
+      zoomTopicMatchesLiveSession(topic) ||
+      isKnownPmiTopic(topic);
+    if (!matches) continue;
+    const id = meetingIdOf(m);
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
 
 function buildParticipantMaps(participants: ZoomParticipant[]) {
   const participantByEmail = new Map<string, ZoomParticipant>();
@@ -856,19 +905,28 @@ Deno.serve(async (req) => {
         const zt = await getZoomToken();
         await zoomGetUserId(zt, hostEmail ?? '');
         zoom_ok = true;
-        const pmiId = TARGET_MEETING_IDS[0] ?? '85950683062';
-        const instances = await zoomPastInstancesForMeetingId(zoomGet, zt, pmiId);
-        zoom_past_instances_count = instances.length;
-        zoom_past_instances_ok = instances.length > 0;
-        if (instances.length > 0) {
-          const testUuid = String(instances[0].uuid ?? '').trim();
-          if (testUuid) {
-            const probe = await zoomParticipantsForUuid(ZOOM_API, zt, testUuid);
-            zoom_participants_probe_count = probe.length;
-            zoom_participants_probe_ok = true;
+        const configuredIds = resolveConfiguredMeetingIds();
+        const instancesByMeetingId: Record<string, number> = {};
+        let probeMeetingId = configuredIds[0] ?? meetingIdFromJoinUrl(ZOOM_MEETING_URL) ?? '';
+        for (const pmiId of configuredIds) {
+          const instances = await zoomPastInstancesForMeetingId(zoomGet, zt, pmiId);
+          instancesByMeetingId[pmiId] = instances.length;
+          if (instances.length > zoom_past_instances_count) {
+            zoom_past_instances_count = instances.length;
+            probeMeetingId = pmiId;
+            zoom_past_instances_ok = true;
+            const testUuid = String(instances[0].uuid ?? '').trim();
+            if (testUuid) {
+              const probe = await zoomParticipantsForUuid(ZOOM_API, zt, testUuid);
+              zoom_participants_probe_count = probe.length;
+              zoom_participants_probe_ok = true;
+              zoom_participants_probe_error = null;
+            }
           }
-        } else {
-          zoom_participants_probe_error = 'No past instances returned for PMI — check meeting:read:list_past_instances:admin';
+        }
+        if (!zoom_past_instances_ok) {
+          zoom_participants_probe_error =
+            `No past instances for meeting id(s) ${configuredIds.join(', ')}. Set Supabase secret ZOOM_LIVE_SESSION_MEETING_ID to your PMI digits (join link uses ${meetingIdFromJoinUrl(ZOOM_MEETING_URL) ?? 'unknown'}).`;
         }
       } catch (e) {
         zoom_error = e instanceof Error ? e.message : String(e);
@@ -889,7 +947,10 @@ Deno.serve(async (req) => {
         zoom_participants_probe_ok,
         zoom_participants_probe_error,
         zoom_participants_probe_count,
-        zoom_pmi_meeting_id: TARGET_MEETING_IDS[0] ?? null,
+        zoom_pmi_meeting_id: probeMeetingId || configuredIds[0] || null,
+        zoom_pmi_meeting_ids_configured: configuredIds,
+        zoom_past_instances_by_meeting_id: instancesByMeetingId,
+        zoom_join_url_meeting_id: meetingIdFromJoinUrl(ZOOM_MEETING_URL),
         zoom_scopes_recommended,
         calendly_configured: !!calTok,
         calendly_ok,
@@ -972,6 +1033,20 @@ Deno.serve(async (req) => {
     // Zoom — fetch all meetings
     const zoomToken = await getZoomToken();
     const zoomUserId = await zoomGetUserId(zoomToken, zoomHostEmail);
+    const discoveredMeetingIds = await discoverLiveSessionMeetingIds(
+      zoomToken,
+      zoomUserId,
+      lookbackDays,
+      slotToleranceMin,
+    );
+    const targetMeetingIds = [...new Set([...resolveConfiguredMeetingIds(), ...discoveredMeetingIds])];
+    const targetMeetingsForAttendance: TargetMeetingDef[] = targetMeetingIds.map((id) => ({
+      id,
+      weekday: WEDNESDAY_LIVE_SLOT.weekday,
+      slot: WEDNESDAY_LIVE_SLOT,
+    }));
+    console.log('[integrations-zoom-calendly] PMI / live meeting ids:', targetMeetingIds.join(', '));
+
     const [zoomPastRaw, zoomUpRaw] = await Promise.all([
       zoomListMeetings(zoomToken, zoomUserId, 'past'),
       zoomListMeetings(zoomToken, zoomUserId, 'upcoming'),
@@ -1104,7 +1179,7 @@ Deno.serve(async (req) => {
         const calStart = DateTime.fromISO(calEv.start_time, { zone: TZ });
         if (!calStart.isValid || calStart.toMillis() >= nowMs) continue;
         const targetMinutes = calStart.hour * 60 + calStart.minute;
-        for (const target of TARGET_MEETINGS) {
+        for (const target of targetMeetingsForAttendance) {
           let instances = pastInstancesCache.get(target.id);
           if (!instances) {
             instances = await zoomPastInstancesForMeetingId(zoomGet, zoomToken, target.id);
@@ -1191,7 +1266,7 @@ Deno.serve(async (req) => {
         dateKey,
         targetMinutes: targetMinutesForParticipants,
         meetingHint: m,
-        targetMeetingIds: TARGET_MEETING_IDS,
+        targetMeetingIds,
         pastInstancesCache,
         parseZoomStartMs,
         isoDateFn: isoDate,
@@ -1349,7 +1424,7 @@ Deno.serve(async (req) => {
             if (needsZoomAttendance && existing) {
               const targetMinutes = calStart.hour * 60 + calStart.minute;
               let zoomMeeting: ZoomRawMeeting | null = null;
-              for (const target of TARGET_MEETINGS) {
+              for (const target of targetMeetingsForAttendance) {
                 let instances = pastInstancesCache.get(target.id);
                 if (!instances) {
                   instances = await zoomPastInstancesForMeetingId(zoomGet, zoomToken, target.id);
@@ -1365,7 +1440,7 @@ Deno.serve(async (req) => {
                 dateKey,
                 targetMinutes,
                 meetingHint: zoomMeeting,
-                targetMeetingIds: TARGET_MEETING_IDS,
+                targetMeetingIds,
                 pastInstancesCache,
                 parseZoomStartMs,
                 isoDateFn: isoDate,
@@ -1414,7 +1489,7 @@ Deno.serve(async (req) => {
             dateKey,
             targetMinutes,
             meetingHint: null,
-            targetMeetingIds: TARGET_MEETING_IDS,
+            targetMeetingIds,
             pastInstancesCache,
             parseZoomStartMs,
             isoDateFn: isoDate,
@@ -1434,7 +1509,7 @@ Deno.serve(async (req) => {
               start_at_ms: calMs,
               duration_minutes: 30,
               host_email: zoomHostEmail,
-              meeting_id: TARGET_MEETING_IDS[0],
+              meeting_id: targetMeetingIds[0],
             },
             calendly: calMeta,
             participants: participants.map((p) => ({
@@ -1514,7 +1589,7 @@ Deno.serve(async (req) => {
         dateKey,
         targetMinutes,
         meetingHint: row.zoom as ZoomRawMeeting,
-        targetMeetingIds: TARGET_MEETING_IDS,
+        targetMeetingIds,
         pastInstancesCache,
         parseZoomStartMs,
         isoDateFn: isoDate,
