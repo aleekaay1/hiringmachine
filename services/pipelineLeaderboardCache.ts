@@ -1,5 +1,5 @@
 import { supabase } from './supabaseClient';
-import type { LeaderboardPeriod, RecruiterLeaderboardRow } from './pipelineLeaderboard';
+import type { RecruiterLeaderboardRow } from './pipelineLeaderboard';
 
 const TABLE = 'pipeline_leaderboard_snapshots';
 
@@ -10,7 +10,7 @@ export type LeaderboardSnapshotPayload = {
 };
 
 export type LeaderboardSnapshotRecord = LeaderboardSnapshotPayload & {
-  period: LeaderboardPeriod;
+  period: string;
   fetchedAt: string;
 };
 
@@ -21,7 +21,7 @@ function isMissingTableError(error: { code?: string; message?: string } | null):
   return /pipeline_leaderboard_snapshots/i.test(m) && /schema cache|does not exist/i.test(m);
 }
 
-export async function loadLeaderboardSnapshot(period: LeaderboardPeriod): Promise<{
+export async function loadLeaderboardSnapshot(periodKey: string): Promise<{
   data: LeaderboardSnapshotRecord | null;
   error: string | null;
   tableMissing: boolean;
@@ -29,7 +29,7 @@ export async function loadLeaderboardSnapshot(period: LeaderboardPeriod): Promis
   const { data, error } = await supabase
     .from(TABLE)
     .select('period, payload, fetched_at')
-    .eq('period', period)
+    .eq('period', periodKey)
     .maybeSingle();
 
   if (error) {
@@ -43,7 +43,7 @@ export async function loadLeaderboardSnapshot(period: LeaderboardPeriod): Promis
   const payload = (data.payload || {}) as LeaderboardSnapshotPayload;
   return {
     data: {
-      period: data.period as LeaderboardPeriod,
+      period: String(data.period || periodKey),
       rows: Array.isArray(payload.rows) ? payload.rows : [],
       previousRows: Array.isArray(payload.previousRows) ? payload.previousRows : [],
       windowLabel: String(payload.windowLabel || ''),
@@ -55,12 +55,12 @@ export async function loadLeaderboardSnapshot(period: LeaderboardPeriod): Promis
 }
 
 export async function saveLeaderboardSnapshot(input: {
-  period: LeaderboardPeriod;
+  periodKey: string;
   payload: LeaderboardSnapshotPayload;
 }): Promise<{ ok: boolean; error: string | null; tableMissing: boolean }> {
   const now = new Date().toISOString();
   const row = {
-    period: input.period,
+    period: input.periodKey,
     payload: input.payload,
     fetched_at: now,
     updated_at: now,

@@ -24,12 +24,16 @@ import { loadLeaderboardSnapshot, saveLeaderboardSnapshot } from '../services/pi
 import {
   buildCompositeLeaderboard,
   buildLeaderboardWindows,
+  defaultLeaderboardCustomRange,
   excludedLeaderboardUserIds,
   filterLeaderboardRows,
+  isValidYmd,
+  leaderboardSnapshotKey,
   resolveLeaderboardBadgeWinners,
   rowMatchesBadgeFilter,
   seedsFromProfiles,
   type LeaderboardBadgeId,
+  type LeaderboardCustomRange,
   type LeaderboardPeriod,
   type RecruiterLeaderboardRow,
 } from '../services/pipelineLeaderboard';
@@ -40,6 +44,7 @@ const PERIODS: Array<{ id: LeaderboardPeriod; label: string }> = [
   { id: 'last7', label: 'This week (Fri–Thu)' },
   { id: 'last30', label: '30 Days' },
   { id: 'thisMonth', label: 'Monthly' },
+  { id: 'custom', label: 'Custom range' },
 ];
 
 const BADGE_FILTERS: Array<{
@@ -207,6 +212,7 @@ const LeadershipLeaderboard: React.FC = () => {
   const [refreshing, setRefreshing] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [period, setPeriod] = React.useState<LeaderboardPeriod>('last7');
+  const [customRange, setCustomRange] = React.useState<LeaderboardCustomRange>(() => defaultLeaderboardCustomRange());
   const [rows, setRows] = React.useState<RecruiterLeaderboardRow[]>([]);
   const [previousRows, setPreviousRows] = React.useState<RecruiterLeaderboardRow[]>([]);
   const [viewerRole, setViewerRole] = React.useState<AppRole | null>(null);
@@ -218,6 +224,17 @@ const LeadershipLeaderboard: React.FC = () => {
   const [badgeFilters, setBadgeFilters] = React.useState<Set<LeaderboardBadgeId>>(new Set());
 
   const leadershipView = viewerRole === 'admin' || viewerRole === 'leadership';
+
+  const activeCustomRange = period === 'custom' ? customRange : null;
+  const snapshotKey = React.useMemo(
+    () => leaderboardSnapshotKey(period, activeCustomRange),
+    [period, activeCustomRange?.sinceYmd, activeCustomRange?.untilYmd],
+  );
+  const customRangeInvalid =
+    period === 'custom' &&
+    (!isValidYmd(customRange.sinceYmd) ||
+      !isValidYmd(customRange.untilYmd) ||
+      customRange.sinceYmd > customRange.untilYmd);
 
   const toggleBadgeFilter = (id: LeaderboardBadgeId) => {
     setBadgeFilters((prev) => {
@@ -238,7 +255,11 @@ const LeadershipLeaderboard: React.FC = () => {
     [],
   );
 
-  const loadFromDatabase = React.useCallback(async (targetPeriod: LeaderboardPeriod) => {
+  const loadFromDatabase = React.useCallback(async (key: string, range: LeaderboardCustomRange | null, targetPeriod: LeaderboardPeriod) => {
+    if (targetPeriod === 'custom' && range && (!isValidYmd(range.sinceYmd) || !isValidYmd(range.untilYmd) || range.sinceYmd > range.untilYmd)) {
+      setCacheReady(true);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -248,7 +269,7 @@ const LeadershipLeaderboard: React.FC = () => {
       setViewerRole(profile?.role ?? null);
 
       const [snapshotResult, profiles] = await Promise.all([
-        loadLeaderboardSnapshot(targetPeriod),
+        loadLeaderboardSnapshot(key),
         listAllUserProfiles().catch(() => []),
       ]);
       const { data, error: cacheError, tableMissing } = snapshotResult;
@@ -270,7 +291,7 @@ const LeadershipLeaderboard: React.FC = () => {
       } else {
         setRows([]);
         setPreviousRows([]);
-        const windows = buildLeaderboardWindows(targetPeriod);
+        const windows = buildLeaderboardWindows(targetPeriod, new Date(), range);
         setWindowLabel(windows.current.label);
         setLastUpdated(null);
       }
@@ -283,6 +304,10 @@ const LeadershipLeaderboard: React.FC = () => {
   }, [applySnapshot]);
 
   const refreshLeaderboard = React.useCallback(async () => {
+    if (customRangeInvalid) {
+      setError('Choose a valid start and end date (start must be on or before end).');
+      return;
+    }
     setRefreshing(true);
     setError(null);
     try {
@@ -293,7 +318,7 @@ const LeadershipLeaderboard: React.FC = () => {
       setViewerUserId(authData.user?.id || null);
       setViewerRole(profile?.role ?? null);
 
-      const windows = buildLeaderboardWindows(period);
+      const windows = buildLeaderboardWindows(period, new Date(), activeCustomRange);
       const recruiterFilter = null;
 
       const [currentRecords, previousRecords] = await Promise.all([
@@ -340,9 +365,8 @@ const LeadershipLeaderboard: React.FC = () => {
         webinarRows: scopedWebinarRows as Array<Record<string, unknown>>,
         currentWindow: windows.previous,
         previousWindow: {
-          fromIso: windows.previous.fromIso,
+          ...windows.previous,
           toIso: windows.previous.fromIso,
-          label: windows.previous.label,
         },
         currentRecords: previousRecords,
         previousRecords: [],
@@ -357,7 +381,7 @@ const LeadershipLeaderboard: React.FC = () => {
         windowLabel: windows.current.label,
       };
 
-      const saved = await saveLeaderboardSnapshot({ period, payload });
+      const saved = await saveLeaderboardSnapshot({ periodKey: snapshotKey, payload });
       if (saved.error) throw new Error(saved.error);
       if (saved.tableMissing) {
         throw new Error('Leaderboard storage is not set up yet. Ask an admin to run the database script.');
@@ -372,12 +396,12 @@ const LeadershipLeaderboard: React.FC = () => {
     } finally {
       setRefreshing(false);
     }
-  }, [period, applySnapshot]);
+  }, [period, activeCustomRange, snapshotKey, customRangeInvalid, applySnapshot]);
 
   React.useEffect(() => {
     setCacheReady(false);
-    void loadFromDatabase(period);
-  }, [period, loadFromDatabase]);
+    void loadFromDatabase(snapshotKey, activeCustomRange, period);
+  }, [snapshotKey, period, activeCustomRange, loadFromDatabase]);
 
   React.useEffect(() => {
     if (selectedKey === 'all') return;
@@ -413,12 +437,14 @@ const LeadershipLeaderboard: React.FC = () => {
   const busy = loading || refreshing;
 
   const periodWindowLabels = React.useMemo(() => {
-    const w = buildLeaderboardWindows(period);
+    const w = buildLeaderboardWindows(period, new Date(), activeCustomRange);
     return { current: w.current.label, previous: w.previous.label };
-  }, [period]);
+  }, [period, activeCustomRange?.sinceYmd, activeCustomRange?.untilYmd]);
 
-  const currentLeaderTitle = period === 'last7' ? 'This week' : period === 'thisMonth' ? 'This month' : 'Current window';
-  const previousLeaderTitle = period === 'last7' ? 'Previous week' : period === 'thisMonth' ? 'Last month' : 'Previous window';
+  const currentLeaderTitle =
+    period === 'last7' ? 'This week' : period === 'thisMonth' ? 'This month' : period === 'custom' ? 'Selected range' : 'Current window';
+  const previousLeaderTitle =
+    period === 'last7' ? 'Previous week' : period === 'thisMonth' ? 'Last month' : period === 'custom' ? 'Prior range' : 'Previous window';
 
   return (
     <PipelineAuthShell
@@ -452,7 +478,7 @@ const LeadershipLeaderboard: React.FC = () => {
                   variant="outline"
                   className="!min-h-0 h-9 border-[#c3d8f2] !bg-white !text-[#0B1B34] hover:!bg-[#eef6ff]"
                   onClick={() => void refreshLeaderboard()}
-                  disabled={busy}
+                  disabled={busy || customRangeInvalid}
                 >
                   <RefreshCw size={14} className={busy ? 'mr-1 animate-spin' : 'mr-1'} />
                   Refresh
@@ -475,6 +501,31 @@ const LeadershipLeaderboard: React.FC = () => {
                   {item.label}
                 </button>
               ))}
+              {period === 'custom' && (
+                <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[#d2e1f5] bg-white px-2.5 py-1.5">
+                  <label className="flex items-center gap-1.5 text-[11px] font-medium text-[#4f6886]">
+                    From
+                    <input
+                      type="date"
+                      value={customRange.sinceYmd}
+                      onChange={(e) => setCustomRange((prev) => ({ ...prev, sinceYmd: e.target.value }))}
+                      className="rounded-lg border border-[#d2e1f5] px-2 py-1 text-xs text-[#0B1B34]"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-[11px] font-medium text-[#4f6886]">
+                    To
+                    <input
+                      type="date"
+                      value={customRange.untilYmd}
+                      onChange={(e) => setCustomRange((prev) => ({ ...prev, untilYmd: e.target.value }))}
+                      className="rounded-lg border border-[#d2e1f5] px-2 py-1 text-xs text-[#0B1B34]"
+                    />
+                  </label>
+                  {customRangeInvalid && (
+                    <span className="text-[11px] font-medium text-rose-600">Pick valid dates (start ≤ end).</span>
+                  )}
+                </div>
+              )}
               {leadershipView && (
                 <select
                   value={selectedKey}

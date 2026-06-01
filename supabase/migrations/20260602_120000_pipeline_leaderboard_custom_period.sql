@@ -1,0 +1,2 @@
+alter table public.pipeline_leaderboard_snapshots
+  drop constraint if exists pipeline_leaderboard_snapshots_period_check;

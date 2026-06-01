@@ -8,6 +8,7 @@ import {
   torontoMonthStartToday,
   torontoYmdFromDate,
   ymdToLocalDate,
+  ymdToShortLabel,
 } from './webinarGeekDates';
 import { nameKeyFromRow } from './webinarGeekInviters';
 import { fmtHrScheduledDateKey } from './webinarGeekRecruiterAnalytics';
@@ -75,7 +76,38 @@ export type LeaderboardBadgeWinners = {
   consistentCloser: RecruiterLeaderboardRow | null;
 };
 
-export type LeaderboardPeriod = 'last7' | 'last30' | 'thisMonth';
+export type LeaderboardPeriod = 'last7' | 'last30' | 'thisMonth' | 'custom';
+
+export type LeaderboardCustomRange = {
+  sinceYmd: string;
+  untilYmd: string;
+};
+
+export function defaultLeaderboardCustomRange(): LeaderboardCustomRange {
+  const week = fridayWeekBoundsFromYmd(torontoYmdFromDate());
+  return { sinceYmd: week.since, untilYmd: week.until };
+}
+
+export function isValidYmd(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [y, m, d] = value.split('-').map(Number);
+  const dt = new Date(y, (m || 1) - 1, d || 1);
+  return dt.getFullYear() === y && dt.getMonth() === (m || 1) - 1 && dt.getDate() === d;
+}
+
+export function leaderboardSnapshotKey(period: LeaderboardPeriod, custom?: LeaderboardCustomRange | null): string {
+  if (period === 'custom' && custom?.sinceYmd && custom?.untilYmd) {
+    return `custom:${custom.sinceYmd}_${custom.untilYmd}`;
+  }
+  return period;
+}
+
+function inclusiveDayCount(sinceYmd: string, untilYmd: string): number {
+  const start = ymdToLocalDate(sinceYmd);
+  const end = ymdToLocalDate(untilYmd);
+  const ms = end.getTime() - start.getTime();
+  return Math.max(1, Math.floor(ms / 86400000) + 1);
+}
 
 export type LeaderboardRecruiterSeed = {
   recruiterKey: string;
@@ -137,13 +169,44 @@ function windowFromYmdRange(sinceYmd: string, untilYmd: string, label: string): 
   };
 }
 
+function customPeriodBounds(range: LeaderboardCustomRange): {
+  current: LeaderboardWindow;
+  previous: LeaderboardWindow;
+} {
+  const { sinceYmd, untilYmd } = range;
+  const days = inclusiveDayCount(sinceYmd, untilYmd);
+  const prevUntilYmd = shiftYmdDays(sinceYmd, -1);
+  const prevSinceYmd = shiftYmdDays(prevUntilYmd, -(days - 1));
+  return {
+    current: windowFromYmdRange(
+      sinceYmd,
+      untilYmd,
+      `Custom · ${ymdToShortLabel(sinceYmd)} → ${ymdToShortLabel(untilYmd)}`,
+    ),
+    previous: windowFromYmdRange(
+      prevSinceYmd,
+      prevUntilYmd,
+      `Prior · ${ymdToShortLabel(prevSinceYmd)} → ${ymdToShortLabel(prevUntilYmd)}`,
+    ),
+  };
+}
+
 function periodBounds(
   period: LeaderboardPeriod,
   now: Date,
+  custom?: LeaderboardCustomRange | null,
 ): {
   current: LeaderboardWindow;
   previous: LeaderboardWindow;
 } {
+  if (period === 'custom') {
+    if (custom?.sinceYmd && custom?.untilYmd && custom.sinceYmd <= custom.untilYmd) {
+      return customPeriodBounds(custom);
+    }
+    const todayYmd = torontoYmdFromDate(now);
+    return customPeriodBounds({ sinceYmd: todayYmd, untilYmd: todayYmd });
+  }
+
   const todayYmd = torontoYmdFromDate(now);
 
   if (period === 'last30') {
@@ -183,8 +246,12 @@ function periodBounds(
   };
 }
 
-export function buildLeaderboardWindows(period: LeaderboardPeriod, now = new Date()): { current: LeaderboardWindow; previous: LeaderboardWindow } {
-  return periodBounds(period, now);
+export function buildLeaderboardWindows(
+  period: LeaderboardPeriod,
+  now = new Date(),
+  custom?: LeaderboardCustomRange | null,
+): { current: LeaderboardWindow; previous: LeaderboardWindow } {
+  return periodBounds(period, now, custom);
 }
 
 function filterWebinarRowsInWindow(rows: AnyRow[], window: LeaderboardWindow): AnyRow[] {
