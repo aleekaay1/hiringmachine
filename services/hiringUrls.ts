@@ -8,7 +8,10 @@ export const LIVE_SESSION_RESCHEDULE_CALENDLY_URL =
 
 /**
  * Default session line items for post–check-in invite (merge + Edge env override).
- * Set `PUBLIC_LIVE_SESSION_DISPLAY_DATE` / `PUBLIC_LIVE_SESSION_DISPLAY_TIME` on Supabase for automated sends.
+ * Supabase secrets for automated check-in email:
+ * - `PUBLIC_LIVE_SESSION_DISPLAY_DATE` / `PUBLIC_LIVE_SESSION_DISPLAY_TIME` — text in email body
+ * - `PUBLIC_LIVE_SESSION_START_ISO` / `PUBLIC_LIVE_SESSION_END_ISO` — required for Add to Calendar (.ics + button)
+ *   Example (Eastern): `2026-06-03T22:00:00.000Z` to `2026-06-03T23:00:00.000Z` for 6–7 PM ET
  */
 export const POST_CHECKIN_DEFAULT_SESSION_DATE = 'See your calendar invite for the date';
 export const POST_CHECKIN_DEFAULT_SESSION_TIME = 'Eastern Time (ET)';

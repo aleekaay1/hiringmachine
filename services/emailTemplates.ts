@@ -1,4 +1,11 @@
 import { buildEmailSignatureHtml } from './emailSignatureHtml';
+import {
+  buildAddToCalendarEmailHtml,
+  buildGoogleCalendarUrl,
+  buildOutlookCalendarUrl,
+  getLiveSessionCalendarEventFromEnv,
+  liveSessionCalendarIcsUrl,
+} from './calendarInvite';
 import { POST_CHECKIN_EMAIL_SUBJECT, POST_CHECKIN_EMAIL_BODY_HTML } from './postCheckinEmailTemplate';
 import {
   DEFAULT_ASSESSMENT_LOOKUP_URL,
@@ -217,6 +224,26 @@ export const POST_ASSESSMENT_SUBMIT_TEMPLATE: EmailTemplate = {
   `.trim(),
 };
 
+function postCheckinAddToCalendarHtmlForPreview(): string {
+  const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() || '';
+  const event = getLiveSessionCalendarEventFromEnv(
+    {
+      PUBLIC_LIVE_SESSION_START_ISO: (import.meta.env.VITE_PUBLIC_LIVE_SESSION_START_ISO as string | undefined)?.trim(),
+      PUBLIC_LIVE_SESSION_END_ISO: (import.meta.env.VITE_PUBLIC_LIVE_SESSION_END_ISO as string | undefined)?.trim(),
+    },
+    ZOOM_MEETING_URL,
+  );
+  if (!event || !supabaseUrl) {
+    return '<p style="font-size:12px;color:#6b7280;"><em>Add to Calendar button is included when session start/end times are configured on the server.</em></p>';
+  }
+  const icsUrl = liveSessionCalendarIcsUrl(`${supabaseUrl}/functions/v1`);
+  return buildAddToCalendarEmailHtml({
+    icsDownloadUrl: icsUrl,
+    googleUrl: buildGoogleCalendarUrl(event),
+    outlookUrl: buildOutlookCalendarUrl(event),
+  });
+}
+
 export function mergeTemplate(
   subject: string,
   bodyHtml: string,
@@ -238,6 +265,7 @@ export function mergeTemplate(
     '{{sessionDate}}': POST_CHECKIN_DEFAULT_SESSION_DATE,
     '{{sessionTime}}': POST_CHECKIN_DEFAULT_SESSION_TIME,
     '{{calendlyRescheduleUrl}}': LIVE_SESSION_RESCHEDULE_CALENDLY_URL,
+    '{{addToCalendarHtml}}': postCheckinAddToCalendarHtmlForPreview(),
     ...(extras || {}),
   };
   const signature = buildEmailSignatureHtml(options?.siteOrigin);

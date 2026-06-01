@@ -12,6 +12,14 @@ import {
 import { buildEmailSignatureHtml } from '../_shared/emailSignatureHtml.ts';
 import { ZOOM_MEETING_URL } from '../_shared/hiringUrls.ts';
 import {
+  buildAddToCalendarEmailHtml,
+  buildGoogleCalendarUrl,
+  buildIcsContent,
+  buildOutlookCalendarUrl,
+  getLiveSessionCalendarEventFromEnv,
+  liveSessionCalendarIcsUrl,
+} from '../_shared/calendarInvite.ts';
+import {
   buildAssessmentInternalNotificationSubject,
   parseAssessmentNotifyRecipients,
   sendAssessmentInternalNotificationIfConfigured,
@@ -130,9 +138,47 @@ Deno.serve(async (req) => {
 
     let subject: string;
     let html: string;
+    let calendarAttachment: { filename: string; content: string; contentType: string } | undefined;
+
     if (isPostCheckin) {
       subject = POST_CHECKIN_EMAIL_SUBJECT;
-      html = applyPostCheckinMerge(candidateName, ZOOM_MEETING_URL, sig);
+      const sessionDate =
+        Deno.env.get('PUBLIC_LIVE_SESSION_DISPLAY_DATE')?.trim() || 'See your calendar invite for the date';
+      const sessionTime =
+        Deno.env.get('PUBLIC_LIVE_SESSION_DISPLAY_TIME')?.trim() || 'Eastern Time (ET)';
+      const calendarEvent = getLiveSessionCalendarEventFromEnv(
+        {
+          PUBLIC_LIVE_SESSION_START_ISO: Deno.env.get('PUBLIC_LIVE_SESSION_START_ISO') ?? undefined,
+          PUBLIC_LIVE_SESSION_END_ISO: Deno.env.get('PUBLIC_LIVE_SESSION_END_ISO') ?? undefined,
+          PUBLIC_LIVE_SESSION_CALENDAR_TITLE: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_TITLE') ?? undefined,
+          PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION') ?? undefined,
+          PUBLIC_LIVE_SESSION_CALENDAR_LOCATION: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_LOCATION') ?? undefined,
+        },
+        ZOOM_MEETING_URL,
+      );
+      const icsUrl = liveSessionCalendarIcsUrl(`${supabaseUrl}/functions/v1`);
+      const addToCalendarHtml = calendarEvent
+        ? buildAddToCalendarEmailHtml({
+            icsDownloadUrl: icsUrl,
+            googleUrl: buildGoogleCalendarUrl(calendarEvent),
+            outlookUrl: buildOutlookCalendarUrl(calendarEvent),
+          })
+        : '';
+      if (calendarEvent) {
+        calendarAttachment = {
+          filename: 'live-online-career-session.ics',
+          content: buildIcsContent(calendarEvent),
+          contentType: 'text/calendar; charset=utf-8',
+        };
+      }
+      html = applyPostCheckinMerge({
+        firstName: firstName || 'there',
+        sessionDate,
+        sessionTime,
+        zoomUrl: ZOOM_MEETING_URL,
+        addToCalendarHtml,
+        emailSignatureHtml: sig,
+      });
     } else {
       subject = POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT;
       html = applyPostAssessmentSubmitMerge(candidateName, sig);
@@ -151,6 +197,7 @@ Deno.serve(async (req) => {
           subject,
           text: html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
           html,
+          ...(calendarAttachment ? { attachments: [calendarAttachment] } : {}),
         },
         (err: Error | null) => (err ? reject(err) : resolve())
       );

@@ -28,6 +28,7 @@ $functions = @(
   "integrations-webinar-geek",
   "send-email",
   "send-candidate-email",
+  "live-session-calendar",
   "send-assessment-email",
   "send-leadership-assessment-reminders",
   "upload-resume",

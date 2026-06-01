@@ -1,7 +1,7 @@
 /**
  * Post check-in email (Live Online Career Session). Used by admin templates + send-candidate-email Edge Function.
  * Sync: supabase/functions/_shared/postCheckinEmailTemplate.ts
- * Placeholders: {{firstName}}, {{Date}}, {{Time}}, {{zoomUrl}}, {{emailSignature}}
+ * Placeholders: {{firstName}}, {{Date}}, {{Time}}, {{zoomUrl}}, {{addToCalendarHtml}}, {{emailSignature}}
  * Edge: override date/time via PUBLIC_LIVE_SESSION_DISPLAY_DATE / PUBLIC_LIVE_SESSION_DISPLAY_TIME
  */
 
@@ -16,6 +16,7 @@ export const POST_CHECKIN_EMAIL_BODY_HTML = `
 📅 {{Date}}<br/>
 ⏰ {{Time}}<br/>
 📍 <a href="{{zoomUrl}}" target="_blank" rel="noopener noreferrer">{{zoomUrl}}</a></p>
+{{addToCalendarHtml}}
 <p>Please join at least 5 minutes early, have your camera on, and be prepared to take notes in a distraction-free environment.</p>
 <p>This is a live interactive session and late entries will not be accommodated.</p>
 <p>We look forward to meeting you.</p>
@@ -28,6 +29,7 @@ export type PostCheckinMergeParams = {
   sessionDate: string;
   sessionTime: string;
   zoomUrl: string;
+  addToCalendarHtml: string;
   emailSignatureHtml: string;
 };
 
@@ -40,6 +42,8 @@ export function applyPostCheckinMerge(p: PostCheckinMergeParams): string {
     .join(p.sessionTime)
     .split('{{zoomUrl}}')
     .join(p.zoomUrl)
+    .split('{{addToCalendarHtml}}')
+    .join(p.addToCalendarHtml)
     .split('{{emailSignature}}')
     .join(p.emailSignatureHtml);
 }

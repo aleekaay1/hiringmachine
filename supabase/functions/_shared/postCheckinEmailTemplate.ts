@@ -14,6 +14,7 @@ export const POST_CHECKIN_EMAIL_BODY_HTML = `
 📅 {{Date}}<br/>
 ⏰ {{Time}}<br/>
 📍 <a href="{{zoomUrl}}" target="_blank" rel="noopener noreferrer">{{zoomUrl}}</a></p>
+{{addToCalendarHtml}}
 <p>Please join at least 5 minutes early, have your camera on, and be prepared to take notes in a distraction-free environment.</p>
 <p>This is a live interactive session and late entries will not be accommodated.</p>
 <p>We look forward to meeting you.</p>
@@ -26,6 +27,7 @@ export type PostCheckinMergeParams = {
   sessionDate: string;
   sessionTime: string;
   zoomUrl: string;
+  addToCalendarHtml: string;
   emailSignatureHtml: string;
 };
 
@@ -38,6 +40,8 @@ export function applyPostCheckinMerge(p: PostCheckinMergeParams): string {
     .join(p.sessionTime)
     .split('{{zoomUrl}}')
     .join(p.zoomUrl)
+    .split('{{addToCalendarHtml}}')
+    .join(p.addToCalendarHtml)
     .split('{{emailSignature}}')
     .join(p.emailSignatureHtml);
 }
