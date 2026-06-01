@@ -1,29 +1,46 @@
 import React from 'react';
 import { Coins } from 'lucide-react';
-import { loadRecruiterCoinWallet } from '../../services/recruiterCoinService';
+import { loadRecruiterCoinWallet, syncAllRecruiterCoins } from '../../services/recruiterCoinService';
+import type { AppRole } from '../../services/accessControl';
 import { COINS_PER_SHOW } from '../../services/recruiterCoins';
+
+const BACKFILL_SESSION_KEY = 'paz_coins_team_backfill_v2';
 
 type CoinWalletBadgeProps = {
   profileBalance?: number | null;
+  role?: AppRole | null;
   className?: string;
 };
 
-const CoinWalletBadge: React.FC<CoinWalletBadgeProps> = ({ profileBalance = 0, className = '' }) => {
+const CoinWalletBadge: React.FC<CoinWalletBadgeProps> = ({
+  profileBalance = 0,
+  role = null,
+  className = '',
+}) => {
   const [balance, setBalance] = React.useState<number>(Number(profileBalance || 0));
   const [syncing, setSyncing] = React.useState(true);
 
   React.useEffect(() => {
     let cancelled = false;
     setSyncing(true);
-    void loadRecruiterCoinWallet(Number(profileBalance || 0)).then((wallet) => {
+
+    const run = async () => {
+      const isAdmin = role === 'admin' || role === 'leadership';
+      if (isAdmin && !sessionStorage.getItem(BACKFILL_SESSION_KEY)) {
+        await syncAllRecruiterCoins().catch(() => undefined);
+        sessionStorage.setItem(BACKFILL_SESSION_KEY, '1');
+      }
+      const wallet = await loadRecruiterCoinWallet(Number(profileBalance || 0));
       if (cancelled) return;
       setBalance(wallet.balance);
       setSyncing(false);
-    });
+    };
+
+    void run();
     return () => {
       cancelled = true;
     };
-  }, [profileBalance]);
+  }, [profileBalance, role]);
 
   return (
     <div

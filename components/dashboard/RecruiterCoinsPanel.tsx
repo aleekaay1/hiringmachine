@@ -33,7 +33,8 @@ const RecruiterCoinsPanel: React.FC<{ wallet: RecruiterCoinWallet | null; loadin
             </p>
             <p className="mt-1 max-w-md text-xs text-amber-900/80">
               You earn <strong>{COINS_PER_SHOW} coins</strong> every time a candidate you booked attends a
-              webinar or live session. Save them up — rewards and bonuses redemption is coming soon.
+              webinar or live session (last {wallet.lookbackDays} days are credited on sync, then new shows
+              add automatically). Save them up — rewards and bonuses redemption is coming soon.
             </p>
           </div>
         </div>
@@ -42,7 +43,9 @@ const RecruiterCoinsPanel: React.FC<{ wallet: RecruiterCoinWallet | null; loadin
             <Sparkles size={14} /> {wallet.totalEvents} shows credited
           </p>
           <p className="mt-0.5 text-[11px] text-amber-800/75">
-            {wallet.ledgerReady ? 'Wallet synced' : 'Run Fetch on Webinar Geek to refresh shows'}
+            {wallet.ledgerReady
+              ? `${wallet.creditedInWindow} shows in last ${wallet.lookbackDays} days · wallet synced`
+              : 'Run Fetch on Webinar Geek to refresh shows'}
           </p>
         </div>
       </div>

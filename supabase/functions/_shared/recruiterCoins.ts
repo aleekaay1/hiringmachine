@@ -4,6 +4,7 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
 export const COINS_PER_SHOW = 10;
+export const COIN_LOOKBACK_DAYS = 14;
 
 export type CoinSourceType = 'webinar_show' | 'live_session_show';
 
@@ -46,7 +47,48 @@ type PipelineCallRecord = {
 };
 
 const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
-const INVITER_FILE_PREFIXES = ['cooper', 'rms'] as const;
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+function torontoYmdFromDate(d = new Date()): string {
+  const p = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Toronto',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(d);
+  const y = p.find((x) => x.type === 'year')?.value ?? '1970';
+  const mo = p.find((x) => x.type === 'month')?.value ?? '01';
+  const da = p.find((x) => x.type === 'day')?.value ?? '01';
+  return `${y}-${mo}-${da}`;
+}
+
+function shiftYmdDays(ymd: string, deltaDays: number): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const dt = new Date(y, (m || 1) - 1, d || 1);
+  dt.setDate(dt.getDate() + deltaDays);
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+}
+
+export function coinEarnWindow(now = new Date()): { sinceYmd: string; untilYmd: string } {
+  const untilYmd = torontoYmdFromDate(now);
+  const sinceYmd = shiftYmdDays(untilYmd, -(COIN_LOOKBACK_DAYS - 1));
+  return { sinceYmd, untilYmd };
+}
+
+function ymdInCoinEarnWindow(ymd: string, window: { sinceYmd: string; untilYmd: string }): boolean {
+  const key = String(ymd || '').trim();
+  if (!key || key === 'unknown' || !/^\d{4}-\d{2}-\d{2}$/.test(key)) return false;
+  return key >= window.sinceYmd && key <= window.untilYmd;
+}
+
+function coinBookingFetchFromIso(window: { sinceYmd: string; untilYmd: string }): string {
+  const bookingLookbackYmd = shiftYmdDays(window.sinceYmd, -45);
+  const [y, m, d] = bookingLookbackYmd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 5, 0, 0)).toISOString();
+}
 
 function normalizeEmail(value: string | null | undefined): string {
   return String(value || '').trim().toLowerCase();
@@ -75,74 +117,33 @@ function fmtHrScheduledDateKey(row: AnyRow): string {
   return `${map.year}-${map.month}-${map.day}`;
 }
 
-function nameKeyFromRow(row: AnyRow): string | null {
-  const raw = String(row.custom_field || '').trim();
-  if (!raw) return null;
-  const lower = raw.toLowerCase();
-  for (const prefix of INVITER_FILE_PREFIXES) {
-    if (lower.startsWith(`${prefix}_`) || lower.startsWith(`${prefix}-`)) {
-      const tail = raw.slice(prefix.length + 1).trim();
-      return tail.replace(/[^a-z0-9]/gi, '').toLowerCase() || null;
-    }
+function buildWebinarRowsByEmail(rows: AnyRow[]): Map<string, AnyRow[]> {
+  const map = new Map<string, AnyRow[]>();
+  for (const row of rows) {
+    const email = normalizeEmail(String(row.email || ''));
+    if (!email) continue;
+    const list = map.get(email) || [];
+    list.push(row);
+    map.set(email, list);
   }
-  return raw.replace(/[^a-z0-9]/gi, '').toLowerCase() || null;
+  return map;
 }
 
-function normalizeIdentityToken(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+function watchSecondsFromRow(row: AnyRow): number {
+  const sec = Number(row.watch_duration || 0);
+  return Number.isFinite(sec) && sec > 0 ? sec : 0;
 }
 
-function buildRecruiterScopeTokens(email: string | null, fullName: string | null): Set<string> {
-  const tokens = new Set<string>();
-  const add = (raw: string) => {
-    const token = normalizeIdentityToken(raw);
-    if (token) tokens.add(token);
-  };
-  const normalizedEmail = String(email || '').trim().toLowerCase();
-  const localPart = normalizedEmail.split('@')[0] || '';
-  add(normalizedEmail);
-  add(localPart);
-  add(localPart.replace(/[._-]+/g, ' '));
-  add(localPart.replace(/[._-]+/g, ''));
-  const name = String(fullName || '').trim().toLowerCase();
-  add(name);
-  add(name.replace(/\s+/g, ''));
-  return tokens;
-}
-
-function recruiterOwnsNameKey(nameKey: string | null, tokens: Set<string>): boolean {
-  if (!nameKey || tokens.size === 0) return false;
-  const normalized = normalizeIdentityToken(nameKey);
-  if (tokens.has(normalized)) return true;
-  for (const token of tokens) {
-    if (token.length >= 6 && (normalized.includes(token) || token.includes(normalized))) return true;
-  }
-  return false;
-}
-
-function seedsFromProfiles(profiles: UserProfileRow[]) {
-  return profiles
-    .filter((p) => p.role === 'recruiter' || p.role === 'webinar' || p.role === 'leadership')
-    .filter((p) => p.role !== 'admin')
-    .map((p) => ({
-      recruiterUserId: p.user_id,
-      displayName: String(p.full_name || '').trim() || String(p.email || '').split('@')[0] || 'Team member',
-    }));
-}
-
-function ownerUserIdForWebinarRow(
-  row: AnyRow,
-  seeds: ReturnType<typeof seedsFromProfiles>,
-  directory: Map<string, { fullName: string | null; email: string | null }>,
-): string | null {
-  const key = nameKeyFromRow(row);
-  if (!key) return null;
-  for (const seed of seeds) {
-    const profile = directory.get(seed.recruiterUserId);
-    const tokens = buildRecruiterScopeTokens(profile?.email ?? null, profile?.fullName ?? seed.displayName);
-    if (recruiterOwnsNameKey(key, tokens)) return seed.recruiterUserId;
-  }
-  return null;
+function classifyWebinarShow(
+  email: string,
+  rowsByEmail: Map<string, AnyRow[]>,
+): { watchedSignal: boolean; showRow: AnyRow | null } {
+  const rows = rowsByEmail.get(email) || [];
+  if (!rows.length) return { watchedSignal: false, showRow: null };
+  const showRow = rows.find((row) => webinarShowedFromRow(row)) ?? null;
+  if (showRow) return { watchedSignal: true, showRow };
+  const maxWatch = rows.reduce((max, row) => Math.max(max, watchSecondsFromRow(row)), 0);
+  return { watchedSignal: maxWatch >= HALF_WATCH_SECONDS, showRow: null };
 }
 
 function buildLiveSessionRowsByEmail(rows: LiveSessionRegistrantRow[]): Map<string, LiveSessionRegistrantRow[]> {
@@ -197,72 +198,79 @@ function readBookedSubtype(record: PipelineCallRecord): string {
 
 export function buildRecruiterCoinEventDrafts(input: {
   userId: string;
-  profiles: UserProfileRow[];
   webinarRows: AnyRow[];
   callRecords: PipelineCallRecord[];
   candidateEmailById: Map<string, string>;
   liveRegistrants: LiveSessionRegistrantRow[];
+  earnWindow?: { sinceYmd: string; untilYmd: string };
 }): RecruiterCoinEventDraft[] {
-  const seeds = seedsFromProfiles(input.profiles);
-  const directory = new Map(
-    input.profiles.map((p) => [p.user_id, { fullName: p.full_name, email: p.email }]),
-  );
+  const window = input.earnWindow ?? coinEarnWindow();
+  const rowsByEmail = buildWebinarRowsByEmail(input.webinarRows);
   const liveSessionByEmail = buildLiveSessionRowsByEmail(input.liveRegistrants);
   const events: RecruiterCoinEventDraft[] = [];
   const seen = new Set<string>();
 
-  for (const row of input.webinarRows) {
-    if (!webinarShowedFromRow(row)) continue;
-    const ownerId = ownerUserIdForWebinarRow(row, seeds, directory);
-    if (ownerId !== input.userId) continue;
-    const subId = String(row.id ?? row.subscription_id ?? '').trim();
-    const email = normalizeEmail(String(row.email || ''));
-    const dateKey = fmtHrScheduledDateKey(row);
-    const sourceKey = subId ? `webinar_show:${subId}` : `webinar_show:${dateKey}:${email}`;
-    if (!sourceKey || seen.has(sourceKey)) continue;
-    seen.add(sourceKey);
-    const fn = String(row.firstname || '').trim();
-    const sn = String(row.surname || '').trim();
-    const name = `${fn} ${sn}`.trim() || email || 'Webinar guest';
-    events.push({
-      userId: input.userId,
-      sourceType: 'webinar_show',
-      sourceKey,
-      points: COINS_PER_SHOW,
-      label: `Webinar show · ${name}`,
-      earnedAt:
-        (typeof row.watched_true_set_at === 'string' && row.watched_true_set_at) ||
-        (typeof row.created_at === 'string' && row.created_at) ||
-        new Date().toISOString(),
-    });
-  }
-
   for (const record of input.callRecords) {
     if (String(record.recruiter_user_id || '').trim() !== input.userId) continue;
     if (String(record.disposition || '').trim().toLowerCase() !== 'booked') continue;
-    if (readBookedSubtype(record) !== 'live session') continue;
+
+    const subtype = readBookedSubtype(record);
     const email = input.candidateEmailById.get(record.candidate_id);
     if (!email) continue;
-    const liveRows = liveSessionByEmail.get(email) || [];
-    const disposedMs = Date.parse(record.disposed_at || record.created_at);
-    const match = pickRegistrantForDisposition(
-      liveRows,
-      Number.isFinite(disposedMs) ? disposedMs : Date.now(),
-    );
-    if (!match?.attended_zoom) continue;
+
     const recordId = String(record.id || '').trim();
     if (!recordId) continue;
-    const sourceKey = `live_show:${recordId}`;
-    if (seen.has(sourceKey)) continue;
-    seen.add(sourceKey);
-    events.push({
-      userId: input.userId,
-      sourceType: 'live_session_show',
-      sourceKey,
-      points: COINS_PER_SHOW,
-      label: `Live session show · ${match.session_date}`,
-      earnedAt: match.zoom_join_at || record.disposed_at || record.created_at,
-    });
+
+    const disposedMs = Date.parse(record.disposed_at || record.created_at);
+
+    if (subtype === 'webinar') {
+      const { watchedSignal, showRow } = classifyWebinarShow(email, rowsByEmail);
+      if (!watchedSignal) continue;
+      const showYmd = showRow ? fmtHrScheduledDateKey(showRow) : torontoYmdFromDate();
+      if (!ymdInCoinEarnWindow(showYmd, window)) continue;
+
+      const subId = showRow ? String(showRow.id ?? showRow.subscription_id ?? '').trim() : '';
+      const sourceKey = subId ? `webinar_show:${subId}` : `webinar_show:booking:${recordId}`;
+      if (seen.has(sourceKey)) continue;
+      seen.add(sourceKey);
+
+      events.push({
+        userId: input.userId,
+        sourceType: 'webinar_show',
+        sourceKey,
+        points: COINS_PER_SHOW,
+        label: `Webinar show · ${email}`,
+        earnedAt:
+          (showRow && typeof showRow.watched_true_set_at === 'string' && showRow.watched_true_set_at) ||
+          (showRow && typeof showRow.created_at === 'string' && showRow.created_at) ||
+          record.disposed_at ||
+          record.created_at,
+      });
+      continue;
+    }
+
+    if (subtype === 'live session') {
+      const liveRows = liveSessionByEmail.get(email) || [];
+      const match = pickRegistrantForDisposition(
+        liveRows,
+        Number.isFinite(disposedMs) ? disposedMs : Date.now(),
+      );
+      if (!match?.attended_zoom) continue;
+      if (!ymdInCoinEarnWindow(match.session_date, window)) continue;
+
+      const sourceKey = `live_show:${recordId}`;
+      if (seen.has(sourceKey)) continue;
+      seen.add(sourceKey);
+
+      events.push({
+        userId: input.userId,
+        sourceType: 'live_session_show',
+        sourceKey,
+        points: COINS_PER_SHOW,
+        label: `Live session show · ${match.session_date}`,
+        earnedAt: match.zoom_join_at || `${match.session_date}T12:00:00.000Z`,
+      });
+    }
   }
 
   return events.sort((a, b) => new Date(b.earnedAt).getTime() - new Date(a.earnedAt).getTime());
@@ -271,13 +279,10 @@ export function buildRecruiterCoinEventDrafts(input: {
 export async function syncRecruiterCoinsForUser(
   admin: SupabaseClient,
   userId: string,
-): Promise<{ balance: number; newEvents: number; totalEvents: number }> {
-  const { data: profiles, error: profileErr } = await admin
-    .from('user_profiles')
-    .select('user_id, email, full_name, role');
-  if (profileErr) throw profileErr;
-
-  const profileRows = (profiles || []) as UserProfileRow[];
+): Promise<{ balance: number; newEvents: number; totalEvents: number; creditedInWindow: number }> {
+  const earnWindow = coinEarnWindow();
+  const bookingFromIso = coinBookingFetchFromIso(earnWindow);
+  const liveSinceYmd = shiftYmdDays(earnWindow.sinceYmd, -14);
 
   const { data: cacheRow } = await admin
     .from('webinar_geek_dashboard_cache')
@@ -290,7 +295,8 @@ export async function syncRecruiterCoinsForUser(
 
   const { data: liveRows, error: liveErr } = await admin
     .from('live_session_registrants')
-    .select('session_date, email, attended_zoom, calendly_no_show, zoom_join_at');
+    .select('session_date, email, attended_zoom, calendly_no_show, zoom_join_at')
+    .gte('session_date', liveSinceYmd);
   if (liveErr && !/relation|does not exist|schema cache/i.test(liveErr.message)) throw liveErr;
 
   let callRecords: PipelineCallRecord[] = [];
@@ -300,6 +306,7 @@ export async function syncRecruiterCoinsForUser(
       'id, candidate_id, recruiter_user_id, recruiter_label, disposition, booked_subtype, disposed_at, created_at, meta, threecx_metadata',
     )
     .eq('recruiter_user_id', userId)
+    .gte('disposed_at', bookingFromIso)
     .order('disposed_at', { ascending: false })
     .limit(8000);
   if (!primaryErr) {
@@ -314,6 +321,7 @@ export async function syncRecruiterCoinsForUser(
       .select('id, candidate_id, created_by_user_id, created_by_label, outcome, request_payload, created_at')
       .eq('created_by_user_id', userId)
       .eq('action', 'call_disposition_saved')
+      .gte('created_at', bookingFromIso)
       .order('created_at', { ascending: false })
       .limit(8000);
     if (callErr && !/relation|does not exist|schema cache/i.test(callErr.message)) throw callErr;
@@ -334,6 +342,7 @@ export async function syncRecruiterCoinsForUser(
       } as PipelineCallRecord;
     });
   }
+
   const candidateIds = [...new Set(callRecords.map((r) => r.candidate_id).filter(Boolean))];
   const candidateEmailById = new Map<string, string>();
   const chunk = 200;
@@ -354,11 +363,11 @@ export async function syncRecruiterCoinsForUser(
 
   const drafts = buildRecruiterCoinEventDrafts({
     userId,
-    profiles: profileRows,
     webinarRows,
     callRecords,
     candidateEmailById,
     liveRegistrants: (liveRows || []) as LiveSessionRegistrantRow[],
+    earnWindow,
   });
 
   for (const draft of drafts) {
@@ -375,7 +384,7 @@ export async function syncRecruiterCoinsForUser(
     );
     if (insErr) {
       if (/relation|does not exist|schema cache/i.test(insErr.message)) {
-        return { balance: 0, newEvents: 0, totalEvents: 0 };
+        return { balance: 0, newEvents: 0, totalEvents: 0, creditedInWindow: 0 };
       }
       throw insErr;
     }
@@ -387,7 +396,7 @@ export async function syncRecruiterCoinsForUser(
     .eq('user_id', userId);
   if (sumErr) {
     if (/relation|does not exist|schema cache/i.test(sumErr.message)) {
-      return { balance: 0, newEvents: 0, totalEvents: 0 };
+      return { balance: 0, newEvents: 0, totalEvents: 0, creditedInWindow: 0 };
     }
     throw sumErr;
   }
@@ -400,5 +409,32 @@ export async function syncRecruiterCoinsForUser(
     .update({ points: balance, points_updated_at: new Date().toISOString() })
     .eq('user_id', userId);
 
-  return { balance, newEvents, totalEvents };
+  return {
+    balance,
+    newEvents: drafts.length,
+    totalEvents,
+    creditedInWindow: drafts.length,
+  };
+}
+
+const COIN_ELIGIBLE_ROLES = new Set(['recruiter', 'webinar', 'leadership']);
+
+export async function syncAllEligibleRecruiterCoins(
+  admin: SupabaseClient,
+): Promise<{ usersSynced: number; results: Array<{ userId: string; balance: number; creditedInWindow: number }> }> {
+  const { data: profiles, error } = await admin.from('user_profiles').select('user_id, role');
+  if (error) throw error;
+
+  const userIds = (profiles || [])
+    .filter((p) => COIN_ELIGIBLE_ROLES.has(String((p as UserProfileRow).role || '')))
+    .map((p) => String((p as UserProfileRow).user_id))
+    .filter(Boolean);
+
+  const results: Array<{ userId: string; balance: number; creditedInWindow: number }> = [];
+  for (const userId of userIds) {
+    const r = await syncRecruiterCoinsForUser(admin, userId);
+    results.push({ userId, balance: r.balance, creditedInWindow: r.creditedInWindow });
+  }
+
+  return { usersSynced: results.length, results };
 }

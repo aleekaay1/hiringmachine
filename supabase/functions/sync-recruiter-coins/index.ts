@@ -2,7 +2,11 @@
 // Deploy: supabase functions deploy sync-recruiter-coins
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { syncRecruiterCoinsForUser } from '../_shared/recruiterCoins.ts';
+import {
+  COIN_LOOKBACK_DAYS,
+  syncAllEligibleRecruiterCoins,
+  syncRecruiterCoinsForUser,
+} from '../_shared/recruiterCoins.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -71,6 +75,34 @@ Deno.serve(async (req) => {
     }
 
     const admin = createClient(supabaseUrl, serviceRole);
+
+    const syncAll = body?.syncAll === true;
+    if (syncAll) {
+      const { data: actorProfile } = await authClient
+        .from('user_profiles')
+        .select('role')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      const actorRole = actorProfile?.role as string | undefined;
+      if (actorRole !== 'admin' && actorRole !== 'leadership') {
+        return new Response(JSON.stringify({ error: 'Forbidden' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const bulk = await syncAllEligibleRecruiterCoins(admin);
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          syncAll: true,
+          usersSynced: bulk.usersSynced,
+          lookbackDays: COIN_LOOKBACK_DAYS,
+          coinsPerShow: 10,
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+
     const result = await syncRecruiterCoinsForUser(admin, requestedUserId);
 
     return new Response(
@@ -78,6 +110,8 @@ Deno.serve(async (req) => {
         ok: true,
         balance: result.balance,
         totalEvents: result.totalEvents,
+        creditedInWindow: result.creditedInWindow,
+        lookbackDays: COIN_LOOKBACK_DAYS,
         coinsPerShow: 10,
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
