@@ -110,20 +110,51 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
   return null;
 }
 
+const ADMIN_DATA_SECTIONS: AppSection[] = [
+  'home',
+  'overview',
+  'candidates',
+  'qr',
+  'live-sessions',
+  'webinar-geek',
+  'calls-analytics',
+  'leaderboard',
+  'analytics',
+  'settings',
+  'email-log',
+  'superdashboard',
+  'hr-dashboard',
+  'pipeline-performance',
+  'pipeline-settings',
+];
+
+/** Recruiter-style pipeline: own uploads + dialer. Leadership included; admins excluded. */
+const PIPELINE_OPERATIONAL_SECTIONS: AppSection[] = [
+  'pipeline',
+  'pipeline-call',
+  'pipeline-uploads',
+  'pipeline-email',
+  'pipeline-performance',
+  'pipeline-settings',
+];
+
 export function canAccessSection(role: AppRole | null, section: AppSection): boolean {
   if (!role) return section === 'overview' || section === 'home';
-  if (role === 'admin' || role === 'leadership') return true;
+  if (role === 'admin') {
+    return ADMIN_DATA_SECTIONS.includes(section);
+  }
+  if (role === 'leadership') {
+    return (
+      ADMIN_DATA_SECTIONS.includes(section) ||
+      PIPELINE_OPERATIONAL_SECTIONS.includes(section)
+    );
+  }
   if (role === 'recruiter') {
     return (
       section === 'home' ||
       section === 'overview' ||
       section === 'settings' ||
-      section === 'pipeline' ||
-      section === 'pipeline-call' ||
-      section === 'pipeline-performance' ||
-      section === 'pipeline-email' ||
-      section === 'pipeline-uploads' ||
-      section === 'pipeline-settings' ||
+      PIPELINE_OPERATIONAL_SECTIONS.includes(section) ||
       section === 'calls-analytics' ||
       section === 'webinar-geek' ||
       section === 'leaderboard'

@@ -5,7 +5,6 @@ import {
   journeyStageForCallDisposition,
   type PipelineCallDisposition,
 } from './pipelineCallDispositions';
-import { getCurrentUserProfile } from './accessControl';
 
 const PIPELINE_BUCKET = 'pipeline-resumes';
 let pipelineCallRecordsPrimaryWriteDisabled = false;
@@ -733,14 +732,11 @@ type PipelineViewerScope = {
 };
 
 async function resolvePipelineViewerScope(): Promise<PipelineViewerScope> {
-  const [{ data: auth }, profile] = await Promise.all([
-    supabase.auth.getUser(),
-    getCurrentUserProfile().catch(() => null),
-  ]);
+  const { data: auth } = await supabase.auth.getUser();
   const userId = auth.user?.id ?? null;
-  const role = String(profile?.role || '').trim().toLowerCase();
-  const hasFullVisibility = role === 'admin' || role === 'leadership';
-  return { userId, hasFullVisibility };
+  // Every operational user (recruiter, leadership) owns their upload queue only.
+  // Admins use analytics dashboards, not shared pipeline candidate lists.
+  return { userId, hasFullVisibility: false };
 }
 
 function applyPipelineUploaderScope<TQuery extends { eq: (column: string, value: unknown) => TQuery }>(

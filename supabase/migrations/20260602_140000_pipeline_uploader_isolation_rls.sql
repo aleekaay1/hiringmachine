@@ -9,7 +9,7 @@ stable
 security definer
 set search_path = public
 as $$
-  select coalesce(public.current_user_app_role() in ('admin', 'leadership'), false);
+  select false;
 $$;
 
 grant execute on function public.pipeline_has_full_visibility() to authenticated;

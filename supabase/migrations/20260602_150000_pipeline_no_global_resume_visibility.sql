@@ -10,6 +10,3 @@ set search_path = public
 as $$
   select false;
 $$;
-
-
--- Also run paste_pipeline_no_global_resume_visibility.sql if you already applied the first migration.
