@@ -22,7 +22,12 @@ export function TeamShowRateRing({
   windowLabel: string;
 }) {
   const pct = clampPct(showRatePct);
-  const r = 54;
+  const gradId = React.useId().replace(/:/g, '');
+  const size = 132;
+  const stroke = 9;
+  const r = (size - stroke) / 2 - 4;
+  const cx = size / 2;
+  const cy = size / 2;
   const c = 2 * Math.PI * r;
   const offset = c - (pct / 100) * c;
 
@@ -37,37 +42,59 @@ export function TeamShowRateRing({
         <p className="mt-0.5 text-xs text-[#b8d4f0]">{windowLabel}</p>
       </div>
 
-      <div className="relative mx-auto flex items-center justify-center py-2">
-        <svg width="140" height="140" viewBox="0 0 140 140" className="-rotate-90" aria-hidden>
-          <circle cx="70" cy="70" r={r} fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="10" />
-          <circle
-            cx="70"
-            cy="70"
-            r={r}
-            fill="none"
-            stroke="url(#adminRingGrad)"
-            strokeWidth="10"
-            strokeLinecap="round"
-            strokeDasharray={c}
-            strokeDashoffset={offset}
-            className="transition-[stroke-dashoffset] duration-700 ease-out"
-          />
-          <defs>
-            <linearGradient id="adminRingGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#67b5ff" />
-              <stop offset="100%" stopColor="#34d399" />
-            </linearGradient>
-          </defs>
-        </svg>
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-          <span
-            className="text-4xl font-bold tabular-nums leading-none"
-            style={{ fontFamily: 'Outfit, Inter, system-ui, sans-serif' }}
+      <div className="relative flex flex-col items-center py-1">
+        <div className="relative" style={{ width: size, height: size }}>
+          <svg
+            width={size}
+            height={size}
+            viewBox={`0 0 ${size} ${size}`}
+            className="block -rotate-90"
+            aria-hidden
           >
-            {pct}%
-          </span>
-          <span className="mt-1 text-[10px] uppercase tracking-wide text-[#9ec9f5]">attended / booked</span>
+            <circle
+              cx={cx}
+              cy={cy}
+              r={r}
+              fill="none"
+              stroke="rgba(255,255,255,0.14)"
+              strokeWidth={stroke}
+            />
+            <circle
+              cx={cx}
+              cy={cy}
+              r={r}
+              fill="none"
+              stroke={`url(#${gradId})`}
+              strokeWidth={stroke}
+              strokeLinecap="round"
+              strokeDasharray={c}
+              strokeDashoffset={offset}
+              className="transition-[stroke-dashoffset] duration-700 ease-out"
+            />
+            <defs>
+              <linearGradient id={gradId} x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stopColor="#67b5ff" />
+                <stop offset="100%" stopColor="#34d399" />
+              </linearGradient>
+            </defs>
+          </svg>
+          <div
+            className="absolute inset-0 flex items-center justify-center"
+            aria-label={`${pct} percent show rate`}
+          >
+            <div className="flex h-[4.75rem] w-[4.75rem] items-center justify-center rounded-full bg-[#0a1628]/95 shadow-inner ring-1 ring-white/15">
+              <span
+                className="text-[2rem] font-bold tabular-nums leading-none tracking-tight"
+                style={{ fontFamily: 'Outfit, Inter, system-ui, sans-serif' }}
+              >
+                {pct}%
+              </span>
+            </div>
+          </div>
         </div>
+        <p className="mt-2 text-center text-[10px] font-semibold uppercase tracking-[0.2em] text-[#9ec9f5]">
+          Attended ÷ booked
+        </p>
       </div>
 
       <div className="relative grid grid-cols-2 gap-2 text-center">
