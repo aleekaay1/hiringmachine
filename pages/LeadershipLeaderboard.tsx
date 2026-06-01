@@ -18,13 +18,16 @@ import {
 } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { LeaderboardPodium } from '../components/leaderboard/LeaderboardPodium';
+import {
+  LeaderboardRefreshProgress,
+  type LeaderboardProgressState,
+} from '../components/leaderboard/LeaderboardRefreshProgress';
 import { LeaderboardWeekCountdown } from '../components/leaderboard/LeaderboardWeekCountdown';
 import { LeaderboardCoinChip } from '../components/dashboard/LeaderboardCoinChip';
 import { currentFridayWeekEndDate, endOfYmdLocal } from '../services/leaderboardCountdown';
 import {
   coinBalanceForLeaderboardRow,
   loadLeaderboardCoinLookup,
-  syncAllRecruiterCoins,
   type LeaderboardCoinLookup,
 } from '../services/recruiterCoinService';
 import { Button } from '../components/UI';
@@ -237,6 +240,7 @@ function overtakeMessage(row: RecruiterLeaderboardRow): string | null {
 const LeadershipLeaderboard: React.FC = () => {
   const [loading, setLoading] = React.useState(false);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [refreshProgress, setRefreshProgress] = React.useState<LeaderboardProgressState | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [period, setPeriod] = React.useState<LeaderboardPeriod>('last7');
   const [customRange, setCustomRange] = React.useState<LeaderboardCustomRange>(() => defaultLeaderboardCustomRange());
@@ -304,13 +308,6 @@ const LeadershipLeaderboard: React.FC = () => {
         loadLeaderboardSnapshot(key),
         listAllUserProfiles().catch(() => []),
       ]);
-      await syncAllRecruiterCoins().catch(() => undefined);
-      const lookup = await loadLeaderboardCoinLookup(profiles).catch(() => ({
-        byUserId: new Map<string, number>(),
-        displayNameToUserId: new Map<string, string>(),
-        byDisplayLabel: new Map<string, number>(),
-      }));
-      setCoinLookup(lookup);
       const { data, error: cacheError, tableMissing } = snapshotResult;
       const excludedUserIds = excludedLeaderboardUserIds(profiles);
       if (cacheError) throw new Error(cacheError);
@@ -334,6 +331,10 @@ const LeadershipLeaderboard: React.FC = () => {
         setWindowLabel(windows.current.label);
         setLastUpdated(null);
       }
+
+      void loadLeaderboardCoinLookup(profiles)
+        .then(setCoinLookup)
+        .catch(() => undefined);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -348,8 +349,10 @@ const LeadershipLeaderboard: React.FC = () => {
       return;
     }
     setRefreshing(true);
+    setRefreshProgress({ pct: 2, label: 'Starting refresh…' });
     setError(null);
     try {
+      setRefreshProgress({ pct: 8, label: 'Checking session…' });
       const [{ data: authData }, profile] = await Promise.all([
         supabase.auth.getUser(),
         getCurrentUserProfile(),
@@ -360,6 +363,7 @@ const LeadershipLeaderboard: React.FC = () => {
       const windows = buildLeaderboardWindows(period, new Date(), activeCustomRange);
       const recruiterFilter = null;
 
+      setRefreshProgress({ pct: 18, label: 'Loading call records…' });
       const [currentRecords, previousRecords] = await Promise.all([
         listPipelineCallRecords({
           fromIso: windows.current.fromIso,
@@ -381,6 +385,7 @@ const LeadershipLeaderboard: React.FC = () => {
         ),
       ];
 
+      setRefreshProgress({ pct: 38, label: 'Loading webinar & live session data…' });
       const [scopedWebinarRows, profiles, liveRegistrants, candidateEmailById] = await Promise.all([
         loadScopedWebinarRowsForViewer({
           role: 'admin',
@@ -399,6 +404,7 @@ const LeadershipLeaderboard: React.FC = () => {
       const recruiterSeeds = seedsFromProfiles(profiles);
       const excludedUserIds = excludedLeaderboardUserIds(profiles);
 
+      setRefreshProgress({ pct: 58, label: 'Calculating rankings…' });
       const computed = buildCompositeLeaderboard({
         webinarRows: scopedWebinarRows as Array<Record<string, unknown>>,
         currentWindow: windows.current,
@@ -433,35 +439,39 @@ const LeadershipLeaderboard: React.FC = () => {
         windowLabel: windows.current.label,
       };
 
+      setRefreshProgress({ pct: 78, label: 'Saving rankings…' });
       const saved = await saveLeaderboardSnapshot({ periodKey: snapshotKey, payload });
       if (saved.error) throw new Error(saved.error);
       if (saved.tableMissing) {
         throw new Error('Leaderboard storage is not set up yet. Ask an admin to run the database script.');
       }
 
+      setRefreshProgress({ pct: 92, label: 'Updating display…' });
       applySnapshot({
         ...payload,
         fetchedAt: new Date().toISOString(),
       });
 
-      await syncAllRecruiterCoins().catch(() => undefined);
+      setRefreshProgress({ pct: 96, label: 'Loading Paz Coins…' });
       const lookup = await loadLeaderboardCoinLookup(profiles).catch(() => ({
         byUserId: new Map<string, number>(),
         displayNameToUserId: new Map<string, string>(),
         byDisplayLabel: new Map<string, number>(),
       }));
       setCoinLookup(lookup);
+      setRefreshProgress({ pct: 100, label: 'Complete' });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setRefreshing(false);
+      window.setTimeout(() => setRefreshProgress(null), 500);
     }
   }, [period, activeCustomRange, snapshotKey, customRangeInvalid, applySnapshot]);
 
   React.useEffect(() => {
     setCacheReady(false);
     void loadFromDatabase(snapshotKey, activeCustomRange, period);
-  }, [snapshotKey, period, activeCustomRange, loadFromDatabase]);
+  }, [snapshotKey, period, loadFromDatabase]);
 
   React.useEffect(() => {
     if (selectedKey === 'all') return;
@@ -571,16 +581,19 @@ const LeadershipLeaderboard: React.FC = () => {
                   Rankings reflect webinar bookings, attendance, and outreach activity for the selected period. Use Refresh when you want the latest numbers.
                 </p>
               </div>
-              <div className="flex flex-col items-end gap-1">
+              <div className="flex w-full max-w-sm flex-col items-end gap-2 sm:w-auto">
                 <Button
                   variant="outline"
                   className="!min-h-0 h-9 border-[#c3d8f2] !bg-white !text-[#0B1B34] hover:!bg-[#eef6ff]"
                   onClick={() => void refreshLeaderboard()}
                   disabled={busy || customRangeInvalid}
                 >
-                  <RefreshCw size={14} className={busy ? 'mr-1 animate-spin' : 'mr-1'} />
+                  <RefreshCw size={14} className={refreshing ? 'mr-1 animate-spin' : 'mr-1'} />
                   Refresh
                 </Button>
+                {refreshing && refreshProgress ? (
+                  <LeaderboardRefreshProgress progress={refreshProgress} variant="compact" />
+                ) : null}
                 <p className="text-[10px] text-[#6a839f]">Last updated: {formatRefreshedAt(lastUpdated)}</p>
               </div>
             </div>
@@ -672,6 +685,10 @@ const LeadershipLeaderboard: React.FC = () => {
             </motion.div>
           )}
 
+          {refreshing && refreshProgress ? (
+            <LeaderboardRefreshProgress progress={refreshProgress} />
+          ) : null}
+
           <section className="rounded-3xl border border-[#d8e3ef] bg-[#f3f7fb] p-4 md:p-5">
             <div className="mb-3 flex items-center gap-2 border-b border-[#dde5f0] pb-3">
               <Users size={16} className="text-[#2f6ea8]" aria-hidden />
@@ -686,9 +703,10 @@ const LeadershipLeaderboard: React.FC = () => {
                 </p>
               </div>
             </div>
-            {loading ? (
+            {loading && rows.length === 0 ? (
               <div className="rounded-2xl border border-[#dfeaf8] bg-[#f9fcff] px-4 py-6 text-center text-sm text-[#4f6886]">
-                Loading saved rankings…
+                <p>Loading saved rankings…</p>
+                <p className="mt-2 text-xs text-[#8aa3be]">Reading from the database — no full recalculation.</p>
               </div>
             ) : error ? (
               <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">
