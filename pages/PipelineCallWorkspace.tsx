@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, History, Moon, Phone, RefreshCw, Sun } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, History, Moon, Phone, RefreshCw, Search, Sun } from 'lucide-react';
 import CandidateProfileEditor from '../components/pipeline/CandidateProfileEditor';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
@@ -70,6 +70,29 @@ function normalizeDispositionLabel(value: string | null | undefined): string {
   return String(value || '').trim().toLowerCase();
 }
 
+function candidateUploadFileLabel(candidate: PipelineCandidate): string {
+  const metadata = candidate.metadata && typeof candidate.metadata === 'object' ? candidate.metadata : {};
+  return String((metadata as Record<string, unknown>).original_file_name || '').trim();
+}
+
+function candidateMatchesSearch(
+  candidate: PipelineCandidate,
+  query: string,
+  resumes: PipelineResume[],
+): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return false;
+  const digitQ = q.replace(/\D/g, '');
+  const phone = String(candidate.phone || '');
+  const phoneDigits = phone.replace(/\D/g, '');
+  if ((candidate.full_name || '').toLowerCase().includes(q)) return true;
+  if ((candidate.email || '').toLowerCase().includes(q)) return true;
+  if (phone.toLowerCase().includes(q)) return true;
+  if (digitQ.length >= 4 && phoneDigits.includes(digitQ)) return true;
+  if (candidateUploadFileLabel(candidate).toLowerCase().includes(q)) return true;
+  return resumes.some((resume) => (resume.original_filename || '').toLowerCase().includes(q));
+}
+
 function dispositionIsRetry(label: string): boolean {
   return Object.prototype.hasOwnProperty.call(RETRY_PRIORITY_ORDER, label);
 }
@@ -116,6 +139,7 @@ const PipelineCallWorkspace: React.FC = () => {
   const [showDispositionModal, setShowDispositionModal] = React.useState(false);
   const [submitAttempted, setSubmitAttempted] = React.useState(false);
   const [themeMode, setThemeMode] = React.useState<WorkspaceThemeMode>('dark');
+  const [candidateSearch, setCandidateSearch] = React.useState('');
 
   const [candidates, setCandidates] = React.useState<PipelineCandidate[]>([]);
   const [resumesByCandidate, setResumesByCandidate] = React.useState<Map<string, PipelineResume[]>>(new Map());
@@ -381,10 +405,28 @@ const PipelineCallWorkspace: React.FC = () => {
     return out;
   }, [queueList, doneList]);
 
+  const searchMatches = React.useMemo(() => {
+    const q = candidateSearch.trim();
+    if (!q) return [];
+    return candidates
+      .filter((candidate) => candidateMatchesSearch(candidate, q, resumesByCandidate.get(candidate.id) || []))
+      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+      .slice(0, 30);
+  }, [candidateSearch, candidates, resumesByCandidate]);
+
   const currentCandidate = React.useMemo(() => {
+    if (selectedCandidateId) {
+      const selected = candidates.find((c) => c.id === selectedCandidateId);
+      if (selected) return selected;
+    }
     if (!displayList.length) return null;
-    return displayList.find((c) => c.id === selectedCandidateId) || queueList[0] || displayList[0];
-  }, [displayList, queueList, selectedCandidateId]);
+    return queueList[0] || displayList[0];
+  }, [candidates, selectedCandidateId, displayList, queueList]);
+
+  const currentCandidateFromSearch = React.useMemo(() => {
+    if (!selectedCandidateId || !candidateSearch.trim()) return false;
+    return !displayList.some((c) => c.id === selectedCandidateId);
+  }, [selectedCandidateId, candidateSearch, displayList]);
   const currentPhoneInfo = React.useMemo(
     () => (currentCandidate ? readPipelineCandidatePhone(currentCandidate) : null),
     [currentCandidate],
@@ -842,6 +884,61 @@ const PipelineCallWorkspace: React.FC = () => {
           className="grid gap-4 xl:grid-cols-[260px_1fr]"
         >
           <aside className={`rounded-2xl border p-3 space-y-3 ${tone.glassPanel}`}>
+            <div className={`rounded-xl border p-2.5 ${tone.subtle}`}>
+              <p className={`mb-1.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Find candidate / resume</p>
+              <p className={`mb-2 text-[10px] ${tone.panelMuted}`}>
+                Search any upload to load profile and log a manual disposition (e.g. inbound callback).
+              </p>
+              <div className="relative">
+                <Search size={14} className={`pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 ${tone.panelLabel}`} />
+                <input
+                  value={candidateSearch}
+                  onChange={(e) => setCandidateSearch(e.target.value)}
+                  placeholder="Name, phone, email, filename…"
+                  className={`w-full rounded-lg border py-2 pl-8 pr-2 text-xs ${tone.input}`}
+                />
+              </div>
+              {candidateSearch.trim() && (
+                <div className="mt-2 max-h-[280px] space-y-1 overflow-auto">
+                  {searchMatches.map((candidate) => {
+                    const latest = latestByCandidate.get(candidate.id);
+                    const fileLabel = candidateUploadFileLabel(candidate);
+                    const resumeName = (resumesByCandidate.get(candidate.id) || [])[0]?.original_filename;
+                    const isActive = candidate.id === selectedCandidateId;
+                    return (
+                      <button
+                        key={candidate.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedCandidateId(candidate.id);
+                          setActionMsg(`Loaded ${candidate.full_name || 'candidate'} for manual disposition.`);
+                        }}
+                        className={`w-full rounded-lg border px-2 py-2 text-left transition ${
+                          isActive
+                            ? (isDark ? 'border-cyan-300/45 bg-cyan-300/18' : 'border-[#9dc6ef] bg-[#e8f3ff]')
+                            : tone.doneCard
+                        }`}
+                      >
+                        <p className={`truncate text-xs font-semibold ${tone.panelTitle}`}>{candidate.full_name || 'Unknown Candidate'}</p>
+                        {(fileLabel || resumeName) && (
+                          <p className={`truncate text-[10px] ${tone.panelLabel}`} title={fileLabel || resumeName}>
+                            {fileLabel || resumeName}
+                          </p>
+                        )}
+                        <p className={`text-[10px] ${tone.panelMuted}`}>
+                          {candidate.phone || candidate.email || 'No contact'}
+                          {latest?.disposition ? ` · ${latest.disposition}` : ' · No disposition yet'}
+                        </p>
+                      </button>
+                    );
+                  })}
+                  {!searchMatches.length && (
+                    <p className={`rounded-lg border border-dashed p-2 text-[11px] ${tone.input}`}>No matches in uploaded resumes.</p>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div>
               <p className={`mb-2 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Queue filters</p>
               <button
@@ -972,6 +1069,15 @@ const PipelineCallWorkspace: React.FC = () => {
             <div className={`rounded-xl border p-3 ${tone.subtle}`}>
               {currentCandidate ? (
                 <>
+                  {currentCandidateFromSearch && (
+                    <div
+                      className={`mb-3 rounded-lg border px-3 py-2 text-[11px] ${
+                        isDark ? 'border-amber-300/35 bg-amber-400/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-900'
+                      }`}
+                    >
+                      Opened from search (outside current queue filter). Use manual disposition below to log this call.
+                    </div>
+                  )}
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <p className={`text-[10px] uppercase tracking-[0.2em] ${tone.panelLabel}`}>Current candidate</p>
@@ -1064,7 +1170,7 @@ const PipelineCallWorkspace: React.FC = () => {
                     </div>
                   </details>
 
-                  <details className={`mt-2 rounded-xl border p-3 ${tone.subtle}`}>
+                  <details className={`mt-2 rounded-xl border p-3 ${tone.subtle}`} open={currentCandidateFromSearch || undefined}>
                     <summary className={`cursor-pointer text-[11px] font-semibold ${tone.panelMuted}`}>Manual disposition (fallback)</summary>
                     <div className="mt-2 space-y-2">
                       <label className={`block text-xs ${tone.panelMuted}`}>
