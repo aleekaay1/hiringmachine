@@ -11,7 +11,7 @@ import {
 } from '../_shared/postAssessmentSubmitEmailTemplate.ts';
 import { buildEmailSignatureHtml } from '../_shared/emailSignatureHtml.ts';
 import { ZOOM_MEETING_URL } from '../_shared/hiringUrls.ts';
-import { buildAddToCalendarEmailHtml, buildGoogleCalendarUrl } from '../_shared/calendarInvite.ts';
+import { buildAddToCalendarEmailHtml, buildGoogleCalendarUrlForEmail } from '../_shared/calendarInvite.ts';
 import {
   fetchNextUpcomingOccurrence,
   fetchOccurrenceBySessionDate,
@@ -155,16 +155,18 @@ Deno.serve(async (req) => {
         : await fetchNextUpcomingOccurrence(admin);
       const calendarEvent = resolveLiveSessionCalendarFromOccurrence(liveSessionEnv, ZOOM_MEETING_URL, occurrence);
       const addToCalendarHtml = buildAddToCalendarEmailHtml({
-        primaryUrl: buildGoogleCalendarUrl(calendarEvent),
+        primaryUrl: buildGoogleCalendarUrlForEmail(calendarEvent),
       });
-      html = applyPostCheckinMerge({
-        firstName: firstName || 'there',
-        sessionDate: calendarEvent.displayDate,
-        sessionTime: calendarEvent.displayTime,
-        zoomUrl: ZOOM_MEETING_URL,
-        addToCalendarHtml,
-        emailSignatureHtml: sig,
-      });
+      html = wrapTransactionalEmailHtml(
+        applyPostCheckinMerge({
+          firstName: firstName || 'there',
+          sessionDate: calendarEvent.displayDate,
+          sessionTime: calendarEvent.displayTime,
+          zoomUrl: ZOOM_MEETING_URL,
+          addToCalendarHtml,
+          emailSignatureHtml: sig,
+        }),
+      );
     } else {
       subject = POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT;
       html = wrapTransactionalEmailHtml(applyPostAssessmentSubmitMerge(candidateName, sig));
@@ -181,8 +183,7 @@ Deno.serve(async (req) => {
           from,
           to: candidateEmail,
           subject,
-          text: html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
-          html,
+          ...(isPostCheckin ? { html } : { html, text: html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() }),
         },
         (err: Error | null) => (err ? reject(err) : resolve())
       );

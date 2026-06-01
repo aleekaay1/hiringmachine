@@ -1,7 +1,7 @@
 import { buildEmailSignatureHtml } from './emailSignatureHtml';
 import {
   buildAddToCalendarEmailHtml,
-  buildGoogleCalendarUrl,
+  buildGoogleCalendarUrlForEmail,
   resolveLiveSessionCalendar,
   type LiveSessionOccurrenceRecord,
 } from './calendarInvite';
@@ -232,7 +232,7 @@ function postCheckinAddToCalendarHtmlForPreview(occurrence?: LiveSessionOccurren
     ZOOM_MEETING_URL,
     occurrence ?? null,
   );
-  return buildAddToCalendarEmailHtml({ primaryUrl: buildGoogleCalendarUrl(event) });
+  return buildAddToCalendarEmailHtml({ primaryUrl: buildGoogleCalendarUrlForEmail(event) });
 }
 
 function postCheckinSessionLabelsForPreview(occurrence?: LiveSessionOccurrenceRecord | null): { date: string; time: string } {

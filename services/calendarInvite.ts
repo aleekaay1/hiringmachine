@@ -283,6 +283,20 @@ export function buildGoogleCalendarUrl(event: LiveSessionCalendarEvent): string 
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
 
+/** Compact Google Calendar link for email buttons (avoids Gmail “quoted text” collapse). */
+export function buildGoogleCalendarUrlForEmail(event: LiveSessionCalendarEvent): string {
+  const start = formatIcsUtc(event.start);
+  const end = formatIcsUtc(event.end);
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: event.title,
+    dates: `${start}/${end}`,
+    details: 'Live Online Career Session. Use the Zoom link in your invitation email to join.',
+    location: event.zoomUrl,
+  });
+  return `https://calendar.google.com/calendar/render?${params.toString()}`;
+}
+
 export function buildOutlookCalendarUrl(event: LiveSessionCalendarEvent): string {
   const params = new URLSearchParams({
     subject: event.title,
@@ -298,7 +312,7 @@ export function buildOutlookCalendarUrl(event: LiveSessionCalendarEvent): string
 export function buildAddToCalendarEmailHtml(input: { primaryUrl: string }): string {
   const btnColor = '#1a73e8';
   const href = input.primaryUrl.replace(/"/g, '&quot;');
-  return `<p style="margin:16px 0 8px;"><a href="${href}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 18px;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:bold;color:#ffffff;text-decoration:none;background-color:${btnColor};border-radius:4px;">Add to Calendar</a></p>`;
+  return `<p style="margin:20px 0 0;"><a href="${href}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 18px;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:bold;color:#ffffff;text-decoration:none;background-color:${btnColor};border-radius:4px;">Add to Calendar</a></p>`;
 }
 
 export function liveSessionCalendarIcsUrl(

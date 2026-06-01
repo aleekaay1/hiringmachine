@@ -119,6 +119,8 @@ Deno.serve(async (req) => {
       contentType?: string;
     }>;
 
+    const htmlBody = typeof bodyHtml === 'string' ? bodyHtml.trim() : '';
+    const textBody = typeof bodyText === 'string' ? bodyText.trim() : '';
     const transport = getTransport();
     try {
       await new Promise<void>((resolve, reject) => {
@@ -128,8 +130,13 @@ Deno.serve(async (req) => {
             to,
             ...(cc ? { cc } : {}),
             subject,
-            text: bodyText || (typeof bodyHtml === 'string' ? bodyHtml.replace(/<[^>]*>/g, '') : ''),
-            html: typeof bodyHtml === 'string' ? bodyHtml : undefined,
+            ...(htmlBody
+              ? textBody
+                ? { html: htmlBody, text: textBody }
+                : { html: htmlBody }
+              : textBody
+                ? { text: textBody }
+                : {}),
             ...(attachments.length ? { attachments } : {}),
             ...(inReplyTo ? { inReplyTo } : {}),
             ...(references ? { references } : {}),
