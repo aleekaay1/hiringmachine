@@ -2,15 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import type { RecruiterLeaderboardRow } from '../../services/pipelineLeaderboard';
-import { listAllUserProfiles } from '../../services/accessControl';
-import {
-  coinBalanceForLeaderboardRow,
-  loadLeaderboardCoinLookup,
-  syncAllRecruiterCoins,
-  type LeaderboardCoinLookup,
-} from '../../services/recruiterCoinService';
 import { DashboardStickyNotesPanel } from './DashboardStickyNotesPanel';
-import { LeaderboardCoinChip } from './LeaderboardCoinChip';
 
 export function formatLeaderboardRefreshed(iso: string | null): string {
   if (!iso) return 'Refresh the leaderboard for latest team numbers';
@@ -24,45 +16,17 @@ export function RecruiterStandingsBoard({
   rows: RecruiterLeaderboardRow[];
   title?: string;
 }) {
-  const [coinLookup, setCoinLookup] = React.useState<LeaderboardCoinLookup>({
-    byUserId: new Map(),
-    displayNameToUserId: new Map(),
-    byDisplayLabel: new Map(),
-  });
-
-  React.useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      await syncAllRecruiterCoins().catch(() => undefined);
-      const profiles = await listAllUserProfiles().catch(() => []);
-      return loadLeaderboardCoinLookup(profiles);
-    };
-    void run()
-      .then((lookup) => {
-        if (!cancelled) setCoinLookup(lookup);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setCoinLookup({ byUserId: new Map(), displayNameToUserId: new Map(), byDisplayLabel: new Map() });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [rows]);
-
   if (rows.length === 0) return null;
 
   return (
     <div className="rounded-3xl border border-[#d9e5f6] bg-white/80 p-4 backdrop-blur-xl">
       <p className="text-sm font-semibold text-[#0B1B34]">{title}</p>
       <div className="mt-2 overflow-x-auto">
-        <table className="w-full min-w-[580px] text-left text-xs">
+        <table className="w-full min-w-[480px] text-left text-xs">
           <thead className="text-[#6d86a3]">
             <tr>
               <th className="pb-2 pr-3 font-medium">#</th>
               <th className="pb-2 pr-3 font-medium">Name</th>
-              <th className="pb-2 pr-3 font-medium">Paz Coins</th>
               <th className="pb-2 pr-3 font-medium">Booked</th>
               <th className="pb-2 pr-3 font-medium">Attended</th>
               <th className="pb-2 pr-3 font-medium">Calls</th>
@@ -74,12 +38,6 @@ export function RecruiterStandingsBoard({
               <tr key={row.recruiterKey} className="border-t border-[#eef4fb] text-[#35567a]">
                 <td className="py-2 pr-3 font-semibold text-[#0B1B34]">{row.rank}</td>
                 <td className="py-2 pr-3">{row.displayName}</td>
-                <td className="py-2 pr-3">
-                  <LeaderboardCoinChip
-                    balance={coinBalanceForLeaderboardRow(row, coinLookup)}
-                    compact
-                  />
-                </td>
                 <td className="py-2 pr-3 tabular-nums">{row.webinarBooked}</td>
                 <td className="py-2 pr-3 tabular-nums">{row.webinarShowed}</td>
                 <td className="py-2 pr-3 tabular-nums">{row.calls}</td>

@@ -17,7 +17,10 @@ import {
   Users,
 } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
+import { LeaderboardPodium } from '../components/leaderboard/LeaderboardPodium';
+import { LeaderboardWeekCountdown } from '../components/leaderboard/LeaderboardWeekCountdown';
 import { LeaderboardCoinChip } from '../components/dashboard/LeaderboardCoinChip';
+import { currentFridayWeekEndDate, endOfYmdLocal } from '../services/leaderboardCountdown';
 import {
   coinBalanceForLeaderboardRow,
   loadLeaderboardCoinLookup,
@@ -489,7 +492,6 @@ const LeadershipLeaderboard: React.FC = () => {
     return badgeWinners.consistentCloser;
   };
 
-  const topPerformer = rows[0] || null;
   const previousTopPerformer = previousRows[0] || null;
   const busy = loading || refreshing;
 
@@ -498,8 +500,47 @@ const LeadershipLeaderboard: React.FC = () => {
     return { current: w.current.label, previous: w.previous.label };
   }, [period, activeCustomRange?.sinceYmd, activeCustomRange?.untilYmd]);
 
-  const currentLeaderTitle =
-    period === 'last7' ? 'This week' : period === 'thisMonth' ? 'This month' : period === 'custom' ? 'Selected range' : 'Current window';
+  const periodEndAt = React.useMemo(() => {
+    if (period === 'last7') return currentFridayWeekEndDate();
+    const w = buildLeaderboardWindows(period, new Date(), activeCustomRange);
+    return endOfYmdLocal(w.current.untilYmd);
+  }, [period, activeCustomRange?.sinceYmd, activeCustomRange?.untilYmd]);
+
+  const countdownCopy = React.useMemo(() => {
+    if (period === 'last7') {
+      return {
+        label: 'This week ends Thursday night',
+        sublabel: 'Fri–Thu competition week · climb the board before time runs out',
+      };
+    }
+    if (period === 'thisMonth') {
+      return {
+        label: 'This month ends in',
+        sublabel: 'Rankings use the selected monthly window',
+      };
+    }
+    if (period === 'custom') {
+      return {
+        label: 'Selected range ends in',
+        sublabel: 'Custom date range countdown',
+      };
+    }
+    return {
+      label: 'Current period ends in',
+      sublabel: '30-day rolling window',
+    };
+  }, [period]);
+
+  const podiumSlots = React.useMemo(() => {
+    const sorted = [...shownRows].sort((a, b) => a.rank - b.rank);
+    return {
+      first: sorted.find((r) => r.rank === 1) ?? null,
+      second: sorted.find((r) => r.rank === 2) ?? null,
+      third: sorted.find((r) => r.rank === 3) ?? null,
+      rest: sorted.filter((r) => r.rank > 3),
+    };
+  }, [shownRows]);
+
   const previousLeaderTitle =
     period === 'last7' ? 'Previous week' : period === 'thisMonth' ? 'Last month' : period === 'custom' ? 'Prior range' : 'Previous window';
 
@@ -601,52 +642,48 @@ const LeadershipLeaderboard: React.FC = () => {
             <p className="mt-2 text-[11px] text-[#5c7594]">{windowLabel}</p>
           </motion.div>
 
-          <div className="grid gap-3 lg:grid-cols-2">
-            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="rounded-3xl border border-[#f2d9aa] bg-gradient-to-br from-[#fff8ea] via-[#fffaf2] to-[#f2f7ff] p-4 backdrop-blur-xl">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[#9b6b00]">{currentLeaderTitle}</p>
-              <p className="mt-0.5 text-[11px] text-[#8a7340]">{periodWindowLabels.current}</p>
-              {topPerformer ? (
-                <div className="mt-2">
-                  <PersonPerformanceBlock
-                    row={topPerformer}
-                    tone="gold"
-                    champion
-                    pazCoins={coinBalanceForLeaderboardRow(topPerformer, coinLookup)}
-                  />
-                </div>
-              ) : (
-                <p className="mt-2 text-sm text-[#6d5a39]">
-                  {cacheReady && !loading
-                    ? `No results for ${period === 'last7' ? 'this week' : 'this period'} yet. Click Refresh to load rankings.`
-                    : 'Loading…'}
-                </p>
-              )}
+          {!loading && !error && shownRows.length > 0 && (
+            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
+              <LeaderboardWeekCountdown
+                endAt={periodEndAt}
+                label={countdownCopy.label}
+                sublabel={countdownCopy.sublabel}
+              />
+              <LeaderboardPodium
+                first={podiumSlots.first}
+                second={podiumSlots.second}
+                third={podiumSlots.third}
+              />
             </motion.div>
+          )}
 
-            <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="rounded-3xl border border-[#d9e5f6] bg-white/80 p-4 backdrop-blur-xl">
+          {previousTopPerformer && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="rounded-2xl border border-[#d9e5f6] bg-white/80 px-4 py-3 backdrop-blur-xl"
+            >
               <p className="text-[10px] uppercase tracking-[0.2em] text-[#2f6ea8]">{previousLeaderTitle}</p>
               <p className="mt-0.5 text-[11px] text-[#5c7594]">{periodWindowLabels.previous}</p>
-              {previousTopPerformer ? (
-                <div className="mt-2">
-                  <PersonPerformanceBlock
-                    row={previousTopPerformer}
-                    pazCoins={coinBalanceForLeaderboardRow(previousTopPerformer, coinLookup)}
-                  />
-                </div>
-              ) : (
-                <p className="mt-2 text-sm text-[#4f6886]">
-                  No leader on record for {period === 'last7' ? 'the previous week' : 'the prior window'}.
-                </p>
-              )}
+              <p className="mt-1 text-sm font-semibold text-[#0B1B34]">
+                {previousTopPerformer.displayName}
+                <span className="ml-2 font-medium text-[#5c7594]">· Score {previousTopPerformer.score.toFixed(1)}</span>
+              </p>
             </motion.div>
-          </div>
+          )}
 
           <section className="rounded-3xl border border-[#d8e3ef] bg-[#f3f7fb] p-4 md:p-5">
             <div className="mb-3 flex items-center gap-2 border-b border-[#dde5f0] pb-3">
               <Users size={16} className="text-[#2f6ea8]" aria-hidden />
               <div>
-                <h3 className="text-sm font-semibold text-[#0B1B34]">Full rankings</h3>
-                <p className="text-[11px] text-[#5c7594]">Team standings for the selected period</p>
+                <h3 className="text-sm font-semibold text-[#0B1B34]">
+                  {podiumSlots.rest.length > 0 ? 'Rest of the board' : 'Full rankings'}
+                </h3>
+                <p className="text-[11px] text-[#5c7594]">
+                  {podiumSlots.rest.length > 0
+                    ? 'Ranks 4 and below · top three are on the podium above'
+                    : 'Team standings for the selected period'}
+                </p>
               </div>
             </div>
             {loading ? (
@@ -672,10 +709,14 @@ const LeadershipLeaderboard: React.FC = () => {
                   </>
                 )}
               </div>
+            ) : podiumSlots.rest.length === 0 && shownRows.length > 0 ? (
+              <div className="rounded-2xl border border-[#dfeaf8] bg-[#f9fcff] px-4 py-5 text-center text-sm text-[#4f6886]">
+                Top three are on the podium above. No additional ranks in this view.
+              </div>
             ) : (
               <div className="space-y-2">
                 <AnimatePresence>
-                  {shownRows.map((row, index) => {
+                  {(podiumSlots.rest.length > 0 ? podiumSlots.rest : shownRows).map((row, index) => {
                     const isViewer = viewerRow?.recruiterKey === row.recruiterKey;
                     return (
                       <motion.article
@@ -691,17 +732,7 @@ const LeadershipLeaderboard: React.FC = () => {
                         }`}
                       >
                         <div className="flex items-start gap-2">
-                          <span
-                            className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                              row.rank === 1
-                                ? 'bg-[#ffe9b8] text-[#7e5400]'
-                                : row.rank === 2
-                                  ? 'bg-[#edf2f8] text-[#3f556e]'
-                                  : row.rank === 3
-                                    ? 'bg-[#ffe6d1] text-[#8a4f16]'
-                                    : 'bg-[#f1f6fd] text-[#4f6886]'
-                            }`}
-                          >
+                          <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#f1f6fd] text-xs font-bold text-[#4f6886]">
                             {row.rank}
                           </span>
                           <div className="min-w-0 flex-1">
@@ -724,15 +755,7 @@ const LeadershipLeaderboard: React.FC = () => {
                             </div>
                           </div>
                         </div>
-                        <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                          <div className="rounded-xl border border-amber-200/70 bg-gradient-to-br from-amber-50/90 to-white px-2.5 py-2">
-                            <p className="text-[10px] uppercase tracking-wide text-amber-900/80">Paz Coins</p>
-                            <div className="mt-1">
-                              <LeaderboardCoinChip
-                                balance={coinBalanceForLeaderboardRow(row, coinLookup)}
-                              />
-                            </div>
-                          </div>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
                           <div className="rounded-xl border border-[#dfeaf8] bg-[#f9fcff] px-2.5 py-2">
                             <p className="text-[10px] uppercase tracking-wide text-[#6d86a3]">Webinar booked / shows</p>
                             <p className="text-lg font-semibold tabular-nums text-[#0B1B34]">
