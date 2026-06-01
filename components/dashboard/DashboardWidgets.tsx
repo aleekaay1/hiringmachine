@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, StickyNote } from 'lucide-react';
-import { loadUserDashboardDayNote, saveUserDashboardDayNote, todayNoteDateYmd } from '../../services/userDashboardDayNotes';
+import { ArrowRight } from 'lucide-react';
+import { DashboardStickyNotesPanel } from './DashboardStickyNotesPanel';
 
 export function StatTile({
   label,
@@ -49,60 +49,7 @@ export function QuickLinkCard({
 }
 
 export function DayNotesPanel({ userId }: { userId: string }) {
-  const [content, setContent] = React.useState('');
-  const [loading, setLoading] = React.useState(true);
-  const [saving, setSaving] = React.useState(false);
-  const [savedHint, setSavedHint] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    void loadUserDashboardDayNote(userId, todayNoteDateYmd()).then((res) => {
-      if (!cancelled) {
-        setContent(res.content);
-        setLoading(false);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [userId]);
-
-  const persist = React.useCallback(
-    async (next: string) => {
-      setSaving(true);
-      setSavedHint(null);
-      try {
-        await saveUserDashboardDayNote(userId, next, todayNoteDateYmd());
-        setSavedHint('Saved');
-        window.setTimeout(() => setSavedHint(null), 2000);
-      } finally {
-        setSaving(false);
-      }
-    },
-    [userId],
-  );
-
-  return (
-    <div className="rounded-3xl border border-[#f2d9aa] bg-gradient-to-br from-[#fff8ea] via-[#fffaf2] to-white p-4">
-      <p className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-[#9b6b00]">
-        <StickyNote size={14} aria-hidden />
-        Today&apos;s notes
-      </p>
-      <p className="mt-1 text-[11px] text-[#6d5a39]">Reminders for this shift — saved automatically.</p>
-      <textarea
-        value={content}
-        onChange={(e) => setContent(e.target.value)}
-        onBlur={() => void persist(content)}
-        disabled={loading}
-        rows={5}
-        placeholder="Callbacks to make, priorities, follow-ups…"
-        className="mt-3 w-full resize-y rounded-xl border border-[#f0ce8f] bg-white/90 px-3 py-2 text-sm text-[#0B1B34] placeholder:text-[#b8a06a] focus:border-[#d4a84a] focus:outline-none focus:ring-2 focus:ring-[#ffe9b8]"
-      />
-      <p className="mt-1 text-[10px] text-[#8a7340]">
-        {saving ? 'Saving…' : savedHint || 'Edits save when you click away'}
-      </p>
-    </div>
-  );
+  return <DashboardStickyNotesPanel userId={userId} />;
 }
 
 export function GoalRow({

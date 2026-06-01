@@ -51,7 +51,6 @@ const AdminDashboardView: React.FC<{ profile: UserProfile }> = ({ profile }) => 
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[#4e79a9]">Administration</p>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <QuickLinkCard title="Candidate admin" description="Full candidate CRM and settings." to="/dashboard?view=overview" accent="border-[#9bc8f6] bg-[#eef6ff] hover:bg-[#e7f4ff]" />
-            <QuickLinkCard title="Super dashboard" description="Executive metrics and integrations." to="/superdashboard" />
             <QuickLinkCard title="Leadership board" description="Team performance rankings." to="/calls-analytics/leaderboard" />
             <QuickLinkCard title="Pipeline settings" description="Extensions, targets, and dial rules." to="/pipeline-settings" />
             <QuickLinkCard title="QR codes" description="Event and collateral QR management." to="/qr" />

@@ -4,6 +4,7 @@ import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import {
   buildLiveSessionScheduleRows,
+  fetchIntegrationHealth,
   fetchLiveSessionsDashboard,
   type LiveSessionScheduleRow,
   type LiveSessionsDashboardPayload,
@@ -86,6 +87,8 @@ const LiveSessionsDashboard: React.FC = () => {
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [healthMessage, setHealthMessage] = useState<string | null>(null);
 
   const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
     const { data: s } = await supabase.auth.getSession();
@@ -121,10 +124,25 @@ const LiveSessionsDashboard: React.FC = () => {
       return;
     }
     setData(result.data);
+    if (sync && result.data && !result.data.from_cache) {
+      const past = result.data.past_meetings;
+      const attended = past.reduce((n, r) => n + (r.stats?.attended_matched_count ?? 0), 0);
+      const zoomJoiners = past.reduce((n, r) => n + (r.stats?.zoom_participant_count ?? 0), 0);
+      const withInvitees = past.filter((r) => (r.stats?.invited_count ?? r.invitees.length) > 0).length;
+      if (withInvitees > 0 && zoomJoiners === 0) {
+        setFetchError(
+          'Calendly registrations loaded but Zoom returned no attendees. Confirm Zoom scopes are saved on the Server-to-Server app, then sync again.',
+        );
+      } else if (attended > 0 || zoomJoiners > 0) {
+        setSyncSummary(
+          `Zoom attendance loaded: ${zoomJoiners} joiner${zoomJoiners === 1 ? '' : 's'} across ${past.length} past session${past.length === 1 ? '' : 's'} (${attended} matched to Calendly).`,
+        );
+      }
+    }
   }, [getFreshAccessToken]);
 
   useEffect(() => {
-    if (isAuthenticated) void load(false);
+    if (isAuthenticated) void load(true);
   }, [isAuthenticated, load]);
 
   const sessions = useMemo(
@@ -161,6 +179,37 @@ const LiveSessionsDashboard: React.FC = () => {
     const { error } = await signInWithGoogle('/live-sessions');
     if (error) setAuthError(error);
     setGoogleLoading(false);
+  };
+
+  const handleCheckZoom = async () => {
+    setHealthMessage(null);
+    setFetchError(null);
+    const token = await getFreshAccessToken();
+    if (!token) {
+      setHealthMessage('Not signed in.');
+      return;
+    }
+    setHealthLoading(true);
+    const result = await fetchIntegrationHealth(token);
+    setHealthLoading(false);
+    if (!result.ok) {
+      setHealthMessage(result.error);
+      return;
+    }
+    const h = result.data;
+    const parts = [
+      h.zoom_ok ? 'Zoom OAuth OK' : `Zoom OAuth failed: ${h.zoom_error ?? 'unknown'}`,
+      typeof h.zoom_past_instances_count === 'number'
+        ? `Past PMI instances: ${h.zoom_past_instances_count}`
+        : null,
+      h.zoom_participants_probe_ok
+        ? `Participant API OK (${h.zoom_participants_probe_count ?? 0} on latest instance)`
+        : `Participant API: ${h.zoom_participants_probe_error ?? 'failed'}`,
+      h.calendly_configured
+        ? (h.calendly_ok ? 'Calendly OK' : `Calendly: ${h.calendly_error ?? 'failed'}`)
+        : 'Calendly not configured',
+    ].filter(Boolean);
+    setHealthMessage(parts.join(' · '));
   };
 
   const handleSyncPipeline = async () => {
@@ -246,6 +295,15 @@ const LiveSessionsDashboard: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              type="button"
+              variant="outline"
+              className="text-sm"
+              onClick={() => void handleCheckZoom()}
+              disabled={healthLoading || loading}
+            >
+              {healthLoading ? 'Checking…' : 'Check Zoom connection'}
+            </Button>
             <Button type="button" variant="outline" className="text-sm" onClick={() => void load(true)} disabled={loading}>
               <RefreshCw size={15} className={`mr-1.5 inline ${loading ? 'animate-spin' : ''}`} />
               Sync Calendly + Zoom
@@ -263,6 +321,7 @@ const LiveSessionsDashboard: React.FC = () => {
           </div>
         </header>
 
+        {healthMessage && <Alert tone="amber">{healthMessage}</Alert>}
         {fetchError && <Alert tone="red">{fetchError}</Alert>}
         {syncError && <Alert tone="red">{syncError}</Alert>}
         {syncSummary && <Alert tone="green">{syncSummary}</Alert>}
@@ -283,8 +342,8 @@ const LiveSessionsDashboard: React.FC = () => {
           </span>
           {data && (
             <span className="text-[#9ba8ba]">
-              {data.from_cache ? 'Showing saved data' : 'Synced live'}
-              {MIDDLE_DOT} {formatDateTimeCanadaEastern(data.generated_at)}
+              {data.from_cache ? 'Registry cache' : 'Live from Zoom + Calendly'}
+              {MIDDLE_DOT} updated {formatDateTimeCanadaEastern(data.generated_at)}
             </span>
           )}
         </div>

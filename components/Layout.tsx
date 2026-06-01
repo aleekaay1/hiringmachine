@@ -69,7 +69,6 @@ const Layout: React.FC<LayoutProps> = ({
     if (location.pathname === '/hr-dashboard') return 'hr-dashboard';
     if (location.pathname === '/qr') return 'qr';
     if (location.pathname === '/email-log') return 'email-log';
-    if (location.pathname === '/superdashboard') return 'superdashboard';
     if (location.pathname === '/dashboard' || location.pathname === '/admin') {
       const view = new URLSearchParams(location.search).get('view');
       if (view === 'candidates') return 'candidates';

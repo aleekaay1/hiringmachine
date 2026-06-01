@@ -33,6 +33,12 @@ import {
   persistLiveSessionsRegistry,
   reclassifySessionsByStart,
 } from '../_shared/liveSessionsRegistry.ts';
+import {
+  fetchZoomParticipantsForSessionDate,
+  zoomParticipantsForUuid,
+  zoomPastInstancesForMeetingId,
+  type ZoomParticipant,
+} from '../_shared/zoomAttendance.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -254,92 +260,6 @@ async function zoomListMeetings(token: string, userId: string, type: 'past' | 'u
   return all;
 }
 
-type ZoomParticipant = { name?: string; user_email?: string; join_time?: string; leave_time?: string };
-
-function participantName(row: Record<string, unknown>): string {
-  const name = String(row.name ?? '').trim();
-  if (name) return name;
-  const userName = String(row.user_name ?? '').trim();
-  if (userName) return userName;
-  return '';
-}
-
-function participantEmail(row: Record<string, unknown>): string {
-  return String(row.user_email ?? row.email ?? '').trim().toLowerCase();
-}
-
-async function zoomParticipantsFromPath(token: string, path: string): Promise<ZoomParticipant[]> {
-  const all: ZoomParticipant[] = [];
-  let nextPageToken = '';
-  let safety = 0;
-  do {
-    safety++;
-    const withToken = `${path}${path.includes('?') ? '&' : '?'}page_size=300${nextPageToken ? `&next_page_token=${encodeURIComponent(nextPageToken)}` : ''}`;
-    const res = await fetch(`${ZOOM_API}${withToken}`, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) {
-      throw new Error(`Zoom GET ${withToken}: ${res.status} ${await res.text()}`);
-    }
-    const body = (await res.json()) as {
-      participants?: Array<Record<string, unknown>>;
-      next_page_token?: string;
-    };
-    for (const p of body.participants ?? []) {
-      all.push({
-        name: participantName(p),
-        user_email: participantEmail(p),
-        join_time: typeof p.join_time === 'string' ? p.join_time : undefined,
-        leave_time: typeof p.leave_time === 'string' ? p.leave_time : undefined,
-      });
-    }
-    nextPageToken = String(body.next_page_token ?? '').trim();
-  } while (nextPageToken && safety < 20);
-  return all;
-}
-
-async function zoomParticipants(token: string, uuid: string): Promise<ZoomParticipant[]> {
-  const encoded = encodeURIComponent(encodeURIComponent(uuid));
-  try {
-    // Preferred endpoint for reporting accounts.
-    return await zoomParticipantsFromPath(token, `/report/meetings/${encoded}/participants`);
-  } catch (e) {
-    console.warn(`Zoom report participants failed for ${uuid}; trying past_meetings fallback.`, e instanceof Error ? e.message : String(e));
-    try {
-      // Fallback endpoint for non-report contexts.
-      return await zoomParticipantsFromPath(token, `/past_meetings/${encoded}/participants`);
-    } catch (fallbackErr) {
-      console.warn(`Zoom participants unavailable for ${uuid}:`, fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr));
-      return [];
-    }
-  }
-}
-
-/** Past occurrences of a recurring PMI (needs meeting:read:list_past_instances:admin). */
-async function zoomPastInstancesForMeetingId(token: string, meetingId: string): Promise<ZoomRawMeeting[]> {
-  const all: ZoomRawMeeting[] = [];
-  let nextPageToken = '';
-  let safety = 0;
-  const base = `/past_meetings/${encodeURIComponent(meetingId)}/instances`;
-  do {
-    safety++;
-    const qs = `page_size=100${nextPageToken ? `&next_page_token=${encodeURIComponent(nextPageToken)}` : ''}`;
-    try {
-      const body = (await zoomGet(token, `${base}?${qs}`)) as {
-        meetings?: ZoomRawMeeting[];
-        next_page_token?: string;
-      };
-      for (const m of body.meetings ?? []) all.push(m);
-      nextPageToken = String(body.next_page_token ?? '').trim();
-    } catch (e) {
-      console.warn(
-        `[zoom] past instances failed for meeting ${meetingId}:`,
-        e instanceof Error ? e.message : String(e),
-      );
-      break;
-    }
-  } while (nextPageToken && safety < 15);
-  return all;
-}
-
 function pickZoomInstanceForTorontoDate(
   instances: ZoomRawMeeting[],
   dateKey: string,
@@ -372,25 +292,60 @@ function pickZoomInstanceForTorontoDate(
   return best;
 }
 
-async function zoomParticipantsForSession(
-  token: string,
-  meeting: ZoomRawMeeting,
-  dateKey: string,
-  targetMinutes: number | null,
-): Promise<ZoomParticipant[]> {
-  const uuid = String(meeting.uuid ?? '').trim();
-  if (uuid) {
-    const primary = await zoomParticipants(token, uuid);
-    if (primary.length > 0) return primary;
+const TARGET_MEETING_IDS = TARGET_MEETINGS.map((t) => t.id);
+
+function buildParticipantMaps(participants: ZoomParticipant[]) {
+  const participantByEmail = new Map<string, ZoomParticipant>();
+  for (const p of participants) {
+    const e = (p.user_email ?? '').trim().toLowerCase();
+    if (e) participantByEmail.set(e, p);
   }
-  const meetingId = meetingIdOf(meeting);
-  if (!meetingId) return [];
-  const instances = await zoomPastInstancesForMeetingId(token, meetingId);
-  const alt = pickZoomInstanceForTorontoDate(instances, dateKey, targetMinutes);
-  const altUuid = String(alt?.uuid ?? '').trim();
-  if (!altUuid || altUuid === uuid) return [];
-  console.log(`[zoom] retry participants via past instance uuid for ${dateKey}:`, altUuid);
-  return zoomParticipants(token, altUuid);
+  const participantNames = participants
+    .filter((p) => p.name)
+    .map((p) => ({ norm: normName(p.name ?? ''), raw: p }));
+  return { participantByEmail, participantNames };
+}
+
+function findParticipantForInvitee(
+  invitee: CalInvitee,
+  participantByEmail: Map<string, ZoomParticipant>,
+  participantNames: Array<{ norm: string; raw: ZoomParticipant }>,
+): ZoomParticipant | null {
+  if (invitee.email && participantByEmail.has(invitee.email)) {
+    return participantByEmail.get(invitee.email)!;
+  }
+  if (invitee.name) {
+    for (const { norm, raw } of participantNames) {
+      if (samePersonByName(invitee.name, raw.name ?? '') || normName(invitee.name) === norm) {
+        return raw;
+      }
+    }
+  }
+  return null;
+}
+
+function mapInviteesWithAttendance(
+  rawInvitees: CalInvitee[],
+  participants: ZoomParticipant[],
+) {
+  const { participantByEmail, participantNames } = buildParticipantMaps(participants);
+  return rawInvitees.map((i) => {
+    const match = findParticipantForInvitee(i, participantByEmail, participantNames);
+    return {
+      email: i.email,
+      name: i.name,
+      status: i.status,
+      no_show: i.no_show,
+      attended_zoom: match !== null,
+      match_method: match ? (participantByEmail.has(i.email) ? 'email' as const : 'name' as const) : null,
+      join_time: match?.join_time ?? null,
+      leave_time: match?.leave_time ?? null,
+      phone_number: i.phone_number ?? null,
+      timezone: i.timezone ?? null,
+      invitee_uri: i.uri,
+      event_uri: i.event_uri,
+    };
+  });
 }
 
 // ─── Zoom time parsing ─────────────────────────────────────────────────────
@@ -622,7 +577,7 @@ function calendlyEventNameKeywords(): string[] {
   if (raw) {
     return raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   }
-  return [LIVE_ONLINE_CALENDLY_NAME];
+  return [LIVE_ONLINE_CALENDLY_NAME, 'career overview', 'live career session'];
 }
 
 function calendlyEventMatchesLiveSession(eventName: string): boolean {
@@ -734,7 +689,7 @@ async function buildCalendlyProbePayload(
   const nowMs = Date.now();
   const from = new Date(nowMs - lookbackDays * 86400_000);
   const to = new Date(nowMs + lookaheadDays * 86400_000);
-  const requireWednesdaySlot = (Deno.env.get('CALENDLY_REQUIRE_WEDNESDAY_SLOT') ?? Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '1').trim() !== '0';
+  const requireWednesdaySlot = (Deno.env.get('CALENDLY_REQUIRE_WEDNESDAY_SLOT') ?? Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '0').trim() !== '0';
   const slotToleranceMin = Number(Deno.env.get('INTEGRATION_SLOT_TOLERANCE_MINUTES') ?? '45');
 
   const bundle = await calendlyFetchAllScheduledEvents(token, from, to);
@@ -851,29 +806,111 @@ Deno.serve(async (req) => {
   if (req.method !== 'GET') return new Response(JSON.stringify({ error: 'Method not allowed' }), { status: 405, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   try {
-    // Auth
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    const reqUrl = new URL(req.url);
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
-    const supabase = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
-    const { data: { user }, error: authErr } = await supabase.auth.getUser();
-    if (authErr || !user) return new Response(JSON.stringify({ error: 'Invalid or expired session' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    const authHeader = req.headers.get('Authorization');
+    const apikeyHeader = req.headers.get('apikey') ?? '';
 
-    // Health check
-    const reqUrl = new URL(req.url);
+    // Health check (before dashboard auth — needs headers, not a bare browser URL)
     if (reqUrl.searchParams.get('health') === '1') {
+      const hasBearer = authHeader?.startsWith('Bearer ') ?? false;
+      const hasAnonApiKey = apikeyHeader.length > 0 && apikeyHeader === anonKey;
+      if (!hasBearer && !hasAnonApiKey) {
+        return new Response(JSON.stringify({
+          error: 'Unauthorized',
+          hint:
+            'This endpoint requires headers. In Live Sessions click "Check Zoom connection", or call with Authorization: Bearer <your_access_token> and apikey: <anon_key>.',
+        }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      if (hasBearer) {
+        const supabaseHealth = createClient(supabaseUrl, anonKey, {
+          global: { headers: { Authorization: authHeader! } },
+        });
+        const { data: { user }, error: authErr } = await supabaseHealth.auth.getUser();
+        if (authErr || !user) {
+          return new Response(JSON.stringify({ error: 'Invalid or expired session' }), {
+            status: 401,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+      }
       const calTok = Deno.env.get('CALENDLY_API_TOKEN')?.trim();
       const hostEmail = Deno.env.get('ZOOM_HOST_USER_EMAIL')?.trim();
       let zoom_ok = false; let zoom_error: string | null = null;
-      try { const zt = await getZoomToken(); await zoomGetUserId(zt, hostEmail ?? ''); zoom_ok = true; }
-      catch (e) { zoom_error = e instanceof Error ? e.message : String(e); }
+      let zoom_past_instances_ok = false;
+      let zoom_past_instances_count = 0;
+      let zoom_participants_probe_ok = false;
+      let zoom_participants_probe_error: string | null = null;
+      let zoom_participants_probe_count = 0;
+      const zoom_scopes_recommended = [
+        'user:read:user:admin',
+        'meeting:read:list_meetings:admin',
+        'meeting:read:list_upcoming_meetings:admin',
+        'meeting:read:list_past_instances:admin',
+        'meeting:read:list_past_participants:admin',
+        'report:read:list_meeting_participants:admin',
+        'dashboard_meetings:read:list_meeting_participants:admin',
+      ];
+      try {
+        const zt = await getZoomToken();
+        await zoomGetUserId(zt, hostEmail ?? '');
+        zoom_ok = true;
+        const pmiId = TARGET_MEETING_IDS[0] ?? '85950683062';
+        const instances = await zoomPastInstancesForMeetingId(zoomGet, zt, pmiId);
+        zoom_past_instances_count = instances.length;
+        zoom_past_instances_ok = instances.length > 0;
+        if (instances.length > 0) {
+          const testUuid = String(instances[0].uuid ?? '').trim();
+          if (testUuid) {
+            const probe = await zoomParticipantsForUuid(ZOOM_API, zt, testUuid);
+            zoom_participants_probe_count = probe.length;
+            zoom_participants_probe_ok = true;
+          }
+        } else {
+          zoom_participants_probe_error = 'No past instances returned for PMI — check meeting:read:list_past_instances:admin';
+        }
+      } catch (e) {
+        zoom_error = e instanceof Error ? e.message : String(e);
+        zoom_participants_probe_error = zoom_error;
+      }
       let calendly_ok: boolean | null = null; let calendly_error: string | null = null;
       if (calTok) {
         try { await calendlyGet(calTok, '/users/me'); calendly_ok = true; }
         catch (e) { calendly_ok = false; calendly_error = e instanceof Error ? e.message : String(e); }
       }
-      return new Response(JSON.stringify({ ok: true, health: true, zoom_ok, zoom_error, calendly_configured: !!calTok, calendly_ok, calendly_error }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({
+        ok: true,
+        health: true,
+        zoom_ok,
+        zoom_error,
+        zoom_past_instances_ok,
+        zoom_past_instances_count,
+        zoom_participants_probe_ok,
+        zoom_participants_probe_error,
+        zoom_participants_probe_count,
+        zoom_pmi_meeting_id: TARGET_MEETING_IDS[0] ?? null,
+        zoom_scopes_recommended,
+        calendly_configured: !!calTok,
+        calendly_ok,
+        calendly_error,
+      }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    // Dashboard / sync — signed-in user required
+    if (!authHeader?.startsWith('Bearer ')) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    const supabase = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
+    const { data: { user }, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !user) {
+      return new Response(JSON.stringify({ error: 'Invalid or expired session' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     const lookbackDaysProbe = Math.max(14, Math.min(365, Number(Deno.env.get('ZOOM_LOOKBACK_DAYS') ?? '90')));
@@ -895,7 +932,15 @@ Deno.serve(async (req) => {
     if (readCacheOnly && serviceRoleEarly) {
       const adminCache = createServiceRoleClient(supabaseUrl, serviceRoleEarly);
       const cached = await loadLiveSessionsRegistryPayload(adminCache);
-      if (cached) {
+      const cacheMaxAgeMs = Math.max(
+        60_000,
+        Number(Deno.env.get('LIVE_SESSIONS_CACHE_MAX_AGE_MS') ?? String(6 * 60 * 60 * 1000)),
+      );
+      const cacheFresh =
+        cached &&
+        Number.isFinite(Date.parse(cached.generated_at)) &&
+        Date.now() - Date.parse(cached.generated_at) <= cacheMaxAgeMs;
+      if (cached && cacheFresh) {
         return new Response(JSON.stringify({
           ok: true,
           generated_at: cached.generated_at,
@@ -916,11 +961,13 @@ Deno.serve(async (req) => {
     if (!zoomHostEmail) return new Response(JSON.stringify({ error: 'Missing ZOOM_HOST_USER_EMAIL' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     const calendlyToken = Deno.env.get('CALENDLY_API_TOKEN')?.trim();
     const calendlyEnabled = !!calendlyToken;
-    const slotToleranceMin = Math.max(5, Math.min(45, Number(Deno.env.get('INTEGRATION_SLOT_TOLERANCE_MINUTES') ?? '20')));
+    const slotToleranceMin = Math.max(5, Math.min(120, Number(Deno.env.get('INTEGRATION_SLOT_TOLERANCE_MINUTES') ?? '45')));
     const lookbackDays   = Math.max(14, Math.min(365, Number(Deno.env.get('ZOOM_LOOKBACK_DAYS')  ?? '90')));
-    const lookaheadDays  = Math.max(7,  Math.min(180, Number(Deno.env.get('ZOOM_LOOKAHEAD_DAYS') ?? '60')));
-    const minPastDateRaw = (Deno.env.get('LIVE_SESSIONS_MIN_PAST_DATE') ?? '2026-04-20').trim();
-    const minPastDate = DateTime.fromISO(minPastDateRaw, { zone: TZ }).startOf('day');
+    const lookaheadDays  = Math.max(7,  Math.min(180, Number(Deno.env.get('ZOOM_LOOKAHEAD_DAYS') ?? '90')));
+    const minPastDateRaw = (Deno.env.get('LIVE_SESSIONS_MIN_PAST_DATE') ?? '').trim();
+    const minPastDate = minPastDateRaw
+      ? DateTime.fromISO(minPastDateRaw, { zone: TZ }).startOf('day')
+      : null;
 
     // Zoom — fetch all meetings
     const zoomToken = await getZoomToken();
@@ -949,7 +996,7 @@ Deno.serve(async (req) => {
       if (ms < nowMs - lookbackDays * 86400_000) continue;
       if (ms > nowMs + lookaheadDays * 86400_000) continue;
       if (ms < nowMs) {
-        if (dt?.isValid && minPastDate.isValid && dt < minPastDate) continue;
+        if (minPastDate?.isValid && dt?.isValid && dt < minPastDate) continue;
         // Past: keep only configured recurring live meetings.
         const slot = isTargetLiveMeeting(m, dt, slotToleranceMin);
         if (slot) pastMeetingCandidates.push(m);
@@ -983,7 +1030,7 @@ Deno.serve(async (req) => {
         event_types: bundle.event_types,
       };
       const requireWednesdaySlot =
-        (Deno.env.get('CALENDLY_REQUIRE_WEDNESDAY_SLOT') ?? Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '1').trim() !== '0';
+        (Deno.env.get('CALENDLY_REQUIRE_WEDNESDAY_SLOT') ?? Deno.env.get('CALENDLY_REQUIRE_TUE_WED') ?? '0').trim() !== '0';
 
       for (const ev of allCalEvents) {
         if (!ev.start_time) continue;
@@ -1060,7 +1107,7 @@ Deno.serve(async (req) => {
         for (const target of TARGET_MEETINGS) {
           let instances = pastInstancesCache.get(target.id);
           if (!instances) {
-            instances = await zoomPastInstancesForMeetingId(zoomToken, target.id);
+            instances = await zoomPastInstancesForMeetingId(zoomGet, zoomToken, target.id);
             pastInstancesCache.set(target.id, instances);
           }
           const picked = pickZoomInstanceForTorontoDate(instances, dateKey, targetMinutes);
@@ -1115,8 +1162,9 @@ Deno.serve(async (req) => {
     selectedPastMeetings.sort((a, b) => parseZoomStartMs(b) - parseZoomStartMs(a));
 
     // ─── Build past session rows ────────────────────────────────────────────
+    const zoomAttendanceDebug: Array<Record<string, unknown>> = [];
     const combinedPast = await Promise.all(selectedPastMeetings.map(async (m) => {
-      const uuid     = String(m.uuid     ?? '');
+      let uuid     = String(m.uuid     ?? '');
       const topic    = String(m.topic    ?? '');
       const start    = String(m.start_time ?? '');
       const startMs  = parseZoomStartMs(m);
@@ -1133,68 +1181,34 @@ Deno.serve(async (req) => {
         ? calStartForParticipants.hour * 60 + calStartForParticipants.minute
         : (startDt?.isValid ? startDt.hour * 60 + startDt.minute : null);
 
-      // Zoom participants (who actually joined)
-      const participants = await zoomParticipantsForSession(
-        zoomToken,
-        m,
-        dateKey,
-        targetMinutesForParticipants,
-      );
-
-      // Build fast lookup structures
-      // Email map: normalized email → participant row
-      const participantByEmail = new Map<string, ZoomParticipant>();
-      for (const p of participants) {
-        const e = (p.user_email ?? '').trim().toLowerCase();
-        if (e) participantByEmail.set(e, p);
-      }
-      // All participant display names (for name-based fallback)
-      const participantNames = participants
-        .filter((p) => p.name)
-        .map((p) => ({ norm: normName(p.name ?? ''), raw: p }));
-
-      // Match Calendly event for this exact date
       const calEv = calEventsByDate.get(dateKey) ?? null;
       const rawInvitees = activeCalendlyInvitees(calInviteesCache, calEv?.uri);
 
-      /**
-       * Find the best Zoom participant match for a Calendly invitee.
-       * Priority: (1) exact email, (2) name-based.
-       */
-      function findParticipant(invitee: CalInvitee): ZoomParticipant | null {
-        // 1. Email match
-        if (invitee.email && participantByEmail.has(invitee.email)) {
-          return participantByEmail.get(invitee.email)!;
-        }
-        // 2. Name-based fallback (catches guests who joined without signing in)
-        if (invitee.name) {
-          for (const { norm, raw } of participantNames) {
-            if (samePersonByName(invitee.name, raw.name ?? '') || normName(invitee.name) === norm) {
-              return raw;
-            }
-          }
-        }
-        return null;
-      }
-
-      // Cross-reference each Calendly invitee
-      const inviteesWithAttendance = rawInvitees.map((i) => {
-        const match = findParticipant(i);
-        return {
-          email:         i.email,
-          name:          i.name,
-          status:        i.status,
-          no_show:       i.no_show,
-          attended_zoom: match !== null,
-          match_method:  match ? (participantByEmail.has(i.email) ? 'email' : 'name') : null,
-          join_time:     match?.join_time ?? null,
-          leave_time:    match?.leave_time ?? null,
-          phone_number:  i.phone_number ?? null,
-          timezone:      i.timezone ?? null,
-          invitee_uri:   i.uri,
-          event_uri:     i.event_uri,
-        };
+      const participantFetch = await fetchZoomParticipantsForSessionDate({
+        zoomApiBase: ZOOM_API,
+        token: zoomToken,
+        zoomGet,
+        dateKey,
+        targetMinutes: targetMinutesForParticipants,
+        meetingHint: m,
+        targetMeetingIds: TARGET_MEETING_IDS,
+        pastInstancesCache,
+        parseZoomStartMs,
+        isoDateFn: isoDate,
+        timeZone: TZ,
       });
+      const participants = participantFetch.participants;
+      if (participantFetch.instanceUuid) {
+        uuid = participantFetch.instanceUuid;
+      }
+      if (participants.length === 0) {
+        console.warn(`[zoom] no participants for ${dateKey}`, participantFetch.debug);
+      } else {
+        console.log(`[zoom] ${dateKey}: ${participants.length} participants via ${participantFetch.debug.source}`);
+      }
+      zoomAttendanceDebug.push(participantFetch.debug as unknown as Record<string, unknown>);
+
+      const inviteesWithAttendance = mapInviteesWithAttendance(rawInvitees, participants);
 
       const attended = inviteesWithAttendance.filter((i) => i.attended_zoom);
       const noShow   = inviteesWithAttendance.filter((i) => !i.attended_zoom);
@@ -1338,53 +1352,28 @@ Deno.serve(async (req) => {
               for (const target of TARGET_MEETINGS) {
                 let instances = pastInstancesCache.get(target.id);
                 if (!instances) {
-                  instances = await zoomPastInstancesForMeetingId(zoomToken, target.id);
+                  instances = await zoomPastInstancesForMeetingId(zoomGet, zoomToken, target.id);
                   pastInstancesCache.set(target.id, instances);
                 }
                 zoomMeeting = pickZoomInstanceForTorontoDate(instances, dateKey, targetMinutes);
                 if (zoomMeeting) break;
               }
-              const participants = zoomMeeting
-                ? await zoomParticipantsForSession(zoomToken, zoomMeeting, dateKey, targetMinutes)
-                : [];
-              const participantByEmail = new Map<string, ZoomParticipant>();
-              for (const p of participants) {
-                const e = (p.user_email ?? '').trim().toLowerCase();
-                if (e) participantByEmail.set(e, p);
-              }
-              const participantNames = participants
-                .filter((p) => p.name)
-                .map((p) => ({ norm: normName(p.name ?? ''), raw: p }));
-              const findParticipant = (invitee: CalInvitee): ZoomParticipant | null => {
-                if (invitee.email && participantByEmail.has(invitee.email)) {
-                  return participantByEmail.get(invitee.email)!;
-                }
-                if (invitee.name) {
-                  for (const { norm, raw } of participantNames) {
-                    if (samePersonByName(invitee.name, raw.name ?? '') || normName(invitee.name) === norm) {
-                      return raw;
-                    }
-                  }
-                }
-                return null;
-              };
-              const inviteesWithAttendance = rawInvitees.map((i) => {
-                const match = findParticipant(i);
-                return {
-                  email: i.email,
-                  name: i.name,
-                  status: i.status,
-                  no_show: i.no_show,
-                  attended_zoom: match !== null,
-                  match_method: match ? (participantByEmail.has(i.email) ? 'email' : 'name') : null,
-                  join_time: match?.join_time ?? null,
-                  leave_time: match?.leave_time ?? null,
-                  phone_number: i.phone_number ?? null,
-                  timezone: i.timezone ?? null,
-                  invitee_uri: i.uri,
-                  event_uri: i.event_uri,
-                };
+              const participantFetch = await fetchZoomParticipantsForSessionDate({
+                zoomApiBase: ZOOM_API,
+                token: zoomToken,
+                zoomGet,
+                dateKey,
+                targetMinutes,
+                meetingHint: zoomMeeting,
+                targetMeetingIds: TARGET_MEETING_IDS,
+                pastInstancesCache,
+                parseZoomStartMs,
+                isoDateFn: isoDate,
+                timeZone: TZ,
               });
+              const participants = participantFetch.participants;
+              zoomAttendanceDebug.push(participantFetch.debug as unknown as Record<string, unknown>);
+              const inviteesWithAttendance = mapInviteesWithAttendance(rawInvitees, participants);
               const attended = inviteesWithAttendance.filter((i) => i.attended_zoom);
               existing.invitees = inviteesWithAttendance;
               existing.calendly = calMeta;
@@ -1403,51 +1392,67 @@ Deno.serve(async (req) => {
                   ? Math.round((attended.length / rawInvitees.length) * 100)
                   : null,
               };
-              if (zoomMeeting) {
-                existing.zoom.uuid = String(zoomMeeting.uuid ?? existing.zoom.uuid);
-                existing.zoom.topic = String(zoomMeeting.topic ?? existing.zoom.topic);
-                existing.zoom.start_time = String(zoomMeeting.start_time ?? existing.zoom.start_time);
-                existing.zoom.start_at_ms = parseZoomStartMs(zoomMeeting);
-                existing.zoom.meeting_id = zoomMeeting.id;
+              if (zoomMeeting || participantFetch.instanceUuid) {
+                const resolvedUuid = participantFetch.instanceUuid ?? String(zoomMeeting?.uuid ?? '');
+                existing.zoom.uuid = resolvedUuid || existing.zoom.uuid;
+                if (zoomMeeting) {
+                  existing.zoom.topic = String(zoomMeeting.topic ?? existing.zoom.topic);
+                  existing.zoom.start_time = String(zoomMeeting.start_time ?? existing.zoom.start_time);
+                  existing.zoom.start_at_ms = parseZoomStartMs(zoomMeeting);
+                  existing.zoom.meeting_id = zoomMeeting.id;
+                }
               }
             }
             continue;
           }
-          if (minPastDate.isValid && calStart < minPastDate) continue;
+          if (minPastDate?.isValid && calStart < minPastDate) continue;
+          const targetMinutes = calStart.hour * 60 + calStart.minute;
+          const participantFetch = await fetchZoomParticipantsForSessionDate({
+            zoomApiBase: ZOOM_API,
+            token: zoomToken,
+            zoomGet,
+            dateKey,
+            targetMinutes,
+            meetingHint: null,
+            targetMeetingIds: TARGET_MEETING_IDS,
+            pastInstancesCache,
+            parseZoomStartMs,
+            isoDateFn: isoDate,
+            timeZone: TZ,
+          });
+          const participants = participantFetch.participants;
+          zoomAttendanceDebug.push(participantFetch.debug as unknown as Record<string, unknown>);
+          const inviteesWithAttendance = mapInviteesWithAttendance(rawInvitees, participants);
+          const attended = inviteesWithAttendance.filter((i) => i.attended_zoom);
           combinedPast.push({
             source: 'past' as const,
             session_type: WEDNESDAY_LIVE_SLOT.label,
             zoom: {
-              uuid: '',
+              uuid: participantFetch.instanceUuid ?? '',
               topic: calEv.name ?? 'Live Online Career Session',
               start_time: calEv.start_time,
               start_at_ms: calMs,
               duration_minutes: 30,
               host_email: zoomHostEmail,
+              meeting_id: TARGET_MEETING_IDS[0],
             },
             calendly: calMeta,
-            participants: [],
-            invitees: rawInvitees.map((i) => ({
-              email: i.email,
-              name: i.name,
-              status: i.status,
-              no_show: i.no_show,
-              attended_zoom: false,
-              match_method: null,
-              join_time: null,
-              leave_time: null,
-              phone_number: i.phone_number ?? null,
-              timezone: i.timezone ?? null,
-              invitee_uri: i.uri,
-              event_uri: i.event_uri,
+            participants: participants.map((p) => ({
+              name: p.name,
+              email: (p.user_email ?? '').trim().toLowerCase(),
+              join_time: p.join_time,
+              leave_time: p.leave_time,
             })),
+            invitees: inviteesWithAttendance,
             walkin_emails: [],
             stats: {
               invited_count: rawInvitees.length,
-              attended_matched_count: 0,
-              no_show_or_absent_count: rawInvitees.length,
-              zoom_participant_count: 0,
-              attendance_rate_pct: rawInvitees.length > 0 ? 0 : null,
+              attended_matched_count: attended.length,
+              no_show_or_absent_count: inviteesWithAttendance.length - attended.length,
+              zoom_participant_count: participants.length,
+              attendance_rate_pct: rawInvitees.length > 0
+                ? Math.round((attended.length / rawInvitees.length) * 100)
+                : null,
             },
           });
           zoomPastDates.add(dateKey);
@@ -1485,6 +1490,59 @@ Deno.serve(async (req) => {
       combinedUpcoming.sort((a, b) => (a.zoom.start_at_ms ?? 0) - (b.zoom.start_at_ms ?? 0));
     }
 
+    // Final pass: any past row with Calendly invitees but zero Zoom participants.
+    for (const row of combinedPast) {
+      if ((row.stats?.zoom_participant_count ?? 0) > 0) continue;
+      const calStart = row.calendly?.start_time
+        ? DateTime.fromISO(row.calendly.start_time, { zone: TZ })
+        : null;
+      const ms = row.zoom.start_at_ms;
+      const zoomDt = typeof ms === 'number' && Number.isFinite(ms)
+        ? DateTime.fromMillis(ms, { zone: TZ })
+        : null;
+      const dateKey = calStart?.isValid ? isoDate(calStart) : (zoomDt?.isValid ? isoDate(zoomDt) : '');
+      if (!dateKey) continue;
+      const rawInvitees = activeCalendlyInvitees(calInviteesCache, row.calendly?.uri);
+      if (rawInvitees.length === 0) continue;
+      const targetMinutes = calStart?.isValid
+        ? calStart.hour * 60 + calStart.minute
+        : (zoomDt?.isValid ? zoomDt.hour * 60 + zoomDt.minute : null);
+      const participantFetch = await fetchZoomParticipantsForSessionDate({
+        zoomApiBase: ZOOM_API,
+        token: zoomToken,
+        zoomGet,
+        dateKey,
+        targetMinutes,
+        meetingHint: row.zoom as ZoomRawMeeting,
+        targetMeetingIds: TARGET_MEETING_IDS,
+        pastInstancesCache,
+        parseZoomStartMs,
+        isoDateFn: isoDate,
+        timeZone: TZ,
+      });
+      if (participantFetch.participants.length === 0) continue;
+      const inviteesWithAttendance = mapInviteesWithAttendance(rawInvitees, participantFetch.participants);
+      const attended = inviteesWithAttendance.filter((i) => i.attended_zoom);
+      row.invitees = inviteesWithAttendance;
+      row.participants = participantFetch.participants.map((p) => ({
+        name: p.name,
+        email: (p.user_email ?? '').trim().toLowerCase(),
+        join_time: p.join_time,
+        leave_time: p.leave_time,
+      }));
+      row.stats = {
+        invited_count: rawInvitees.length,
+        attended_matched_count: attended.length,
+        no_show_or_absent_count: inviteesWithAttendance.length - attended.length,
+        zoom_participant_count: participantFetch.participants.length,
+        attendance_rate_pct: rawInvitees.length > 0
+          ? Math.round((attended.length / rawInvitees.length) * 100)
+          : null,
+      };
+      if (participantFetch.instanceUuid) row.zoom.uuid = participantFetch.instanceUuid;
+      zoomAttendanceDebug.push({ ...participantFetch.debug, backfill: true } as unknown as Record<string, unknown>);
+    }
+
     const { pastMeetings: finalPast, upcomingMeetings: finalUpcoming } = reclassifySessionsByStart(
       combinedPast,
       combinedUpcoming,
@@ -1504,6 +1562,9 @@ Deno.serve(async (req) => {
       past_meetings: finalPast,
       upcoming_meetings: finalUpcoming,
       calendly_events_in_range: calEventsByDate.size,
+      ...(reqUrl.searchParams.get('zoom_attendance_debug') === '1'
+        ? { zoom_attendance_debug: zoomAttendanceDebug }
+        : {}),
       ...(calendlyFetchMeta ? { calendly_fetch: calendlyFetchMeta } : {}),
       ...(includeCalDebug && calendlyEnabled && calendlyToken
         ? {

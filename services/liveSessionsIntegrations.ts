@@ -235,9 +235,17 @@ export interface IntegrationHealthPayload {
   health: boolean;
   zoom_ok: boolean;
   zoom_error: string | null;
+  zoom_past_instances_ok?: boolean;
+  zoom_past_instances_count?: number;
+  zoom_participants_probe_ok?: boolean;
+  zoom_participants_probe_error?: string | null;
+  zoom_participants_probe_count?: number;
+  zoom_pmi_meeting_id?: string | null;
+  zoom_scopes_recommended?: string[];
   calendly_configured: boolean;
   calendly_ok: boolean | null;
   calendly_error: string | null;
+  hint?: string;
 }
 
 export async function fetchIntegrationHealth(
@@ -378,16 +386,39 @@ export async function fetchCalendlyProbe(
   return { ok: true, data: json };
 }
 
-export async function fetchLiveSessionsDashboard(
+const LIVE_SESSIONS_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+function dashboardHasSessions(payload: LiveSessionsDashboardPayload): boolean {
+  return payload.past_meetings.length + payload.upcoming_meetings.length > 0;
+}
+
+function dashboardCacheIsFresh(payload: LiveSessionsDashboardPayload): boolean {
+  const generated = Date.parse(payload.generated_at);
+  if (!Number.isFinite(generated)) return false;
+  return Date.now() - generated <= LIVE_SESSIONS_CACHE_MAX_AGE_MS;
+}
+
+/** Registry/cache rows saved before Zoom scopes were fixed often have invitees but zero joiners. */
+function dashboardNeedsAttendanceRefresh(payload: LiveSessionsDashboardPayload): boolean {
+  for (const row of payload.past_meetings) {
+    const invited = row.stats?.invited_count ?? row.invitees?.length ?? 0;
+    const zoomCount = row.stats?.zoom_participant_count ?? row.participants?.length ?? 0;
+    const matched = row.stats?.attended_matched_count ?? 0;
+    if (invited > 0 && zoomCount === 0 && matched === 0) return true;
+  }
+  return false;
+}
+
+async function fetchLiveSessionsDashboardRaw(
   accessToken: string,
-  options?: { sync?: boolean; readCache?: boolean },
+  mode: 'sync' | 'read_cache' | 'live',
 ): Promise<{ ok: true; data: LiveSessionsDashboardPayload } | { ok: false; error: string }> {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     return { ok: false, error: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY' };
   }
   const params = new URLSearchParams();
-  if (options?.sync) params.set('sync', '1');
-  else if (options?.readCache !== false) params.set('read_cache', '1');
+  if (mode === 'sync') params.set('sync', '1');
+  else if (mode === 'read_cache') params.set('read_cache', '1');
   const qs = params.toString();
   const url = `${SUPABASE_URL}/functions/v1/integrations-zoom-calendly${qs ? `?${qs}` : ''}`;
   const res = await fetch(url, {
@@ -405,6 +436,34 @@ export async function fetchLiveSessionsDashboard(
   }
   const payload = json as unknown as LiveSessionsDashboardPayload;
   return { ok: true, data: reconcileLiveSessionsPastUpcoming(payload) };
+}
+
+export async function fetchLiveSessionsDashboard(
+  accessToken: string,
+  options?: { sync?: boolean; readCache?: boolean },
+): Promise<{ ok: true; data: LiveSessionsDashboardPayload } | { ok: false; error: string }> {
+  if (options?.sync) {
+    return fetchLiveSessionsDashboardRaw(accessToken, 'sync');
+  }
+
+  if (options?.readCache === false) {
+    return fetchLiveSessionsDashboardRaw(accessToken, 'live');
+  }
+
+  const cached = await fetchLiveSessionsDashboardRaw(accessToken, 'read_cache');
+  if (
+    cached.ok &&
+    dashboardHasSessions(cached.data) &&
+    dashboardCacheIsFresh(cached.data) &&
+    !dashboardNeedsAttendanceRefresh(cached.data)
+  ) {
+    return cached;
+  }
+
+  const live = await fetchLiveSessionsDashboardRaw(accessToken, 'sync');
+  if (live.ok) return live;
+  if (cached.ok && dashboardHasSessions(cached.data)) return cached;
+  return live;
 }
 
 const TORONTO = 'America/Toronto';

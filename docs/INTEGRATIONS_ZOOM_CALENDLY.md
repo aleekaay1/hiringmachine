@@ -13,9 +13,12 @@ The **Live sessions** page (`/live-sessions`) loads data through the Edge Functi
    | `user:read:user:admin` | Resolve the host user (`GET /users/{userId}`) |
    | `meeting:read:list_meetings:admin` | List past meetings for a user |
    | `meeting:read:list_upcoming_meetings:admin` | List upcoming meetings for a user |
-   | `report:read:list_meeting_participants:admin` | Participant report (who joined) for past meetings |
+   | `report:read:list_meeting_participants:admin` | Participant report (`GET /report/meetings/{uuid}/participants`) |
+   | `meeting:read:list_past_instances:admin` | **Required for PMI** — list past occurrences (`GET /past_meetings/{meetingId}/instances`) |
+   | `meeting:read:list_past_participants:admin` | Past instance attendees (`GET /past_meetings/{uuid}/participants`) |
+   | `dashboard_meetings:read:list_meeting_participants:admin` | Metrics fallback (`GET /metrics/meetings/{id}/participants?type=past`) |
 
-   Optional if Zoom returns an error for a specific endpoint: `meeting:read:list_past_instances:admin` (past instances).
+   Attendance for recurring PMI sessions uses the **instance UUID** from past instances, not the scheduled-meeting UUID from `list meetings`. Without `list_past_instances` + `list_past_participants`, Calendly registrations will show but Zoom attended counts stay at 0.
 
    **If the UI doesn’t show these:** ensure the app type is **Server-to-Server OAuth**, open **Scopes** → **Add** → search **granular** (or paste the full string). If your account still uses legacy “classic” scopes, the Zoom docs above map each API method to the required granular scope.
 

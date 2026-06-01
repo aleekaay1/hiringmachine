@@ -122,7 +122,6 @@ const ADMIN_DATA_SECTIONS: AppSection[] = [
   'analytics',
   'settings',
   'email-log',
-  'superdashboard',
   'hr-dashboard',
   'pipeline-performance',
   'pipeline-settings',

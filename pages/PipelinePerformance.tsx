@@ -8,6 +8,7 @@ import {
   listPipelineCallRecords,
   listPipelineIncomingEmailLogsByCandidates,
 } from '../services/pipelineService';
+import { getCurrentUserProfile } from '../services/accessControl';
 import { supabase } from '../services/supabaseClient';
 
 type Preset = 'this_week' | 'last_7_days' | 'all';
@@ -57,6 +58,10 @@ const PipelinePerformance: React.FC = () => {
   const [emailReplies, setEmailReplies] = React.useState(0);
   const [bookedCount, setBookedCount] = React.useState(0);
   const [weeklyRows, setWeeklyRows] = React.useState<Array<{ week: string; calls: number; emails: number; booked: number }>>([]);
+  const [recruiterRows, setRecruiterRows] = React.useState<
+    Array<{ recruiterKey: string; label: string; calls: number; emails: number; booked: number }>
+  >([]);
+  const [isAdminView, setIsAdminView] = React.useState(false);
   const [themeMode, setThemeMode] = React.useState<WorkspaceThemeMode>('dark');
 
   React.useEffect(() => {
@@ -102,18 +107,22 @@ const PipelinePerformance: React.FC = () => {
       const userId = auth.user?.id;
       if (!userId) throw new Error('Not authenticated.');
 
+      const profile = await getCurrentUserProfile();
+      const adminView = profile?.role === 'admin';
+      setIsAdminView(adminView);
+
       const fromIso = preset === 'all' ? null : isoStartOfDay(fromDate);
       const toIso = preset === 'all' ? null : isoEndOfDay(toDate);
 
       const [callRecords, emailLogs] = await Promise.all([
         listPipelineCallRecords({
-          recruiterUserId: userId,
+          recruiterUserId: adminView ? undefined : userId,
           fromIso,
           toIso,
           limit: 5000,
         }),
         listPipelineCallLogs({
-          createdByUserId: userId,
+          createdByUserId: adminView ? undefined : userId,
           actions: ['email_sent'],
           fromIso,
           toIso,
@@ -127,6 +136,37 @@ const PipelinePerformance: React.FC = () => {
       const candidateIds = [...new Set(callRecords.map((row) => row.candidate_id).filter(Boolean))];
       const inbound = await listPipelineIncomingEmailLogsByCandidates(candidateIds, { fromIso, toIso });
       setEmailReplies(inbound.length);
+
+      if (adminView) {
+        const byRecruiter = new Map<string, { label: string; calls: number; emails: number; booked: number }>();
+        const recruiterKeyFor = (userIdValue: string | null | undefined, label: string | null | undefined) =>
+          userIdValue?.trim() || `label:${(label || 'unknown').trim().toLowerCase()}`;
+        const ensureRecruiter = (key: string, label: string) => {
+          if (!byRecruiter.has(key)) {
+            byRecruiter.set(key, { label, calls: 0, emails: 0, booked: 0 });
+          }
+          return byRecruiter.get(key)!;
+        };
+        for (const row of callRecords) {
+          const key = recruiterKeyFor(row.recruiter_user_id, row.recruiter_label);
+          const label = String(row.recruiter_label || row.recruiter_user_id || 'Unknown recruiter').trim() || 'Unknown recruiter';
+          const bucket = ensureRecruiter(key, label);
+          bucket.calls += 1;
+          if (String(row.disposition || '').toLowerCase() === 'booked') bucket.booked += 1;
+        }
+        for (const log of emailLogs) {
+          const key = recruiterKeyFor(log.created_by_user_id, log.created_by_label);
+          const label = String(log.created_by_label || log.created_by_user_id || 'Unknown recruiter').trim() || 'Unknown recruiter';
+          ensureRecruiter(key, label).emails += 1;
+        }
+        setRecruiterRows(
+          [...byRecruiter.entries()]
+            .map(([recruiterKey, row]) => ({ recruiterKey, ...row }))
+            .sort((a, b) => b.calls - a.calls || a.label.localeCompare(b.label)),
+        );
+      } else {
+        setRecruiterRows([]);
+      }
 
       if (preset === 'all' || !fromIso || !toIso) {
         setWeeklyRows([]);
@@ -195,7 +235,7 @@ const PipelinePerformance: React.FC = () => {
   return (
     <PipelineAuthShell
       title="Recruiter Performance"
-      subtitle="Sign in to view your KPI metrics"
+      subtitle={isAdminView ? 'Sign in to view team KPI metrics' : 'Sign in to view your KPI metrics'}
       redirectPath="/pipeline/performance"
     >
       <div className={`mx-auto w-full max-w-[1320px] ${tone.page} ${tone.pageTheme}`}>
@@ -213,7 +253,11 @@ const PipelinePerformance: React.FC = () => {
             <div>
               <p className={`text-[10px] uppercase tracking-[0.22em] ${tone.panelLabel}`}>Pipeline recruiter studio</p>
               <h1 className={`text-lg font-semibold ${tone.panelTitle}`}>Recruiter Performance</h1>
-              <p className={`text-xs ${tone.panelMuted}`}>Calls, outbound email, replies, and booked outcomes by date range.</p>
+              <p className={`text-xs ${tone.panelMuted}`}>
+                {isAdminView
+                  ? 'All recruiters — calls, outbound email, replies, and booked outcomes by date range.'
+                  : 'Calls, outbound email, replies, and booked outcomes by date range.'}
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -337,6 +381,30 @@ const PipelinePerformance: React.FC = () => {
           </div>
         </motion.div>
 
+        {isAdminView && recruiterRows.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.11 }}
+            className={`mt-4 rounded-2xl border p-4 ${tone.glassPanel}`}
+          >
+            <p className={`mb-2 text-sm font-semibold ${tone.panelTitle}`}>By recruiter</p>
+            <div className="space-y-2">
+              {recruiterRows.map((row) => (
+                <div
+                  key={row.recruiterKey}
+                  className={`rounded-xl border px-3 py-2 text-xs flex flex-wrap items-center justify-between gap-2 ${tone.subtle}`}
+                >
+                  <p className={`font-semibold ${tone.panelTitle}`}>{row.label}</p>
+                  <p className={tone.panelMuted}>Calls: {row.calls}</p>
+                  <p className={tone.panelMuted}>Emails: {row.emails}</p>
+                  <p className={tone.panelMuted}>Booked: {row.booked}</p>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+
         {preset !== 'all' && (
           <motion.div
             initial={{ opacity: 0, y: 16 }}
@@ -344,7 +412,9 @@ const PipelinePerformance: React.FC = () => {
             transition={{ duration: 0.5, delay: 0.12 }}
             className={`mt-4 rounded-2xl border p-4 ${tone.glassPanel}`}
           >
-            <p className={`mb-2 text-sm font-semibold ${tone.panelTitle}`}>Weekly totals</p>
+            <p className={`mb-2 text-sm font-semibold ${tone.panelTitle}`}>
+              {isAdminView ? 'Weekly totals (all recruiters)' : 'Weekly totals'}
+            </p>
             <div className="space-y-2">
               {weeklyRows.map((row) => (
                 <div key={row.week} className={`rounded-xl border px-3 py-2 text-xs flex flex-wrap items-center justify-between gap-2 ${tone.subtle}`}>

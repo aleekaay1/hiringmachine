@@ -1,6 +1,6 @@
 -- Per-recruiter isolation for pipeline resume uploads (candidates + resumes + storage).
 -- Recruiters: only rows where pipeline_candidates.uploader_user_id = auth.uid().
--- Admin / leadership: full access via user_profiles.role.
+-- Admins use dashboards only; leadership and recruiters are scoped to uploader_user_id.
 
 create or replace function public.pipeline_has_full_visibility()
 returns boolean
