@@ -11,11 +11,14 @@ import {
   type UpcomingMeetingInvitee,
 } from '../services/liveSessionsIntegrations';
 import {
+  collectLiveSessionAttendeeProfiles,
   collectLiveSessionInviteAndAttendEmails,
+  sendLiveSessionAssessmentEmails,
   syncLiveSessionPipeline,
+  type LiveSessionAttendeeMatch,
 } from '../services/liveSessionPipelineSync';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
-import { ChevronDown, ChevronRight, RefreshCw, Users, Video } from 'lucide-react';
+import { ChevronDown, ChevronRight, Mail, RefreshCw, Users, Video, X } from 'lucide-react';
 import { signInWithGoogle } from '../services/googleAuth';
 
 const EM_DASH = '\u2014';
@@ -86,6 +89,10 @@ const LiveSessionsDashboard: React.FC = () => {
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncSummary, setSyncSummary] = useState<string | null>(null);
+  const [pipelineModalOpen, setPipelineModalOpen] = useState(false);
+  const [pipelineMatches, setPipelineMatches] = useState<LiveSessionAttendeeMatch[]>([]);
+  const [pipelineSelected, setPipelineSelected] = useState<string[]>([]);
+  const [sendAssessmentsLoading, setSendAssessmentsLoading] = useState(false);
 
   const getFreshAccessToken = useCallback(async (): Promise<string | null> => {
     const { data: s } = await supabase.auth.getSession();
@@ -187,25 +194,80 @@ const LiveSessionsDashboard: React.FC = () => {
       setSyncError('Not signed in.');
       return;
     }
+    const { invitedEmails, attendedEmails } = collectLiveSessionInviteAndAttendEmails(data);
+    const attendeeProfiles = collectLiveSessionAttendeeProfiles(data);
     setSyncLoading(true);
-    const result = await syncLiveSessionPipeline(token, collectLiveSessionInviteAndAttendEmails(data));
+    const result = await syncLiveSessionPipeline(token, {
+      invitedEmails,
+      attendedEmails,
+      attendeeProfiles,
+    });
     setSyncLoading(false);
     if (!result.ok) {
       setSyncError(result.error);
       return;
     }
     const r = result.data;
-    setSyncSummary(
-      [
-        r.invited_stage_updated > 0 ? `${r.invited_stage_updated} moved to invited` : null,
-        r.attended_rows_updated > 0 ? `${r.attended_rows_updated} marked attended` : null,
-        r.assessment_stage_updated > 0 ? `${r.assessment_stage_updated} moved to assessment sent` : null,
-        r.assessment_emails_sent > 0 ? `${r.assessment_emails_sent} leadership assessment email${r.assessment_emails_sent === 1 ? '' : 's'} sent` : null,
-        r.assessment_email_send_failed > 0 ? `${r.assessment_email_send_failed} email send failed` : null,
-      ]
-        .filter(Boolean)
-        .join(` ${MIDDLE_DOT} `) || 'No new pipeline changes.',
-    );
+    const stageParts = [
+      r.invited_stage_updated > 0 ? `${r.invited_stage_updated} moved to invited` : null,
+      r.attended_rows_updated > 0 ? `${r.attended_rows_updated} marked attended` : null,
+    ].filter(Boolean);
+    if (stageParts.length > 0) {
+      setSyncSummary(stageParts.join(` ${MIDDLE_DOT} `));
+    }
+    const matches = r.matched_attendees ?? [];
+    setPipelineMatches(matches);
+    setPipelineSelected(matches.filter((m) => m.canSendAssessment).map((m) => m.email));
+    setPipelineModalOpen(true);
+  };
+
+  const handleSendSelectedAssessments = async () => {
+    const toSend = pipelineSelected.filter((email) => {
+      const row = pipelineMatches.find((m) => m.email === email);
+      return row?.canSendAssessment;
+    });
+    if (toSend.length === 0) {
+      setSyncError('Select at least one eligible attendee to email.');
+      return;
+    }
+    setSyncError(null);
+    const token = await getFreshAccessToken();
+    if (!token) {
+      setSyncError('Not signed in.');
+      return;
+    }
+    setSendAssessmentsLoading(true);
+    const result = await sendLiveSessionAssessmentEmails(token, toSend);
+    setSendAssessmentsLoading(false);
+    if (!result.ok) {
+      setSyncError(result.error);
+      return;
+    }
+    setPipelineModalOpen(false);
+    const parts = [
+      syncSummary,
+      result.assessment_emails_sent > 0
+        ? `${result.assessment_emails_sent} leadership assessment email${result.assessment_emails_sent === 1 ? '' : 's'} sent`
+        : null,
+      result.assessment_email_send_failed > 0
+        ? `${result.assessment_email_send_failed} email send failed`
+        : null,
+    ].filter(Boolean);
+    setSyncSummary(parts.join(` ${MIDDLE_DOT} `) || 'Done.');
+    if (result.failed.length > 0) {
+      setSyncError(result.failed.map((f) => `${f.email}: ${f.error}`).join(' '));
+    }
+  };
+
+  const togglePipelineEmail = (email: string, checked: boolean) => {
+    setPipelineSelected((prev) => {
+      if (checked) return prev.includes(email) ? prev : [...prev, email];
+      return prev.filter((e) => e !== email);
+    });
+  };
+
+  const selectAllEligiblePipeline = () => {
+    setPipelineSelected(pipelineMatches.filter((m) => m.canSendAssessment).map((m) => m.email));
   };
 
   if (!isAuthenticated) {
@@ -272,10 +334,10 @@ const LiveSessionsDashboard: React.FC = () => {
               className="text-sm"
               onClick={() => void handleSyncPipeline()}
               disabled={loading || syncLoading || !data}
-              title="Update candidate stages and email the leadership assessment to Zoom attendees"
+              title="Update candidate stages, then review Zoom attendees matched in the portal and send leadership emails manually"
             >
               <Users size={15} className={`mr-1.5 inline ${syncLoading ? 'animate-pulse' : ''}`} />
-              Sync pipeline & send assessments
+              Sync pipeline
             </Button>
           </div>
         </header>
@@ -328,10 +390,160 @@ const LiveSessionsDashboard: React.FC = () => {
           onToggle={(key) => setExpandedKey((k) => (k === key ? null : key))}
         />
 
+        {pipelineModalOpen && (
+          <LiveSessionPipelineReviewModal
+            matches={pipelineMatches}
+            selected={pipelineSelected}
+            sending={sendAssessmentsLoading}
+            onToggle={togglePipelineEmail}
+            onSelectAllEligible={selectAllEligiblePipeline}
+            onClose={() => !sendAssessmentsLoading && setPipelineModalOpen(false)}
+            onSend={() => void handleSendSelectedAssessments()}
+          />
+        )}
       </div>
     </Layout>
   );
 };
+
+function LiveSessionPipelineReviewModal({
+  matches,
+  selected,
+  sending,
+  onToggle,
+  onSelectAllEligible,
+  onClose,
+  onSend,
+}: {
+  matches: LiveSessionAttendeeMatch[];
+  selected: string[];
+  sending: boolean;
+  onToggle: (email: string, checked: boolean) => void;
+  onSelectAllEligible: () => void;
+  onClose: () => void;
+  onSend: () => void;
+}) {
+  const selectedSet = new Set(selected);
+  const eligibleCount = matches.filter((m) => m.canSendAssessment).length;
+  const sendCount = selected.filter((email) => matches.find((m) => m.email === email)?.canSendAssessment).length;
+
+  return (
+    <div
+      className="fixed inset-0 z-[120] bg-[#0B1B34]/40 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        className="bg-white rounded-2xl border border-[#d6e6f9] shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-labelledby="pipeline-review-title"
+      >
+        <div className="px-5 py-4 border-b border-[#e5edf9] flex items-start justify-between gap-3">
+          <div>
+            <h2 id="pipeline-review-title" className="text-base font-bold text-[#0B1B34]">
+              Matched Zoom attendees
+            </h2>
+            <p className="text-xs text-[#7a8fa8] mt-1">
+              Pipeline stages were updated. Select who should receive the leadership assessment email.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="p-1.5 rounded-lg text-[#7a8fa8] hover:bg-[#f0f6ff] disabled:opacity-50"
+            onClick={onClose}
+            disabled={sending}
+            aria-label="Close"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-auto px-5 py-3">
+          {matches.length === 0 ? (
+            <p className="text-sm text-[#7a8fa8] py-6 text-center">
+              No Zoom-confirmed attendees in past sessions. Refresh from Zoom + Calendly first.
+            </p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-[10px] uppercase tracking-wide text-[#7a8fa8] border-b border-[#e5edf9]">
+                  <th className="py-2 pr-2 w-8" />
+                  <th className="py-2 pr-2">Name</th>
+                  <th className="py-2 pr-2">Email</th>
+                  <th className="py-2 pr-2">Portal</th>
+                  <th className="py-2">Assessment email</th>
+                </tr>
+              </thead>
+              <tbody>
+                {matches.map((m) => {
+                  const checked = selectedSet.has(m.email);
+                  return (
+                    <tr key={m.email} className="border-b border-[#f0f4fa] last:border-0">
+                      <td className="py-2.5 pr-2 align-top">
+                        <input
+                          type="checkbox"
+                          className="rounded border-[#cfe3f9]"
+                          checked={checked}
+                          disabled={!m.canSendAssessment || sending}
+                          onChange={(e) => onToggle(m.email, e.target.checked)}
+                          aria-label={`Select ${m.displayName}`}
+                        />
+                      </td>
+                      <td className="py-2.5 pr-2 align-top font-medium text-[#0B1B34]">{m.displayName}</td>
+                      <td className="py-2.5 pr-2 align-top text-[#4a5d78] text-xs break-all">{m.email}</td>
+                      <td className="py-2.5 pr-2 align-top">
+                        {m.inPortal ? (
+                          <span className="text-[11px] text-green-700 bg-green-50 border border-green-100 rounded-full px-2 py-0.5">
+                            Matched
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-full px-2 py-0.5">
+                            Not in portal
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2.5 align-top text-xs text-[#6f7b8d]">
+                        {m.canSendAssessment ? (
+                          <span className="text-green-700">Ready to send</span>
+                        ) : (
+                          <span>{m.skipReason || 'Cannot send'}</span>
+                        )}
+                        {m.pipelineStage && m.inPortal && (
+                          <div className="text-[10px] text-[#9ba8ba] mt-0.5 truncate max-w-[180px]" title={m.pipelineStage}>
+                            {m.pipelineStage}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div className="px-5 py-4 border-t border-[#e5edf9] flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-[#7a8fa8]">
+            {eligibleCount} eligible {MIDDLE_DOT} {sendCount} selected to send
+          </p>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" className="text-sm" onClick={onSelectAllEligible} disabled={sending || eligibleCount === 0}>
+              Select all eligible
+            </Button>
+            <Button type="button" variant="outline" className="text-sm" onClick={onClose} disabled={sending}>
+              Cancel
+            </Button>
+            <Button type="button" className="text-sm" onClick={onSend} disabled={sending || sendCount === 0}>
+              <Mail size={15} className={`mr-1.5 inline ${sending ? 'animate-pulse' : ''}`} />
+              {sending ? 'Sending…' : `Send leadership email (${sendCount})`}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function SessionsBlock({
   title,

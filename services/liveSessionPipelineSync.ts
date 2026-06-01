@@ -36,21 +36,59 @@ export function collectLiveSessionInviteAndAttendEmails(payload: LiveSessionsDas
   return { invitedEmails: [...invited], attendedEmails: [...attended] };
 }
 
+/** Zoom-attended invitees with display context for the pipeline sync review UI. */
+export function collectLiveSessionAttendeeProfiles(
+  payload: LiveSessionsDashboardPayload,
+): Array<{ email: string; displayName: string; sessionDateKey: string }> {
+  const byEmail = new Map<string, { displayName: string; sessionDateKey: string }>();
+
+  for (const m of payload.past_meetings) {
+    const sessionDateKey =
+      String(m.calendly?.start_time || m.zoom?.start_time || '').slice(0, 10) || '';
+    for (const i of m.invitees) {
+      if (!i.attended_zoom) continue;
+      const email = norm(i.email);
+      if (!email) continue;
+      const displayName = String(i.name || '').trim() || email;
+      const existing = byEmail.get(email);
+      if (!existing || sessionDateKey > existing.sessionDateKey) {
+        byEmail.set(email, { displayName, sessionDateKey });
+      }
+    }
+  }
+
+  return [...byEmail.entries()]
+    .map(([email, meta]) => ({ email, ...meta }))
+    .sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+export type LiveSessionAttendeeMatch = {
+  email: string;
+  displayName: string;
+  sessionDateKey: string;
+  candidateId: string | null;
+  inPortal: boolean;
+  pipelineStage: string | null;
+  canSendAssessment: boolean;
+  skipReason: string | null;
+};
+
 export interface SyncLiveSessionPipelineResult {
   ok: true;
   invited_stage_updated: number;
   skipped_invite_not_in_portal: number;
   attended_rows_updated: number;
-  assessment_stage_updated: number;
   skipped_attended_not_in_portal: number;
-  assessment_emails_sent: number;
-  assessment_email_send_failed: number;
+  matched_attendees: LiveSessionAttendeeMatch[];
+  assessment_stage_updated?: number;
+  assessment_emails_sent?: number;
+  assessment_email_send_failed?: number;
 }
 
-export async function syncLiveSessionPipeline(
+async function postLiveSessionPipeline(
   accessToken: string,
-  params: { invitedEmails: string[]; attendedEmails: string[] }
-): Promise<{ ok: true; data: SyncLiveSessionPipelineResult } | { ok: false; error: string }> {
+  body: Record<string, unknown>,
+): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     return { ok: false, error: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY' };
   }
@@ -62,15 +100,60 @@ export async function syncLiveSessionPipeline(
       Authorization: `Bearer ${token}`,
       apikey: SUPABASE_ANON_KEY,
     },
-    body: JSON.stringify({
-      invitedEmails: params.invitedEmails,
-      attendedEmails: params.attendedEmails,
-    }),
+    body: JSON.stringify(body),
   });
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
-    const err = (json.error as string) || res.statusText || 'Sync failed';
+    const err = (json.error as string) || res.statusText || 'Request failed';
     return { ok: false, error: err };
   }
-  return { ok: true, data: json as unknown as SyncLiveSessionPipelineResult };
+  return { ok: true, data: json };
+}
+
+/** Update candidate pipeline stages from Calendly/Zoom; returns matched attendees for review. */
+export async function syncLiveSessionPipeline(
+  accessToken: string,
+  params: {
+    invitedEmails: string[];
+    attendedEmails: string[];
+    attendeeProfiles?: Array<{ email: string; displayName: string; sessionDateKey?: string }>;
+  },
+): Promise<{ ok: true; data: SyncLiveSessionPipelineResult } | { ok: false; error: string }> {
+  const result = await postLiveSessionPipeline(accessToken, {
+    invitedEmails: params.invitedEmails,
+    attendedEmails: params.attendedEmails,
+    attendeeProfiles: params.attendeeProfiles ?? [],
+  });
+  if (!result.ok) return result;
+  return { ok: true, data: result.data as unknown as SyncLiveSessionPipelineResult };
+}
+
+/** Send leadership assessment link to selected portal candidates (after sync review). */
+export async function sendLiveSessionAssessmentEmails(
+  accessToken: string,
+  emails: string[],
+): Promise<
+  | {
+      ok: true;
+      assessment_emails_sent: number;
+      assessment_email_send_failed: number;
+      assessment_stage_updated: number;
+      failed: Array<{ email: string; error: string }>;
+    }
+  | { ok: false; error: string }
+> {
+  const result = await postLiveSessionPipeline(accessToken, {
+    sendAssessmentEmails: emails,
+  });
+  if (!result.ok) return result;
+  const d = result.data;
+  return {
+    ok: true,
+    assessment_emails_sent: Number(d.assessment_emails_sent || 0),
+    assessment_email_send_failed: Number(d.assessment_email_send_failed || 0),
+    assessment_stage_updated: Number(d.assessment_stage_updated || 0),
+    failed: Array.isArray(d.assessment_send_failures)
+      ? (d.assessment_send_failures as Array<{ email: string; error: string }>)
+      : [],
+  };
 }
