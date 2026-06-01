@@ -9,7 +9,7 @@ import {
   type AppRole,
   type AppSection,
 } from '../services/accessControl';
-import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut, MonitorPlay, Mail, PhoneCall, SlidersHorizontal, FileUp } from 'lucide-react';
+import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut, MonitorPlay, Mail, PhoneCall, SlidersHorizontal, FileUp, Trophy } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -41,6 +41,7 @@ const Layout: React.FC<LayoutProps> = ({
     { name: 'Live Sessions', route: '/live-sessions', icon: Video, section: 'live-sessions' as const },
     { name: 'Webinar Geek', route: '/webinar-geek', icon: MonitorPlay, section: 'webinar-geek' as const },
     { name: 'Calls Analytics', route: '/calls-analytics', icon: BarChart3, section: 'calls-analytics' as const },
+    { name: 'Leadership Board', route: '/calls-analytics/leaderboard', icon: Trophy, section: 'leaderboard' as const },
     { name: 'Call workspace', route: '/pipeline/call', icon: PhoneCall, section: 'pipeline-call' as const },
     { name: 'Recruiter performance', route: '/pipeline/performance', icon: BarChart3, section: 'pipeline-performance' as const },
     { name: 'Email workspace', route: '/pipeline/email', icon: Mail, section: 'pipeline-email' as const },
@@ -60,6 +61,7 @@ const Layout: React.FC<LayoutProps> = ({
     if (location.pathname === '/pipeline/uploads') return 'pipeline-uploads';
     if (location.pathname === '/pipeline-settings') return 'pipeline-settings';
     if (location.pathname === '/calls-analytics') return 'calls-analytics';
+    if (location.pathname === '/calls-analytics/leaderboard' || location.pathname === '/leaderboard') return 'leaderboard';
     if (location.pathname === '/webinar-geek') return 'webinar-geek';
     if (location.pathname === '/live-sessions') return 'live-sessions';
     if (location.pathname === '/hr-dashboard') return 'hr-dashboard';

@@ -17,6 +17,7 @@ export type AppSection =
   | 'pipeline-email'
   | 'pipeline-uploads'
   | 'pipeline-settings'
+  | 'leaderboard'
   | 'hr-dashboard'
   | 'email-log'
   | 'superdashboard';
@@ -122,20 +123,24 @@ export function canAccessSection(role: AppRole | null, section: AppSection): boo
       section === 'pipeline-uploads' ||
       section === 'pipeline-settings' ||
       section === 'calls-analytics' ||
-      section === 'webinar-geek'
+      section === 'webinar-geek' ||
+      section === 'leaderboard'
     );
   }
-  if (role === 'webinar') return section === 'overview' || section === 'webinar-geek' || section === 'calls-analytics';
+  if (role === 'webinar') {
+    return section === 'overview' || section === 'webinar-geek' || section === 'calls-analytics' || section === 'leaderboard';
+  }
   if (role === 'hr') {
     return (
       section === 'overview' ||
       section === 'candidates' ||
       section === 'hr-dashboard' ||
       section === 'live-sessions' ||
-      section === 'email-log'
+      section === 'email-log' ||
+      section === 'leaderboard'
     );
   }
-  return section === 'overview';
+  return section === 'overview' || section === 'leaderboard';
 }
 
 export function defaultRouteForRole(role: AppRole | null): string {

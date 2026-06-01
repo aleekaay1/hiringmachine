@@ -1,4 +1,5 @@
 ﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
@@ -599,6 +600,12 @@ function CallsAnalyticsPage(p: PageProps) {
           />
         </div>
         <div className="flex flex-wrap gap-2">
+          <Link
+            to="/calls-analytics/leaderboard"
+            className="inline-flex items-center rounded-xl border border-[#c7dbf1] bg-white/70 px-3 py-2 text-xs font-semibold text-[#0B1B34] hover:bg-white"
+          >
+            Leadership Board
+          </Link>
           <Button type="button" onClick={p.onFetch} disabled={p.loading}>
             {p.loading ? (
               <>
