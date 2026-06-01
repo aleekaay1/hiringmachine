@@ -8,7 +8,6 @@ import {
   Flame,
   Medal,
   Minus,
-  Phone,
   RefreshCw,
   Star,
   Target,
@@ -25,6 +24,8 @@ import { loadLeaderboardSnapshot, saveLeaderboardSnapshot } from '../services/pi
 import {
   buildCompositeLeaderboard,
   buildLeaderboardWindows,
+  excludedLeaderboardUserIds,
+  filterLeaderboardRows,
   resolveLeaderboardBadgeWinners,
   rowMatchesBadgeFilter,
   seedsFromProfiles,
@@ -58,7 +59,7 @@ const BADGE_FILTERS: Array<{
   {
     id: 'fastClimber',
     label: 'Fast Climber',
-    description: 'Moved up two or more places vs the prior period.',
+    description: 'Moved up two or more places vs the previous week.',
     icon: Flame,
     accent: 'border-[#f5c4c4] bg-[#fff5f5] text-[#a84a4a]',
   },
@@ -71,18 +72,8 @@ const BADGE_FILTERS: Array<{
   },
 ];
 
-const GOALS = {
-  calls: 40,
-  booked: 12,
-  showRate: 0.7,
-};
-
 function pct(value: number): number {
   return Math.round(value * 100);
-}
-
-function clamp(value: number, max = 100): number {
-  return Math.max(0, Math.min(max, value));
 }
 
 function formatRefreshedAt(iso: string | null): string {
@@ -186,7 +177,6 @@ function PersonPerformanceBlock({
           <StatChip icon={TrendingUp} label="Show rate" value={`${pct(row.showRatio)}%`} tone={tone === 'gold' ? 'gold' : 'default'} />
           <StatChip icon={CalendarCheck} label="Booked" value={row.webinarBooked} tone={tone === 'gold' ? 'gold' : 'default'} />
           <StatChip icon={UserCheck} label="Attended" value={row.webinarShowed} tone={tone === 'gold' ? 'gold' : 'default'} />
-          <StatChip icon={Phone} label="Calls" value={row.calls} tone="muted" />
         </div>
         <p className={`mt-2 inline-flex items-center gap-1 text-sm font-semibold ${subClass}`}>
           <Star size={14} className={tone === 'gold' ? 'text-[#9b6b00]' : 'text-[#2f6ea8]'} aria-hidden />
@@ -257,7 +247,12 @@ const LeadershipLeaderboard: React.FC = () => {
       const profile = await getCurrentUserProfile();
       setViewerRole(profile?.role ?? null);
 
-      const { data, error: cacheError, tableMissing } = await loadLeaderboardSnapshot(targetPeriod);
+      const [snapshotResult, profiles] = await Promise.all([
+        loadLeaderboardSnapshot(targetPeriod),
+        listAllUserProfiles().catch(() => []),
+      ]);
+      const { data, error: cacheError, tableMissing } = snapshotResult;
+      const excludedUserIds = excludedLeaderboardUserIds(profiles);
       if (cacheError) throw new Error(cacheError);
       if (tableMissing) {
         setError('Leaderboard storage is not set up yet. Ask an admin to run the database script.');
@@ -267,7 +262,11 @@ const LeadershipLeaderboard: React.FC = () => {
         return;
       }
       if (data) {
-        applySnapshot(data);
+        applySnapshot({
+          ...data,
+          rows: filterLeaderboardRows(data.rows, excludedUserIds),
+          previousRows: filterLeaderboardRows(data.previousRows, excludedUserIds),
+        });
       } else {
         setRows([]);
         setPreviousRows([]);
@@ -325,6 +324,7 @@ const LeadershipLeaderboard: React.FC = () => {
         profiles.map((item) => [item.user_id, { fullName: item.full_name, email: item.email ?? null }]),
       );
       const recruiterSeeds = seedsFromProfiles(profiles);
+      const excludedUserIds = excludedLeaderboardUserIds(profiles);
 
       const computed = buildCompositeLeaderboard({
         webinarRows: scopedWebinarRows as Array<Record<string, unknown>>,
@@ -334,6 +334,7 @@ const LeadershipLeaderboard: React.FC = () => {
         previousRecords,
         recruiterDirectory,
         recruiterSeeds,
+        excludedUserIds,
       });
       const previousComputed = buildCompositeLeaderboard({
         webinarRows: scopedWebinarRows as Array<Record<string, unknown>>,
@@ -347,6 +348,7 @@ const LeadershipLeaderboard: React.FC = () => {
         previousRecords: [],
         recruiterDirectory,
         recruiterSeeds,
+        excludedUserIds,
       });
 
       const payload = {
@@ -409,6 +411,14 @@ const LeadershipLeaderboard: React.FC = () => {
   const topPerformer = rows[0] || null;
   const previousTopPerformer = previousRows[0] || null;
   const busy = loading || refreshing;
+
+  const periodWindowLabels = React.useMemo(() => {
+    const w = buildLeaderboardWindows(period);
+    return { current: w.current.label, previous: w.previous.label };
+  }, [period]);
+
+  const currentLeaderTitle = period === 'last7' ? 'This week' : period === 'thisMonth' ? 'This month' : 'Current window';
+  const previousLeaderTitle = period === 'last7' ? 'Previous week' : period === 'thisMonth' ? 'Last month' : 'Previous window';
 
   return (
     <PipelineAuthShell
@@ -485,34 +495,43 @@ const LeadershipLeaderboard: React.FC = () => {
 
           <div className="grid gap-3 lg:grid-cols-2">
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="rounded-3xl border border-[#f2d9aa] bg-gradient-to-br from-[#fff8ea] via-[#fffaf2] to-[#f2f7ff] p-4 backdrop-blur-xl">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[#9b6b00]">Current period leader</p>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-[#9b6b00]">{currentLeaderTitle}</p>
+              <p className="mt-0.5 text-[11px] text-[#8a7340]">{periodWindowLabels.current}</p>
               {topPerformer ? (
                 <div className="mt-2">
                   <PersonPerformanceBlock row={topPerformer} tone="gold" champion />
                 </div>
               ) : (
                 <p className="mt-2 text-sm text-[#6d5a39]">
-                  {cacheReady && !loading ? 'No results for this period yet. Click Refresh to load rankings.' : 'Loading…'}
+                  {cacheReady && !loading
+                    ? `No results for ${period === 'last7' ? 'this week' : 'this period'} yet. Click Refresh to load rankings.`
+                    : 'Loading…'}
                 </p>
               )}
             </motion.div>
 
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="rounded-3xl border border-[#d9e5f6] bg-white/80 p-4 backdrop-blur-xl">
-              <p className="text-[10px] uppercase tracking-[0.2em] text-[#2f6ea8]">Previous period leader</p>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-[#2f6ea8]">{previousLeaderTitle}</p>
+              <p className="mt-0.5 text-[11px] text-[#5c7594]">{periodWindowLabels.previous}</p>
               {previousTopPerformer ? (
                 <div className="mt-2">
                   <PersonPerformanceBlock row={previousTopPerformer} />
                 </div>
               ) : (
-                <p className="mt-2 text-sm text-[#4f6886]">No prior-period leader on record.</p>
+                <p className="mt-2 text-sm text-[#4f6886]">
+                  No leader on record for {period === 'last7' ? 'the previous week' : 'the prior window'}.
+                </p>
               )}
             </motion.div>
           </div>
 
-          <div className="rounded-3xl border border-[#d9e5f6] bg-white/80 p-4 backdrop-blur-xl">
-            <div className="mb-3 flex items-center gap-2">
+          <section className="rounded-3xl border border-[#d8e3ef] bg-[#f3f7fb] p-4 md:p-5">
+            <div className="mb-3 flex items-center gap-2 border-b border-[#dde5f0] pb-3">
               <Users size={16} className="text-[#2f6ea8]" aria-hidden />
-              <h3 className="text-sm font-semibold text-[#0B1B34]">Full rankings</h3>
+              <div>
+                <h3 className="text-sm font-semibold text-[#0B1B34]">Full rankings</h3>
+                <p className="text-[11px] text-[#5c7594]">Team standings for the selected period</p>
+              </div>
             </div>
             {loading ? (
               <div className="rounded-2xl border border-[#dfeaf8] bg-[#f9fcff] px-4 py-6 text-center text-sm text-[#4f6886]">
@@ -542,9 +561,6 @@ const LeadershipLeaderboard: React.FC = () => {
                 <AnimatePresence>
                   {shownRows.map((row, index) => {
                     const isViewer = viewerRow?.recruiterKey === row.recruiterKey;
-                    const callProgress = clamp((row.calls / GOALS.calls) * 100);
-                    const bookedProgress = clamp((row.webinarBooked / GOALS.booked) * 100);
-                    const showRateProgress = clamp((row.showRatio / GOALS.showRate) * 100);
                     return (
                       <motion.article
                         key={row.recruiterKey}
@@ -554,8 +570,8 @@ const LeadershipLeaderboard: React.FC = () => {
                         transition={{ duration: 0.2, delay: index * 0.025 }}
                         className={`rounded-2xl border p-3 transition ${
                           isViewer
-                            ? 'border-[#9bc8f6] bg-[#e7f4ff] shadow-[0_16px_36px_-24px_rgba(0,94,184,0.35)]'
-                            : 'border-[#d9e5f6] bg-white hover:bg-[#f7fbff]'
+                            ? 'border-[#7eb3ea] bg-white shadow-[0_12px_28px_-18px_rgba(0,94,184,0.4)] ring-2 ring-[#9bc8f6]/60'
+                            : 'border-[#c5d9ee] bg-white shadow-sm hover:border-[#9bc8f6]/50 hover:shadow-md'
                         }`}
                       >
                         <div className="flex items-start gap-2">
@@ -589,33 +605,17 @@ const LeadershipLeaderboard: React.FC = () => {
                             </div>
                           </div>
                         </div>
-                        <div className="mt-3 grid gap-2 md:grid-cols-3">
-                          <div className="rounded-xl border border-[#dfeaf8] bg-[#f9fcff] px-2.5 py-2">
-                            <p className="text-[10px] uppercase tracking-wide text-[#6d86a3]">Calls</p>
-                            <p className="text-[11px] text-[#35567a]">
-                              {row.calls}/{GOALS.calls}
-                            </p>
-                            <div className="mt-1 h-1.5 rounded-full bg-[#dfeaf8]">
-                              <div className="h-full rounded-full bg-[#67b5ff]" style={{ width: `${callProgress}%` }} />
-                            </div>
-                          </div>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
                           <div className="rounded-xl border border-[#dfeaf8] bg-[#f9fcff] px-2.5 py-2">
                             <p className="text-[10px] uppercase tracking-wide text-[#6d86a3]">Booked</p>
-                            <p className="text-[11px] text-[#35567a]">
-                              {row.webinarBooked}/{GOALS.booked}
-                            </p>
-                            <div className="mt-1 h-1.5 rounded-full bg-[#dfeaf8]">
-                              <div className="h-full rounded-full bg-[#ad8cff]" style={{ width: `${bookedProgress}%` }} />
-                            </div>
+                            <p className="text-lg font-semibold tabular-nums text-[#0B1B34]">{row.webinarBooked}</p>
                           </div>
                           <div className="rounded-xl border border-[#dfeaf8] bg-[#f9fcff] px-2.5 py-2">
-                            <p className="text-[10px] uppercase tracking-wide text-[#6d86a3]">Show rate</p>
-                            <p className="text-[11px] text-[#35567a]">
-                              {pct(row.showRatio)}% / {pct(GOALS.showRate)}%
+                            <p className="text-[10px] uppercase tracking-wide text-[#6d86a3]">Shows</p>
+                            <p className="text-lg font-semibold tabular-nums text-[#0B1B34]">
+                              {row.webinarShowed}
+                              <span className="ml-1.5 text-xs font-medium text-[#5c7594]">({pct(row.showRatio)}% rate)</span>
                             </p>
-                            <div className="mt-1 h-1.5 rounded-full bg-[#dfeaf8]">
-                              <div className="h-full rounded-full bg-[#53c78b]" style={{ width: `${showRateProgress}%` }} />
-                            </div>
                           </div>
                         </div>
                       </motion.article>
@@ -624,7 +624,7 @@ const LeadershipLeaderboard: React.FC = () => {
                 </AnimatePresence>
               </div>
             )}
-          </div>
+          </section>
 
           <div className="rounded-3xl border border-[#d9e5f6] bg-white/80 p-4 backdrop-blur-xl">
             <p className="text-[10px] uppercase tracking-[0.2em] text-[#4e79a9]">Recognition this period</p>
@@ -692,7 +692,7 @@ const LeadershipLeaderboard: React.FC = () => {
               <Target size={13} aria-hidden /> How to read this board
             </p>
             <p className="mt-1">
-              Everyone sees the same rankings. Rank change badges on the right show movement since the previous period. Data updates only when you press Refresh.
+              Rankings are scored from webinar bookings, attendance, and show rate only. Data updates when you press Refresh.
             </p>
           </div>
         </div>

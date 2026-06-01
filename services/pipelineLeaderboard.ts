@@ -17,6 +17,44 @@ type RecruiterDirectory = Map<string, { fullName: string | null; email: string |
 
 const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
 
+const EXCLUDED_LEADERBOARD_NAMES = new Set(['unknown recruiter', 'unknown', 'admin']);
+
+export function excludedLeaderboardUserIds(profiles: UserProfile[]): Set<string> {
+  return new Set(profiles.filter((p) => p.role === 'admin').map((p) => p.user_id));
+}
+
+export function isExcludedLeaderboardParticipant(
+  displayName: string,
+  recruiterUserId: string | null,
+  excludedUserIds?: Set<string>,
+): boolean {
+  const normalized = String(displayName || '').trim().toLowerCase();
+  if (!normalized || EXCLUDED_LEADERBOARD_NAMES.has(normalized)) return true;
+  if (/^unknown(\s+recruiter)?$/i.test(normalized)) return true;
+  if (normalized === 'administrator' || normalized === 'admin') return true;
+  if (recruiterUserId && excludedUserIds?.has(recruiterUserId)) return true;
+  return false;
+}
+
+function filterAggregates(aggregates: Aggregate[], excludedUserIds: Set<string>): Aggregate[] {
+  return aggregates.filter(
+    (agg) => !isExcludedLeaderboardParticipant(agg.displayName, agg.recruiterUserId, excludedUserIds),
+  );
+}
+
+export function filterLeaderboardRows(
+  rows: RecruiterLeaderboardRow[],
+  excludedUserIds: Set<string> = new Set(),
+): RecruiterLeaderboardRow[] {
+  const filtered = rows.filter(
+    (row) => !isExcludedLeaderboardParticipant(row.displayName, row.recruiterUserId, excludedUserIds),
+  );
+  filtered.forEach((row, index) => {
+    row.rank = index + 1;
+  });
+  return filtered;
+}
+
 export const LEADERBOARD_BADGE_TOP_PERFORMER = 'Top Performer';
 export const LEADERBOARD_BADGE_FAST_CLIMBER = 'Fast Climber';
 export const LEADERBOARD_BADGE_CONSISTENT_CLOSER = 'Consistent Closer';
@@ -212,11 +250,14 @@ function displayNameForRecord(record: PipelineCallRecord, directory: RecruiterDi
   return (fallbackEmail ? displayNameFromEmail(fallbackEmail) : null) || 'Unknown Recruiter';
 }
 
-function recruiterKeyForRecord(record: PipelineCallRecord): { recruiterKey: string; recruiterUserId: string | null } {
+function recruiterKeyForRecord(record: PipelineCallRecord): { recruiterKey: string; recruiterUserId: string | null } | null {
   const userId = String(record.recruiter_user_id || '').trim() || null;
   if (userId) return { recruiterKey: `uid:${userId}`, recruiterUserId: userId };
-  const label = String(record.recruiter_label || '').trim() || 'Unknown Recruiter';
-  return { recruiterKey: `label:${label.toLowerCase()}`, recruiterUserId: null };
+  const label = String(record.recruiter_label || '').trim();
+  if (!label) return null;
+  const labelLower = label.toLowerCase();
+  if (EXCLUDED_LEADERBOARD_NAMES.has(labelLower) || labelLower === 'administrator') return null;
+  return { recruiterKey: `label:${labelLower}`, recruiterUserId: null };
 }
 
 function ownerForWebinarRow(
@@ -308,7 +349,9 @@ function aggregateCallRecords(
   const map = new Map<string, Aggregate>();
 
   for (const record of records) {
-    const { recruiterKey, recruiterUserId } = recruiterKeyForRecord(record);
+    const identity = recruiterKeyForRecord(record);
+    if (!identity) continue;
+    const { recruiterKey, recruiterUserId } = identity;
     if (!map.has(recruiterKey)) {
       const seed = seeds.find((s) => s.recruiterKey === recruiterKey);
       map.set(
@@ -385,16 +428,17 @@ function toRows(aggregates: Aggregate[]): RecruiterLeaderboardRow[] {
   if (aggregates.length === 0) return [];
 
   const maxWebinarBooked = Math.max(1, ...aggregates.map((a) => a.webinarBooked));
-  const maxCalls = Math.max(1, ...aggregates.map((a) => a.calls));
+  const maxWebinarShowed = Math.max(1, ...aggregates.map((a) => a.webinarShowed));
 
   const rows = aggregates.map((agg) => {
     const showRatio = showRatioFromCounts(agg.webinarShowed, agg.webinarBooked);
     const smoothed = showRatioSmoothed(agg.webinarShowed, agg.webinarBooked);
-    const lowSampleFactor = Math.min(1, agg.webinarBooked / 12);
-    const qualityComponent = smoothed * (0.55 + 0.45 * lowSampleFactor);
+    const lowSampleFactor = Math.min(1, agg.webinarBooked / 8);
+    const showQuality = smoothed * (0.55 + 0.45 * lowSampleFactor);
     const bookedNorm = agg.webinarBooked / maxWebinarBooked;
-    const callsNorm = agg.calls / maxCalls;
-    const score = 100 * (0.55 * qualityComponent + 0.3 * bookedNorm + 0.15 * callsNorm);
+    const showedNorm = agg.webinarShowed / maxWebinarShowed;
+    const score = 100 * (0.5 * showQuality + 0.3 * bookedNorm + 0.2 * showedNorm);
+    const callsNorm = 0;
 
     return {
       recruiterKey: agg.recruiterKey,
@@ -424,7 +468,6 @@ function toRows(aggregates: Aggregate[]): RecruiterLeaderboardRow[] {
     if (b.score !== a.score) return b.score - a.score;
     if (b.webinarBooked !== a.webinarBooked) return b.webinarBooked - a.webinarBooked;
     if (b.webinarShowed !== a.webinarShowed) return b.webinarShowed - a.webinarShowed;
-    if (b.calls !== a.calls) return b.calls - a.calls;
     return a.displayName.localeCompare(b.displayName);
   });
 
@@ -495,8 +538,10 @@ export function buildCompositeLeaderboard(input: {
   recruiterSeeds?: LeaderboardRecruiterSeed[];
   /** When set, only these user ids are included (recruiter self-view). */
   restrictToUserIds?: string[] | null;
+  excludedUserIds?: Set<string>;
 }): RecruiterLeaderboardRow[] {
   const seeds = input.recruiterSeeds || [];
+  const excludedUserIds = input.excludedUserIds ?? new Set<string>();
   const currentWebinar = filterWebinarRowsInWindow(input.webinarRows, input.currentWindow);
   const previousWebinar = filterWebinarRowsInWindow(input.webinarRows, input.previousWindow);
 
@@ -509,8 +554,8 @@ export function buildCompositeLeaderboard(input: {
     aggregateCallRecords(input.previousRecords, input.recruiterDirectory, seeds),
   );
 
-  let currentRows = toRows(currentMerged);
-  let previousRows = toRows(previousMerged);
+  let currentRows = toRows(filterAggregates(currentMerged, excludedUserIds));
+  let previousRows = toRows(filterAggregates(previousMerged, excludedUserIds));
 
   const restrict = input.restrictToUserIds?.filter(Boolean);
   if (restrict?.length) {
@@ -523,11 +568,20 @@ export function buildCompositeLeaderboard(input: {
 }
 
 export function seedsFromProfiles(profiles: UserProfile[]): LeaderboardRecruiterSeed[] {
+  const excluded = excludedLeaderboardUserIds(profiles);
   return profiles
     .filter((item) => item.role === 'recruiter' || item.role === 'webinar' || item.role === 'leadership')
-    .map((item) => ({
-      recruiterKey: `uid:${item.user_id}`,
-      recruiterUserId: item.user_id,
-      displayName: String(item.full_name || '').trim() || String(item.email || '').split('@')[0] || 'Unknown',
-    }));
+    .filter((item) => !excluded.has(item.user_id))
+    .map((item) => {
+      const displayName =
+        String(item.full_name || '').trim() ||
+        String(item.email || '').split('@')[0] ||
+        'Team member';
+      return {
+        recruiterKey: `uid:${item.user_id}`,
+        recruiterUserId: item.user_id,
+        displayName: isExcludedLeaderboardParticipant(displayName, item.user_id, excluded) ? '' : displayName,
+      };
+    })
+    .filter((item) => item.displayName.length > 0);
 }
