@@ -2,7 +2,7 @@
 // Deploy: supabase functions deploy live-session-calendar
 // Secrets: PUBLIC_LIVE_SESSION_START_ISO, PUBLIC_LIVE_SESSION_END_ISO (required for a valid invite)
 
-import { buildIcsContent, getLiveSessionCalendarEventFromEnv } from '../_shared/calendarInvite.ts';
+import { buildIcsContent, resolveLiveSessionCalendar } from '../_shared/calendarInvite.ts';
 import { ZOOM_MEETING_URL } from '../_shared/hiringUrls.ts';
 
 const corsHeaders = {
@@ -20,23 +20,18 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const event = getLiveSessionCalendarEventFromEnv(
+    const event = resolveLiveSessionCalendar(
       {
         PUBLIC_LIVE_SESSION_START_ISO: Deno.env.get('PUBLIC_LIVE_SESSION_START_ISO') ?? undefined,
         PUBLIC_LIVE_SESSION_END_ISO: Deno.env.get('PUBLIC_LIVE_SESSION_END_ISO') ?? undefined,
+        PUBLIC_LIVE_SESSION_DISPLAY_DATE: Deno.env.get('PUBLIC_LIVE_SESSION_DISPLAY_DATE') ?? undefined,
+        PUBLIC_LIVE_SESSION_DISPLAY_TIME: Deno.env.get('PUBLIC_LIVE_SESSION_DISPLAY_TIME') ?? undefined,
         PUBLIC_LIVE_SESSION_CALENDAR_TITLE: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_TITLE') ?? undefined,
         PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION') ?? undefined,
         PUBLIC_LIVE_SESSION_CALENDAR_LOCATION: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_LOCATION') ?? undefined,
       },
       ZOOM_MEETING_URL,
     );
-
-    if (!event) {
-      return new Response(
-        'Calendar invite is not configured. Set PUBLIC_LIVE_SESSION_START_ISO and PUBLIC_LIVE_SESSION_END_ISO on the server.',
-        { status: 503, headers: { ...corsHeaders, 'Content-Type': 'text/plain; charset=utf-8' } },
-      );
-    }
 
     const ics = buildIcsContent(event);
     return new Response(ics, {

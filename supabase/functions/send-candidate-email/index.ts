@@ -16,7 +16,7 @@ import {
   buildGoogleCalendarUrl,
   buildIcsContent,
   buildOutlookCalendarUrl,
-  getLiveSessionCalendarEventFromEnv,
+  resolveLiveSessionCalendar,
   liveSessionCalendarIcsUrl,
 } from '../_shared/calendarInvite.ts';
 import {
@@ -142,39 +142,31 @@ Deno.serve(async (req) => {
 
     if (isPostCheckin) {
       subject = POST_CHECKIN_EMAIL_SUBJECT;
-      const sessionDate =
-        Deno.env.get('PUBLIC_LIVE_SESSION_DISPLAY_DATE')?.trim() || 'See your calendar invite for the date';
-      const sessionTime =
-        Deno.env.get('PUBLIC_LIVE_SESSION_DISPLAY_TIME')?.trim() || 'Eastern Time (ET)';
-      const calendarEvent = getLiveSessionCalendarEventFromEnv(
-        {
-          PUBLIC_LIVE_SESSION_START_ISO: Deno.env.get('PUBLIC_LIVE_SESSION_START_ISO') ?? undefined,
-          PUBLIC_LIVE_SESSION_END_ISO: Deno.env.get('PUBLIC_LIVE_SESSION_END_ISO') ?? undefined,
-          PUBLIC_LIVE_SESSION_CALENDAR_TITLE: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_TITLE') ?? undefined,
-          PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION') ?? undefined,
-          PUBLIC_LIVE_SESSION_CALENDAR_LOCATION: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_LOCATION') ?? undefined,
-        },
-        ZOOM_MEETING_URL,
-      );
+      const liveSessionEnv = {
+        PUBLIC_LIVE_SESSION_START_ISO: Deno.env.get('PUBLIC_LIVE_SESSION_START_ISO') ?? undefined,
+        PUBLIC_LIVE_SESSION_END_ISO: Deno.env.get('PUBLIC_LIVE_SESSION_END_ISO') ?? undefined,
+        PUBLIC_LIVE_SESSION_DISPLAY_DATE: Deno.env.get('PUBLIC_LIVE_SESSION_DISPLAY_DATE') ?? undefined,
+        PUBLIC_LIVE_SESSION_DISPLAY_TIME: Deno.env.get('PUBLIC_LIVE_SESSION_DISPLAY_TIME') ?? undefined,
+        PUBLIC_LIVE_SESSION_CALENDAR_TITLE: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_TITLE') ?? undefined,
+        PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION') ?? undefined,
+        PUBLIC_LIVE_SESSION_CALENDAR_LOCATION: Deno.env.get('PUBLIC_LIVE_SESSION_CALENDAR_LOCATION') ?? undefined,
+      };
+      const calendarEvent = resolveLiveSessionCalendar(liveSessionEnv, ZOOM_MEETING_URL);
       const icsUrl = liveSessionCalendarIcsUrl(`${supabaseUrl}/functions/v1`);
-      const addToCalendarHtml = calendarEvent
-        ? buildAddToCalendarEmailHtml({
-            icsDownloadUrl: icsUrl,
-            googleUrl: buildGoogleCalendarUrl(calendarEvent),
-            outlookUrl: buildOutlookCalendarUrl(calendarEvent),
-          })
-        : '';
-      if (calendarEvent) {
-        calendarAttachment = {
-          filename: 'live-online-career-session.ics',
-          content: buildIcsContent(calendarEvent),
-          contentType: 'text/calendar; charset=utf-8',
-        };
-      }
+      const addToCalendarHtml = buildAddToCalendarEmailHtml({
+        icsDownloadUrl: icsUrl,
+        googleUrl: buildGoogleCalendarUrl(calendarEvent),
+        outlookUrl: buildOutlookCalendarUrl(calendarEvent),
+      });
+      calendarAttachment = {
+        filename: 'live-online-career-session.ics',
+        content: buildIcsContent(calendarEvent),
+        contentType: 'text/calendar; charset=utf-8',
+      };
       html = applyPostCheckinMerge({
         firstName: firstName || 'there',
-        sessionDate,
-        sessionTime,
+        sessionDate: calendarEvent.displayDate,
+        sessionTime: calendarEvent.displayTime,
         zoomUrl: ZOOM_MEETING_URL,
         addToCalendarHtml,
         emailSignatureHtml: sig,

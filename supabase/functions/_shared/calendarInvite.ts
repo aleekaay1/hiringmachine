@@ -9,9 +9,23 @@ export type LiveSessionCalendarEvent = {
   zoomUrl: string;
   start: Date;
   end: Date;
+  recurringWeekly?: boolean;
 };
 
+export type ResolvedLiveSession = LiveSessionCalendarEvent & {
+  displayDate: string;
+  displayTime: string;
+};
+
+export const LIVE_SESSION_TIMEZONE = 'America/New_York';
+export const LIVE_SESSION_WEEKDAY = 3;
+export const LIVE_SESSION_START_HOUR = 11;
+export const LIVE_SESSION_START_MINUTE = 30;
+export const LIVE_SESSION_DURATION_MINUTES = 60;
+
 const DEFAULT_TITLE = 'Live Online Career Session | Globe Life AIL · Paz Organization';
+
+type Ymd = { year: number; month: number; day: number };
 
 function escapeIcsText(value: string): string {
   return value
@@ -34,18 +48,122 @@ export function parseIsoDate(value: string | undefined | null): Date | null {
   return new Date(ms);
 }
 
-export function getLiveSessionCalendarEventFromEnv(
+function easternParts(now: Date): Ymd & { weekday: number; hour: number; minute: number } {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: LIVE_SESSION_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const parts = dtf.formatToParts(now);
+  const map: Record<string, string> = {};
+  for (const p of parts) {
+    if (p.type !== 'literal') map[p.type] = p.value;
+  }
+  const weekdayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    weekday: weekdayMap[map.weekday] ?? 0,
+    hour: Number(map.hour),
+    minute: Number(map.minute),
+  };
+}
+
+function addDaysYmd(ymd: Ymd, days: number): Ymd {
+  const d = new Date(Date.UTC(ymd.year, ymd.month - 1, ymd.day + days));
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
+}
+
+export function zonedWallClockToUtc(ymd: Ymd, hour: number, minute: number, timeZone = LIVE_SESSION_TIMEZONE): Date {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  });
+
+  const readParts = (ms: number) => {
+    const got: Record<string, string> = {};
+    for (const p of dtf.formatToParts(new Date(ms))) {
+      if (p.type !== 'literal') got[p.type] = p.value;
+    }
+    return {
+      year: Number(got.year),
+      month: Number(got.month),
+      day: Number(got.day),
+      hour: Number(got.hour),
+      minute: Number(got.minute),
+    };
+  };
+
+  let ts = Date.UTC(ymd.year, ymd.month - 1, ymd.day, hour, minute);
+  for (let i = 0; i < 4; i += 1) {
+    const got = readParts(ts);
+    const desired = Date.UTC(ymd.year, ymd.month - 1, ymd.day, hour, minute);
+    const actual = Date.UTC(got.year, got.month - 1, got.day, got.hour, got.minute);
+    ts += desired - actual;
+  }
+  return new Date(ts);
+}
+
+export function getNextWednesdayLiveSessionBounds(now = new Date()): {
+  start: Date;
+  end: Date;
+  displayDate: string;
+  displayTime: string;
+} {
+  const ep = easternParts(now);
+  let daysAhead = (LIVE_SESSION_WEEKDAY - ep.weekday + 7) % 7;
+  if (daysAhead === 0) {
+    const beforeStart =
+      ep.hour < LIVE_SESSION_START_HOUR ||
+      (ep.hour === LIVE_SESSION_START_HOUR && ep.minute < LIVE_SESSION_START_MINUTE);
+    if (!beforeStart) daysAhead = 7;
+  }
+  const sessionYmd = addDaysYmd({ year: ep.year, month: ep.month, day: ep.day }, daysAhead);
+  const start = zonedWallClockToUtc(sessionYmd, LIVE_SESSION_START_HOUR, LIVE_SESSION_START_MINUTE);
+  const end = new Date(start.getTime() + LIVE_SESSION_DURATION_MINUTES * 60 * 1000);
+
+  const displayDate = new Intl.DateTimeFormat('en-US', {
+    timeZone: LIVE_SESSION_TIMEZONE,
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(start);
+
+  const timeFmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: LIVE_SESSION_TIMEZONE,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+  const displayTime = `${timeFmt.format(start)} – ${timeFmt.format(end)} Eastern (ET)`;
+
+  return { start, end, displayDate, displayTime };
+}
+
+function buildEventFields(
   env: Record<string, string | undefined>,
   zoomUrl: string,
-): LiveSessionCalendarEvent | null {
-  const start = parseIsoDate(env.PUBLIC_LIVE_SESSION_START_ISO);
-  const end = parseIsoDate(env.PUBLIC_LIVE_SESSION_END_ISO);
-  if (!start || !end || end.getTime() <= start.getTime()) return null;
-
+  start: Date,
+  end: Date,
+  recurringWeekly: boolean,
+): LiveSessionCalendarEvent {
   const title = env.PUBLIC_LIVE_SESSION_CALENDAR_TITLE?.trim() || DEFAULT_TITLE;
   const description =
     env.PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION?.trim() ||
-    `Live Online Career Session hosted by Alex Paz.\n\nJoin Zoom: ${zoomUrl}\n\nPlease join at least 5 minutes early.`;
+    `Live Online Career Session hosted by Alex Paz.\n\nJoin Zoom: ${zoomUrl}\n\nEvery Wednesday at 11:30 AM Eastern. Please join at least 5 minutes early.`;
 
   return {
     title,
@@ -54,10 +172,61 @@ export function getLiveSessionCalendarEventFromEnv(
     zoomUrl,
     start,
     end,
+    recurringWeekly,
   };
 }
 
-export function buildIcsContent(event: LiveSessionCalendarEvent, uid = 'live-session@paz-organization'): string {
+export function resolveLiveSessionCalendar(
+  env: Record<string, string | undefined>,
+  zoomUrl: string,
+  now = new Date(),
+): ResolvedLiveSession {
+  const start = parseIsoDate(env.PUBLIC_LIVE_SESSION_START_ISO);
+  const end = parseIsoDate(env.PUBLIC_LIVE_SESSION_END_ISO);
+  if (start && end && end.getTime() > start.getTime()) {
+    const displayDate =
+      env.PUBLIC_LIVE_SESSION_DISPLAY_DATE?.trim() ||
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: LIVE_SESSION_TIMEZONE,
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      }).format(start);
+    const timeFmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: LIVE_SESSION_TIMEZONE,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+    const displayTime =
+      env.PUBLIC_LIVE_SESSION_DISPLAY_TIME?.trim() ||
+      `${timeFmt.format(start)} – ${timeFmt.format(end)} Eastern (ET)`;
+    return {
+      ...buildEventFields(env, zoomUrl, start, end, false),
+      displayDate,
+      displayTime,
+    };
+  }
+
+  const next = getNextWednesdayLiveSessionBounds(now);
+  const displayDate = env.PUBLIC_LIVE_SESSION_DISPLAY_DATE?.trim() || next.displayDate;
+  const displayTime = env.PUBLIC_LIVE_SESSION_DISPLAY_TIME?.trim() || next.displayTime;
+  return {
+    ...buildEventFields(env, zoomUrl, next.start, next.end, true),
+    displayDate,
+    displayTime,
+  };
+}
+
+export function getLiveSessionCalendarEventFromEnv(
+  env: Record<string, string | undefined>,
+  zoomUrl: string,
+): LiveSessionCalendarEvent | null {
+  return resolveLiveSessionCalendar(env, zoomUrl);
+}
+
+export function buildIcsContent(event: LiveSessionCalendarEvent, uid = 'live-session-weekly@paz-organization'): string {
   const stamp = formatIcsUtc(new Date());
   const dtStart = formatIcsUtc(event.start);
   const dtEnd = formatIcsUtc(event.end);
@@ -65,6 +234,7 @@ export function buildIcsContent(event: LiveSessionCalendarEvent, uid = 'live-ses
   const description = escapeIcsText(event.description);
   const location = escapeIcsText(event.location);
   const url = escapeIcsText(event.zoomUrl);
+  const rrule = event.recurringWeekly ? ['RRULE:FREQ=WEEKLY;BYDAY=WE'] : [];
 
   return [
     'BEGIN:VCALENDAR',
@@ -77,6 +247,7 @@ export function buildIcsContent(event: LiveSessionCalendarEvent, uid = 'live-ses
     `DTSTAMP:${stamp}`,
     `DTSTART:${dtStart}`,
     `DTEND:${dtEnd}`,
+    ...rrule,
     `SUMMARY:${summary}`,
     `DESCRIPTION:${description}`,
     `LOCATION:${location}`,
@@ -97,6 +268,9 @@ export function buildGoogleCalendarUrl(event: LiveSessionCalendarEvent): string 
     details: event.description,
     location: event.location,
   });
+  if (event.recurringWeekly) {
+    params.set('recur', 'RRULE:FREQ=WEEKLY;BYDAY=WE');
+  }
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }
 
@@ -127,8 +301,8 @@ export function buildAddToCalendarEmailHtml(input: {
     fallbacks.push(`<a href="${input.outlookUrl}" target="_blank" rel="noopener noreferrer" style="${linkStyle}">Outlook</a>`);
   }
   const fallbackRow = fallbacks.length
-    ? `<p style="margin:8px 0 0;font-size:12px;color:#4b5563;">Or add via ${fallbacks.join(' · ')}. An .ics file is also attached to this email.</p>`
-    : `<p style="margin:8px 0 0;font-size:12px;color:#4b5563;">An .ics calendar file is attached to this email for Apple Calendar and other apps.</p>`;
+    ? `<p style="margin:8px 0 0;font-size:12px;color:#4b5563;">Or add via ${fallbacks.join(' · ')}. An .ics file is also attached (repeats every Wednesday).</p>`
+    : `<p style="margin:8px 0 0;font-size:12px;color:#4b5563;">An .ics calendar file is attached for Apple Calendar and other apps.</p>`;
 
   return `
 <p style="margin:16px 0 8px;">

@@ -3,7 +3,7 @@ import {
   buildAddToCalendarEmailHtml,
   buildGoogleCalendarUrl,
   buildOutlookCalendarUrl,
-  getLiveSessionCalendarEventFromEnv,
+  resolveLiveSessionCalendar,
   liveSessionCalendarIcsUrl,
 } from './calendarInvite';
 import { POST_CHECKIN_EMAIL_SUBJECT, POST_CHECKIN_EMAIL_BODY_HTML } from './postCheckinEmailTemplate';
@@ -226,15 +226,15 @@ export const POST_ASSESSMENT_SUBMIT_TEMPLATE: EmailTemplate = {
 
 function postCheckinAddToCalendarHtmlForPreview(): string {
   const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() || '';
-  const event = getLiveSessionCalendarEventFromEnv(
+  const event = resolveLiveSessionCalendar(
     {
       PUBLIC_LIVE_SESSION_START_ISO: (import.meta.env.VITE_PUBLIC_LIVE_SESSION_START_ISO as string | undefined)?.trim(),
       PUBLIC_LIVE_SESSION_END_ISO: (import.meta.env.VITE_PUBLIC_LIVE_SESSION_END_ISO as string | undefined)?.trim(),
     },
     ZOOM_MEETING_URL,
   );
-  if (!event || !supabaseUrl) {
-    return '<p style="font-size:12px;color:#6b7280;"><em>Add to Calendar button is included when session start/end times are configured on the server.</em></p>';
+  if (!supabaseUrl) {
+    return '<p style="font-size:12px;color:#6b7280;"><em>Add to Calendar uses the deployed live-session-calendar function.</em></p>';
   }
   const icsUrl = liveSessionCalendarIcsUrl(`${supabaseUrl}/functions/v1`);
   return buildAddToCalendarEmailHtml({
@@ -242,6 +242,11 @@ function postCheckinAddToCalendarHtmlForPreview(): string {
     googleUrl: buildGoogleCalendarUrl(event),
     outlookUrl: buildOutlookCalendarUrl(event),
   });
+}
+
+function postCheckinSessionLabelsForPreview(): { date: string; time: string } {
+  const resolved = resolveLiveSessionCalendar({}, ZOOM_MEETING_URL);
+  return { date: resolved.displayDate, time: resolved.displayTime };
 }
 
 export function mergeTemplate(
@@ -252,6 +257,7 @@ export function mergeTemplate(
   options?: { siteOrigin?: string }
 ): { subject: string; bodyHtml: string } {
   const candidateName = `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim();
+  const sessionLabels = postCheckinSessionLabelsForPreview();
   const map: Record<string, string> = {
     '{{firstName}}': candidate.firstName || '',
     '{{lastName}}': candidate.lastName || '',
@@ -260,10 +266,10 @@ export function mergeTemplate(
     '{{candidateName}}': candidateName,
     '{{zoomUrl}}': ZOOM_MEETING_URL,
     '{{assessmentLookupUrl}}': DEFAULT_ASSESSMENT_LOOKUP_URL,
-    '{{Date}}': POST_CHECKIN_DEFAULT_SESSION_DATE,
-    '{{Time}}': POST_CHECKIN_DEFAULT_SESSION_TIME,
-    '{{sessionDate}}': POST_CHECKIN_DEFAULT_SESSION_DATE,
-    '{{sessionTime}}': POST_CHECKIN_DEFAULT_SESSION_TIME,
+    '{{Date}}': sessionLabels.date,
+    '{{Time}}': sessionLabels.time,
+    '{{sessionDate}}': sessionLabels.date,
+    '{{sessionTime}}': sessionLabels.time,
     '{{calendlyRescheduleUrl}}': LIVE_SESSION_RESCHEDULE_CALENDLY_URL,
     '{{addToCalendarHtml}}': postCheckinAddToCalendarHtmlForPreview(),
     ...(extras || {}),
