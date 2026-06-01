@@ -2,6 +2,9 @@ import React from 'react';
 import type { UserProfile } from '../../services/accessControl';
 import { loadRecruiterPersonalMetrics, type RecruiterPersonalMetrics } from '../../services/dashboardPersonalMetrics';
 import { DayNotesPanel, GoalRow, QuickLinkCard, StatTile } from './DashboardWidgets';
+import RecruiterCoinsPanel from './RecruiterCoinsPanel';
+import { loadRecruiterCoinWallet, type RecruiterCoinWallet } from '../../services/recruiterCoinService';
+import { COINS_PER_SHOW } from '../../services/recruiterCoins';
 
 function pct(n: number): string {
   return `${Math.round(n * 100)}%`;
@@ -9,13 +12,20 @@ function pct(n: number): string {
 
 const RecruiterDashboardView: React.FC<{ profile: UserProfile }> = ({ profile }) => {
   const [metrics, setMetrics] = React.useState<RecruiterPersonalMetrics | null>(null);
+  const [wallet, setWallet] = React.useState<RecruiterCoinWallet | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
-    void loadRecruiterPersonalMetrics(profile)
-      .then((data) => {
-        if (!cancelled) setMetrics(data);
+    void Promise.all([
+      loadRecruiterPersonalMetrics(profile),
+      loadRecruiterCoinWallet(Number(profile.points || 0)),
+    ])
+      .then(([data, coinWallet]) => {
+        if (!cancelled) {
+          setMetrics(data);
+          setWallet(coinWallet);
+        }
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -39,8 +49,15 @@ const RecruiterDashboardView: React.FC<{ profile: UserProfile }> = ({ profile })
     );
   }
 
+  const periodShowCoins =
+    metrics != null
+      ? (metrics.webinarShowed + metrics.liveSessionShowed) * COINS_PER_SHOW
+      : null;
+
   return (
     <>
+      <RecruiterCoinsPanel wallet={wallet} loading={!wallet && !error} />
+
       <div className="rounded-3xl border border-[#d9e5f6] bg-white/80 p-4 backdrop-blur-xl">
         <p className="text-[10px] uppercase tracking-[0.2em] text-[#2f6ea8]">Your week at a glance</p>
         <p className="mt-1 text-xs text-[#5c7594]">{metrics.windowLabel}</p>
@@ -66,6 +83,11 @@ const RecruiterDashboardView: React.FC<{ profile: UserProfile }> = ({ profile })
         </div>
         <p className="mt-2 text-[10px] text-[#6a839f]">
           Upload progress updates in the uploads workspace. Booking goal compares to your week total above until daily tracking is added.
+          {periodShowCoins != null && periodShowCoins > 0 ? (
+            <span className="block mt-1 text-amber-800/90">
+              This period: {metrics!.webinarShowed + metrics!.liveSessionShowed} shows ≈ {periodShowCoins} coins at {COINS_PER_SHOW} per show (lifetime balance in your wallet above).
+            </span>
+          ) : null}
         </p>
       </div>
 

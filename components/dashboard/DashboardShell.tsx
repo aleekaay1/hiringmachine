@@ -1,5 +1,6 @@
 import React from 'react';
 import PipelineAuthShell from '../PipelineAuthShell';
+import CoinWalletBadge from './CoinWalletBadge';
 import type { AppRole, UserProfile } from '../../services/accessControl';
 
 const ROLE_LABELS: Record<AppRole, string> = {
@@ -88,7 +89,12 @@ const DashboardShell: React.FC<DashboardShellProps> = ({ profile, loading, child
                   {loading ? 'Loading your overview…' : 'Your home base for today’s work, goals, and quick links.'}
                 </p>
               </div>
-              <LiveClock />
+              <div className="flex flex-wrap items-start justify-end gap-3">
+                {profile && profile.role !== 'viewer' && profile.role !== 'hr' ? (
+                  <CoinWalletBadge profileBalance={profile.points} />
+                ) : null}
+                <LiveClock />
+              </div>
             </div>
           </div>
           {children}
