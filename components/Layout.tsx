@@ -9,7 +9,7 @@ import {
   type AppRole,
   type AppSection,
 } from '../services/accessControl';
-import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut, MonitorPlay, Mail, PhoneCall, SlidersHorizontal, FileUp, Trophy } from 'lucide-react';
+import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut, MonitorPlay, Mail, PhoneCall, SlidersHorizontal, FileUp, Trophy, LayoutDashboard } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -35,7 +35,8 @@ const Layout: React.FC<LayoutProps> = ({
   const isActive = (path: string) => current === path;
 
   const adminMenu = [
-    { name: 'Overview', route: '/dashboard?view=overview', icon: Home, section: 'overview' as const },
+    { name: 'My dashboard', route: '/home', icon: Home, section: 'home' as const },
+    { name: 'Overview', route: '/dashboard?view=overview', icon: LayoutDashboard, section: 'overview' as const },
     { name: 'Candidates', route: '/dashboard?view=candidates', icon: Users, section: 'candidates' as const },
     { name: 'QR Codes', route: '/qr', icon: QrCode, section: 'qr' as const },
     { name: 'Live Sessions', route: '/live-sessions', icon: Video, section: 'live-sessions' as const },
@@ -54,6 +55,7 @@ const Layout: React.FC<LayoutProps> = ({
   ] as const;
 
   const currentSection = React.useMemo<AppSection>(() => {
+    if (location.pathname === '/home') return 'home';
     if (location.pathname === '/pipeline') return 'pipeline';
     if (location.pathname === '/pipeline/call') return 'pipeline-call';
     if (location.pathname === '/pipeline/performance') return 'pipeline-performance';

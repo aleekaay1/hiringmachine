@@ -18,6 +18,7 @@ export type AppSection =
   | 'pipeline-uploads'
   | 'pipeline-settings'
   | 'leaderboard'
+  | 'home'
   | 'hr-dashboard'
   | 'email-log'
   | 'superdashboard';
@@ -110,10 +111,11 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
 }
 
 export function canAccessSection(role: AppRole | null, section: AppSection): boolean {
-  if (!role) return section === 'overview';
+  if (!role) return section === 'overview' || section === 'home';
   if (role === 'admin' || role === 'leadership') return true;
   if (role === 'recruiter') {
     return (
+      section === 'home' ||
       section === 'overview' ||
       section === 'settings' ||
       section === 'pipeline' ||
@@ -128,10 +130,11 @@ export function canAccessSection(role: AppRole | null, section: AppSection): boo
     );
   }
   if (role === 'webinar') {
-    return section === 'overview' || section === 'webinar-geek' || section === 'calls-analytics' || section === 'leaderboard';
+    return section === 'home' || section === 'overview' || section === 'webinar-geek' || section === 'calls-analytics' || section === 'leaderboard';
   }
   if (role === 'hr') {
     return (
+      section === 'home' ||
       section === 'overview' ||
       section === 'candidates' ||
       section === 'hr-dashboard' ||
@@ -140,13 +143,20 @@ export function canAccessSection(role: AppRole | null, section: AppSection): boo
       section === 'leaderboard'
     );
   }
-  return section === 'overview' || section === 'leaderboard';
+  return section === 'overview' || section === 'leaderboard' || section === 'home';
 }
 
 export function defaultRouteForRole(role: AppRole | null): string {
-  if (role === 'recruiter') return '/pipeline/call';
-  if (role === 'webinar') return '/webinar-geek';
-  if (role === 'hr') return '/hr-dashboard';
+  if (
+    role === 'recruiter' ||
+    role === 'leadership' ||
+    role === 'admin' ||
+    role === 'webinar' ||
+    role === 'hr' ||
+    role === 'viewer'
+  ) {
+    return '/home';
+  }
   return '/dashboard?view=overview';
 }
 

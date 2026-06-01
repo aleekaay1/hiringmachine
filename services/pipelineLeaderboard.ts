@@ -1,6 +1,14 @@
 import { buildRecruiterScopeTokens, recruiterOwnsNameKey, type UserProfile } from './accessControl';
 import { readCallRecordMeta, type PipelineCallRecord } from './pipelineService';
-import { eventMsToTorontoYmd } from './webinarGeekDates';
+import {
+  fridayWeekBoundsFromYmd,
+  monthBoundsFromFirstYmd,
+  shiftMonthFirstYmd,
+  shiftYmdDays,
+  torontoMonthStartToday,
+  torontoYmdFromDate,
+  ymdToLocalDate,
+} from './webinarGeekDates';
 import { nameKeyFromRow } from './webinarGeekInviters';
 import { fmtHrScheduledDateKey } from './webinarGeekRecruiterAnalytics';
 
@@ -9,10 +17,24 @@ type RecruiterDirectory = Map<string, { fullName: string | null; email: string |
 
 const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
 
+export const LEADERBOARD_BADGE_TOP_PERFORMER = 'Top Performer';
+export const LEADERBOARD_BADGE_FAST_CLIMBER = 'Fast Climber';
+export const LEADERBOARD_BADGE_CONSISTENT_CLOSER = 'Consistent Closer';
+
+export type LeaderboardBadgeId = 'topPerformer' | 'fastClimber' | 'consistentCloser';
+
 export type LeaderboardWindow = {
   fromIso: string;
   toIso: string;
   label: string;
+  sinceYmd: string;
+  untilYmd: string;
+};
+
+export type LeaderboardBadgeWinners = {
+  topPerformer: RecruiterLeaderboardRow | null;
+  fastClimber: RecruiterLeaderboardRow | null;
+  consistentCloser: RecruiterLeaderboardRow | null;
 };
 
 export type LeaderboardPeriod = 'last7' | 'last30' | 'thisMonth';
@@ -58,99 +80,103 @@ type Aggregate = {
   liveSessionBooked: number;
 };
 
-function startOfDayUtc(value: Date): Date {
-  const copy = new Date(value);
-  copy.setUTCHours(0, 0, 0, 0);
-  return copy;
+function utcRangeFromTorontoYmd(sinceYmd: string, untilYmd: string): { from: Date; to: Date } {
+  const from = ymdToLocalDate(sinceYmd);
+  from.setHours(0, 0, 0, 0);
+  const to = ymdToLocalDate(untilYmd);
+  to.setHours(23, 59, 59, 999);
+  return { from, to };
 }
 
-function endOfDayUtc(value: Date): Date {
-  const copy = new Date(value);
-  copy.setUTCHours(23, 59, 59, 999);
-  return copy;
+function windowFromYmdRange(sinceYmd: string, untilYmd: string, label: string): LeaderboardWindow {
+  const { from, to } = utcRangeFromTorontoYmd(sinceYmd, untilYmd);
+  return {
+    fromIso: from.toISOString(),
+    toIso: to.toISOString(),
+    label,
+    sinceYmd,
+    untilYmd,
+  };
 }
 
-function periodBounds(period: LeaderboardPeriod, now: Date): { from: Date; to: Date; previousFrom: Date; previousTo: Date; label: string } {
-  const today = startOfDayUtc(now);
-  const to = endOfDayUtc(now);
+function periodBounds(
+  period: LeaderboardPeriod,
+  now: Date,
+): {
+  current: LeaderboardWindow;
+  previous: LeaderboardWindow;
+} {
+  const todayYmd = torontoYmdFromDate(now);
 
   if (period === 'last30') {
-    const from = new Date(today);
-    from.setUTCDate(from.getUTCDate() - 29);
-    const previousTo = new Date(from);
-    previousTo.setUTCDate(previousTo.getUTCDate() - 1);
-    const previousFrom = new Date(previousTo);
-    previousFrom.setUTCDate(previousFrom.getUTCDate() - 29);
+    const untilYmd = todayYmd;
+    const sinceYmd = shiftYmdDays(untilYmd, -29);
+    const prevUntilYmd = shiftYmdDays(sinceYmd, -1);
+    const prevSinceYmd = shiftYmdDays(prevUntilYmd, -29);
     return {
-      from,
-      to,
-      previousFrom: startOfDayUtc(previousFrom),
-      previousTo: endOfDayUtc(previousTo),
-      label: 'Last 30 days',
+      current: windowFromYmdRange(sinceYmd, untilYmd, 'Last 30 days'),
+      previous: windowFromYmdRange(prevSinceYmd, prevUntilYmd, 'Previous 30 days'),
     };
   }
 
   if (period === 'thisMonth') {
-    const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
-    const monthLength = Math.max(1, Math.round((to.getTime() - from.getTime()) / 86400000) + 1);
-    const previousTo = new Date(from);
-    previousTo.setUTCDate(previousTo.getUTCDate() - 1);
-    const previousFrom = new Date(previousTo);
-    previousFrom.setUTCDate(previousFrom.getUTCDate() - (monthLength - 1));
+    const monthStart = torontoMonthStartToday();
+    const month = monthBoundsFromFirstYmd(monthStart);
+    const prevMonth = monthBoundsFromFirstYmd(shiftMonthFirstYmd(monthStart, -1));
     return {
-      from,
-      to,
-      previousFrom: startOfDayUtc(previousFrom),
-      previousTo: endOfDayUtc(previousTo),
-      label: 'This month',
+      current: windowFromYmdRange(month.since, month.until, month.title),
+      previous: windowFromYmdRange(prevMonth.since, prevMonth.until, `Previous ${month.title}`),
     };
   }
 
-  const from = new Date(today);
-  from.setUTCDate(from.getUTCDate() - 6);
-  const previousTo = new Date(from);
-  previousTo.setUTCDate(previousTo.getUTCDate() - 1);
-  const previousFrom = new Date(previousTo);
-  previousFrom.setUTCDate(previousFrom.getUTCDate() - 6);
+  const currentWeek = fridayWeekBoundsFromYmd(todayYmd);
+  const previousWeek = fridayWeekBoundsFromYmd(shiftYmdDays(currentWeek.since, -7));
   return {
-    from,
-    to,
-    previousFrom: startOfDayUtc(previousFrom),
-    previousTo: endOfDayUtc(previousTo),
-    label: 'Last 7 days',
+    current: windowFromYmdRange(
+      currentWeek.since,
+      currentWeek.until,
+      `This week (Fri–Thu) · ${currentWeek.title}`,
+    ),
+    previous: windowFromYmdRange(
+      previousWeek.since,
+      previousWeek.until,
+      `Prior week (Fri–Thu) · ${previousWeek.title}`,
+    ),
   };
 }
 
 export function buildLeaderboardWindows(period: LeaderboardPeriod, now = new Date()): { current: LeaderboardWindow; previous: LeaderboardWindow } {
-  const bounds = periodBounds(period, now);
-  return {
-    current: {
-      fromIso: bounds.from.toISOString(),
-      toIso: bounds.to.toISOString(),
-      label: bounds.label,
-    },
-    previous: {
-      fromIso: bounds.previousFrom.toISOString(),
-      toIso: bounds.previousTo.toISOString(),
-      label: `Previous ${bounds.label.toLowerCase()}`,
-    },
-  };
+  return periodBounds(period, now);
 }
 
-function windowTorontoYmdBounds(fromIso: string, toIso: string): { sinceYmd: string; untilYmd: string } {
-  return {
-    sinceYmd: eventMsToTorontoYmd(new Date(fromIso).getTime()),
-    untilYmd: eventMsToTorontoYmd(new Date(toIso).getTime()),
-  };
-}
-
-function filterWebinarRowsInWindow(rows: AnyRow[], fromIso: string, toIso: string): AnyRow[] {
-  const { sinceYmd, untilYmd } = windowTorontoYmdBounds(fromIso, toIso);
+function filterWebinarRowsInWindow(rows: AnyRow[], window: LeaderboardWindow): AnyRow[] {
+  const { sinceYmd, untilYmd } = window;
   return rows.filter((row) => {
     const key = fmtHrScheduledDateKey(row);
     if (key === 'unknown') return false;
     return key >= sinceYmd && key <= untilYmd;
   });
+}
+
+export function resolveLeaderboardBadgeWinners(rows: RecruiterLeaderboardRow[]): LeaderboardBadgeWinners {
+  const topPerformer = rows.find((row) => row.rank === 1) ?? null;
+  const fastClimber =
+    [...rows]
+      .filter((row) => row.badges.includes(LEADERBOARD_BADGE_FAST_CLIMBER))
+      .sort((a, b) => b.rankDelta - a.rankDelta || a.rank - b.rank)[0] ?? null;
+  const consistentCloser =
+    [...rows]
+      .filter((row) => row.badges.includes(LEADERBOARD_BADGE_CONSISTENT_CLOSER))
+      .sort((a, b) => b.showRatioSmoothed - a.showRatioSmoothed || b.webinarBooked - a.webinarBooked)[0] ?? null;
+  return { topPerformer, fastClimber, consistentCloser };
+}
+
+export function rowMatchesBadgeFilter(row: RecruiterLeaderboardRow, filters: Set<LeaderboardBadgeId>): boolean {
+  if (filters.size === 0) return true;
+  if (filters.has('topPerformer') && row.badges.includes(LEADERBOARD_BADGE_TOP_PERFORMER)) return true;
+  if (filters.has('fastClimber') && row.badges.includes(LEADERBOARD_BADGE_FAST_CLIMBER)) return true;
+  if (filters.has('consistentCloser') && row.badges.includes(LEADERBOARD_BADGE_CONSISTENT_CLOSER)) return true;
+  return false;
 }
 
 function watchSecondsFromRow(row: AnyRow): number {
@@ -411,9 +437,9 @@ function toRows(aggregates: Aggregate[]): RecruiterLeaderboardRow[] {
 
 function labelsForRow(row: RecruiterLeaderboardRow): string[] {
   const badges: string[] = [];
-  if (row.rank === 1) badges.push('Top Performer');
-  if (row.rankDelta >= 2) badges.push('Fast Climber');
-  if (row.showRatioSmoothed >= 0.65 && row.webinarBooked >= 8) badges.push('Consistent Closer');
+  if (row.rank === 1) badges.push(LEADERBOARD_BADGE_TOP_PERFORMER);
+  if (row.rankDelta >= 2) badges.push(LEADERBOARD_BADGE_FAST_CLIMBER);
+  if (row.showRatioSmoothed >= 0.65 && row.webinarBooked >= 8) badges.push(LEADERBOARD_BADGE_CONSISTENT_CLOSER);
   return badges;
 }
 
@@ -471,8 +497,8 @@ export function buildCompositeLeaderboard(input: {
   restrictToUserIds?: string[] | null;
 }): RecruiterLeaderboardRow[] {
   const seeds = input.recruiterSeeds || [];
-  const currentWebinar = filterWebinarRowsInWindow(input.webinarRows, input.currentWindow.fromIso, input.currentWindow.toIso);
-  const previousWebinar = filterWebinarRowsInWindow(input.webinarRows, input.previousWindow.fromIso, input.previousWindow.toIso);
+  const currentWebinar = filterWebinarRowsInWindow(input.webinarRows, input.currentWindow);
+  const previousWebinar = filterWebinarRowsInWindow(input.webinarRows, input.previousWindow);
 
   const currentMerged = mergeAggregates(
     aggregateWebinarRows(currentWebinar, seeds, input.recruiterDirectory),

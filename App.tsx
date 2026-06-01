@@ -25,6 +25,7 @@ import PipelineEmailWorkspace from './pages/PipelineEmailWorkspace';
 import PipelineUploadsWorkspace from './pages/PipelineUploadsWorkspace';
 import PipelineSettings from './pages/PipelineSettings';
 import SuperDashboard from './pages/SuperDashboard';
+import RoleHome from './pages/RoleHome';
 
 const App: React.FC = () => {
   return (
@@ -41,6 +42,7 @@ const App: React.FC = () => {
         <Route path="/assessment-lookup" element={<AssessmentLookup />} />
         <Route path="/thank-you" element={<ThankYou />} />
         <Route path="/not-eligible" element={<NotEligible />} />
+        <Route path="/home" element={<RoleHome />} />
         <Route path="/dashboard" element={<AdminDashboard />} />
         <Route path="/admin" element={<Navigate to="/dashboard" replace />} />
         <Route path="/live-sessions" element={<LiveSessionsDashboard />} />
