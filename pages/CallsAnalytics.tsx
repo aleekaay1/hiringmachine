@@ -422,7 +422,7 @@ const CallsAnalytics: React.FC = () => {
 
   return (
     <Layout isAdmin>
-      <div className="min-h-screen bg-gradient-to-br from-[#e8f2fc] via-[#f0f6ff] to-[#e6eef8]">
+      <div className="min-h-screen min-w-0 overflow-x-hidden bg-gradient-to-br from-[#e8f2fc] via-[#f0f6ff] to-[#e6eef8]">
         <CallsAnalyticsPage
           scopeTitle={scopeTitle}
           viewerRole={viewerRole}
@@ -571,7 +571,7 @@ type PageProps = {
 
 function CallsAnalyticsPage(p: PageProps) {
   return (
-    <div className="w-full max-w-6xl mx-auto p-5 space-y-5">
+    <div className="w-full min-w-0 max-w-6xl mx-auto p-4 sm:p-5 space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className={`${glassCard} px-5 py-4 flex-1 min-w-[16rem]`}>
           <CallsAnalyticsPageHeader
@@ -631,7 +631,7 @@ function CallsAnalyticsPage(p: PageProps) {
         </div>
       )}
 
-      <div className={`${glassCard} p-4`}>
+      <div className={`${glassCard} p-4 min-w-0 max-w-full overflow-hidden`}>
         <CalendarNav
           scopeMode={p.scopeMode}
           setScopeMode={p.setScopeMode}
@@ -677,7 +677,7 @@ function CallsAnalyticsPage(p: PageProps) {
         </div>
       )}
 
-      <div className={`${glassCard} overflow-hidden`}>
+      <div className={`${glassCard} w-full min-w-0 max-w-full overflow-hidden`}>
         <BookingsTableHeader
           count={p.filteredRows.length}
           selectedDayYmd={p.scopeMode === 'day' ? p.selectedDayYmd : null}
@@ -866,25 +866,25 @@ function RecruiterBookingsSummaryTable({
   scopeTitle: string;
 }) {
   return (
-    <div className={`${glassCard} overflow-hidden`}>
-      <div className="px-4 py-2.5 border-b border-white/50 bg-white/30">
-        <p className="text-sm font-semibold text-slate-800">Bookings by recruiter</p>
+      <div className={`${glassCard} w-full min-w-0 max-w-full overflow-hidden`}>
+        <div className="px-4 py-2.5 border-b border-white/50 bg-white/30">
+          <p className="text-sm font-semibold text-slate-800">Bookings by recruiter</p>
         <p className="text-[11px] text-slate-500">
           {scopeTitle} · Showed = marked watched · Less = not full watch · click a row to filter details
         </p>
       </div>
-      <div className="overflow-auto max-h-[min(50vh,480px)]">
-        <table className="min-w-full text-xs text-slate-800">
+      <div className="w-full max-w-full overflow-x-auto max-h-[min(50vh,480px)]">
+        <table className="w-full min-w-[640px] text-xs text-slate-800">
           <thead className="sticky top-0 z-10 border-b border-white/50 bg-white/75 backdrop-blur">
             <tr className="text-left text-[10px] uppercase tracking-wide text-slate-500">
               <th className="px-3 py-2">Recruiter</th>
               <th className="px-3 py-2">Data file</th>
-              <th className="px-3 py-2 text-right">Booked</th>
-              <th className="px-3 py-2 text-right">Showed</th>
-              <th className="px-3 py-2 text-right">Full</th>
-              <th className="px-3 py-2 text-right">Less</th>
-              <th className="px-3 py-2 text-right">Showed %</th>
-              <th className="px-3 py-2 text-right">Full %</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap">Booked</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap">Showed</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap">Full</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap hidden sm:table-cell">Less</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap">Showed %</th>
+              <th className="px-3 py-2 text-right whitespace-nowrap hidden md:table-cell">Full %</th>
             </tr>
           </thead>
           <tbody>
@@ -905,9 +905,9 @@ function RecruiterBookingsSummaryTable({
                   <td className="px-3 py-2 text-right tabular-nums font-semibold">{p.bookings}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{p.watchedYes}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-emerald-800">{p.full}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-600">{watchedLess}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-600 hidden sm:table-cell">{watchedLess}</td>
                   <td className="px-3 py-2 text-right tabular-nums font-medium">{showedPct}%</td>
-                  <td className="px-3 py-2 text-right tabular-nums font-medium">{fullPct}%</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-medium hidden md:table-cell">{fullPct}%</td>
                 </tr>
               );
             })}
@@ -1115,12 +1115,12 @@ function CalendarGrid({
 }) {
   return (
     <>
-      <div className="grid grid-cols-7 gap-1.5 text-center text-[10px] font-medium uppercase tracking-wide text-slate-500 mb-1.5">
+      <div className="grid grid-cols-7 gap-1 sm:gap-1.5 text-center text-[10px] font-medium uppercase tracking-wide text-slate-500 mb-1.5 min-w-0">
         {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
           <WeekdayLabel key={d} label={d} />
         ))}
       </div>
-      <div className="grid grid-cols-7 gap-1.5">
+      <div className="grid grid-cols-7 gap-1 sm:gap-1.5 min-w-0">
         {calendarCells.map((day, idx) => {
           if (day == null) {
             return <CalendarEmptyCell key={`e-${idx}`} />;
@@ -1137,7 +1137,7 @@ function CalendarGrid({
                 setScopeMode('day');
                 setSelectedDayYmd(ymd);
               }}
-              className={`min-h-[64px] rounded-xl border text-left px-2 py-1 transition ${
+              className={`min-h-[56px] sm:min-h-[64px] rounded-lg sm:rounded-xl border text-left px-1.5 sm:px-2 py-1 transition min-w-0 ${
                 active || inWeek
                   ? 'border-[#005EB8]/40 bg-[#005EB8]/8'
                   : 'border-white/40 bg-white/30 hover:bg-white/50'
@@ -1185,19 +1185,19 @@ function BookingsTableHeader({
 
 function BookingsTable({ rows, selectedDayYmd }: { rows: AnyRow[]; selectedDayYmd?: string | null }) {
   return (
-    <div className="overflow-auto max-h-[min(70vh,520px)]">
-      <table className="min-w-full text-xs text-slate-800">
+    <div className="w-full max-w-full overflow-x-auto max-h-[min(70vh,520px)]">
+      <table className="w-full min-w-[720px] text-xs text-slate-800">
         <thead className="sticky top-0 z-10 border-b border-white/50 bg-white/70 backdrop-blur">
           <tr className="text-left text-[10px] uppercase tracking-wide text-slate-500">
             <th className="px-3 py-2">Recruiter</th>
-            <th className="px-3 py-2">Source</th>
-            <th className="px-3 py-2">Team</th>
+            <th className="px-3 py-2 hidden lg:table-cell">Source</th>
+            <th className="px-3 py-2 hidden md:table-cell">Team</th>
             <th className="px-3 py-2">Status</th>
             <th className="px-3 py-2">Candidate</th>
-            <th className="px-3 py-2">Email</th>
-            <th className="px-3 py-2">Phone</th>
-            <th className="px-3 py-2">Scheduled on</th>
-            <th className="px-3 py-2">Scheduled for</th>
+            <th className="px-3 py-2 hidden sm:table-cell">Email</th>
+            <th className="px-3 py-2 hidden xl:table-cell">Phone</th>
+            <th className="px-3 py-2 whitespace-nowrap">Scheduled on</th>
+            <th className="px-3 py-2 whitespace-nowrap">Scheduled for</th>
             <th className="px-3 py-2">Watched</th>
           </tr>
         </thead>
@@ -1214,17 +1214,17 @@ function BookingsTable({ rows, selectedDayYmd }: { rows: AnyRow[]; selectedDayYm
               const sessionMs = webinarSessionMsFromRow(row);
               return (
                 <tr key={String(row.id)} className="border-b border-white/30 hover:bg-white/40">
-                  <td className="px-3 py-2 font-medium">{recruiterNameFromRow(row)}</td>
-                  <td className="px-3 py-2 text-slate-600">{sourceDisplay(row)}</td>
-                  <td className="px-3 py-2 text-slate-600">{recruiterTeamFromRow(row)}</td>
+                  <td className="px-3 py-2 font-medium max-w-[8rem] truncate">{recruiterNameFromRow(row)}</td>
+                  <td className="px-3 py-2 text-slate-600 hidden lg:table-cell">{sourceDisplay(row)}</td>
+                  <td className="px-3 py-2 text-slate-600 hidden md:table-cell">{recruiterTeamFromRow(row)}</td>
                   <td className="px-3 py-2 text-slate-600">{subscriptionStatus(row)}</td>
-                  <td className="px-3 py-2">{candidateDisplayNameFromRow(row) || '—'}</td>
-                  <td className="px-3 py-2 text-slate-600">{String(row.email || '—')}</td>
-                  <td className="px-3 py-2 text-slate-600 tabular-nums">{phoneDisplay(row)}</td>
-                  <td className="px-3 py-2 tabular-nums text-slate-600">
+                  <td className="px-3 py-2 max-w-[9rem] truncate">{candidateDisplayNameFromRow(row) || '—'}</td>
+                  <td className="px-3 py-2 text-slate-600 max-w-[10rem] truncate hidden sm:table-cell">{String(row.email || '—')}</td>
+                  <td className="px-3 py-2 text-slate-600 tabular-nums hidden xl:table-cell">{phoneDisplay(row)}</td>
+                  <td className="px-3 py-2 tabular-nums text-slate-600 whitespace-nowrap">
                     {hrMs ? formatDateTimeCanadaEastern(hrMs) : '—'}
                   </td>
-                  <td className="px-3 py-2 tabular-nums text-slate-600">
+                  <td className="px-3 py-2 tabular-nums text-slate-600 whitespace-nowrap">
                     {sessionMs ? formatDateTimeCanadaEastern(sessionMs) : '—'}
                   </td>
                   <td className="px-3 py-2">{row.watched === true ? 'Yes' : 'No'}</td>

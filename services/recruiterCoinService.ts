@@ -3,6 +3,10 @@ import { supabase } from './supabaseClient';
 import { filterRowsForRecruiterOwnership } from './recruiterDataScope';
 import { loadWebinarGeekDashboardCache } from './webinarGeekDashboardCache';
 import {
+  resolveWebinarRowRecruiterUserId,
+  seedsFromProfiles,
+} from './pipelineLeaderboard';
+import {
   COINS_PER_SHOW,
   coinEarnWindow,
   coinShowDateYmdForWebinarRow,
@@ -143,7 +147,15 @@ function readRpcCoinRow(row: Record<string, unknown>): { userId: string; balance
   return { userId, balance: Number.isFinite(balance) ? balance : 0 };
 }
 
-/** Team coin totals for leaderboard (RPC when deployed, else visible profile rows). */
+function mergeCoinBalance(map: Map<string, number>, userId: string, balance: number): void {
+  if (!userId) return;
+  const next = Number(balance);
+  if (!Number.isFinite(next) || next < 0) return;
+  const prev = map.get(userId) ?? 0;
+  if (next > prev) map.set(userId, next);
+}
+
+/** Team coin totals — RPC (ledger sum) with profiles.points fallback. */
 export async function loadRecruiterCoinBalanceMap(): Promise<Map<string, number>> {
   const map = new Map<string, number>();
 
@@ -151,47 +163,64 @@ export async function loadRecruiterCoinBalanceMap(): Promise<Map<string, number>
   if (!rpcError && Array.isArray(rpcData)) {
     for (const row of rpcData) {
       const parsed = readRpcCoinRow(row as Record<string, unknown>);
-      if (parsed) map.set(parsed.userId, parsed.balance);
+      if (parsed) mergeCoinBalance(map, parsed.userId, parsed.balance);
     }
-    return map;
   }
 
-  const { data, error } = await supabase.from('user_profiles').select('user_id, points, role');
-  if (error) {
-    if (/relation|does not exist|schema cache|PGRST205|404/i.test(error.message)) return map;
-    throw error;
+  const { data: profileRows, error: profileErr } = await supabase
+    .from('user_profiles')
+    .select('user_id, points, role');
+  if (!profileErr) {
+    for (const row of profileRows || []) {
+      const role = String((row as { role?: string }).role || '');
+      if (role !== 'recruiter' && role !== 'webinar' && role !== 'leadership') continue;
+      const userId = String((row as { user_id?: string }).user_id || '').trim();
+      mergeCoinBalance(map, userId, Number((row as { points?: number }).points || 0));
+    }
   }
 
-  for (const row of data || []) {
-    const role = String((row as { role?: string }).role || '');
-    if (role !== 'recruiter' && role !== 'webinar' && role !== 'leadership') continue;
-    const userId = String((row as { user_id?: string }).user_id || '').trim();
-    if (!userId) continue;
-    map.set(userId, Number((row as { points?: number }).points || 0));
+  if (rpcError) {
+    const ledgerSum = new Map<string, number>();
+    const { data: ledgerRows, error: ledgerErr } = await supabase
+      .from('recruiter_coin_ledger')
+      .select('user_id, points');
+    if (!ledgerErr) {
+      for (const row of ledgerRows || []) {
+        const userId = String((row as { user_id?: string }).user_id || '').trim();
+        if (!userId) continue;
+        ledgerSum.set(userId, (ledgerSum.get(userId) ?? 0) + Number((row as { points?: number }).points || 0));
+      }
+      for (const [userId, sum] of ledgerSum) {
+        mergeCoinBalance(map, userId, sum);
+      }
+    }
   }
 
   return map;
 }
 
-/** Map normalized display/email tokens → user_id for leaderboard rows missing recruiterUserId. */
+/** Map display/email tokens → user_id for leaderboard rows. */
 export function buildDisplayNameToUserId(profiles: UserProfile[]): Map<string, string> {
   const map = new Map<string, string>();
   for (const profile of profiles) {
     const userId = String(profile.user_id || '').trim();
     if (!userId) continue;
 
-    const add = (raw: string) => {
-      const token = normalizeCoinLookupToken(raw);
+    const addKey = (raw: string) => {
+      const trimmed = String(raw || '').trim().toLowerCase();
+      if (!trimmed) return;
+      map.set(trimmed, userId);
+      const token = normalizeCoinLookupToken(trimmed);
       if (token) map.set(token, userId);
     };
 
-    add(String(profile.full_name || ''));
+    addKey(String(profile.full_name || ''));
     const email = String(profile.email || '').trim().toLowerCase();
-    add(email);
+    addKey(email);
     const local = email.split('@')[0] || '';
-    add(local);
-    add(local.replace(/[._-]+/g, ' '));
-    add(local.replace(/[._-]+/g, ''));
+    addKey(local);
+    addKey(local.replace(/[._-]+/g, ' '));
+    addKey(local.replace(/[._-]+/g, ''));
 
     const tokens = buildRecruiterScopeTokens(profile.email ?? null, profile.full_name ?? null);
     for (const token of tokens) {
@@ -201,16 +230,126 @@ export function buildDisplayNameToUserId(profiles: UserProfile[]): Map<string, s
   return map;
 }
 
+/** Direct label → balance (matches leaderboard displayName / email local part). */
+export function buildBalanceByDisplayLabel(
+  profiles: UserProfile[],
+  byUserId: Map<string, number>,
+): Map<string, number> {
+  const map = new Map<string, number>();
+  const attach = (label: string, userId: string) => {
+    const key = label.trim().toLowerCase();
+    if (!key) return;
+    const bal = byUserId.get(userId) ?? 0;
+    map.set(key, Math.max(map.get(key) ?? 0, bal));
+    const token = normalizeCoinLookupToken(key);
+    if (token) map.set(token, Math.max(map.get(token) ?? 0, bal));
+  };
+
+  for (const profile of profiles) {
+    const userId = String(profile.user_id || '').trim();
+    if (!userId) continue;
+    attach(String(profile.full_name || ''), userId);
+    attach((profile.email || '').split('@')[0] || '', userId);
+  }
+  return map;
+}
+
+type RecruiterDirectory = Map<string, { fullName: string | null; email: string | null }>;
+
+function buildRecruiterDirectory(profiles: UserProfile[]): RecruiterDirectory {
+  const map: RecruiterDirectory = new Map();
+  for (const profile of profiles) {
+    const userId = String(profile.user_id || '').trim();
+    if (!userId) continue;
+    map.set(userId, {
+      fullName: profile.full_name ?? null,
+      email: profile.email ?? null,
+    });
+  }
+  return map;
+}
+
+/** Same WebinarGeek row → recruiter mapping as the leadership leaderboard. */
+async function buildTeamCoinEstimatesFromWebinarCache(
+  profiles: UserProfile[],
+): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  const { data } = await loadWebinarGeekDashboardCache();
+  const rows = data?.subscriptions || [];
+  if (!rows.length) return map;
+
+  const seeds = seedsFromProfiles(profiles);
+  const directory = buildRecruiterDirectory(profiles);
+  const window = coinEarnWindow();
+
+  for (const row of rows) {
+    if (!webinarShowedFromRow(row)) continue;
+    if (!ymdInCoinEarnWindow(coinShowDateYmdForWebinarRow(row), window)) continue;
+    const userId = resolveWebinarRowRecruiterUserId(row, seeds, directory);
+    if (!userId) continue;
+    mergeCoinBalance(map, userId, (map.get(userId) ?? 0) + COINS_PER_SHOW);
+  }
+
+  return map;
+}
+
+async function enrichBalancesFromWebinarEstimates(
+  profiles: UserProfile[],
+  byUserId: Map<string, number>,
+): Promise<void> {
+  const { data } = await loadWebinarGeekDashboardCache();
+  const allRows = data?.subscriptions || [];
+  if (!allRows.length) return;
+
+  const window = coinEarnWindow();
+  for (const profile of profiles) {
+    const userId = String(profile.user_id || '').trim();
+    if (!userId) continue;
+    if ((byUserId.get(userId) ?? 0) > 0) continue;
+
+    const scoped = filterRowsForRecruiterOwnership(allRows, profile.email ?? null, profile.full_name ?? null);
+    let shows = 0;
+    for (const row of scoped) {
+      if (!webinarShowedFromRow(row)) continue;
+      if (!ymdInCoinEarnWindow(coinShowDateYmdForWebinarRow(row), window)) continue;
+      shows += 1;
+    }
+    if (shows > 0) {
+      mergeCoinBalance(map, userId, shows * COINS_PER_SHOW);
+    }
+  }
+}
+
 export type LeaderboardCoinLookup = {
   byUserId: Map<string, number>;
   displayNameToUserId: Map<string, string>;
+  byDisplayLabel: Map<string, number>;
 };
 
 export async function loadLeaderboardCoinLookup(profiles: UserProfile[]): Promise<LeaderboardCoinLookup> {
   const byUserId = await loadRecruiterCoinBalanceMap();
+  const teamEstimates = await buildTeamCoinEstimatesFromWebinarCache(profiles);
+  for (const [userId, estimate] of teamEstimates) {
+    mergeCoinBalance(byUserId, userId, estimate);
+  }
+  await enrichBalancesFromWebinarEstimates(profiles, byUserId);
+  const displayNameToUserId = buildDisplayNameToUserId(profiles);
+  const byDisplayLabel = buildBalanceByDisplayLabel(profiles, byUserId);
+
+  for (const profile of profiles) {
+    const userId = String(profile.user_id || '').trim();
+    if (!userId) continue;
+    const bal = byUserId.get(userId) ?? 0;
+    const local = (profile.email || '').split('@')[0].toLowerCase();
+    if (local) byDisplayLabel.set(local, Math.max(byDisplayLabel.get(local) ?? 0, bal));
+    const name = String(profile.full_name || '').trim().toLowerCase();
+    if (name) byDisplayLabel.set(name, Math.max(byDisplayLabel.get(name) ?? 0, bal));
+  }
+
   return {
     byUserId,
-    displayNameToUserId: buildDisplayNameToUserId(profiles),
+    displayNameToUserId,
+    byDisplayLabel,
   };
 }
 
@@ -232,6 +371,18 @@ export function resolveLeaderboardRowUserId(
     if (fromKey) return fromKey;
   }
 
+  if (row.recruiterKey.startsWith('name:')) {
+    const nameKey = row.recruiterKey.slice(5).trim();
+    if (nameKey && displayNameToUserId.has(nameKey)) {
+      return displayNameToUserId.get(nameKey)!;
+    }
+  }
+
+  const rawLabel = row.displayName.trim().toLowerCase();
+  if (rawLabel && displayNameToUserId.has(rawLabel)) {
+    return displayNameToUserId.get(rawLabel)!;
+  }
+
   const displayToken = normalizeCoinLookupToken(row.displayName);
   if (displayToken && displayNameToUserId.has(displayToken)) {
     return displayNameToUserId.get(displayToken)!;
@@ -251,12 +402,37 @@ export function coinBalanceForLeaderboardRow(
   displayNameToUserId?: Map<string, string>,
 ): number {
   const byUserId = lookup instanceof Map ? lookup : lookup.byUserId;
+  const directUid = String(row.recruiterUserId || '').trim();
+  if (directUid && byUserId.has(directUid)) {
+    return byUserId.get(directUid)!;
+  }
+
+  if (!(lookup instanceof Map)) {
+    const label = row.displayName.trim().toLowerCase();
+    if (label && lookup.byDisplayLabel.has(label)) {
+      return lookup.byDisplayLabel.get(label)!;
+    }
+    const token = normalizeCoinLookupToken(label);
+    if (token && lookup.byDisplayLabel.has(token)) {
+      return lookup.byDisplayLabel.get(token)!;
+    }
+    if (row.recruiterKey.startsWith('uid:')) {
+      const fromKey = row.recruiterKey.slice(4).trim();
+      if (fromKey && byUserId.has(fromKey)) return byUserId.get(fromKey)!;
+    }
+  }
   const nameMap =
     lookup instanceof Map ? displayNameToUserId ?? new Map<string, string>() : lookup.displayNameToUserId;
 
   const userId = resolveLeaderboardRowUserId(row, nameMap);
-  if (!userId) return 0;
-  return byUserId.get(userId) ?? 0;
+  if (userId) return byUserId.get(userId) ?? 0;
+
+  const label = row.displayName.trim().toLowerCase();
+  if (!(lookup instanceof Map) && label && lookup.byDisplayLabel.has(label)) {
+    return lookup.byDisplayLabel.get(label)!;
+  }
+
+  return 0;
 }
 
 export async function loadRecruiterCoinWallet(input: {

@@ -4,7 +4,7 @@ import { loadRecruiterCoinWallet, syncAllRecruiterCoins } from '../../services/r
 import type { AppRole } from '../../services/accessControl';
 import { COINS_PER_SHOW } from '../../services/recruiterCoins';
 
-const BACKFILL_SESSION_KEY = 'paz_coins_team_backfill_v3';
+const BACKFILL_SESSION_KEY = 'paz_coins_team_backfill_v4';
 
 type CoinWalletBadgeProps = {
   profileBalance?: number | null;

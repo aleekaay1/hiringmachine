@@ -427,13 +427,13 @@ export async function syncRecruiterCoinsForUser(
   const profileRows = (profiles || []) as UserProfileRow[];
 
   const { data: cacheRow } = await admin
-    .from('webinar_geek_dashboard_cache')
-    .select('payload')
+    .from('webinar_geek_dashboard_snapshots')
+    .select('subscriptions')
     .eq('id', 'latest')
     .maybeSingle();
 
-  const payload = cacheRow?.payload as { subscriptions?: AnyRow[] } | null;
-  const webinarRows = Array.isArray(payload?.subscriptions) ? payload!.subscriptions! : [];
+  const subs = cacheRow?.subscriptions;
+  const webinarRows = Array.isArray(subs) ? (subs as AnyRow[]) : [];
 
   const { data: liveRows, error: liveErr } = await admin
     .from('live_session_registrants')

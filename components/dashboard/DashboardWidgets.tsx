@@ -6,6 +6,7 @@ import { listAllUserProfiles } from '../../services/accessControl';
 import {
   coinBalanceForLeaderboardRow,
   loadLeaderboardCoinLookup,
+  syncAllRecruiterCoins,
   type LeaderboardCoinLookup,
 } from '../../services/recruiterCoinService';
 import { DashboardStickyNotesPanel } from './DashboardStickyNotesPanel';
@@ -26,24 +27,29 @@ export function RecruiterStandingsBoard({
   const [coinLookup, setCoinLookup] = React.useState<LeaderboardCoinLookup>({
     byUserId: new Map(),
     displayNameToUserId: new Map(),
+    byDisplayLabel: new Map(),
   });
 
   React.useEffect(() => {
     let cancelled = false;
-    void listAllUserProfiles()
-      .then((profiles) => loadLeaderboardCoinLookup(profiles))
+    const run = async () => {
+      await syncAllRecruiterCoins().catch(() => undefined);
+      const profiles = await listAllUserProfiles().catch(() => []);
+      return loadLeaderboardCoinLookup(profiles);
+    };
+    void run()
       .then((lookup) => {
         if (!cancelled) setCoinLookup(lookup);
       })
       .catch(() => {
         if (!cancelled) {
-          setCoinLookup({ byUserId: new Map(), displayNameToUserId: new Map() });
+          setCoinLookup({ byUserId: new Map(), displayNameToUserId: new Map(), byDisplayLabel: new Map() });
         }
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [rows]);
 
   if (rows.length === 0) return null;
 

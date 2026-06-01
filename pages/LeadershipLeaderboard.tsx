@@ -21,6 +21,7 @@ import { LeaderboardCoinChip } from '../components/dashboard/LeaderboardCoinChip
 import {
   coinBalanceForLeaderboardRow,
   loadLeaderboardCoinLookup,
+  syncAllRecruiterCoins,
   type LeaderboardCoinLookup,
 } from '../services/recruiterCoinService';
 import { Button } from '../components/UI';
@@ -248,6 +249,7 @@ const LeadershipLeaderboard: React.FC = () => {
   const [coinLookup, setCoinLookup] = React.useState<LeaderboardCoinLookup>({
     byUserId: new Map(),
     displayNameToUserId: new Map(),
+    byDisplayLabel: new Map(),
   });
 
   const leadershipView = viewerRole === 'admin' || viewerRole === 'leadership';
@@ -299,9 +301,11 @@ const LeadershipLeaderboard: React.FC = () => {
         loadLeaderboardSnapshot(key),
         listAllUserProfiles().catch(() => []),
       ]);
+      await syncAllRecruiterCoins().catch(() => undefined);
       const lookup = await loadLeaderboardCoinLookup(profiles).catch(() => ({
         byUserId: new Map<string, number>(),
         displayNameToUserId: new Map<string, string>(),
+        byDisplayLabel: new Map<string, number>(),
       }));
       setCoinLookup(lookup);
       const { data, error: cacheError, tableMissing } = snapshotResult;
@@ -437,9 +441,11 @@ const LeadershipLeaderboard: React.FC = () => {
         fetchedAt: new Date().toISOString(),
       });
 
+      await syncAllRecruiterCoins().catch(() => undefined);
       const lookup = await loadLeaderboardCoinLookup(profiles).catch(() => ({
         byUserId: new Map<string, number>(),
         displayNameToUserId: new Map<string, string>(),
+        byDisplayLabel: new Map<string, number>(),
       }));
       setCoinLookup(lookup);
     } catch (e) {

@@ -200,7 +200,7 @@ const Layout: React.FC<LayoutProps> = ({
           )}
         </aside>
       )}
-      <div className="min-h-screen flex flex-col flex-1">
+      <div className="min-h-screen flex flex-col flex-1 min-w-0">
       {!hideHeader && !isAdmin && (
         <header className="bg-white shadow-sm sticky top-0 z-50 safe-area-top">
           <div
