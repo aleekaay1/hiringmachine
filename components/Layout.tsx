@@ -247,7 +247,7 @@ const Layout: React.FC<LayoutProps> = ({
           <div className="h-1 w-full bg-gradient-to-r from-[#005EB8] to-[#37B06D]" />
         </header>
       )}
-      <main className="flex-grow flex flex-col relative overflow-x-hidden px-safe-area">
+      <main className="flex-grow flex flex-col min-h-0 relative overflow-x-hidden px-safe-area">
         {children}
       </main>
       {!isAdmin && (
