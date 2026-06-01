@@ -96,7 +96,7 @@ function formatEmailLogType(type: string | undefined): string {
   const map: Record<string, string> = {
     stage2_post_checkin: 'Stage 2 – Post check-in',
     stage3_assessment_link: 'Leadership assessment (after session attended)',
-    stage3_assessment_link_post_overview: 'Leadership assessment (post overview / CEO follow-up)',
+    stage3_assessment_link_post_overview: 'Leadership assessment (post overview)',
     missed_live_session_reschedule: 'Missed live session – reschedule',
     stage5_evaluation: 'Evaluation done',
     compose: 'Compose (manual)',

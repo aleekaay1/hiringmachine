@@ -156,7 +156,7 @@ function buildEventFields(
   const title = env.PUBLIC_LIVE_SESSION_CALENDAR_TITLE?.trim() || DEFAULT_TITLE;
   const description =
     env.PUBLIC_LIVE_SESSION_CALENDAR_DESCRIPTION?.trim() ||
-    `Live Online Career Session hosted by Alex Paz.\n\nJoin Zoom: ${zoomUrl}\n\nPlease join at least 5 minutes early.`;
+    `Live Online Career Session with Globe Life AIL · Paz Organization.\n\nJoin Zoom: ${zoomUrl}\n\nPlease join at least 5 minutes early.`;
 
   return {
     title,

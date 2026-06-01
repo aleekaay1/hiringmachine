@@ -69,8 +69,8 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
   },
   {
     id: 'stage3_assessment_link_post_overview',
-    name: 'Leadership assessment (post overview / CEO follow-up)',
-    hint: 'Alternate after career overview; Alex Paz sign-off in copy.',
+    name: 'Leadership assessment (post overview)',
+    hint: 'Alternate after career overview session.',
     subject: 'Your next step: Leadership Assessment',
     bodyHtml: `
 <p>Hi {{firstName}},</p>
@@ -79,7 +79,7 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
 <p><strong>{{Assessment Link}}</strong></p>
 <p>We are currently moving forward with candidates who demonstrate responsiveness, professionalism, and consistency throughout the process.</p>
 <p>Please complete the assessment as soon as possible to remain under consideration.</p>
-<p>Best regards,<br/>Alex Paz<br/>CEO &amp; Agency Owner<br/>Globe Life – Paz Organization</p>
+<p>Best regards,</p>
 {{emailSignature}}
     `.trim(),
   },

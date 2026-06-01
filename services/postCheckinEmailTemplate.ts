@@ -11,7 +11,7 @@ export const POST_CHECKIN_EMAIL_SUBJECT =
 export const POST_CHECKIN_EMAIL_BODY_HTML = `
 <p>Hi {{firstName}},</p>
 <p>Your check-in form has been received and reviewed.</p>
-<p>You’ve been selected to attend our <strong>Live Online Career Session</strong> hosted by Alex Paz.</p>
+<p>You’ve been selected to attend our <strong>Live Online Career Session</strong>.</p>
 <p><strong>Session Details:</strong><br/>
 📅 {{Date}}<br/>
 ⏰ {{Time}}<br/>
