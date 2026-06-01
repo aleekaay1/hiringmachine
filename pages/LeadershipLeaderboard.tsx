@@ -17,6 +17,11 @@ import {
   Users,
 } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
+import { LeaderboardCoinChip } from '../components/dashboard/LeaderboardCoinChip';
+import {
+  coinBalanceForLeaderboardRow,
+  loadRecruiterCoinBalanceMap,
+} from '../services/recruiterCoinService';
 import { Button } from '../components/UI';
 import { getCurrentUserProfile, listAllUserProfiles, type AppRole } from '../services/accessControl';
 import { loadScopedWebinarRowsForViewer } from '../services/pipelineBookedOutcomes';
@@ -161,10 +166,12 @@ function PersonPerformanceBlock({
   row,
   tone = 'default',
   champion = false,
+  pazCoins = null,
 }: {
   row: RecruiterLeaderboardRow;
   tone?: 'default' | 'gold' | 'highlight';
   champion?: boolean;
+  pazCoins?: number | null;
 }) {
   const nameClass =
     tone === 'gold'
@@ -194,6 +201,11 @@ function PersonPerformanceBlock({
           <StatChip icon={UserCheck} label="Webinar shows" value={row.webinarShowed} tone={tone === 'gold' ? 'gold' : 'default'} />
           <StatChip icon={CalendarCheck} label="Live booked" value={row.liveSessionBooked} tone="muted" />
           <StatChip icon={UserCheck} label="Live shows" value={row.liveSessionShowed} tone="muted" />
+          {pazCoins != null ? (
+            <span title="Paz Coins balance">
+              <LeaderboardCoinChip balance={pazCoins} compact />
+            </span>
+          ) : null}
         </div>
         <p className={`mt-2 inline-flex items-center gap-1 text-sm font-semibold ${subClass}`}>
           <Star size={14} className={tone === 'gold' ? 'text-[#9b6b00]' : 'text-[#2f6ea8]'} aria-hidden />
@@ -234,6 +246,7 @@ const LeadershipLeaderboard: React.FC = () => {
   const [lastUpdated, setLastUpdated] = React.useState<string | null>(null);
   const [cacheReady, setCacheReady] = React.useState(false);
   const [badgeFilters, setBadgeFilters] = React.useState<Set<LeaderboardBadgeId>>(new Set());
+  const [coinByUserId, setCoinByUserId] = React.useState<Map<string, number>>(new Map());
 
   const leadershipView = viewerRole === 'admin' || viewerRole === 'leadership';
 
@@ -280,10 +293,12 @@ const LeadershipLeaderboard: React.FC = () => {
       const profile = await getCurrentUserProfile();
       setViewerRole(profile?.role ?? null);
 
-      const [snapshotResult, profiles] = await Promise.all([
+      const [snapshotResult, profiles, coinMap] = await Promise.all([
         loadLeaderboardSnapshot(key),
         listAllUserProfiles().catch(() => []),
+        loadRecruiterCoinBalanceMap().catch(() => new Map<string, number>()),
       ]);
+      setCoinByUserId(coinMap);
       const { data, error: cacheError, tableMissing } = snapshotResult;
       const excludedUserIds = excludedLeaderboardUserIds(profiles);
       if (cacheError) throw new Error(cacheError);
@@ -416,6 +431,9 @@ const LeadershipLeaderboard: React.FC = () => {
         ...payload,
         fetchedAt: new Date().toISOString(),
       });
+
+      const coinMap = await loadRecruiterCoinBalanceMap().catch(() => new Map<string, number>());
+      setCoinByUserId(coinMap);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -575,7 +593,12 @@ const LeadershipLeaderboard: React.FC = () => {
               <p className="mt-0.5 text-[11px] text-[#8a7340]">{periodWindowLabels.current}</p>
               {topPerformer ? (
                 <div className="mt-2">
-                  <PersonPerformanceBlock row={topPerformer} tone="gold" champion />
+                  <PersonPerformanceBlock
+                    row={topPerformer}
+                    tone="gold"
+                    champion
+                    pazCoins={coinBalanceForLeaderboardRow(topPerformer, coinByUserId)}
+                  />
                 </div>
               ) : (
                 <p className="mt-2 text-sm text-[#6d5a39]">
@@ -591,7 +614,10 @@ const LeadershipLeaderboard: React.FC = () => {
               <p className="mt-0.5 text-[11px] text-[#5c7594]">{periodWindowLabels.previous}</p>
               {previousTopPerformer ? (
                 <div className="mt-2">
-                  <PersonPerformanceBlock row={previousTopPerformer} />
+                  <PersonPerformanceBlock
+                    row={previousTopPerformer}
+                    pazCoins={coinBalanceForLeaderboardRow(previousTopPerformer, coinByUserId)}
+                  />
                 </div>
               ) : (
                 <p className="mt-2 text-sm text-[#4f6886]">
@@ -665,7 +691,10 @@ const LeadershipLeaderboard: React.FC = () => {
                             {row.rank}
                           </span>
                           <div className="min-w-0 flex-1">
-                            <PersonPerformanceBlock row={row} />
+                            <PersonPerformanceBlock
+                              row={row}
+                              pazCoins={coinBalanceForLeaderboardRow(row, coinByUserId)}
+                            />
                             {isViewer && overtakeMessage(row) && (
                               <p className="mt-1 text-[11px] font-medium text-[#35567a]">{overtakeMessage(row)}</p>
                             )}
@@ -681,7 +710,15 @@ const LeadershipLeaderboard: React.FC = () => {
                             </div>
                           </div>
                         </div>
-                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                          <div className="rounded-xl border border-amber-200/70 bg-gradient-to-br from-amber-50/90 to-white px-2.5 py-2">
+                            <p className="text-[10px] uppercase tracking-wide text-amber-900/80">Paz Coins</p>
+                            <div className="mt-1">
+                              <LeaderboardCoinChip
+                                balance={coinBalanceForLeaderboardRow(row, coinByUserId)}
+                              />
+                            </div>
+                          </div>
                           <div className="rounded-xl border border-[#dfeaf8] bg-[#f9fcff] px-2.5 py-2">
                             <p className="text-[10px] uppercase tracking-wide text-[#6d86a3]">Webinar booked / shows</p>
                             <p className="text-lg font-semibold tabular-nums text-[#0B1B34]">

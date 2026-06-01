@@ -31,6 +31,21 @@ using (
 comment on table public.recruiter_coin_ledger is
   'Paz Coins earn events (10 per webinar/live show). Balance cached on user_profiles.points.';
 
+-- Leaderboard: any signed-in user can read team coin balances.
+create or replace function public.list_recruiter_coin_balances()
+returns table (user_id uuid, balance integer)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select up.user_id, coalesce(up.points, 0)::integer as balance
+  from public.user_profiles up
+  where up.role in ('recruiter', 'webinar', 'leadership');
+$$;
+
+grant execute on function public.list_recruiter_coin_balances() to authenticated;
+
 -- Optional: legacy day note table (removes 404 on dashboard if you still use sticky-note import)
 create table if not exists public.user_dashboard_day_notes (
   user_id uuid not null references auth.users(id) on delete cascade,

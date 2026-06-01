@@ -131,6 +131,46 @@ export async function estimateCoinBalanceFromWebinarCache(
   return shows * COINS_PER_SHOW;
 }
 
+/** Team coin totals for leaderboard (all roles can read via RPC when deployed). */
+export async function loadRecruiterCoinBalanceMap(): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+
+  const { data: rpcData, error: rpcError } = await supabase.rpc('list_recruiter_coin_balances');
+  if (!rpcError && Array.isArray(rpcData)) {
+    for (const row of rpcData) {
+      const userId = String((row as { user_id?: string }).user_id || '').trim();
+      if (!userId) continue;
+      map.set(userId, Number((row as { balance?: number }).balance || 0));
+    }
+    if (map.size > 0) return map;
+  }
+
+  const { data, error } = await supabase.from('user_profiles').select('user_id, points, role');
+  if (error) {
+    if (/relation|does not exist|schema cache|PGRST205|404/i.test(error.message)) return map;
+    throw error;
+  }
+
+  for (const row of data || []) {
+    const role = String((row as { role?: string }).role || '');
+    if (role !== 'recruiter' && role !== 'webinar' && role !== 'leadership') continue;
+    const userId = String((row as { user_id?: string }).user_id || '').trim();
+    if (!userId) continue;
+    map.set(userId, Number((row as { points?: number }).points || 0));
+  }
+
+  return map;
+}
+
+export function coinBalanceForLeaderboardRow(
+  row: { recruiterUserId: string | null },
+  balanceByUserId: Map<string, number>,
+): number | null {
+  const userId = String(row.recruiterUserId || '').trim();
+  if (!userId) return null;
+  return balanceByUserId.get(userId) ?? 0;
+}
+
 export async function loadRecruiterCoinWallet(input: {
   profileBalance?: number;
   email?: string | null;
