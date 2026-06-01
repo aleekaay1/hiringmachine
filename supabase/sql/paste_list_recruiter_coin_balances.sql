@@ -8,8 +8,15 @@ stable
 security definer
 set search_path = public
 as $$
-  select up.user_id, coalesce(up.points, 0)::integer as balance
+  select
+    up.user_id,
+    coalesce(ledger.total_points, up.points, 0)::integer as balance
   from public.user_profiles up
+  left join (
+    select user_id, sum(points)::bigint as total_points
+    from public.recruiter_coin_ledger
+    group by user_id
+  ) ledger on ledger.user_id = up.user_id
   where up.role in ('recruiter', 'webinar', 'leadership');
 $$;
 

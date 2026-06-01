@@ -20,7 +20,8 @@ import PipelineAuthShell from '../components/PipelineAuthShell';
 import { LeaderboardCoinChip } from '../components/dashboard/LeaderboardCoinChip';
 import {
   coinBalanceForLeaderboardRow,
-  loadRecruiterCoinBalanceMap,
+  loadLeaderboardCoinLookup,
+  type LeaderboardCoinLookup,
 } from '../services/recruiterCoinService';
 import { Button } from '../components/UI';
 import { getCurrentUserProfile, listAllUserProfiles, type AppRole } from '../services/accessControl';
@@ -166,12 +167,12 @@ function PersonPerformanceBlock({
   row,
   tone = 'default',
   champion = false,
-  pazCoins = null,
+  pazCoins = 0,
 }: {
   row: RecruiterLeaderboardRow;
   tone?: 'default' | 'gold' | 'highlight';
   champion?: boolean;
-  pazCoins?: number | null;
+  pazCoins?: number;
 }) {
   const nameClass =
     tone === 'gold'
@@ -201,11 +202,9 @@ function PersonPerformanceBlock({
           <StatChip icon={UserCheck} label="Webinar shows" value={row.webinarShowed} tone={tone === 'gold' ? 'gold' : 'default'} />
           <StatChip icon={CalendarCheck} label="Live booked" value={row.liveSessionBooked} tone="muted" />
           <StatChip icon={UserCheck} label="Live shows" value={row.liveSessionShowed} tone="muted" />
-          {pazCoins != null ? (
-            <span title="Paz Coins balance">
-              <LeaderboardCoinChip balance={pazCoins} compact />
-            </span>
-          ) : null}
+          <span title="Paz Coins balance">
+            <LeaderboardCoinChip balance={pazCoins} compact />
+          </span>
         </div>
         <p className={`mt-2 inline-flex items-center gap-1 text-sm font-semibold ${subClass}`}>
           <Star size={14} className={tone === 'gold' ? 'text-[#9b6b00]' : 'text-[#2f6ea8]'} aria-hidden />
@@ -246,7 +245,10 @@ const LeadershipLeaderboard: React.FC = () => {
   const [lastUpdated, setLastUpdated] = React.useState<string | null>(null);
   const [cacheReady, setCacheReady] = React.useState(false);
   const [badgeFilters, setBadgeFilters] = React.useState<Set<LeaderboardBadgeId>>(new Set());
-  const [coinByUserId, setCoinByUserId] = React.useState<Map<string, number>>(new Map());
+  const [coinLookup, setCoinLookup] = React.useState<LeaderboardCoinLookup>({
+    byUserId: new Map(),
+    displayNameToUserId: new Map(),
+  });
 
   const leadershipView = viewerRole === 'admin' || viewerRole === 'leadership';
 
@@ -293,12 +295,15 @@ const LeadershipLeaderboard: React.FC = () => {
       const profile = await getCurrentUserProfile();
       setViewerRole(profile?.role ?? null);
 
-      const [snapshotResult, profiles, coinMap] = await Promise.all([
+      const [snapshotResult, profiles] = await Promise.all([
         loadLeaderboardSnapshot(key),
         listAllUserProfiles().catch(() => []),
-        loadRecruiterCoinBalanceMap().catch(() => new Map<string, number>()),
       ]);
-      setCoinByUserId(coinMap);
+      const lookup = await loadLeaderboardCoinLookup(profiles).catch(() => ({
+        byUserId: new Map<string, number>(),
+        displayNameToUserId: new Map<string, string>(),
+      }));
+      setCoinLookup(lookup);
       const { data, error: cacheError, tableMissing } = snapshotResult;
       const excludedUserIds = excludedLeaderboardUserIds(profiles);
       if (cacheError) throw new Error(cacheError);
@@ -432,8 +437,11 @@ const LeadershipLeaderboard: React.FC = () => {
         fetchedAt: new Date().toISOString(),
       });
 
-      const coinMap = await loadRecruiterCoinBalanceMap().catch(() => new Map<string, number>());
-      setCoinByUserId(coinMap);
+      const lookup = await loadLeaderboardCoinLookup(profiles).catch(() => ({
+        byUserId: new Map<string, number>(),
+        displayNameToUserId: new Map<string, string>(),
+      }));
+      setCoinLookup(lookup);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -597,7 +605,7 @@ const LeadershipLeaderboard: React.FC = () => {
                     row={topPerformer}
                     tone="gold"
                     champion
-                    pazCoins={coinBalanceForLeaderboardRow(topPerformer, coinByUserId)}
+                    pazCoins={coinBalanceForLeaderboardRow(topPerformer, coinLookup)}
                   />
                 </div>
               ) : (
@@ -616,7 +624,7 @@ const LeadershipLeaderboard: React.FC = () => {
                 <div className="mt-2">
                   <PersonPerformanceBlock
                     row={previousTopPerformer}
-                    pazCoins={coinBalanceForLeaderboardRow(previousTopPerformer, coinByUserId)}
+                    pazCoins={coinBalanceForLeaderboardRow(previousTopPerformer, coinLookup)}
                   />
                 </div>
               ) : (
@@ -693,7 +701,7 @@ const LeadershipLeaderboard: React.FC = () => {
                           <div className="min-w-0 flex-1">
                             <PersonPerformanceBlock
                               row={row}
-                              pazCoins={coinBalanceForLeaderboardRow(row, coinByUserId)}
+                              pazCoins={coinBalanceForLeaderboardRow(row, coinLookup)}
                             />
                             {isViewer && overtakeMessage(row) && (
                               <p className="mt-1 text-[11px] font-medium text-[#35567a]">{overtakeMessage(row)}</p>
@@ -715,7 +723,7 @@ const LeadershipLeaderboard: React.FC = () => {
                             <p className="text-[10px] uppercase tracking-wide text-amber-900/80">Paz Coins</p>
                             <div className="mt-1">
                               <LeaderboardCoinChip
-                                balance={coinBalanceForLeaderboardRow(row, coinByUserId)}
+                                balance={coinBalanceForLeaderboardRow(row, coinLookup)}
                               />
                             </div>
                           </div>

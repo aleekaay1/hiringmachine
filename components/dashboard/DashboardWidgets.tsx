@@ -2,9 +2,11 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
 import type { RecruiterLeaderboardRow } from '../../services/pipelineLeaderboard';
+import { listAllUserProfiles } from '../../services/accessControl';
 import {
   coinBalanceForLeaderboardRow,
-  loadRecruiterCoinBalanceMap,
+  loadLeaderboardCoinLookup,
+  type LeaderboardCoinLookup,
 } from '../../services/recruiterCoinService';
 import { DashboardStickyNotesPanel } from './DashboardStickyNotesPanel';
 import { LeaderboardCoinChip } from './LeaderboardCoinChip';
@@ -21,16 +23,22 @@ export function RecruiterStandingsBoard({
   rows: RecruiterLeaderboardRow[];
   title?: string;
 }) {
-  const [coinByUserId, setCoinByUserId] = React.useState<Map<string, number>>(new Map());
+  const [coinLookup, setCoinLookup] = React.useState<LeaderboardCoinLookup>({
+    byUserId: new Map(),
+    displayNameToUserId: new Map(),
+  });
 
   React.useEffect(() => {
     let cancelled = false;
-    void loadRecruiterCoinBalanceMap()
-      .then((map) => {
-        if (!cancelled) setCoinByUserId(map);
+    void listAllUserProfiles()
+      .then((profiles) => loadLeaderboardCoinLookup(profiles))
+      .then((lookup) => {
+        if (!cancelled) setCoinLookup(lookup);
       })
       .catch(() => {
-        if (!cancelled) setCoinByUserId(new Map());
+        if (!cancelled) {
+          setCoinLookup({ byUserId: new Map(), displayNameToUserId: new Map() });
+        }
       });
     return () => {
       cancelled = true;
@@ -62,7 +70,7 @@ export function RecruiterStandingsBoard({
                 <td className="py-2 pr-3">{row.displayName}</td>
                 <td className="py-2 pr-3">
                   <LeaderboardCoinChip
-                    balance={coinBalanceForLeaderboardRow(row, coinByUserId)}
+                    balance={coinBalanceForLeaderboardRow(row, coinLookup)}
                     compact
                   />
                 </td>
