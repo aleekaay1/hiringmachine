@@ -241,6 +241,57 @@ function isoInRange(iso: string, fromIso: string | null, toIso: string | null): 
   return true;
 }
 
+function webinarRowKey(row: AnyRow): string {
+  const id = String(row.id ?? row.subscription_id ?? '').trim();
+  if (id) return id;
+  return `${String(row.email || '')}|${String(row.custom_field || '')}`;
+}
+
+/** Booked in range: scheduled-on OR session date (matches Calls Analytics when invite date is missing). */
+function webinarRowBookedInRange(
+  row: AnyRow,
+  sinceYmd: string | null,
+  untilYmd: string | null,
+): boolean {
+  const scheduled = fmtHrScheduledDateKey(row);
+  const session = fmtWebinarSessionDateKey(row);
+  return ymdInRange(scheduled, sinceYmd, untilYmd) || ymdInRange(session, sinceYmd, untilYmd);
+}
+
+function countWebinarsBookedInRange(
+  rows: AnyRow[],
+  sinceYmd: string | null,
+  untilYmd: string | null,
+): number {
+  const seen = new Set<string>();
+  let count = 0;
+  for (const row of rows) {
+    if (!webinarRowBookedInRange(row, sinceYmd, untilYmd)) continue;
+    const key = webinarRowKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    count += 1;
+  }
+  return count;
+}
+
+function filterWebinarsBookedInRange(
+  rows: AnyRow[],
+  sinceYmd: string | null,
+  untilYmd: string | null,
+): AnyRow[] {
+  const seen = new Set<string>();
+  const out: AnyRow[] = [];
+  for (const row of rows) {
+    if (!webinarRowBookedInRange(row, sinceYmd, untilYmd)) continue;
+    const key = webinarRowKey(row);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
+
 function readBookedSubtype(record: PipelineCallRecord): string {
   const meta = record.threecx_metadata && typeof record.threecx_metadata === 'object' ? record.threecx_metadata : {};
   return String(
@@ -400,8 +451,7 @@ export async function loadRecruiterReport(
     profile.full_name ?? null,
   );
 
-  const webinarsBooked = scopedWebinar
-    .filter((row) => ymdInRange(fmtHrScheduledDateKey(row), range.sinceYmd, range.untilYmd))
+  const webinarsBooked = filterWebinarsBookedInRange(scopedWebinar, range.sinceYmd, range.untilYmd)
     .map(mapWebinarRow)
     .sort((a, b) => b.scheduledOnYmd.localeCompare(a.scheduledOnYmd));
 
@@ -528,8 +578,10 @@ export async function loadTeamReportCards(
       profile.email ?? null,
       profile.full_name ?? null,
     );
-    const webinarsBooked = scopedWebinar.filter((row) =>
-      ymdInRange(fmtHrScheduledDateKey(row), range.sinceYmd, range.untilYmd),
+    const webinarsBookedCount = countWebinarsBookedInRange(
+      scopedWebinar,
+      range.sinceYmd,
+      range.untilYmd,
     );
     const webinarShows = scopedWebinar.filter(
       (row) =>
@@ -548,7 +600,7 @@ export async function loadTeamReportCards(
         ...stats,
         emailsSent: 0,
         emailReplies: 0,
-        webinarBooked: webinarsBooked.length,
+        webinarBooked: webinarsBookedCount,
         webinarShowed: webinarShows.length,
         liveBooked,
         liveShowed: 0,

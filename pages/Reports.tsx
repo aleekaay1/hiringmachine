@@ -191,8 +191,8 @@ const Reports: React.FC = () => {
                         <p className="font-bold tabular-nums text-[#0B1B34]">{card.summary.totalCalls}</p>
                       </div>
                       <div className="rounded-lg bg-[#f7fbff] px-2 py-1.5">
-                        <p className="text-[#6d86a3]">Booked</p>
-                        <p className="font-bold tabular-nums text-[#0B1B34]">{card.summary.bookedCalls}</p>
+                        <p className="text-[#6d86a3]">Webinar booked</p>
+                        <p className="font-bold tabular-nums text-[#0B1B34]">{card.summary.webinarBooked}</p>
                       </div>
                       <div className="rounded-lg bg-[#f7fbff] px-2 py-1.5">
                         <p className="text-[#6d86a3]">Webinar shows</p>
