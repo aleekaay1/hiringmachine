@@ -189,23 +189,18 @@ export function resolvedCalendarFromOccurrence(
   };
 }
 
-/** Env ISO override, else synced occurrence from Calendly/Zoom registry. */
-const WEDNESDAY_WEEKDAY = 3;
-const LIVE_SESSION_START_HOUR = 11;
-const LIVE_SESSION_START_MINUTE = 30;
-const LIVE_SESSION_DURATION_MIN = 30;
-
 /** Next Wednesday 11:30 AM Eastern when Calendly/Zoom registry has no row yet. */
 export function fallbackNextWednesdayLiveSession(
   zoomUrl: string,
   env: Record<string, string | undefined> = {},
   now = new Date(),
 ): ResolvedLiveSession {
+  const fallbackSlotMinutes = 30;
   const parts = easternParts(now);
   const minutesNow = parts.hour * 60 + parts.minute;
   const sessionStartMinutes = LIVE_SESSION_START_HOUR * 60 + LIVE_SESSION_START_MINUTE;
-  let daysUntil = (WEDNESDAY_WEEKDAY - parts.weekday + 7) % 7;
-  if (daysUntil === 0 && minutesNow >= sessionStartMinutes + LIVE_SESSION_DURATION_MIN) {
+  let daysUntil = (LIVE_SESSION_WEEKDAY - parts.weekday + 7) % 7;
+  if (daysUntil === 0 && minutesNow >= sessionStartMinutes + fallbackSlotMinutes) {
     daysUntil = 7;
   }
   const targetYmd = addDaysYmd(
@@ -213,7 +208,7 @@ export function fallbackNextWednesdayLiveSession(
     daysUntil,
   );
   const start = zonedWallClockToUtc(targetYmd, LIVE_SESSION_START_HOUR, LIVE_SESSION_START_MINUTE);
-  const end = new Date(start.getTime() + LIVE_SESSION_DURATION_MIN * 60 * 1000);
+  const end = new Date(start.getTime() + fallbackSlotMinutes * 60 * 1000);
   const labels = formatSessionDisplayLabels(start, end);
   const sessionDate = `${targetYmd.year}-${String(targetYmd.month).padStart(2, '0')}-${String(targetYmd.day).padStart(2, '0')}`;
   return {
