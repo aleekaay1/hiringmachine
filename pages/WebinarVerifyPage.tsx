@@ -205,6 +205,10 @@ const WebinarVerifyPage: React.FC = () => {
       setError('Email, first name, and a broadcast slot are required to book.');
       return;
     }
+    if (!surname.trim()) {
+      setError('Last name is required — WebinarGeek rejects bookings without a surname.');
+      return;
+    }
     if (bookingMode === 'link' && !selectedLinkTag.trim()) {
       setError('Choose a registration link to book as, or switch to direct portal booking.');
       return;
@@ -414,6 +418,7 @@ const WebinarVerifyPage: React.FC = () => {
                   <input
                     value={surname}
                     onChange={(e) => setSurname(e.target.value)}
+                    required
                     className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
                   />
                 </label>

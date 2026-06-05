@@ -51,7 +51,7 @@ function parseBool(value: string | null): boolean | undefined {
   return undefined;
 }
 
-async function wgRequest(path: string, init: RequestInit = {}): Promise<{ ok: boolean; status: number; json: Record<string, unknown> }> {
+async function wgRequest(path: string, init: RequestInit = {}): Promise<{ ok: boolean; status: number; json: Record<string, unknown>; raw: string }> {
   const token = Deno.env.get('WEBINARGEEK_API_TOKEN')?.trim();
   if (!token) throw new Error('Missing WEBINARGEEK_API_TOKEN secret');
   const url = `${WEBINARGEEK_BASE}${path.startsWith('/') ? '' : '/'}${path}`;
@@ -63,8 +63,16 @@ async function wgRequest(path: string, init: RequestInit = {}): Promise<{ ok: bo
       ...(init.headers || {}),
     },
   });
-  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  return { ok: res.ok, status: res.status, json };
+  const raw = await res.text();
+  let json: Record<string, unknown> = {};
+  if (raw.trim()) {
+    try {
+      json = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      json = { raw_body: raw.slice(0, 500) };
+    }
+  }
+  return { ok: res.ok, status: res.status, json, raw };
 }
 
 async function wgGet(path: string, params?: Record<string, string | number | boolean | undefined>) {
@@ -102,11 +110,145 @@ function subscriptionRowsFromWgJson(json: Record<string, unknown>): Array<Record
 }
 
 function wgErrorMessage(json: Record<string, unknown>, fallback: string): string {
-  const message = String(json.message || json.error || '').trim();
+  const message = String(json.message || json.error || json.detail || '').trim();
   const code = String(json.code || '').trim();
   if (message && code) return `${message} (${code})`;
   if (message) return message;
+
+  if (Array.isArray(json.errors)) {
+    const joined = json.errors.map((entry) => String(entry)).filter(Boolean).join('; ');
+    if (joined) return joined;
+  }
+  if (json.errors && typeof json.errors === 'object') {
+    const parts: string[] = [];
+    for (const [key, value] of Object.entries(json.errors as Record<string, unknown>)) {
+      if (Array.isArray(value)) parts.push(`${key}: ${value.map(String).join(', ')}`);
+      else parts.push(`${key}: ${String(value)}`);
+    }
+    if (parts.length) return parts.join('; ');
+  }
+
+  const rawBody = String(json.raw_body || '').trim();
+  if (rawBody) return rawBody.slice(0, 240);
+
+  const keys = Object.keys(json).filter((key) => key !== 'ok');
+  if (keys.length) return JSON.stringify(json);
   return fallback;
+}
+
+type RegistrationFieldRow = {
+  name?: string;
+  mandatory?: boolean;
+  extra_field?: boolean;
+  field_options?: Array<{ label?: string }>;
+};
+
+function registrationFieldsFromWebinarJson(json: Record<string, unknown>): RegistrationFieldRow[] {
+  const fields = json.registration_fields;
+  return Array.isArray(fields) ? fields as RegistrationFieldRow[] : [];
+}
+
+function buildSubscriptionPayload(input: {
+  email: string;
+  firstname: string;
+  surname: string;
+  customField?: string | null;
+  registrationFields?: RegistrationFieldRow[];
+}): Record<string, unknown> {
+  const effectiveSurname = input.surname.trim() || '.';
+  const payload: Record<string, unknown> = {
+    email: input.email,
+    firstname: input.firstname,
+    surname: effectiveSurname,
+  };
+  if (input.customField) payload.custom_field = input.customField;
+
+  const extraFields: Record<string, string> = {};
+  for (const field of input.registrationFields || []) {
+    const name = String(field.name || '').trim();
+    if (!name || !field.mandatory) continue;
+    if (name === 'email' || name === 'firstname' || name === 'surname' || name === 'custom_field') continue;
+    if (field.extra_field) {
+      const option = field.field_options?.[0]?.label;
+      extraFields[name] = String(option || 'Yes');
+      continue;
+    }
+    if (payload[name] == null) payload[name] = '-';
+  }
+  if (Object.keys(extraFields).length) payload.extra_fields = extraFields;
+
+  return payload;
+}
+
+function subscriptionBroadcastId(row: Record<string, unknown>): string | null {
+  const broadcast = row.broadcast && typeof row.broadcast === 'object'
+    ? row.broadcast as Record<string, unknown>
+    : null;
+  const id = broadcast?.id ?? row.broadcast_id;
+  return id != null && String(id).trim() ? String(id) : null;
+}
+
+async function resolveBroadcastContext(broadcastId: string, webinarIdHint?: string) {
+  const broadcastRes = await wgGet(`/broadcasts/${encodeURIComponent(broadcastId)}`, {
+    nested_resources: 'webinar,episode',
+  });
+  if (!broadcastRes.ok) {
+    return {
+      ok: false as const,
+      status: broadcastRes.status,
+      error: wgErrorMessage(broadcastRes.json, `Broadcast ${broadcastId} not found (${broadcastRes.status})`),
+      json: broadcastRes.json,
+    };
+  }
+
+  const broadcast = broadcastRes.json;
+  const nestedWebinar = broadcast.webinar && typeof broadcast.webinar === 'object'
+    ? broadcast.webinar as Record<string, unknown>
+    : null;
+  const resolvedWebinarId = String(
+    webinarIdHint || nestedWebinar?.id || broadcast.webinar_id || '',
+  ).trim() || null;
+
+  let registrationFields: RegistrationFieldRow[] = registrationFieldsFromWebinarJson(broadcast);
+  if (!registrationFields.length && resolvedWebinarId) {
+    const webinarRes = await wgGet(`/webinars/${encodeURIComponent(resolvedWebinarId)}`);
+    if (webinarRes.ok) registrationFields = registrationFieldsFromWebinarJson(webinarRes.json);
+  }
+
+  const cancelled = broadcast.cancelled === true;
+  const hasEnded = broadcast.has_ended === true;
+  if (cancelled) {
+    return {
+      ok: false as const,
+      status: 422,
+      error: 'This broadcast was cancelled in WebinarGeek. Pick another upcoming session.',
+      json: broadcastRes.json,
+    };
+  }
+  if (hasEnded) {
+    return {
+      ok: false as const,
+      status: 422,
+      error: 'This broadcast has already ended. Pick an upcoming session from the list.',
+      json: broadcastRes.json,
+    };
+  }
+
+  return {
+    ok: true as const,
+    broadcast,
+    webinarId: resolvedWebinarId,
+    registrationFields,
+  };
+}
+
+async function attemptBroadcastBooking(
+  broadcastId: string,
+  payload: Record<string, unknown>,
+): Promise<{ ok: boolean; status: number; json: Record<string, unknown>; raw: string; endpoint: string }> {
+  const endpoint = `/broadcasts/${encodeURIComponent(broadcastId)}/subscriptions`;
+  const res = await wgPost(endpoint, payload);
+  return { ...res, endpoint };
 }
 
 function simplifySubscriptionRow(row: Record<string, unknown>) {
@@ -878,19 +1020,77 @@ Deno.serve(async (req) => {
         effectiveCustomField = parsedTag.tag;
       }
 
-      const subscriptionPayload: Record<string, unknown> = {
+      const broadcastContext = await resolveBroadcastContext(broadcastId, webinarId || undefined);
+      if (!broadcastContext.ok) {
+        return new Response(JSON.stringify({
+          error: broadcastContext.error,
+          source_status: broadcastContext.status,
+          wg_details: broadcastContext.json,
+        }), {
+          status: broadcastContext.status === 404 ? 404 : 502,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const resolvedWebinarId = broadcastContext.webinarId || webinarId || null;
+      const existingRows = await findSubscriptionsByEmail(email);
+      const alreadyRegistered = existingRows.some((row) => subscriptionBroadcastId(row) === broadcastId);
+      if (alreadyRegistered) {
+        const simplified = existingRows
+          .filter((row) => subscriptionBroadcastId(row) === broadcastId)
+          .map(simplifySubscriptionRow);
+        return new Response(JSON.stringify({
+          ok: true,
+          booked: true,
+          already_registered: true,
+          subscription: simplified[0] || null,
+          email_verified: simplified.some((row) => row.email_verified === true),
+          custom_field: effectiveCustomField,
+          booked_by: bookedByLabel,
+          message: 'Already registered for this session in WebinarGeek.',
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const subscriptionPayload = buildSubscriptionPayload({
         email,
         firstname,
-        surname: surname || undefined,
-        custom_field: effectiveCustomField || undefined,
-      };
+        surname,
+        customField: effectiveCustomField,
+        registrationFields: broadcastContext.registrationFields,
+      });
 
-      let bookRes = await wgPost(`/broadcasts/${encodeURIComponent(broadcastId)}/subscriptions`, subscriptionPayload);
-      if (!bookRes.ok && webinarId) {
-        bookRes = await wgPost(`/webinars/${encodeURIComponent(webinarId)}/series_subscribe`, {
-          ...subscriptionPayload,
-          broadcasts: [Number(broadcastId) || broadcastId],
+      let bookRes = await attemptBroadcastBooking(broadcastId, subscriptionPayload);
+      let usedPayload = subscriptionPayload;
+      let droppedCustomField = false;
+
+      if (!bookRes.ok && bookRes.status === 422 && effectiveCustomField) {
+        const withoutTag = { ...subscriptionPayload };
+        delete withoutTag.custom_field;
+        const retry = await attemptBroadcastBooking(broadcastId, withoutTag);
+        if (retry.ok) {
+          bookRes = retry;
+          usedPayload = withoutTag;
+          droppedCustomField = true;
+          effectiveCustomField = null;
+        }
+      }
+
+      if (!bookRes.ok && bookRes.status === 422 && !surname.trim()) {
+        const withSurname = buildSubscriptionPayload({
+          email,
+          firstname,
+          surname: '.',
+          customField: droppedCustomField ? null : effectiveCustomField,
+          registrationFields: broadcastContext.registrationFields,
         });
+        const retry = await attemptBroadcastBooking(broadcastId, withSurname);
+        if (retry.ok) {
+          bookRes = retry;
+          usedPayload = withSurname;
+        }
       }
 
       const subscriptionRow = bookRes.ok
@@ -905,7 +1105,7 @@ Deno.serve(async (req) => {
         candidate_last_name: surname || null,
         candidate_id: candidateId,
         broadcast_id: broadcastId,
-        webinar_id: webinarId || null,
+        webinar_id: resolvedWebinarId,
         custom_field: effectiveCustomField,
         wg_subscription_id: subscriptionRow?.id != null ? String(subscriptionRow.id) : null,
         email_verified: subscriptionRow?.email_verified === true,
@@ -918,6 +1118,10 @@ Deno.serve(async (req) => {
           registration_source: 'api',
           wg_status: bookRes.status,
           wg_code: bookRes.json.code ?? null,
+          dropped_custom_field: droppedCustomField,
+          attempted_endpoint: bookRes.endpoint,
+          attempted_payload: usedPayload,
+          wg_response: bookRes.ok ? null : bookRes.json,
         },
       };
 
@@ -932,7 +1136,9 @@ Deno.serve(async (req) => {
           error: auditRow.error_message,
           source_status: bookRes.status,
           wg_code: bookRes.json.code ?? null,
-          attempted_endpoint: `/broadcasts/${broadcastId}/subscriptions`,
+          wg_details: bookRes.json,
+          attempted_endpoint: bookRes.endpoint,
+          attempted_payload: usedPayload,
         }), {
           status: 502,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -946,8 +1152,11 @@ Deno.serve(async (req) => {
         subscription: simplified,
         email_verified: simplified?.email_verified === true,
         custom_field: effectiveCustomField,
+        dropped_custom_field: droppedCustomField,
         booked_by: bookedByLabel,
-        message: simplified?.email_verified
+        message: droppedCustomField
+          ? 'Registered, but WebinarGeek rejected the Cooper/RMS link tag — booked without link attribution.'
+          : simplified?.email_verified
           ? 'Registered and email already verified in WebinarGeek.'
           : 'Registered — candidate must confirm the WebinarGeek email to appear as verified.',
       }), {

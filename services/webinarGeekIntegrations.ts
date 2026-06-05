@@ -90,10 +90,20 @@ async function callWebinarGeek(
     if (res.status === 401) {
       return { ok: false, error: 'Unauthorized (session expired). Please sign in again.' };
     }
-    const err = (json.error as string) || res.statusText || 'Request failed';
+    const base = (json.error as string) || res.statusText || 'Request failed';
+    const details = json.wg_details && typeof json.wg_details === 'object'
+      ? wgDetailsToText(json.wg_details as Record<string, unknown>)
+      : '';
+    const err = details && !base.includes(details) ? `${base} — ${details}` : base;
     return { ok: false, error: err };
   }
   return { ok: true, data: json };
+}
+
+function wgDetailsToText(json: Record<string, unknown>): string {
+  const message = String(json.message || json.error || '').trim();
+  if (message) return message;
+  return JSON.stringify(json);
 }
 
 export async function fetchWebinarGeekHealth(accessToken: string) {
