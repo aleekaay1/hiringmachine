@@ -1,6 +1,6 @@
 import React from 'react';
 import Layout from './Layout';
-import { Button } from './UI';
+import StaffLoginPage from './StaffLoginPage';
 import { supabase } from '../services/supabaseClient';
 import { signInWithGoogle } from '../services/googleAuth';
 
@@ -44,83 +44,41 @@ const PipelineAuthShell: React.FC<PipelineAuthShellProps> = ({
 
   if (!authReady) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-[#f7fbff] to-[#eef6ff] flex items-center justify-center p-4">
-        <p className="text-sm text-[#6f7b8d]">Loading session...</p>
+      <div className="min-h-screen bg-[#e8f2fc] flex items-center justify-center p-4">
+        <p className="text-sm text-[#6f7b8d]">Loading session…</p>
       </div>
     );
   }
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-[#f7fbff] to-[#eef6ff] flex items-center justify-center p-4">
-        <div className="bg-white border border-[#d9e9fb] p-8 rounded-[24px] shadow w-full max-w-sm">
-          <div className="flex justify-center mb-5">
-            <div className="h-24 w-24 rounded-full bg-white border border-[#d6deea] shadow-sm flex items-center justify-center overflow-hidden">
-              <img
-                src="/logo.png"
-                alt="Paz Hiring Journey"
-                className="h-20 w-20 object-contain"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = 'none';
-                }}
-              />
-            </div>
-          </div>
-          <h2 className="text-xl font-bold text-[#0B1B34] mb-1 text-center">{title}</h2>
-          <p className="text-sm text-[#6f7b8d] text-center mb-6">{subtitle}</p>
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              setAuthError(null);
-              const { error } = await supabase.auth.signInWithPassword({ email, password });
-              if (error) {
-                setAuthError('Invalid email or password.');
-                return;
-              }
-              setIsAuthenticated(true);
-            }}
-            className="space-y-4"
-          >
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-xl border border-[#cfe3f9]"
-            />
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-xl border border-[#cfe3f9]"
-            />
-            <Button fullWidth type="submit">Sign in</Button>
-            <div className="relative py-1">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t border-[#d9e9fb]" />
-              </div>
-              <div className="relative flex justify-center text-[10px] uppercase tracking-wide text-[#95a6bd]">
-                <span className="bg-white px-2">or</span>
-              </div>
-            </div>
-            <Button
-              fullWidth
-              type="button"
-              variant="outline"
-              onClick={async () => {
-                setAuthError(null);
-                setGoogleLoading(true);
-                const { error } = await signInWithGoogle(redirectPath);
-                if (error) setAuthError(error);
-                setGoogleLoading(false);
-              }}
-              disabled={googleLoading}
-            >
-              {googleLoading ? 'Redirecting...' : 'Continue with Google'}
-            </Button>
-            {authError && <p className="text-sm text-red-600 text-center">{authError}</p>}
-          </form>
-        </div>
-      </div>
+      <StaffLoginPage
+        title={title}
+        subtitle={subtitle}
+        email={email}
+        onEmailChange={setEmail}
+        password={password}
+        onPasswordChange={setPassword}
+        authError={authError}
+        googleLoading={googleLoading}
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setAuthError(null);
+          const { error } = await supabase.auth.signInWithPassword({ email, password });
+          if (error) {
+            setAuthError('Invalid email or password.');
+            return;
+          }
+          setIsAuthenticated(true);
+        }}
+        onGoogleSignIn={async () => {
+          setAuthError(null);
+          setGoogleLoading(true);
+          const { error } = await signInWithGoogle(redirectPath);
+          if (error) setAuthError(error);
+          setGoogleLoading(false);
+        }}
+      />
     );
   }
 

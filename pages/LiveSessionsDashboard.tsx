@@ -20,6 +20,7 @@ import {
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { ChevronDown, ChevronRight, Mail, RefreshCw, Users, Video, X } from 'lucide-react';
 import { signInWithGoogle } from '../services/googleAuth';
+import StaffLoginPage from '../components/StaffLoginPage';
 
 const EM_DASH = '\u2014';
 const MIDDLE_DOT = '\u00B7';
@@ -272,39 +273,18 @@ const LiveSessionsDashboard: React.FC = () => {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-[#f7fbff] to-[#eef6ff] flex items-center justify-center p-4">
-        <div className="bg-white border border-[#d9e9fb] p-8 rounded-[28px] shadow w-full max-w-sm">
-          <h2 className="text-xl font-bold text-[#0B1B34] mb-1 text-center">Live Online Career Session</h2>
-          <p className="text-sm text-[#6f7b8d] text-center mb-6">Sign in with your admin account</p>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-2xl border border-[#cfe3f9]"
-            />
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-2xl border border-[#cfe3f9]"
-            />
-            <Button fullWidth type="submit">Sign in</Button>
-            <div className="relative py-1">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t border-[#d9e9fb]" />
-              </div>
-              <div className="relative flex justify-center text-[10px] uppercase tracking-wide text-[#95a6bd]">
-                <span className="bg-white px-2">or</span>
-              </div>
-            </div>
-            <Button fullWidth type="button" variant="outline" onClick={() => void handleGoogleLogin()} disabled={googleLoading}>
-              {googleLoading ? 'Redirecting...' : 'Continue with Google'}
-            </Button>
-            {authError && <p className="text-sm text-red-600 text-center">{authError}</p>}
-          </form>
-        </div>
-      </div>
+      <StaffLoginPage
+        title="Live Online Career Session"
+        subtitle="Sign in with your admin account to manage Zoom and Calendly sessions."
+        email={email}
+        onEmailChange={setEmail}
+        password={password}
+        onPasswordChange={setPassword}
+        authError={authError}
+        googleLoading={googleLoading}
+        onSubmit={(e) => void handleLogin(e)}
+        onGoogleSignIn={() => void handleGoogleLogin()}
+      />
     );
   }
 

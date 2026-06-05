@@ -48,6 +48,7 @@ import { hasResumeOrLinkedInMaterial } from '../services/linkedinUrl';
 import { listSourceCandidateIdsInPipeline, sendCandidatesToPipelineFromAdmin } from '../services/pipelineService';
 import { syncRecruiterCoinsAfterCandidateHired } from '../services/recruiterCoinService';
 import { signInWithGoogle } from '../services/googleAuth';
+import StaffLoginPage from '../components/StaffLoginPage';
 
 const SUGGESTED_TAGS = ['Strong fit', 'Follow up', 'Licensing needed', 'High potential', 'Second interview', 'Offer extended'];
 
@@ -1169,61 +1170,20 @@ const AdminDashboard: React.FC = () => {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-sm">
-          <div className="flex justify-center mb-5">
-            <div className="h-24 w-24 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center overflow-hidden">
-              <img
-                src="/logo.png"
-                alt="Paz Hiring Journey"
-                className="h-20 w-20 object-contain"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = 'none';
-                }}
-              />
-            </div>
-          </div>
-          <h2 className="text-2xl font-bold text-[#005EB8] mb-6 text-center">Admin Access</h2>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-              <input 
-                type="email" 
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                className="w-full px-4 py-2 border rounded-lg focus:ring-[#005EB8] focus:border-[#005EB8]"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-              <input 
-                type="password" 
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                className="w-full px-4 py-2 border rounded-lg focus:ring-[#005EB8] focus:border-[#005EB8]"
-              />
-            </div>
-            <Button fullWidth type="submit">Login</Button>
-            <div className="relative py-1">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t border-gray-200" />
-              </div>
-              <div className="relative flex justify-center text-[10px] uppercase tracking-wide text-gray-400">
-                <span className="bg-white px-2">or</span>
-              </div>
-            </div>
-            <Button fullWidth type="button" variant="outline" onClick={() => void handleGoogleLogin()} disabled={googleLoading}>
-              {googleLoading ? 'Redirecting...' : 'Continue with Google'}
-            </Button>
-            {authError && (
-              <p className="text-xs text-center text-red-500 mt-2">{authError}</p>
-            )}
-            <p className="text-xs text-center text-gray-400 mt-4">
-              Use your admin credentials for Globe Life Paz.
-            </p>
-          </form>
-        </div>
-      </div>
+      <StaffLoginPage
+        title="Admin access"
+        subtitle="Sign in to manage candidates, sessions, and team analytics."
+        footerNote="Use your Globe Life Paz staff credentials."
+        email={email}
+        onEmailChange={setEmail}
+        password={password}
+        onPasswordChange={setPassword}
+        authError={authError}
+        googleLoading={googleLoading}
+        submitLabel="Sign in"
+        onSubmit={(e) => void handleLogin(e)}
+        onGoogleSignIn={() => void handleGoogleLogin()}
+      />
     );
   }
 

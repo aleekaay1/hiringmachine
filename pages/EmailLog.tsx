@@ -21,6 +21,7 @@ import {
 import { Candidate } from '../types';
 import { Download, Mail, RefreshCw, Search } from 'lucide-react';
 import { signInWithGoogle } from '../services/googleAuth';
+import StaffLoginPage from '../components/StaffLoginPage';
 
 type EmailSendLogRow = {
   id: string;
@@ -907,41 +908,18 @@ const EmailLog: React.FC = () => {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-[#f7fbff] to-[#eef6ff] flex items-center justify-center p-4">
-        <div className="bg-white border border-[#d9e9fb] p-8 rounded-[28px] shadow-[0_18px_50px_-24px_rgba(0,94,184,0.35)] w-full max-w-sm">
-          <h2 className="text-xl font-bold text-[#0B1B34] mb-1 text-center">Email log</h2>
-          <p className="text-sm text-[#6f7b8d] text-center mb-6">Sign in with a staff account (admin, recruiter, or HR)</p>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-2xl border border-[#cfe3f9] text-[#0B1B34]"
-            />
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-2xl border border-[#cfe3f9] text-[#0B1B34]"
-            />
-            <Button fullWidth type="submit">
-              Sign in
-            </Button>
-            <div className="relative py-1">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t border-[#d9e9fb]" />
-              </div>
-              <div className="relative flex justify-center text-[10px] uppercase tracking-wide text-[#95a6bd]">
-                <span className="bg-white px-2">or</span>
-              </div>
-            </div>
-            <Button fullWidth type="button" variant="outline" onClick={() => void handleGoogleLogin()} disabled={googleLoading}>
-              {googleLoading ? 'Redirecting...' : 'Continue with Google'}
-            </Button>
-            {authError && <p className="text-sm text-red-600 text-center">{authError}</p>}
-          </form>
-        </div>
-      </div>
+      <StaffLoginPage
+        title="Email log"
+        subtitle="Sign in with a staff account (admin, recruiter, or HR)."
+        email={email}
+        onEmailChange={setEmail}
+        password={password}
+        onPasswordChange={setPassword}
+        authError={authError}
+        googleLoading={googleLoading}
+        onSubmit={(e) => void handleLogin(e)}
+        onGoogleSignIn={() => void handleGoogleLogin()}
+      />
     );
   }
 

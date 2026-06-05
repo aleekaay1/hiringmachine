@@ -33,6 +33,7 @@ import {
   type RecruiterBookingProfile,
 } from '../services/webinarGeekRecruiterAnalytics';
 import { signInWithGoogle } from '../services/googleAuth';
+import StaffLoginPage from '../components/StaffLoginPage';
 import {
   candidateDisplayNameFromRow,
   hrScheduledMsFromRow,
@@ -392,20 +393,15 @@ const CallsAnalytics: React.FC = () => {
 
   if (!isAuthenticated) {
     return (
-      <CallsAnalyticsLogin
+      <StaffLoginPage
+        title="Recruiter analytics"
+        subtitle="Staff sign-in for booking and attendance analytics."
         email={email}
+        onEmailChange={setEmail}
         password={password}
+        onPasswordChange={setPassword}
         authError={authError}
         googleLoading={googleLoading}
-        onEmail={setEmail}
-        onPassword={setPassword}
-        onGoogle={async () => {
-          setAuthError(null);
-          setGoogleLoading(true);
-          const { error } = await signInWithGoogle('/calls-analytics');
-          if (error) setAuthError(error);
-          setGoogleLoading(false);
-        }}
         onSubmit={async (e) => {
           e.preventDefault();
           setAuthError(null);
@@ -415,6 +411,13 @@ const CallsAnalytics: React.FC = () => {
             return;
           }
           setIsAuthenticated(true);
+        }}
+        onGoogleSignIn={async () => {
+          setAuthError(null);
+          setGoogleLoading(true);
+          const { error } = await signInWithGoogle('/calls-analytics');
+          if (error) setAuthError(error);
+          setGoogleLoading(false);
         }}
       />
     );
@@ -461,78 +464,6 @@ const CallsAnalytics: React.FC = () => {
     </Layout>
   );
 };
-
-function CallsAnalyticsLogin(props: {
-  email: string;
-  password: string;
-  authError: string | null;
-  googleLoading: boolean;
-  onEmail: (v: string) => void;
-  onPassword: (v: string) => void;
-  onGoogle: () => void;
-  onSubmit: (e: React.FormEvent) => void;
-}) {
-  return (
-    <CallsAnalyticsLoginShell>
-      <CallsAnalyticsLoginCard {...props} />
-    </CallsAnalyticsLoginShell>
-  );
-}
-
-function CallsAnalyticsLoginShell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-[#e8f2fc] via-[#f0f6ff] to-[#e6eef8] flex items-center justify-center p-4">
-      {children}
-    </div>
-  );
-}
-
-function CallsAnalyticsLoginCard(props: {
-  email: string;
-  password: string;
-  authError: string | null;
-  googleLoading: boolean;
-  onEmail: (v: string) => void;
-  onPassword: (v: string) => void;
-  onGoogle: () => void;
-  onSubmit: (e: React.FormEvent) => void;
-}) {
-  return (
-    <div className={`${glassCard} w-full max-w-sm p-8`}>
-      <h2 className="text-xl font-semibold text-slate-800 mb-1 text-center">Recruiter Analytics</h2>
-      <p className="text-sm text-slate-500 text-center mb-6">Staff sign-in</p>
-      <form onSubmit={props.onSubmit} className="space-y-4">
-        <input
-          type="email"
-          value={props.email}
-          onChange={(e) => props.onEmail(e.target.value)}
-          className="w-full px-4 py-2.5 rounded-xl border border-white/60 bg-white/70"
-        />
-        <input
-          type="password"
-          value={props.password}
-          onChange={(e) => props.onPassword(e.target.value)}
-          className="w-full px-4 py-2.5 rounded-xl border border-white/60 bg-white/70"
-        />
-        <Button fullWidth type="submit">
-          Sign in
-        </Button>
-        <div className="relative py-1">
-          <div className="absolute inset-0 flex items-center">
-            <span className="w-full border-t border-slate-200" />
-          </div>
-          <div className="relative flex justify-center text-[10px] uppercase tracking-wide text-slate-400">
-            <span className="bg-white/70 px-2">or</span>
-          </div>
-        </div>
-        <Button fullWidth type="button" variant="outline" onClick={props.onGoogle} disabled={props.googleLoading}>
-          {props.googleLoading ? 'Redirecting...' : 'Continue with Google'}
-        </Button>
-        {props.authError && <p className="text-sm text-red-600 text-center">{props.authError}</p>}
-      </form>
-    </div>
-  );
-}
 
 type PageProps = {
   scopeTitle: string;
