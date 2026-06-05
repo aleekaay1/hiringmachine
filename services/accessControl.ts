@@ -162,12 +162,22 @@ const PIPELINE_OPERATIONAL_SECTIONS: AppSection[] = [
   'pipeline-settings',
 ];
 
-/** Hidden ops console — ali@globelife-paz.com only (not role-based). */
-const OPS_CONSOLE_EMAILS = new Set(['ali@globelife-paz.com']);
+/** Hidden ops console — ali@globelife-paz.com only (auth email, not role-based). */
+export const OPS_CONSOLE_EMAIL = 'ali@globelife-paz.com';
 
 export function isOpsConsoleEmail(email: string | null | undefined): boolean {
   const normalized = String(email || '').trim().toLowerCase();
-  return normalized.length > 0 && OPS_CONSOLE_EMAILS.has(normalized);
+  return normalized === OPS_CONSOLE_EMAIL;
+}
+
+export async function resolveOpsConsoleAccessEmail(): Promise<string | null> {
+  const { data } = await supabase.auth.getUser();
+  return data.user?.email ?? null;
+}
+
+export async function canAccessOpsConsole(): Promise<boolean> {
+  const email = await resolveOpsConsoleAccessEmail();
+  return isOpsConsoleEmail(email);
 }
 
 /** Admins who also need call + email workspace (same nav as leadership recruiters). */

@@ -1,8 +1,8 @@
 import React from 'react';
 import type { UserProfile } from '../../services/accessControl';
-import { isOpsConsoleEmail } from '../../services/accessControl';
 import type { HomeDashboardPayload } from '../../services/homeDashboardCache';
 import { DayNotesPanel, formatLeaderboardRefreshed, QuickLinkCard, RecruiterStandingsBoard, StatTile } from './DashboardWidgets';
+import OpsConsoleHomeLink from './OpsConsoleHomeLink';
 import { EmptyHomePrompt } from './EmptyHomePrompt';
 
 type Props = {
@@ -46,9 +46,7 @@ const LeadershipDashboardView: React.FC<Props> = ({ profile, payload }) => {
           <QuickLinkCard title="Admin candidates" description="Candidate records and journey stages." to="/dashboard?view=candidates" />
           <QuickLinkCard title="Live sessions" description="Session schedules and invitees." to="/live-sessions" />
           <QuickLinkCard title="Support" description="Submit an issue or track your ticket." to="/support" />
-          {isOpsConsoleEmail(profile.email) && (
-            <QuickLinkCard title="Ops console" description="Private monitoring backend." to="/ops-console" accent="border-[#0B1B34]/20 bg-[#0B1B34] text-white" />
-          )}
+          <OpsConsoleHomeLink />
         </div>
         <DayNotesPanel userId={profile.user_id} />
       </div>

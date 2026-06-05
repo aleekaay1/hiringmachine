@@ -3,7 +3,7 @@ import { Activity, CheckCircle2, RefreshCw, Shield, Ticket, XCircle } from 'luci
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
-import { getCurrentUserProfile, isOpsConsoleEmail } from '../services/accessControl';
+import { canAccessOpsConsole } from '../services/accessControl';
 import {
   listAllSupportTickets,
   listOpsHealthHistory,
@@ -51,9 +51,7 @@ const OpsConsolePage: React.FC = () => {
   const [message, setMessage] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    void getCurrentUserProfile().then((p) => {
-      setAllowed(isOpsConsoleEmail(p?.email));
-    });
+    void canAccessOpsConsole().then(setAllowed);
   }, []);
 
   const refreshHealth = React.useCallback(async () => {

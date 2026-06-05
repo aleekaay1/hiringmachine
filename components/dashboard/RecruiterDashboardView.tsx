@@ -1,9 +1,9 @@
 import React from 'react';
 import type { UserProfile } from '../../services/accessControl';
-import { isOpsConsoleEmail } from '../../services/accessControl';
 import type { HomeDashboardPayload } from '../../services/homeDashboardCache';
 import { DayNotesPanel, GoalRow, QuickLinkCard, StatTile } from './DashboardWidgets';
 import RecruiterCoinsPanel from './RecruiterCoinsPanel';
+import OpsConsoleHomeLink from './OpsConsoleHomeLink';
 import { EmptyHomePrompt } from './EmptyHomePrompt';
 
 function pct(n: number): string {
@@ -61,9 +61,7 @@ const RecruiterDashboardView: React.FC<Props> = ({ profile, payload }) => {
             <QuickLinkCard title="Webinar activity" description="See bookings and attendance." to="/webinar-geek" />
             <QuickLinkCard title="Leaderboard" description="See how you rank on the team board." to="/calls-analytics/leaderboard" />
             <QuickLinkCard title="Support" description="Submit an issue or track your ticket." to="/support" accent="border-[#c8ddf4] bg-[#f4f9ff] hover:bg-[#ebf5ff]" />
-            {isOpsConsoleEmail(profile.email) && (
-              <QuickLinkCard title="Ops console" description="Private monitoring & ticket backend." to="/ops-console" accent="border-[#0B1B34]/20 bg-[#0B1B34] text-white hover:opacity-95" />
-            )}
+            <OpsConsoleHomeLink />
           </div>
         </div>
         <DayNotesPanel userId={profile.user_id} />

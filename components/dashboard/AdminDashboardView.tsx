@@ -1,8 +1,8 @@
 import React from 'react';
 import type { UserProfile } from '../../services/accessControl';
-import { isOpsConsoleEmail } from '../../services/accessControl';
 import type { HomeDashboardPayload } from '../../services/homeDashboardCache';
 import { DayNotesPanel, RecruiterStandingsBoard, StatTile, QuickLinkCard } from './DashboardWidgets';
+import OpsConsoleHomeLink from './OpsConsoleHomeLink';
 import {
   AdminQuickLinksStrip,
   AdminSnapshotHeader,
@@ -68,9 +68,7 @@ const AdminDashboardView: React.FC<Props> = ({ profile, payload }) => {
         <div className="space-y-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-[#4e79a9]">Administration</p>
           <AdminQuickLinksStrip />
-          {isOpsConsoleEmail(profile.email) && (
-            <QuickLinkCard title="Ops console" description="Private monitoring & tickets." to="/ops-console" accent="border-[#0B1B34]/20 bg-[#0B1B34] text-white" />
-          )}
+          <OpsConsoleHomeLink />
           <QuickLinkCard title="Support" description="Team support tickets." to="/support" />
           <p className="text-[11px] text-[#6d86a3]">
             Saved snapshot from your last refresh. Use the refresh button above for the latest team numbers.

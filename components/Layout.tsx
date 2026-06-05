@@ -89,10 +89,10 @@ const Layout: React.FC<LayoutProps> = ({
   React.useEffect(() => {
     if (!isAdmin) return;
     let cancelled = false;
-    void getCurrentUserProfile().then((profile) => {
+    void Promise.all([getCurrentUserProfile(), supabase.auth.getUser()]).then(([profile, authRes]) => {
       if (!cancelled) {
         setRole(profile?.role ?? null);
-        setUserEmail(profile?.email ?? null);
+        setUserEmail(authRes.data.user?.email ?? profile?.email ?? null);
         setRoleResolved(true);
       }
     });
