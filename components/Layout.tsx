@@ -9,7 +9,7 @@ import {
   type AppRole,
   type AppSection,
 } from '../services/accessControl';
-import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut, MonitorPlay, Mail, PhoneCall, SlidersHorizontal, FileUp, Trophy, LayoutDashboard, FileText } from 'lucide-react';
+import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut, MonitorPlay, Mail, PhoneCall, SlidersHorizontal, FileUp, Trophy, LayoutDashboard, FileText, LifeBuoy } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -54,6 +54,7 @@ const Layout: React.FC<LayoutProps> = ({
     { name: 'Settings', route: '/dashboard?view=settings', icon: Settings, section: 'settings' as const },
     { name: 'Email log', route: '/email-log', icon: Mail, section: 'email-log' as const },
     { name: 'Reports', route: '/reports', icon: FileText, section: 'reports' as const },
+    { name: 'Support', route: '/support', icon: LifeBuoy, section: 'support' as const },
   ] as const;
 
   const currentSection = React.useMemo<AppSection>(() => {
@@ -72,6 +73,8 @@ const Layout: React.FC<LayoutProps> = ({
     if (location.pathname === '/qr') return 'qr';
     if (location.pathname === '/email-log') return 'email-log';
     if (location.pathname === '/reports' || location.pathname.startsWith('/reports/')) return 'reports';
+    if (location.pathname === '/support') return 'support';
+    if (location.pathname === '/ops-console') return 'ops-console';
     if (location.pathname === '/dashboard' || location.pathname === '/admin') {
       const view = new URLSearchParams(location.search).get('view');
       if (view === 'candidates') return 'candidates';

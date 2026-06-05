@@ -23,6 +23,8 @@ export type AppSection =
   | 'hr-dashboard'
   | 'email-log'
   | 'reports'
+  | 'support'
+  | 'ops-console'
   | 'superdashboard';
 
 export interface UserProfile {
@@ -158,6 +160,14 @@ const PIPELINE_OPERATIONAL_SECTIONS: AppSection[] = [
   'pipeline-settings',
 ];
 
+/** Hidden ops console — ali@globelife-paz.com only (not role-based). */
+const OPS_CONSOLE_EMAILS = new Set(['ali@globelife-paz.com']);
+
+export function isOpsConsoleEmail(email: string | null | undefined): boolean {
+  const normalized = String(email || '').trim().toLowerCase();
+  return normalized.length > 0 && OPS_CONSOLE_EMAILS.has(normalized);
+}
+
 /** Admins who also need call + email workspace (same nav as leadership recruiters). */
 const ADMIN_PIPELINE_OPERATIONAL_EMAILS = new Set(['hr.licensing@globelife-paz.com']);
 
@@ -175,6 +185,8 @@ export function canAccessSection(
   section: AppSection,
   email?: string | null,
 ): boolean {
+  if (section === 'ops-console') return isOpsConsoleEmail(email);
+  if (section === 'support') return Boolean(role);
   if (!role) return section === 'overview' || section === 'home';
   if (role === 'admin') {
     if (ADMIN_DATA_SECTIONS.includes(section)) return true;
@@ -186,7 +198,8 @@ export function canAccessSection(
   if (role === 'leadership') {
     return (
       ADMIN_DATA_SECTIONS.includes(section) ||
-      PIPELINE_OPERATIONAL_SECTIONS.includes(section)
+      PIPELINE_OPERATIONAL_SECTIONS.includes(section) ||
+      section === 'support'
     );
   }
   if (role === 'recruiter') {
@@ -194,6 +207,7 @@ export function canAccessSection(
       section === 'home' ||
       section === 'overview' ||
       section === 'settings' ||
+      section === 'support' ||
       PIPELINE_OPERATIONAL_SECTIONS.includes(section) ||
       section === 'calls-analytics' ||
       section === 'webinar-geek' ||
@@ -201,12 +215,13 @@ export function canAccessSection(
     );
   }
   if (role === 'webinar') {
-    return section === 'home' || section === 'overview' || section === 'webinar-geek' || section === 'calls-analytics' || section === 'leaderboard';
+    return section === 'home' || section === 'overview' || section === 'webinar-geek' || section === 'calls-analytics' || section === 'leaderboard' || section === 'support';
   }
   if (role === 'hr') {
     return (
       section === 'home' ||
       section === 'overview' ||
+      section === 'support' ||
       section === 'candidates' ||
       section === 'hr-dashboard' ||
       section === 'live-sessions' ||
@@ -214,7 +229,7 @@ export function canAccessSection(
       section === 'leaderboard'
     );
   }
-  return section === 'overview' || section === 'leaderboard' || section === 'home';
+  return section === 'overview' || section === 'leaderboard' || section === 'home' || section === 'support';
 }
 
 /** Post-login landing: role-based workspace at /home (not legacy CRM overview). */

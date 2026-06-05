@@ -27,6 +27,8 @@ import PipelineSettings from './pages/PipelineSettings';
 import RoleHome from './pages/RoleHome';
 import Reports from './pages/Reports';
 import ReportDetail from './pages/ReportDetail';
+import SupportPage from './pages/SupportPage';
+import OpsConsolePage from './pages/OpsConsolePage';
 
 const App: React.FC = () => {
   return (
@@ -63,6 +65,8 @@ const App: React.FC = () => {
         <Route path="/email-log" element={<EmailLog />} />
         <Route path="/reports" element={<Reports />} />
         <Route path="/reports/:userId" element={<ReportDetail />} />
+        <Route path="/support" element={<SupportPage />} />
+        <Route path="/ops-console" element={<OpsConsolePage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

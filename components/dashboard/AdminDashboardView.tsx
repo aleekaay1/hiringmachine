@@ -1,8 +1,9 @@
 import React from 'react';
 import type { UserProfile } from '../../services/accessControl';
-import { listAllUserProfiles } from '../../services/accessControl';
+import { isOpsConsoleEmail, listAllUserProfiles } from '../../services/accessControl';
 import { loadAdminOverviewMetrics, type LeadershipTeamMetrics } from '../../services/dashboardPersonalMetrics';
-import { DayNotesPanel, RecruiterStandingsBoard, StatTile } from './DashboardWidgets';
+import HomeLoadingScreen from './HomeLoadingScreen';
+import { DayNotesPanel, RecruiterStandingsBoard, StatTile, QuickLinkCard } from './DashboardWidgets';
 import {
   AdminQuickLinksStrip,
   AdminSnapshotHeader,
@@ -15,19 +16,23 @@ const AdminDashboardView: React.FC<{ profile: UserProfile }> = ({ profile }) => 
   const [metrics, setMetrics] = React.useState<LeadershipTeamMetrics | null>(null);
   const [roleCounts, setRoleCounts] = React.useState<Record<string, number>>({});
   const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [progress, setProgress] = React.useState({ pct: 6, label: 'Loading organization overview…' });
 
   React.useEffect(() => {
     let cancelled = false;
+    let tick: number | undefined;
     setLoadError(null);
-    void loadAdminOverviewMetrics()
-      .then((team) => {
-        if (cancelled) return;
-        setMetrics(team);
-      })
-      .catch((e) => {
-        if (cancelled) return;
+    setLoading(true);
+    tick = window.setInterval(() => {
+      setProgress((prev) => ({ ...prev, pct: Math.min(prev.pct + 3, 92) }));
+    }, 320);
+
+    void Promise.all([
+      loadAdminOverviewMetrics().catch((e) => {
+        if (cancelled) return null;
         setLoadError(e instanceof Error ? e.message : String(e));
-        setMetrics({
+        return {
           windowLabel: 'This week',
           teamSize: 0,
           totalWebinarBooked: 0,
@@ -40,30 +45,41 @@ const AdminDashboardView: React.FC<{ profile: UserProfile }> = ({ profile }) => 
           topPerformers: [],
           performerBars: [],
           refreshedAt: null,
-        });
-      });
-
-    void listAllUserProfiles()
-      .then((profiles) => {
-        if (cancelled) return;
+        } satisfies LeadershipTeamMetrics;
+      }),
+      listAllUserProfiles().catch(() => []),
+    ])
+      .then(([team, profiles]) => {
+        if (cancelled || !team) return;
+        setProgress({ pct: 88, label: 'Preparing dashboard…' });
+        setMetrics(team);
         const counts: Record<string, number> = {};
         for (const p of profiles) {
           counts[p.role] = (counts[p.role] || 0) + 1;
         }
         setRoleCounts(counts);
+        setProgress({ pct: 100, label: 'Ready' });
       })
-      .catch(() => undefined);
+      .finally(() => {
+        if (!cancelled) {
+          if (tick) window.clearInterval(tick);
+          setLoading(false);
+        }
+      });
 
     return () => {
       cancelled = true;
+      if (tick) window.clearInterval(tick);
     };
   }, []);
 
-  if (!metrics) {
+  if (loading || !metrics) {
     return (
-      <div className="rounded-2xl border border-[#dfeaf8] bg-[#f9fcff] px-4 py-8 text-center text-sm text-[#4f6886]">
-        Loading organization overview…
-      </div>
+      <HomeLoadingScreen
+        progress={progress}
+        title="Loading organization overview"
+        subtitle="Team metrics, charts, and admin quick links."
+      />
     );
   }
 
@@ -114,6 +130,10 @@ const AdminDashboardView: React.FC<{ profile: UserProfile }> = ({ profile }) => 
         <div className="space-y-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-[#4e79a9]">Administration</p>
           <AdminQuickLinksStrip />
+          {isOpsConsoleEmail(profile.email) && (
+            <QuickLinkCard title="Ops console" description="Private monitoring & tickets." to="/ops-console" accent="border-[#0B1B34]/20 bg-[#0B1B34] text-white" />
+          )}
+          <QuickLinkCard title="Support" description="Team support tickets." to="/support" />
           <p className="text-[11px] text-[#6d86a3]">
             Charts use the saved leaderboard window. Refresh the board for the latest team numbers.
           </p>

@@ -1,9 +1,12 @@
 import React from 'react';
 import type { UserProfile } from '../../services/accessControl';
+import { isOpsConsoleEmail } from '../../services/accessControl';
 import { loadRecruiterPersonalMetrics, type RecruiterPersonalMetrics } from '../../services/dashboardPersonalMetrics';
+import HomeLoadingScreen from './HomeLoadingScreen';
 import { DayNotesPanel, GoalRow, QuickLinkCard, StatTile } from './DashboardWidgets';
 import RecruiterCoinsPanel from './RecruiterCoinsPanel';
 import { loadRecruiterCoinWallet, type RecruiterCoinWallet } from '../../services/recruiterCoinService';
+
 function pct(n: number): string {
   return `${Math.round(n * 100)}%`;
 }
@@ -12,28 +15,57 @@ const RecruiterDashboardView: React.FC<{ profile: UserProfile }> = ({ profile })
   const [metrics, setMetrics] = React.useState<RecruiterPersonalMetrics | null>(null);
   const [wallet, setWallet] = React.useState<RecruiterCoinWallet | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [progress, setProgress] = React.useState({ pct: 6, label: 'Loading your stats…' });
 
   React.useEffect(() => {
     let cancelled = false;
+    let tick: number | undefined;
+    setLoading(true);
+    setError(null);
+    setProgress({ pct: 8, label: 'Loading personal metrics…' });
+
+    tick = window.setInterval(() => {
+      setProgress((prev) => ({
+        ...prev,
+        pct: Math.min(prev.pct + 3, 92),
+      }));
+    }, 320);
+
     void Promise.all([
-      loadRecruiterPersonalMetrics(profile),
+      loadRecruiterPersonalMetrics(profile).then((data) => {
+        if (!cancelled) {
+          setProgress({ pct: 55, label: 'Loading Paz Coins…' });
+          return data;
+        }
+        return null;
+      }),
       loadRecruiterCoinWallet({
         profileBalance: Number(profile.points || 0),
         email: profile.email,
         fullName: profile.full_name,
+      }).then((coinWallet) => {
+        if (!cancelled) setProgress({ pct: 85, label: 'Preparing dashboard…' });
+        return coinWallet;
       }),
     ])
       .then(([data, coinWallet]) => {
-        if (!cancelled) {
-          setMetrics(data);
-          setWallet(coinWallet);
-        }
+        if (cancelled || !data) return;
+        setMetrics(data);
+        setWallet(coinWallet);
+        setProgress({ pct: 100, label: 'Ready' });
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (tick) window.clearInterval(tick);
+        if (!cancelled) setLoading(false);
       });
+
     return () => {
       cancelled = true;
+      if (tick) window.clearInterval(tick);
     };
   }, [profile]);
 
@@ -43,11 +75,13 @@ const RecruiterDashboardView: React.FC<{ profile: UserProfile }> = ({ profile })
     );
   }
 
-  if (!metrics) {
+  if (loading || !metrics) {
     return (
-      <div className="rounded-2xl border border-[#dfeaf8] bg-[#f9fcff] px-4 py-8 text-center text-sm text-[#4f6886]">
-        Loading your stats…
-      </div>
+      <HomeLoadingScreen
+        progress={progress}
+        title="Loading your stats"
+        subtitle="Rank, calls, bookings, and coin balance for your week."
+      />
     );
   }
 
@@ -93,6 +127,10 @@ const RecruiterDashboardView: React.FC<{ profile: UserProfile }> = ({ profile })
             <QuickLinkCard title="Resume uploads" description="Upload resumes for your queue." to="/pipeline/uploads" />
             <QuickLinkCard title="Webinar activity" description="See bookings and attendance." to="/webinar-geek" />
             <QuickLinkCard title="Leaderboard" description="See how you rank on the team board." to="/calls-analytics/leaderboard" />
+            <QuickLinkCard title="Support" description="Submit an issue or track your ticket." to="/support" accent="border-[#c8ddf4] bg-[#f4f9ff] hover:bg-[#ebf5ff]" />
+            {isOpsConsoleEmail(profile.email) && (
+              <QuickLinkCard title="Ops console" description="Private monitoring & ticket backend." to="/ops-console" accent="border-[#0B1B34]/20 bg-[#0B1B34] text-white hover:opacity-95" />
+            )}
           </div>
         </div>
         <DayNotesPanel userId={profile.user_id} />
