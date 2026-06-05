@@ -1,8 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, History, Moon, Phone, RefreshCw, Search, Sun } from 'lucide-react';
-import CandidateProfileEditor from '../components/pipeline/CandidateProfileEditor';
+import { CheckCircle2, ExternalLink, Phone, RefreshCw, Settings } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import {
@@ -19,7 +18,6 @@ import {
   readPipelineCandidatePhone,
   savePipelineCallDisposition,
   savePipelineCandidatePhoneOverride,
-  savePipelineUserCallSettings,
   type PipelineCallRecord,
   type PipelineCandidate,
   type PipelineResume,
@@ -31,17 +29,14 @@ import {
   type PipelineBookedSubtype,
   type PipelineCallDisposition,
 } from '../services/pipelineCallDispositions';
-import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { buildThreeCxWebclientUrl } from '../services/threeCxService';
 import { supabase } from '../services/supabaseClient';
 import { getCurrentUserProfile } from '../services/accessControl';
 import {
-  LIVE_SESSION_BOOKED_OUTCOME_RULE_LABEL,
   buildLiveSessionRowsByEmail,
   loadLiveSessionRegistrantsForMatching,
 } from '../services/liveSessionBookedOutcomes';
 import {
-  BOOKED_OUTCOME_RULE_LABEL,
   buildWebinarRowsByEmail,
   classifyBookedOutcome,
   loadScopedWebinarRowsForViewer,
@@ -50,18 +45,9 @@ import {
 
 type QueueFilter = 'all' | 'callbacks' | 'not_interested' | 'booked' | 'booked_no_show' | 'booked_didnt_watch';
 
-type CallbackRow = {
-  candidateId: string;
-  candidateName: string;
-  callbackAt: string;
-  phone: string;
-  latestRecord: PipelineCallRecord;
-};
-
 type CandidateBookedOutcomeMap = Map<string, BookedOutcomeBucket>;
-type WorkspaceThemeMode = 'dark' | 'light';
 
-const WORKSPACE_THEME_STORAGE_KEY = 'pipeline-call-workspace-theme';
+const AUTO_ADVANCE = true;
 
 const TERMINAL_EXCLUDED_DISPOSITIONS = new Set(['not interested', 'do not call']);
 const RETRY_PRIORITY_ORDER: Record<string, number> = {
@@ -73,29 +59,6 @@ const RETRY_PRIORITY_ORDER: Record<string, number> = {
 
 function normalizeDispositionLabel(value: string | null | undefined): string {
   return String(value || '').trim().toLowerCase();
-}
-
-function candidateUploadFileLabel(candidate: PipelineCandidate): string {
-  const metadata = candidate.metadata && typeof candidate.metadata === 'object' ? candidate.metadata : {};
-  return String((metadata as Record<string, unknown>).original_file_name || '').trim();
-}
-
-function candidateMatchesSearch(
-  candidate: PipelineCandidate,
-  query: string,
-  resumes: PipelineResume[],
-): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return false;
-  const digitQ = q.replace(/\D/g, '');
-  const phone = String(candidate.phone || '');
-  const phoneDigits = phone.replace(/\D/g, '');
-  if ((candidate.full_name || '').toLowerCase().includes(q)) return true;
-  if ((candidate.email || '').toLowerCase().includes(q)) return true;
-  if (phone.toLowerCase().includes(q)) return true;
-  if (digitQ.length >= 4 && phoneDigits.includes(digitQ)) return true;
-  if (candidateUploadFileLabel(candidate).toLowerCase().includes(q)) return true;
-  return resumes.some((resume) => (resume.original_filename || '').toLowerCase().includes(q));
 }
 
 function dispositionIsRetry(label: string): boolean {
@@ -113,23 +76,13 @@ function latestRecordByCandidate(records: PipelineCallRecord[]): Map<string, Pip
   return map;
 }
 
-const QUICK_FILTERS: Array<{ id: QueueFilter; label: string }> = [
-  { id: 'callbacks', label: 'Callbacks' },
-  { id: 'not_interested', label: 'Not interested' },
-  { id: 'booked', label: 'Booked' },
-  { id: 'booked_no_show', label: 'Booked no show' },
-  { id: 'booked_didnt_watch', label: "Booked didn't watch" },
-];
-
 const PipelineCallWorkspace: React.FC = () => {
   const [initialLoading, setInitialLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
-  const [savingSettings, setSavingSettings] = React.useState(false);
   const [savingDisposition, setSavingDisposition] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [actionMsg, setActionMsg] = React.useState<string | null>(null);
-  const [autoMode, setAutoMode] = React.useState(true);
-  const [queueFilter, setQueueFilter] = React.useState<QueueFilter>('all');
+  const queueFilter: QueueFilter = 'all';
   const [agentExtension, setAgentExtension] = React.useState('');
   const [dailyUploadTarget, setDailyUploadTarget] = React.useState<number | ''>('');
   const [dailyWebinarBookingTarget, setDailyWebinarBookingTarget] = React.useState<number | ''>('');
@@ -143,9 +96,6 @@ const PipelineCallWorkspace: React.FC = () => {
   const [phoneMsg, setPhoneMsg] = React.useState<string | null>(null);
   const [showDispositionModal, setShowDispositionModal] = React.useState(false);
   const [submitAttempted, setSubmitAttempted] = React.useState(false);
-  const [themeMode, setThemeMode] = React.useState<WorkspaceThemeMode>('dark');
-  const [candidateSearch, setCandidateSearch] = React.useState('');
-
   const [candidates, setCandidates] = React.useState<PipelineCandidate[]>([]);
   const [resumesByCandidate, setResumesByCandidate] = React.useState<Map<string, PipelineResume[]>>(new Map());
   const [records, setRecords] = React.useState<PipelineCallRecord[]>([]);
@@ -157,19 +107,6 @@ const PipelineCallWorkspace: React.FC = () => {
   React.useEffect(() => {
     selectedCandidateIdRef.current = selectedCandidateId;
   }, [selectedCandidateId]);
-
-  React.useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const stored = window.localStorage.getItem(WORKSPACE_THEME_STORAGE_KEY);
-    if (stored === 'dark' || stored === 'light') {
-      setThemeMode(stored);
-    }
-  }, []);
-
-  React.useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(WORKSPACE_THEME_STORAGE_KEY, themeMode);
-  }, [themeMode]);
 
   const loadWorkspace = React.useCallback(async (mode: 'initial' | 'refresh' | 'silent' = 'silent') => {
     if (mode === 'initial') setInitialLoading(true);
@@ -330,8 +267,6 @@ const PipelineCallWorkspace: React.FC = () => {
       });
   }, [filteredCandidates, latestByCandidate, callbackAtByCandidate]);
 
-  const isRetryPass = queueFilter === 'all' && undisposedQueue.length === 0 && retryQueue.length > 0;
-
   const activeQueueRaw = React.useMemo(() => {
     if (queueFilter === 'all') {
       return undisposedQueue.length > 0 ? undisposedQueue : retryQueue;
@@ -371,22 +306,6 @@ const PipelineCallWorkspace: React.FC = () => {
     });
   }, [filteredCandidates, latestByCandidate, queueActiveIds, queueFilter]);
 
-  const queueStateLabel = React.useMemo(() => {
-    if (queueFilter === 'all') return isRetryPass ? 'Retry queue (callbacks/no answer first)' : 'Main pass queue';
-    if (queueFilter === 'callbacks') return 'Callback queue';
-    if (queueFilter === 'booked_no_show') return 'Booked no show (best-effort)';
-    if (queueFilter === 'booked_didnt_watch') return "Booked didn't watch (best-effort)";
-    if (queueFilter === 'booked') return 'Booked outcomes';
-    if (queueFilter === 'not_interested') return 'Not interested / do not call';
-    return 'Queue';
-  }, [queueFilter, isRetryPass]);
-
-  const queueCapStatus = React.useMemo(() => {
-    if (queueCap == null) return 'No cap';
-    if (queueCap <= 0) return 'Cap reached';
-    return `${queueCap} left`;
-  }, [queueCap]);
-
   const emptyQueueGuidance = React.useMemo(() => {
     if (queueFilter === 'booked_no_show' || queueFilter === 'booked_didnt_watch') {
       return 'No candidates matched this booked outcome bucket. Try Booked filter or refresh WebinarGeek cache.';
@@ -412,15 +331,6 @@ const PipelineCallWorkspace: React.FC = () => {
     return out;
   }, [queueList, doneList]);
 
-  const searchMatches = React.useMemo(() => {
-    const q = candidateSearch.trim();
-    if (!q) return [];
-    return candidates
-      .filter((candidate) => candidateMatchesSearch(candidate, q, resumesByCandidate.get(candidate.id) || []))
-      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
-      .slice(0, 30);
-  }, [candidateSearch, candidates, resumesByCandidate]);
-
   const currentCandidate = React.useMemo(() => {
     if (selectedCandidateId) {
       const selected = candidates.find((c) => c.id === selectedCandidateId);
@@ -430,10 +340,6 @@ const PipelineCallWorkspace: React.FC = () => {
     return queueList[0] || displayList[0];
   }, [candidates, selectedCandidateId, displayList, queueList]);
 
-  const currentCandidateFromSearch = React.useMemo(() => {
-    if (!selectedCandidateId || !candidateSearch.trim()) return false;
-    return !displayList.some((c) => c.id === selectedCandidateId);
-  }, [selectedCandidateId, candidateSearch, displayList]);
   const currentPhoneInfo = React.useMemo(
     () => (currentCandidate ? readPipelineCandidatePhone(currentCandidate) : null),
     [currentCandidate],
@@ -448,18 +354,6 @@ const PipelineCallWorkspace: React.FC = () => {
     setPhoneInput(currentPhoneInfo?.effectivePhone || '');
     setPhoneMsg(null);
   }, [currentCandidate?.id, currentPhoneInfo?.effectivePhone]);
-
-  const currentQueueIndex = React.useMemo(
-    () => queueList.findIndex((candidate) => candidate.id === currentCandidate?.id),
-    [queueList, currentCandidate?.id],
-  );
-
-  const carouselCards = React.useMemo(() => {
-    if (!queueList.length) return [];
-    const fallbackIndex = currentQueueIndex >= 0 ? currentQueueIndex : 0;
-    const start = Math.max(0, fallbackIndex - 1);
-    return queueList.slice(start, start + 4);
-  }, [queueList, currentQueueIndex]);
 
   const disposedInFilteredCount = React.useMemo(
     () => filteredCandidates.filter((candidate) => latestByCandidate.has(candidate.id)).length,
@@ -489,42 +383,10 @@ const PipelineCallWorkspace: React.FC = () => {
     return Math.min(100, Math.round((bookedTodayCount / Number(dailyWebinarBookingTarget)) * 100));
   }, [dailyWebinarBookingTarget, bookedTodayCount]);
 
-  const callbackRows = React.useMemo<CallbackRow[]>(() => {
-    const byCandidate = new Map<string, CallbackRow>();
-    for (const row of records) {
-      const callbackAt = readCallRecordMeta(row).callbackAt;
-      if (!callbackAt) continue;
-      const candidate = candidates.find((c) => c.id === row.candidate_id);
-      if (!candidate) continue;
-      const existing = byCandidate.get(row.candidate_id);
-      const candidateName = candidate.full_name || 'Unknown Candidate';
-      const phone = normalizeDialDestination(candidate.phone || '');
-      if (!phone) continue;
-      if (!existing || new Date(callbackAt).getTime() < new Date(existing.callbackAt).getTime()) {
-        byCandidate.set(row.candidate_id, {
-          candidateId: row.candidate_id,
-          candidateName,
-          callbackAt,
-          phone,
-          latestRecord: row,
-        });
-      }
-    }
-    return [...byCandidate.values()].sort((a, b) => new Date(a.callbackAt).getTime() - new Date(b.callbackAt).getTime());
-  }, [records, candidates]);
-
   const selectedResumes = React.useMemo(
     () => (currentCandidate ? resumesByCandidate.get(currentCandidate.id) || [] : []),
     [resumesByCandidate, currentCandidate],
   );
-
-  const selectedHistory = React.useMemo(() => {
-    if (!currentCandidate) return [];
-    return records
-      .filter((r) => r.candidate_id === currentCandidate.id)
-      .sort((a, b) => new Date(b.disposed_at).getTime() - new Date(a.disposed_at).getTime())
-      .slice(0, 8);
-  }, [records, currentCandidate]);
 
   const dispositionError = submitAttempted && !disposition ? 'Disposition is required.' : null;
   const bookedSubtypeError =
@@ -532,7 +394,7 @@ const PipelineCallWorkspace: React.FC = () => {
   const callbackAtError =
     submitAttempted && disposition === 'Callback requested' && !callbackAtInput ? 'Callback date/time is required.' : null;
   const dialNumberPreview = normalizeDialDestination(phoneInput || currentCandidate?.phone || '');
-  const isDark = themeMode === 'dark';
+  const isDark = false;
   const showLoadingOverlay = initialLoading || refreshing;
   const loadingOverlayText = initialLoading ? 'Loading call workspace...' : 'Refreshing queue...';
 
@@ -576,46 +438,6 @@ const PipelineCallWorkspace: React.FC = () => {
     }),
     [isDark],
   );
-
-  const handleProfileSaved = React.useCallback((updated: PipelineCandidate) => {
-    setCandidates((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
-    setPhoneInput(String(updated.phone || '').trim());
-    setPhoneMsg(null);
-  }, []);
-
-  const goToNextCandidate = () => {
-    if (!queueList.length) {
-      setActionMsg('No candidates left in the active queue.');
-      return;
-    }
-    if (currentQueueIndex < 0) {
-      setSelectedCandidateId(queueList[0].id);
-      return;
-    }
-    if (currentQueueIndex >= queueList.length - 1) {
-      setActionMsg('You are on the last candidate in the active queue.');
-      return;
-    }
-    setSelectedCandidateId(queueList[currentQueueIndex + 1].id);
-    setActionMsg(null);
-  };
-
-  const saveSettings = async () => {
-    setSavingSettings(true);
-    setActionMsg(null);
-    try {
-      await savePipelineUserCallSettings({
-        extension: agentExtension,
-        dailyUploadTarget: dailyUploadTarget === '' ? null : Number(dailyUploadTarget),
-        dailyWebinarBookingTarget: dailyWebinarBookingTarget === '' ? null : Number(dailyWebinarBookingTarget),
-      });
-      setActionMsg('Call workspace settings saved.');
-    } catch (e) {
-      setActionMsg(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSavingSettings(false);
-    }
-  };
 
   const placeCall = async (candidate: PipelineCandidate, destinationRaw?: string) => {
     const destination = normalizeDialDestination(destinationRaw || candidate.phone || '');
@@ -706,7 +528,7 @@ const PipelineCallWorkspace: React.FC = () => {
         bookedSubtype: bookedSubtype || null,
         threecxMetadata: {
           source: 'phase2_call_workspace',
-          auto_mode: autoMode,
+          auto_mode: AUTO_ADVANCE,
           phone_input: phoneInput.trim() || null,
           phone_original_extracted: currentPhoneInfo?.originalExtractedPhone || null,
           phone_override_applied: Boolean(currentPhoneInfo?.overridePhone),
@@ -763,7 +585,7 @@ const PipelineCallWorkspace: React.FC = () => {
       if (!alreadyTracked && sameRecruiter && disposedToday) {
         setTodaysCallCount((prev) => prev + 1);
       }
-      if (autoMode) {
+      if (AUTO_ADVANCE) {
         const idx = queueList.findIndex((c) => c.id === currentCandidate.id);
         if (idx >= 0 && idx < queueList.length - 1) {
           setSelectedCandidateId(queueList[idx + 1].id);
@@ -796,39 +618,26 @@ const PipelineCallWorkspace: React.FC = () => {
         >
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className={`text-[10px] uppercase tracking-[0.22em] ${tone.panelLabel}`}>Pipeline recruiter studio</p>
-              <h1 className={`text-lg font-semibold ${tone.panelTitle}`}>Recruiter Call Workspace</h1>
-              <p className={`text-xs ${tone.panelMuted}`}>Call, disposition in popup, and move through queue with clean chronology.</p>
+              <p className={`text-[10px] uppercase tracking-[0.22em] ${tone.panelLabel}`}>Call workspace</p>
+              <h1 className={`text-xl font-semibold ${tone.panelTitle}`}>Recruiter Call Workspace</h1>
+              <p className={`text-xs ${tone.panelMuted}`}>Pick a candidate, place the call, log the outcome.</p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
-              <button
-                type="button"
-                onClick={() => setThemeMode((prev) => (prev === 'dark' ? 'light' : 'dark'))}
-                className={`inline-flex items-center gap-1 rounded-xl border px-3 py-2 text-xs font-semibold ${tone.actionButton}`}
-                aria-label="Toggle dark and light mode"
+              <Link
+                to="/pipeline-settings"
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold ${tone.actionButton}`}
               >
-                {isDark ? <Sun size={13} /> : <Moon size={13} />}
-                {isDark ? 'Light mode' : 'Dark mode'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setAutoMode((v) => !v)}
-                className={`rounded-xl px-3 py-2 text-xs font-semibold border ${
-                  autoMode
-                    ? (isDark ? 'border-emerald-300/40 bg-emerald-400/15 text-emerald-100' : 'border-emerald-300 bg-emerald-50 text-emerald-800')
-                    : tone.actionButton
-                }`}
-              >
-                {autoMode ? 'Auto mode: ON' : 'Auto mode: OFF'}
-              </button>
+                <Settings size={14} />
+                Settings
+              </Link>
               <Button
                 variant="outline"
-                className={`!min-h-0 h-9 px-3 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
+                className="!min-h-0 h-9 px-3 text-xs"
                 onClick={() => void loadWorkspace('refresh')}
                 disabled={showLoadingOverlay}
               >
                 <RefreshCw size={14} className={refreshing ? 'mr-1 animate-spin' : 'mr-1'} />
-                Refresh queue
+                Refresh
               </Button>
             </div>
           </div>
@@ -872,529 +681,189 @@ const PipelineCallWorkspace: React.FC = () => {
               </div>
             </div>
           </div>
-          <div className={`mt-3 flex flex-wrap items-center gap-2 text-xs ${tone.panelMuted}`}>
-            <span className={`rounded-full px-2.5 py-1 font-semibold ${isDark ? 'bg-white/10 text-white' : 'bg-[#edf5ff] text-[#0B1B34]'}`}>Active queue: {queueList.length}</span>
-            <span className={`rounded-full px-2.5 py-1 ${isDark ? 'bg-white/5 text-slate-200' : 'bg-[#f2f6fb] text-slate-700'}`}>Done lane: {doneList.length}</span>
-            <span className={`rounded-full border px-2.5 py-1 ${tone.input}`}>Filter: {queueStateLabel}</span>
-            <span className={`rounded-full border px-2.5 py-1 ${tone.input}`}>Mode: {autoMode ? 'Auto advance' : 'Manual select'}</span>
-            <span className={`rounded-full border px-2.5 py-1 ${tone.input}`}>Cap: {queueCapStatus}</span>
-            {currentCandidate && (
-              <span className={`rounded-full border px-2.5 py-1 ${tone.input}`}>Current: {currentCandidate.full_name || 'Unknown Candidate'}</span>
-            )}
-          </div>
         </motion.div>
 
         <motion.div
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.45, delay: 0.1 }}
-          className="grid gap-4 xl:grid-cols-[260px_1fr]"
+          className="grid gap-4 lg:grid-cols-[minmax(280px,340px)_1fr]"
         >
-          <aside className={`rounded-2xl border p-3 space-y-3 ${tone.glassPanel}`}>
-            <div className={`rounded-xl border p-2.5 ${tone.subtle}`}>
-              <p className={`mb-1.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Find candidate / resume</p>
-              <p className={`mb-2 text-[10px] ${tone.panelMuted}`}>
-                Search any upload to load profile and log a manual disposition (e.g. inbound callback).
-              </p>
-              <div className="relative">
-                <Search size={14} className={`pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 ${tone.panelLabel}`} />
-                <input
-                  value={candidateSearch}
-                  onChange={(e) => setCandidateSearch(e.target.value)}
-                  placeholder="Name, phone, email, filename…"
-                  className={`w-full rounded-lg border py-2 pl-8 pr-2 text-xs ${tone.input}`}
-                />
+          <aside className={`rounded-2xl border p-4 ${tone.glassPanel}`}>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div>
+                <p className={`text-sm font-semibold ${tone.panelTitle}`}>To call</p>
+                <p className={`text-xs ${tone.panelMuted}`}>{queueList.length} in queue</p>
               </div>
-              {candidateSearch.trim() && (
-                <div className="mt-2 max-h-[280px] space-y-1 overflow-auto">
-                  {searchMatches.map((candidate) => {
-                    const latest = latestByCandidate.get(candidate.id);
-                    const fileLabel = candidateUploadFileLabel(candidate);
-                    const resumeName = (resumesByCandidate.get(candidate.id) || [])[0]?.original_filename;
-                    const isActive = candidate.id === selectedCandidateId;
-                    return (
-                      <button
-                        key={candidate.id}
-                        type="button"
-                        onClick={() => {
-                          setSelectedCandidateId(candidate.id);
-                          setActionMsg(`Loaded ${candidate.full_name || 'candidate'} for manual disposition.`);
-                        }}
-                        className={`w-full rounded-lg border px-2 py-2 text-left transition ${
-                          isActive
-                            ? (isDark ? 'border-cyan-300/45 bg-cyan-300/18' : 'border-[#9dc6ef] bg-[#e8f3ff]')
-                            : tone.doneCard
-                        }`}
-                      >
-                        <p className={`truncate text-xs font-semibold ${tone.panelTitle}`}>{candidate.full_name || 'Unknown Candidate'}</p>
-                        {(fileLabel || resumeName) && (
-                          <p className={`truncate text-[10px] ${tone.panelLabel}`} title={fileLabel || resumeName}>
-                            {fileLabel || resumeName}
-                          </p>
-                        )}
-                        <p className={`text-[10px] ${tone.panelMuted}`}>
-                          {candidate.phone || candidate.email || 'No contact'}
-                          {latest?.disposition ? ` · ${latest.disposition}` : ' · No disposition yet'}
+            </div>
+            <div className="max-h-[min(70vh,640px)] space-y-2 overflow-y-auto pr-1">
+              {queueList.map((candidate, index) => {
+                const isSelected = candidate.id === currentCandidate?.id;
+                const latest = latestByCandidate.get(candidate.id);
+                const dispositionLabel = normalizeDispositionLabel(latest?.disposition);
+                const phoneInfo = readPipelineCandidatePhone(candidate);
+                const callbackAt = callbackAtByCandidate.get(candidate.id);
+                const isCallbackDue = callbackAt && new Date(callbackAt).getTime() <= Date.now();
+                return (
+                  <button
+                    key={candidate.id}
+                    type="button"
+                    onClick={() => setSelectedCandidateId(candidate.id)}
+                    className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
+                      isSelected
+                        ? 'border-[#7eb3e7] bg-white shadow-[0_8px_24px_-16px_rgba(38,95,165,0.45)]'
+                        : tone.doneCard
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className={`truncate text-sm font-semibold ${tone.panelTitle}`}>
+                          {index + 1}. {candidate.full_name || 'Unknown Candidate'}
                         </p>
-                      </button>
-                    );
-                  })}
-                  {!searchMatches.length && (
-                    <p className={`rounded-lg border border-dashed p-2 text-[11px] ${tone.input}`}>No matches in uploaded resumes.</p>
-                  )}
-                </div>
+                        <p className={`mt-0.5 truncate text-xs ${tone.panelMuted}`}>
+                          {phoneInfo.effectivePhone || 'No phone'}
+                        </p>
+                        {candidate.email && (
+                          <p className={`truncate text-[11px] ${tone.panelLabel}`}>{candidate.email}</p>
+                        )}
+                      </div>
+                      {dispositionLabel === 'callback requested' && (
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${isCallbackDue ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
+                          {isCallbackDue ? 'Due' : 'Callback'}
+                        </span>
+                      )}
+                      {!latest && (
+                        <span className="shrink-0 rounded-full bg-[#edf5ff] px-2 py-0.5 text-[10px] font-semibold text-[#285082]">
+                          New
+                        </span>
+                      )}
+                      {latest && dispositionIsRetry(dispositionLabel) && dispositionLabel !== 'callback requested' && (
+                        <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+                          Retry
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+              {!queueList.length && (
+                <p className={`rounded-xl border border-dashed p-4 text-center text-xs ${tone.panelMuted}`}>{emptyQueueGuidance}</p>
               )}
             </div>
-
-            <div>
-              <p className={`mb-2 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Queue filters</p>
-              <button
-                type="button"
-                onClick={() => setQueueFilter('all')}
-                className={`mb-1 w-full rounded-lg border px-2 py-2 text-left text-xs ${
-                  queueFilter === 'all'
-                    ? (isDark ? 'border-cyan-300/45 bg-cyan-300/18 text-cyan-100' : 'border-[#9dc6ef] bg-[#e8f3ff] text-[#0B1B34]')
-                    : `${tone.input}`
-                }`}
-              >
-                All queue
-              </button>
-              {QUICK_FILTERS.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setQueueFilter(item.id)}
-                  title={
-                    item.id === 'booked_no_show' || item.id === 'booked_didnt_watch'
-                      ? `${BOOKED_OUTCOME_RULE_LABEL} ${LIVE_SESSION_BOOKED_OUTCOME_RULE_LABEL}`
-                      : undefined
-                  }
-                  className={`mb-1 w-full rounded-lg border px-2 py-2 text-left text-xs ${
-                    queueFilter === item.id
-                      ? (isDark ? 'border-cyan-300/45 bg-cyan-300/18 text-cyan-100' : 'border-[#9dc6ef] bg-[#e8f3ff] text-[#0B1B34]')
-                      : `${tone.input}`
-                  }`}
-                >
-                  {item.label}
-                  {(item.id === 'booked_no_show' || item.id === 'booked_didnt_watch') && (
-                    <span className="ml-2 text-[10px] text-slate-400">(email match)</span>
-                  )}
-                </button>
-              ))}
-            </div>
-
-            <div>
-              <p className={`mb-1 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Callbacks</p>
-              <div className="max-h-[320px] space-y-1.5 overflow-auto">
-                {callbackRows.map((row) => {
-                  const isDue = new Date(row.callbackAt).getTime() <= Date.now();
-                  return (
-                    <button
-                      key={`${row.candidateId}-${row.callbackAt}`}
-                      type="button"
-                      onClick={() => setSelectedCandidateId(row.candidateId)}
-                      className={`w-full rounded-lg border px-2 py-2 text-left transition ${tone.doneCard}`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <p className={`truncate text-xs font-semibold ${tone.panelTitle}`}>{row.candidateName}</p>
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                            isDue
-                              ? (isDark ? 'bg-amber-300/20 text-amber-100' : 'bg-amber-100 text-amber-800')
-                              : (isDark ? 'bg-white/10 text-slate-300' : 'bg-slate-100 text-slate-600')
-                          }`}
-                        >
-                          {isDue ? 'Due' : 'Upcoming'}
-                        </span>
-                      </div>
-                      <p className={`text-[10px] ${tone.panelLabel}`}>{formatDateTimeCanadaEastern(row.callbackAt)}</p>
-                    </button>
-                  );
-                })}
-                {!callbackRows.length && (
-                  <p className={`rounded-lg border border-dashed p-2 text-[11px] ${tone.input}`}>No callbacks logged yet.</p>
-                )}
-              </div>
-            </div>
-
-            <details className={`rounded-xl border p-2.5 ${tone.subtle}`} open>
-              <summary className={`cursor-pointer text-[11px] font-semibold ${tone.panelTitle}`}>Settings</summary>
-              <div className="mt-2 space-y-2">
-                <label className={`block text-[11px] ${tone.panelMuted}`}>
-                  Daily target
-                  <input
-                    type="number"
-                    min={0}
-                    value={dailyUploadTarget}
-                    onChange={(e) => setDailyUploadTarget(e.target.value ? Number(e.target.value) : '')}
-                    className={`mt-1 w-full rounded-lg border px-2 py-1.5 text-xs ${tone.input}`}
-                  />
-                </label>
-                <label className={`block text-[11px] ${tone.panelMuted}`}>
-                  Daily booked target
-                  <input
-                    type="number"
-                    min={0}
-                    value={dailyWebinarBookingTarget}
-                    onChange={(e) => setDailyWebinarBookingTarget(e.target.value ? Number(e.target.value) : '')}
-                    className={`mt-1 w-full rounded-lg border px-2 py-1.5 text-xs ${tone.input}`}
-                  />
-                </label>
-                <label className={`block text-[11px] ${tone.panelMuted}`}>
-                  Extension
-                  <input
-                    value={agentExtension}
-                    onChange={(e) => setAgentExtension(e.target.value)}
-                    className={`mt-1 w-full rounded-lg border px-2 py-1.5 text-xs ${tone.input}`}
-                  />
-                </label>
-                <Button variant="outline" className={`!min-h-0 h-8 w-full text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`} onClick={() => void saveSettings()} disabled={savingSettings}>
-                  {savingSettings ? 'Saving...' : 'Save settings'}
-                </Button>
-                <p className={`text-[10px] ${tone.panelLabel}`}>Today calls: {todaysCallCount}</p>
-              </div>
-            </details>
-
-            <details className={`rounded-xl border p-2.5 ${tone.subtle}`}>
-              <summary className={`cursor-pointer text-[11px] font-semibold ${tone.panelTitle}`}>Utilities</summary>
-              <div className="mt-2 space-y-2">
-                <Link
-                  to="/pipeline"
-                  className={`block rounded-lg border px-3 py-2 text-center text-xs ${tone.actionButton}`}
-                >
-                  Open legacy mode
-                </Link>
-                <Button
-                  variant="outline"
-                  className={`!min-h-0 h-9 w-full px-3 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
-                  onClick={() => setSelectedCandidateId(queueList[0]?.id ?? doneList[0]?.id ?? null)}
-                  disabled={!queueList.length && !doneList.length}
-                >
-                  Focus first card
-                </Button>
-              </div>
-            </details>
           </aside>
 
-          <section className={`rounded-2xl border p-4 space-y-3 ${tone.glassPanel}`}>
-            <div className={`rounded-xl border p-3 ${tone.subtle}`}>
+          <section className="space-y-4">
+            <div className={`rounded-2xl border p-5 md:p-6 ${tone.glassPanel}`}>
               {currentCandidate ? (
-                <>
-                  {currentCandidateFromSearch && (
-                    <div
-                      className={`mb-3 rounded-lg border px-3 py-2 text-[11px] ${
-                        isDark ? 'border-amber-300/35 bg-amber-400/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-900'
-                      }`}
+                <div className="space-y-5">
+                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                    <div className="min-w-0">
+                      <p className={`text-[10px] uppercase tracking-[0.2em] ${tone.panelLabel}`}>Now calling</p>
+                      <h2 className={`mt-1 text-2xl font-semibold ${tone.panelTitle}`}>
+                        {currentCandidate.full_name || 'Unknown Candidate'}
+                      </h2>
+                      <div className={`mt-2 space-y-1 text-sm ${tone.panelMuted}`}>
+                        {currentCandidate.email && <p>{currentCandidate.email}</p>}
+                        {currentCandidate.journey_stage && (
+                          <p className="text-xs">Stage: {currentCandidate.journey_stage}</p>
+                        )}
+                        {selectedResumes[0] && (
+                          <a
+                            href={getPipelineResumeOpenInNewTabUrl(selectedResumes[0]) || '#'}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={`inline-flex items-center gap-1 text-xs font-semibold text-[#005EB8] hover:underline`}
+                          >
+                            <ExternalLink size={12} />
+                            {selectedResumes[0].original_filename}
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                    <Button
+                      className="!min-h-0 h-12 shrink-0 px-6 text-base"
+                      onClick={() => void placeCall(currentCandidate, phoneInput)}
                     >
-                      Opened from search (outside current queue filter). Use manual disposition below to log this call.
-                    </div>
-                  )}
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className={`text-[10px] uppercase tracking-[0.2em] ${tone.panelLabel}`}>Current candidate</p>
-                      <h2 className={`text-xl font-semibold ${tone.panelTitle}`}>{currentCandidate.full_name || 'Unknown Candidate'}</h2>
-                      <p className={`text-xs ${tone.panelMuted}`}>
-                        {currentPhoneInfo?.effectivePhone || 'No phone'} {currentCandidate.email ? `· ${currentCandidate.email}` : ''}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
+                      <Phone size={18} className="mr-2" />
+                      Place call
+                    </Button>
+                  </div>
+
+                  <div className={`rounded-2xl border p-4 ${tone.subtle}`}>
+                    <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Phone number</p>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <input
+                        value={phoneInput}
+                        onChange={(e) => {
+                          setPhoneInput(e.target.value);
+                          setPhoneMsg(null);
+                        }}
+                        placeholder="e.g. +1 (555) 123-4567"
+                        className={`min-w-0 flex-1 rounded-xl border px-3 py-2.5 text-sm ${tone.input}`}
+                      />
                       <Button
                         variant="outline"
-                        className={`!min-h-0 h-10 px-3 text-sm ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
-                        onClick={goToNextCandidate}
-                        disabled={!queueList.length}
+                        className="!min-h-0 h-10 shrink-0 px-4 text-sm"
+                        onClick={() => void saveCandidatePhoneOverride()}
+                        disabled={savingPhone || !currentCandidate}
                       >
-                        <ChevronRight size={14} className="mr-1" />
-                        Next candidate
-                      </Button>
-                      <Button
-                        className={`!min-h-0 h-10 px-4 text-sm ${isDark ? '!bg-cyan-400/20 !text-cyan-100 hover:!bg-cyan-400/30 !border !border-cyan-200/35' : ''}`}
-                        onClick={() => void placeCall(currentCandidate, phoneInput)}
-                      >
-                        <Phone size={14} className="mr-1" />
-                        Place call
+                        {savingPhone ? 'Saving...' : 'Save number'}
                       </Button>
                     </div>
+                    <p className={`mt-2 text-[11px] ${tone.panelLabel}`}>
+                      Dial preview: {normalizeDialDestination(phoneInput) || '—'}
+                    </p>
+                    {phoneMsg && <p className="mt-1 text-xs text-emerald-700">{phoneMsg}</p>}
                   </div>
-
-                  <div className="mt-3">
-                    <CandidateProfileEditor
-                      candidate={currentCandidate}
-                      tone={tone}
-                      isDark={isDark}
-                      onSaved={handleProfileSaved}
-                    />
-                  </div>
-
-                  <details className={`mt-3 rounded-xl border p-3 ${tone.subtle}`}>
-                    <summary className={`cursor-pointer text-[11px] font-semibold ${tone.panelMuted}`}>Phone override</summary>
-                    <div className="mt-2">
-                      <p className={`mb-1 text-[11px] ${tone.panelLabel}`}>Save once for future calls.</p>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <input
-                          value={phoneInput}
-                          onChange={(e) => {
-                            setPhoneInput(e.target.value);
-                            setPhoneMsg(null);
-                          }}
-                          placeholder="e.g. +1 (555) 123-4567"
-                          className={`min-w-[220px] flex-1 rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}
-                        />
-                        <Button
-                          variant="outline"
-                          className={`!min-h-0 h-9 px-3 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
-                          onClick={() => void saveCandidatePhoneOverride()}
-                          disabled={savingPhone || !currentCandidate}
-                        >
-                          {savingPhone ? 'Saving...' : 'Save number'}
-                        </Button>
-                      </div>
-                      <p className={`mt-1 text-[10px] ${tone.panelLabel}`}>Normalized for dial: {normalizeDialDestination(phoneInput) || '—'}</p>
-                      {currentPhoneInfo?.originalExtractedPhone && (
-                        <p className={`mt-1 text-[10px] ${tone.panelLabel}`}>OCR extracted originally: {currentPhoneInfo.originalExtractedPhone}</p>
-                      )}
-                      {phoneMsg && <p className="mt-1 text-[10px] text-emerald-700">{phoneMsg}</p>}
-                    </div>
-                  </details>
-
-                  <details className={`mt-2 rounded-xl border p-3 ${tone.subtle}`}>
-                    <summary className={`cursor-pointer text-[11px] font-semibold ${tone.panelMuted}`}>Resume links</summary>
-                    <div className="mt-2">
-                      {selectedResumes.length ? (
-                        <div className="space-y-1">
-                          {selectedResumes.slice(0, 3).map((resume) => (
-                            <a
-                              key={resume.id}
-                              href={getPipelineResumeOpenInNewTabUrl(resume) || '#'}
-                              target="_blank"
-                              rel="noreferrer"
-                              className={`mr-2 inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs ${tone.actionButton}`}
-                            >
-                              <ExternalLink size={12} />
-                              {resume.original_filename}
-                            </a>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className={`text-xs ${tone.panelLabel}`}>No resume uploaded yet.</p>
-                      )}
-                    </div>
-                  </details>
-
-                  <details className={`mt-2 rounded-xl border p-3 ${tone.subtle}`} open={currentCandidateFromSearch || undefined}>
-                    <summary className={`cursor-pointer text-[11px] font-semibold ${tone.panelMuted}`}>Manual disposition (fallback)</summary>
-                    <div className="mt-2 space-y-2">
-                      <label className={`block text-xs ${tone.panelMuted}`}>
-                        Disposition
-                        <select
-                          value={disposition}
-                          onChange={(e) => setDisposition(e.target.value as PipelineCallDisposition)}
-                          className={`mt-1 w-full rounded-lg border px-2 py-2 text-xs ${tone.input}`}
-                        >
-                          <option value="">Select disposition</option>
-                          {PIPELINE_CALL_DISPOSITIONS.map((d) => (
-                            <option key={d} value={d}>
-                              {d}
-                            </option>
-                          ))}
-                        </select>
-                        {dispositionError && <p className="mt-1 text-[11px] text-red-600">{dispositionError}</p>}
-                      </label>
-
-                      {disposition === 'Booked' && (
-                        <label className={`block text-xs ${tone.panelMuted}`}>
-                          Booked subtype <span className="text-red-600">*</span>
-                          <select
-                            value={bookedSubtype}
-                            onChange={(e) => setBookedSubtype(e.target.value as PipelineBookedSubtype)}
-                            className={`mt-1 w-full rounded-lg border px-2 py-2 text-xs ${tone.input}`}
-                          >
-                            <option value="">Select subtype</option>
-                            {PIPELINE_BOOKED_SUBTYPES.map((item) => (
-                              <option key={item} value={item}>
-                                {item}
-                              </option>
-                            ))}
-                          </select>
-                          {bookedSubtypeError && <p className="mt-1 text-[11px] text-red-600">{bookedSubtypeError}</p>}
-                        </label>
-                      )}
-
-                      {disposition === 'Callback requested' && (
-                        <label className={`block text-xs ${tone.panelMuted}`}>
-                          Callback date/time <span className="text-red-600">*</span>
-                          <input
-                            type="datetime-local"
-                            value={callbackAtInput}
-                            onChange={(e) => setCallbackAtInput(e.target.value)}
-                            className={`mt-1 w-full rounded-lg border px-2 py-2 text-xs ${tone.input}`}
-                          />
-                          {callbackAtError && <p className="mt-1 text-[11px] text-red-600">{callbackAtError}</p>}
-                        </label>
-                      )}
-
-                      <label className={`block text-xs ${tone.panelMuted}`}>
-                        Comment
-                        <textarea
-                          value={comment}
-                          onChange={(e) => setComment(e.target.value)}
-                          rows={3}
-                          className={`mt-1 w-full rounded-lg border px-2 py-2 text-xs ${tone.input}`}
-                          placeholder="Call notes..."
-                        />
-                      </label>
-
-                      <Button className="w-full" onClick={() => void saveDisposition()} disabled={savingDisposition || !currentCandidate}>
-                        {savingDisposition ? 'Saving...' : autoMode ? 'Save + auto advance' : 'Save disposition'}
-                      </Button>
-                    </div>
-                  </details>
-                </>
+                </div>
               ) : (
                 <p className={`text-sm ${tone.panelMuted}`}>{emptyQueueGuidance}</p>
               )}
             </div>
 
-            <div className={`rounded-xl border p-3 ${tone.subtle}`}>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <p className={`text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Queue carousel</p>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!queueList.length) return;
-                      const index = currentQueueIndex <= 0 ? 0 : currentQueueIndex - 1;
-                      setSelectedCandidateId(queueList[index]?.id || null);
-                    }}
-                    className={`rounded-lg border p-1.5 disabled:cursor-not-allowed disabled:opacity-40 ${tone.actionButton}`}
-                    disabled={!queueList.length || currentQueueIndex <= 0}
-                    aria-label="Previous queue card"
-                  >
-                    <ChevronLeft size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!queueList.length) return;
-                      const index = currentQueueIndex < 0 ? 1 : currentQueueIndex + 1;
-                      setSelectedCandidateId(queueList[index]?.id || null);
-                    }}
-                    className={`rounded-lg border p-1.5 disabled:cursor-not-allowed disabled:opacity-40 ${tone.actionButton}`}
-                    disabled={!queueList.length || currentQueueIndex >= queueList.length - 1}
-                    aria-label="Next queue card"
-                  >
-                    <ChevronRight size={14} />
-                  </button>
+            <div className={`rounded-2xl border p-4 ${tone.glassPanel}`}>
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div>
+                  <p className={`text-sm font-semibold ${tone.panelTitle}`}>Done</p>
+                  <p className={`text-xs ${tone.panelMuted}`}>{doneList.length} completed</p>
                 </div>
               </div>
-              <div className="grid gap-2 md:grid-cols-4">
-                {carouselCards.map((candidate) => {
-                  const isCenter = candidate.id === currentCandidate?.id;
+              <div className="grid gap-2 sm:grid-cols-2">
+                {doneList.slice(0, 12).map((candidate) => {
                   const latest = latestByCandidate.get(candidate.id);
-                  const dispositionLabel = latest?.disposition || 'Undisposed';
-                  const cardPhoneInfo = readPipelineCandidatePhone(candidate);
+                  const isSelected = candidate.id === currentCandidate?.id;
                   return (
                     <button
                       key={candidate.id}
                       type="button"
                       onClick={() => setSelectedCandidateId(candidate.id)}
-                      className={`rounded-xl border px-3 py-2 text-left transition ${
-                        isCenter
-                          ? (isDark ? 'border-cyan-300/40 bg-cyan-300/15 shadow-[0_10px_26px_-16px_rgba(56,189,248,0.65)]' : 'border-[#7eb3e7] bg-white shadow-[0_8px_22px_-14px_rgba(38,95,165,0.55)]')
-                          : `${tone.doneCard}`
+                      className={`flex items-center justify-between rounded-xl border px-3 py-2.5 text-left transition ${
+                        isSelected ? 'border-[#9dc6ef] bg-[#e8f3ff]' : tone.doneCard
                       }`}
                     >
-                      <p className={`truncate text-xs font-semibold ${tone.panelTitle}`}>{candidate.full_name || 'Unknown Candidate'}</p>
-                      <p className={`mt-1 text-[10px] ${tone.panelLabel}`}>{cardPhoneInfo.effectivePhone || 'No phone'}</p>
-                      <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${isDark ? 'bg-white/10 text-cyan-100' : 'bg-[#edf5ff] text-[#285082]'}`}>
-                        {dispositionLabel}
-                      </span>
-                    </button>
-                  );
-                })}
-                {!carouselCards.length && <p className={`text-xs ${tone.panelLabel}`}>No active queue candidates.</p>}
-              </div>
-            </div>
-
-            <div>
-              <p className={`mb-1 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Done lane / history</p>
-              <div className="grid gap-1.5 md:grid-cols-2">
-                {doneList.slice(0, 8).map((candidate) => {
-                  const latest = latestByCandidate.get(candidate.id);
-                  return (
-                    <button
-                      key={candidate.id}
-                      type="button"
-                      onClick={() => setSelectedCandidateId(candidate.id)}
-                      className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left transition ${tone.doneCard}`}
-                    >
                       <div className="min-w-0 pr-2">
-                        <p className={`truncate text-xs font-semibold blur-[0.2px] ${tone.panelTitle}`}>{candidate.full_name || 'Unknown Candidate'}</p>
-                        <p className={`truncate text-[10px] ${tone.panelLabel}`}>{latest?.disposition || 'Disposed'}</p>
+                        <p className={`truncate text-sm font-semibold ${tone.panelTitle}`}>
+                          {candidate.full_name || 'Unknown Candidate'}
+                        </p>
+                        <p className={`truncate text-xs ${tone.panelMuted}`}>{latest?.disposition || 'Disposed'}</p>
                       </div>
-                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${isDark ? 'bg-white/12 text-slate-200' : 'bg-slate-100 text-slate-700'}`}>
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
                         <CheckCircle2 size={11} />
                         Done
                       </span>
                     </button>
                   );
                 })}
-                {!doneList.length && <p className={`text-xs ${tone.panelLabel}`}>No disposed cards in this lane yet.</p>}
+                {!doneList.length && (
+                  <p className={`col-span-full rounded-xl border border-dashed p-4 text-center text-xs ${tone.panelMuted}`}>
+                    Disposed candidates will appear here.
+                  </p>
+                )}
               </div>
-            </div>
-
-            <div className={`rounded-2xl border p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] ${tone.recentRail}`}>
-              <div className="mb-2 flex items-start justify-between gap-3">
-                <div>
-                  <p className={`text-[11px] font-semibold uppercase tracking-wide ${tone.panelTitle}`}>Recent call history</p>
-                  <p className={`text-[10px] ${tone.panelLabel}`}>Chronological event log for selected candidate</p>
-                </div>
-                <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold ${tone.input}`}>
-                  <History size={11} />
-                  Newest → Older
-                </span>
-              </div>
-              {selectedHistory.length ? (
-                <div className="overflow-x-auto pb-1">
-                  <div className="inline-flex min-w-full items-stretch gap-2 pr-1">
-                    {selectedHistory.map((row, index) => {
-                      const meta = readCallRecordMeta(row);
-                      return (
-                        <motion.article
-                          key={row.id}
-                          initial={{ opacity: 0, x: 16 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ duration: 0.22, delay: index * 0.03 }}
-                          className={`group relative min-h-[132px] w-[250px] shrink-0 rounded-xl border p-3 text-xs backdrop-blur-sm ${
-                            isDark
-                              ? 'border-cyan-200/20 bg-white/[0.06] shadow-[0_12px_28px_-24px_rgba(56,189,248,0.9)]'
-                              : 'border-[#c8def4] bg-white/85 shadow-[0_10px_24px_-22px_rgba(22,76,138,0.7)]'
-                          }`}
-                        >
-                          {index < selectedHistory.length - 1 && (
-                            <span className={`pointer-events-none absolute right-[-10px] top-7 h-[2px] w-4 rounded-full ${isDark ? 'bg-cyan-200/45' : 'bg-[#b7d0ec]'}`} aria-hidden="true" />
-                          )}
-                          <div className="mb-1.5 flex items-center justify-between gap-2">
-                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${isDark ? 'bg-cyan-300/18 text-cyan-100' : 'bg-[#eaf3ff] text-[#24558a]'}`}>{row.disposition}</span>
-                            <span className={`text-[10px] ${tone.panelLabel}`}>{formatDateTimeCanadaEastern(row.disposed_at)}</span>
-                          </div>
-                          <p className={`truncate text-[11px] font-medium ${tone.panelMuted}`}>{row.dialed_number || 'No dialed number logged'}</p>
-                          <div className={`mt-2 space-y-1 text-[10px] ${tone.panelLabel}`}>
-                            {meta.bookedSubtype && <p>Booked subtype: {meta.bookedSubtype}</p>}
-                            {meta.callbackAt && <p>Callback: {formatDateTimeCanadaEastern(meta.callbackAt)}</p>}
-                            {!meta.bookedSubtype && !meta.callbackAt && <p>No additional metadata on this call.</p>}
-                          </div>
-                        </motion.article>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : (
-                <p className={`rounded-xl border border-dashed px-3 py-2 text-xs ${tone.input}`}>No call history yet.</p>
-              )}
             </div>
           </section>
         </motion.div>
+
 
         <AnimatePresence>
           {showLoadingOverlay && (
@@ -1509,7 +978,7 @@ const PipelineCallWorkspace: React.FC = () => {
               </label>
 
               <Button className="w-full" onClick={() => void saveDisposition()} disabled={savingDisposition || !currentCandidate}>
-                {savingDisposition ? 'Saving...' : autoMode ? 'Save + auto advance' : 'Save disposition'}
+                {savingDisposition ? 'Saving...' : 'Save disposition'}
               </Button>
             </motion.div>
           </motion.div>

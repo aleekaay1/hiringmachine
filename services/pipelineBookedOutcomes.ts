@@ -147,7 +147,7 @@ export function classifyBookedOutcome(input: {
       reason: 'Candidate has no email for WebinarGeek matching.',
     };
   }
-  const rows = rowsByEmail.get(email) || [];
+  const rows = input.rowsByEmail.get(email) || [];
   if (!rows.length) {
     return {
       bucket: 'booked',
