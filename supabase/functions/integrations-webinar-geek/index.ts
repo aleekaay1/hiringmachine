@@ -375,6 +375,9 @@ async function resolveBroadcastContext(broadcastId: string, webinarIdHint?: stri
   ).trim() || null;
 
   let registrationFields: RegistrationFieldRow[] = registrationFieldsFromWebinarJson(broadcast);
+  if (!registrationFields.length && nestedWebinar) {
+    registrationFields = registrationFieldsFromWebinarJson(nestedWebinar);
+  }
   if (!registrationFields.length && resolvedWebinarId) {
     const webinarRes = await wgGet(`/webinars/${encodeURIComponent(resolvedWebinarId)}`);
     if (webinarRes.ok) registrationFields = registrationFieldsFromWebinarJson(webinarRes.json);
@@ -439,6 +442,26 @@ function simplifySubscriptionRow(row: Record<string, unknown>) {
     webinar_id: webinar?.id ?? row.webinar_id ?? null,
     webinar_title: webinar?.title ?? webinar?.name ?? null,
   };
+}
+
+async function findSubscriptionForBroadcast(
+  email: string,
+  broadcastId: string,
+): Promise<Array<Record<string, unknown>>> {
+  const normalized = normalizeLookupEmail(email);
+  if (!normalized || !broadcastId) return [];
+
+  const res = await wgGet('/subscriptions', {
+    email: normalized,
+    broadcast_id: broadcastId,
+    per_page: 10,
+    nested_resources: 'broadcast,webinar',
+  });
+  if (!res.ok) return [];
+
+  return subscriptionRowsFromWgJson(res.json).filter(
+    (row) => subscriptionBroadcastId(row) === broadcastId,
+  );
 }
 
 async function findSubscriptionsByEmail(email: string): Promise<Array<Record<string, unknown>>> {
@@ -1159,29 +1182,20 @@ Deno.serve(async (req) => {
         });
       }
 
-      const profileRes = await admin
-        .from('user_profiles')
-        .select('full_name, email')
-        .eq('user_id', user.id)
-        .maybeSingle();
+      const [profileRes, settingsRow, broadcastContext, existingRows] = await Promise.all([
+        admin.from('user_profiles').select('full_name, email').eq('user_id', user.id).maybeSingle(),
+        admin.from('pipeline_user_call_settings').select('webinar_geek_custom_field').eq('user_id', user.id).maybeSingle().catch(() => ({ data: null })),
+        resolveBroadcastContext(broadcastId, webinarId || undefined),
+        findSubscriptionForBroadcast(email, broadcastId),
+      ]);
+
       const bookedByLabel =
         String((profileRes.data as { full_name?: string } | null)?.full_name || '').trim() ||
         String(user.email || '').trim() ||
         user.id;
       const userEmail = String((profileRes.data as { email?: string } | null)?.email || user.email || '').trim();
       const userFullName = String((profileRes.data as { full_name?: string } | null)?.full_name || '').trim();
-
-      let settingsCustomField = '';
-      try {
-        const { data: settingsRow } = await admin
-          .from('pipeline_user_call_settings')
-          .select('webinar_geek_custom_field')
-          .eq('user_id', user.id)
-          .maybeSingle();
-        settingsCustomField = String((settingsRow as { webinar_geek_custom_field?: string } | null)?.webinar_geek_custom_field || '').trim();
-      } catch {
-        // Column may not exist yet before migration.
-      }
+      const settingsCustomField = String((settingsRow.data as { webinar_geek_custom_field?: string } | null)?.webinar_geek_custom_field || '').trim();
 
       let effectiveCustomField: string | null = null;
       const requestedTag = customField || settingsCustomField || '';
@@ -1204,7 +1218,6 @@ Deno.serve(async (req) => {
       }
       effectiveCustomField = parsedTag.tag;
 
-      const broadcastContext = await resolveBroadcastContext(broadcastId, webinarId || undefined);
       if (!broadcastContext.ok) {
         return new Response(JSON.stringify({
           error: broadcastContext.error,
@@ -1217,12 +1230,9 @@ Deno.serve(async (req) => {
       }
 
       const resolvedWebinarId = broadcastContext.webinarId || webinarId || null;
-      const existingRows = await findSubscriptionsByEmail(email);
-      const alreadyRegistered = existingRows.some((row) => subscriptionBroadcastId(row) === broadcastId);
+      const alreadyRegistered = existingRows.length > 0;
       if (alreadyRegistered) {
-        const simplified = existingRows
-          .filter((row) => subscriptionBroadcastId(row) === broadcastId)
-          .map(simplifySubscriptionRow);
+        const simplified = existingRows.map(simplifySubscriptionRow);
         return new Response(JSON.stringify({
           ok: true,
           booked: true,
@@ -1310,7 +1320,9 @@ Deno.serve(async (req) => {
       };
 
       try {
-        await admin.from('webinar_geek_portal_bookings').insert(auditRow);
+        void admin.from('webinar_geek_portal_bookings').insert(auditRow).then(({ error }) => {
+          if (error) console.error('webinar_geek_portal_bookings insert failed:', error);
+        });
       } catch (auditErr) {
         console.error('webinar_geek_portal_bookings insert failed:', auditErr);
       }

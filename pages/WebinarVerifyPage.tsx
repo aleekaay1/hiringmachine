@@ -2,6 +2,7 @@ import React from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { CheckCircle2, CircleAlert, ExternalLink, Loader2, Search, Sparkles, Video } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
+import HomeLoadingScreen from '../components/dashboard/HomeLoadingScreen';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import { getPipelineUserCallSettings } from '../services/pipelineService';
@@ -62,6 +63,8 @@ const WebinarVerifyPage: React.FC = () => {
 
   const [checking, setChecking] = React.useState(false);
   const [booking, setBooking] = React.useState(false);
+  const [bookingProgress, setBookingProgress] = React.useState<{ pct: number; label: string } | null>(null);
+  const [bookSuccess, setBookSuccess] = React.useState<string | null>(null);
   const [loadingBroadcasts, setLoadingBroadcasts] = React.useState(false);
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -155,6 +158,29 @@ const WebinarVerifyPage: React.FC = () => {
     };
   }, []);
 
+  React.useEffect(() => {
+    if (!booking) return;
+    const stages = [
+      { pct: 15, label: 'Connecting to WebinarGeek…' },
+      { pct: 35, label: 'Checking session slot…' },
+      { pct: 55, label: 'Registering candidate…' },
+      { pct: 78, label: 'Confirming booking…' },
+    ];
+    let stageIndex = 0;
+    setBookingProgress(stages[0]);
+    const timer = window.setInterval(() => {
+      stageIndex += 1;
+      if (stageIndex < stages.length) {
+        setBookingProgress(stages[stageIndex]);
+        return;
+      }
+      setBookingProgress((prev) => (
+        prev ? { ...prev, pct: Math.min(prev.pct + 2, 94), label: 'Almost done…' } : prev
+      ));
+    }, 800);
+    return () => window.clearInterval(timer);
+  }, [booking]);
+
   const getToken = async (): Promise<string> => {
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
@@ -197,6 +223,17 @@ const WebinarVerifyPage: React.FC = () => {
     }
   };
 
+  const refreshVerifyQuietly = async (token: string, normalized: string) => {
+    const result = await verifyWebinarGeekEmail(token, normalized);
+    if (!result.ok) return;
+    const status = (result.data.status as WebinarGeekVerifyStatus) || 'not_found';
+    const rows = Array.isArray(result.data.subscriptions)
+      ? (result.data.subscriptions as WebinarGeekVerifySubscription[])
+      : [];
+    setVerifyStatus(status);
+    setSubscriptions(rows);
+  };
+
   const runBook = async () => {
     const normalized = email.trim().toLowerCase();
     if (!normalized || !firstname.trim() || !selectedBroadcastId) {
@@ -213,7 +250,8 @@ const WebinarVerifyPage: React.FC = () => {
     }
     setBooking(true);
     setError(null);
-    setMessage(null);
+    setBookSuccess(null);
+    setBookingProgress({ pct: 8, label: 'Starting booking…' });
     try {
       const token = await getToken();
       const selected = broadcasts.find((row) => String(row.id) === selectedBroadcastId);
@@ -227,10 +265,15 @@ const WebinarVerifyPage: React.FC = () => {
         candidateId: candidateId || undefined,
       });
       if (!result.ok) throw new Error(result.error);
-      setMessage(String(result.data.message || 'Webinar booked through the portal.'));
-      await runVerify();
+      const successText = String(
+        result.data.message || 'Webinar booked successfully — candidate is registered in WebinarGeek.',
+      );
+      setBookingProgress({ pct: 100, label: 'Booked successfully!' });
+      setBookSuccess(successText);
+      void refreshVerifyQuietly(token, normalized);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      setBookingProgress(null);
     } finally {
       setBooking(false);
     }
@@ -330,7 +373,19 @@ const WebinarVerifyPage: React.FC = () => {
               )}
             </section>
 
-            <section className="rounded-3xl border border-white/80 bg-white/90 p-5 shadow-[0_20px_60px_-40px_rgba(59,130,246,0.35)] backdrop-blur">
+            <section className="relative rounded-3xl border border-white/80 bg-white/90 p-5 shadow-[0_20px_60px_-40px_rgba(59,130,246,0.35)] backdrop-blur">
+              {booking && bookingProgress && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center rounded-3xl bg-white/95 p-4 backdrop-blur-sm">
+                  <div className="w-full max-w-md">
+                    <HomeLoadingScreen
+                      progress={bookingProgress}
+                      title="Booking webinar"
+                      subtitle="Registering the candidate in WebinarGeek — this usually takes a few seconds."
+                    />
+                  </div>
+                </div>
+              )}
+
               <div className="flex items-center gap-2 text-sm font-semibold text-[#0B1B34]">
                 <Sparkles className="h-4 w-4 text-sky-600" />
                 Book webinar
@@ -428,14 +483,7 @@ const WebinarVerifyPage: React.FC = () => {
                   onClick={() => void runBook()}
                   disabled={booking || loadingBroadcasts || !selectedLinkTag.trim() || !bookingIdentities.length}
                 >
-                  {booking ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Booking…
-                    </>
-                  ) : (
-                    'Book webinar'
-                  )}
+                  {booking ? 'Booking…' : 'Book webinar'}
                 </Button>
                 <a
                   href="/pipeline-settings"
@@ -447,13 +495,20 @@ const WebinarVerifyPage: React.FC = () => {
                   <ExternalLink className="h-3 w-3" />
                 </a>
               </div>
+
+              {bookSuccess && (
+                <div className="mt-4 flex items-start gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div>
+                    <p className="font-semibold">Booking confirmed</p>
+                    <p className="mt-1 text-xs opacity-90">{bookSuccess}</p>
+                  </div>
+                </div>
+              )}
             </section>
 
             {error && (
               <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p>
-            )}
-            {message && !verifyStatus && (
-              <p className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">{message}</p>
             )}
           </div>
         </div>
