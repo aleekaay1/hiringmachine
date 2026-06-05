@@ -24,7 +24,7 @@ import {
 } from '../components/leaderboard/LeaderboardRefreshProgress';
 import { LeaderboardWeekCountdown } from '../components/leaderboard/LeaderboardWeekCountdown';
 import { LeaderboardCoinChip } from '../components/dashboard/LeaderboardCoinChip';
-import { currentFridayWeekEndDate, endOfYmdLocal } from '../services/leaderboardCountdown';
+import { currentFridayWeekEndDate, endOfYmdLocal, lastFridayWeekEndDate } from '../services/leaderboardCountdown';
 import {
   coinBalanceForLeaderboardRow,
   loadLeaderboardCoinLookup,
@@ -60,6 +60,7 @@ import { supabase } from '../services/supabaseClient';
 
 const PERIODS: Array<{ id: LeaderboardPeriod; label: string }> = [
   { id: 'last7', label: 'This week (Fri–Thu)' },
+  { id: 'lastWeek', label: 'Last week (Fri–Thu)' },
   { id: 'last30', label: '30 Days' },
   { id: 'thisMonth', label: 'Monthly' },
   { id: 'custom', label: 'Custom range' },
@@ -512,6 +513,7 @@ const LeadershipLeaderboard: React.FC = () => {
 
   const periodEndAt = React.useMemo(() => {
     if (period === 'last7') return currentFridayWeekEndDate();
+    if (period === 'lastWeek') return lastFridayWeekEndDate();
     const w = buildLeaderboardWindows(period, new Date(), activeCustomRange);
     return endOfYmdLocal(w.current.untilYmd);
   }, [period, activeCustomRange?.sinceYmd, activeCustomRange?.untilYmd]);
@@ -521,6 +523,12 @@ const LeadershipLeaderboard: React.FC = () => {
       return {
         label: 'This week ends Thursday night',
         sublabel: 'Fri–Thu competition week · climb the board before time runs out',
+      };
+    }
+    if (period === 'lastWeek') {
+      return {
+        label: 'Last week — final standings',
+        sublabel: 'Completed Fri–Thu week · refresh to recalculate if numbers changed',
       };
     }
     if (period === 'thisMonth') {
@@ -552,7 +560,15 @@ const LeadershipLeaderboard: React.FC = () => {
   }, [shownRows]);
 
   const previousLeaderTitle =
-    period === 'last7' ? 'Previous week' : period === 'thisMonth' ? 'Last month' : period === 'custom' ? 'Prior range' : 'Previous window';
+    period === 'last7'
+      ? 'Previous week'
+      : period === 'lastWeek'
+        ? 'Two weeks ago'
+        : period === 'thisMonth'
+          ? 'Last month'
+          : period === 'custom'
+            ? 'Prior range'
+            : 'Previous window';
 
   return (
     <PipelineAuthShell

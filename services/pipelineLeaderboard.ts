@@ -92,7 +92,7 @@ export type LeaderboardBadgeWinners = {
   consistentCloser: RecruiterLeaderboardRow | null;
 };
 
-export type LeaderboardPeriod = 'last7' | 'last30' | 'thisMonth' | 'custom';
+export type LeaderboardPeriod = 'last7' | 'lastWeek' | 'last30' | 'thisMonth' | 'custom';
 
 export type LeaderboardCustomRange = {
   sinceYmd: string;
@@ -245,6 +245,24 @@ function periodBounds(
     return {
       current: windowFromYmdRange(month.since, month.until, month.title),
       previous: windowFromYmdRange(prevMonth.since, prevMonth.until, `Previous ${month.title}`),
+    };
+  }
+
+  if (period === 'lastWeek') {
+    const currentWeek = fridayWeekBoundsFromYmd(todayYmd);
+    const lastWeek = fridayWeekBoundsFromYmd(shiftYmdDays(currentWeek.since, -7));
+    const priorWeek = fridayWeekBoundsFromYmd(shiftYmdDays(lastWeek.since, -7));
+    return {
+      current: windowFromYmdRange(
+        lastWeek.since,
+        lastWeek.until,
+        `Last week (Fri–Thu) · ${lastWeek.title}`,
+      ),
+      previous: windowFromYmdRange(
+        priorWeek.since,
+        priorWeek.until,
+        `Two weeks ago (Fri–Thu) · ${priorWeek.title}`,
+      ),
     };
   }
 

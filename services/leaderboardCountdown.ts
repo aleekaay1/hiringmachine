@@ -1,5 +1,6 @@
 import {
   fridayWeekBoundsFromYmd,
+  shiftYmdDays,
   torontoYmdFromDate,
   ymdToLocalDate,
 } from './webinarGeekDates';
@@ -7,9 +8,15 @@ import {
 /** End of the current Fri–Thu competition week (Thursday 23:59:59 local). */
 export function currentFridayWeekEndDate(now = new Date()): Date {
   const { until } = fridayWeekBoundsFromYmd(torontoYmdFromDate(now));
-  const end = ymdToLocalDate(until);
-  end.setHours(23, 59, 59, 999);
-  return end;
+  return endOfYmdLocal(until);
+}
+
+/** End of the prior Fri–Thu week (completed last week). */
+export function lastFridayWeekEndDate(now = new Date()): Date {
+  const todayYmd = torontoYmdFromDate(now);
+  const currentWeek = fridayWeekBoundsFromYmd(todayYmd);
+  const lastWeek = fridayWeekBoundsFromYmd(shiftYmdDays(currentWeek.since, -7));
+  return endOfYmdLocal(lastWeek.until);
 }
 
 export function endOfYmdLocal(ymd: string): Date {

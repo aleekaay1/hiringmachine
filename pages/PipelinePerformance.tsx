@@ -8,7 +8,7 @@ import {
   listPipelineCallRecords,
   listPipelineIncomingEmailLogsByCandidates,
 } from '../services/pipelineService';
-import { getCurrentUserProfile } from '../services/accessControl';
+import { getCurrentUserProfile, listAllUserProfiles } from '../services/accessControl';
 import { supabase } from '../services/supabaseClient';
 
 type Preset = 'this_week' | 'last_7_days' | 'all';
@@ -26,6 +26,42 @@ function isoEndOfDay(value: string): string | null {
   if (!value) return null;
   const date = new Date(`${value}T23:59:59.999`);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+type RecruiterDirectory = Map<string, { fullName: string | null; email: string | null }>;
+
+function displayNameFromEmail(email: string): string | null {
+  const local = String(email || '').trim().toLowerCase().split('@')[0] || '';
+  if (!local) return null;
+  const parts = local.split(/[._-]+/g).filter(Boolean);
+  if (!parts.length) return null;
+  return parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(' ');
+}
+
+function isUuidLike(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+}
+
+function recruiterDisplayName(
+  userId: string | null | undefined,
+  label: string | null | undefined,
+  directory: RecruiterDirectory,
+): string {
+  const uid = String(userId || '').trim();
+  if (uid && directory.has(uid)) {
+    const row = directory.get(uid)!;
+    const full = String(row.fullName || '').trim();
+    if (full) return full;
+    const fromEmail = row.email ? displayNameFromEmail(row.email) : null;
+    if (fromEmail) return fromEmail;
+    if (row.email) return row.email;
+  }
+  const labelStr = String(label || '').trim();
+  if (labelStr && !isUuidLike(labelStr)) {
+    if (labelStr.includes('@')) return displayNameFromEmail(labelStr) || labelStr;
+    return labelStr;
+  }
+  return 'Unknown recruiter';
 }
 
 function weekBuckets(fromIso: string | null, toIso: string | null): Array<{ week: string; calls: number; emails: number; booked: number }> {
@@ -138,6 +174,10 @@ const PipelinePerformance: React.FC = () => {
       setEmailReplies(inbound.length);
 
       if (adminView) {
+        const profiles = await listAllUserProfiles().catch(() => []);
+        const directory: RecruiterDirectory = new Map(
+          profiles.map((profile) => [profile.user_id, { fullName: profile.full_name, email: profile.email ?? null }]),
+        );
         const byRecruiter = new Map<string, { label: string; calls: number; emails: number; booked: number }>();
         const recruiterKeyFor = (userIdValue: string | null | undefined, label: string | null | undefined) =>
           userIdValue?.trim() || `label:${(label || 'unknown').trim().toLowerCase()}`;
@@ -149,14 +189,14 @@ const PipelinePerformance: React.FC = () => {
         };
         for (const row of callRecords) {
           const key = recruiterKeyFor(row.recruiter_user_id, row.recruiter_label);
-          const label = String(row.recruiter_label || row.recruiter_user_id || 'Unknown recruiter').trim() || 'Unknown recruiter';
+          const label = recruiterDisplayName(row.recruiter_user_id, row.recruiter_label, directory);
           const bucket = ensureRecruiter(key, label);
           bucket.calls += 1;
           if (String(row.disposition || '').toLowerCase() === 'booked') bucket.booked += 1;
         }
         for (const log of emailLogs) {
           const key = recruiterKeyFor(log.created_by_user_id, log.created_by_label);
-          const label = String(log.created_by_label || log.created_by_user_id || 'Unknown recruiter').trim() || 'Unknown recruiter';
+          const label = recruiterDisplayName(log.created_by_user_id, log.created_by_label, directory);
           ensureRecruiter(key, label).emails += 1;
         }
         setRecruiterRows(
