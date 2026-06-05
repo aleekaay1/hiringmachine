@@ -34,6 +34,24 @@ export interface UserProfile {
   points_updated_at?: string | null;
 }
 
+/** Training / sandbox accounts (demo-*@globelife-paz.com) — hidden from leaderboard, reports, and staff lists. */
+export function isDemoStaffEmail(email: string | null | undefined): boolean {
+  const normalized = String(email || '').trim().toLowerCase();
+  if (!normalized.endsWith('@globelife-paz.com')) return false;
+  const local = normalized.split('@')[0] || '';
+  return local.startsWith('demo-') || local.startsWith('demo_');
+}
+
+export function isDemoStaffProfile(profile: Pick<UserProfile, 'email' | 'full_name'>): boolean {
+  if (isDemoStaffEmail(profile.email)) return true;
+  const name = String(profile.full_name || '').trim().toLowerCase();
+  return name === 'demo leadership' || name === 'demo admin' || name.startsWith('demo ');
+}
+
+export function filterProductionStaffProfiles<T extends Pick<UserProfile, 'email' | 'full_name'>>(profiles: T[]): T[] {
+  return profiles.filter((p) => !isDemoStaffProfile(p));
+}
+
 /** When `public.user_profiles` is not in PostgREST (404 / PGRST205), avoid hammering a missing table every layout mount. */
 let userProfilesTableMissing: boolean | null = null;
 
@@ -210,16 +228,16 @@ export async function listAllUserProfiles(): Promise<UserProfile[]> {
     .select('user_id, email, full_name, role, points, points_updated_at')
     .order('full_name', { ascending: true })
     .order('email', { ascending: true });
-  if (!full.error) return (full.data || []) as UserProfile[];
+  if (!full.error) return filterProductionStaffProfiles((full.data || []) as UserProfile[]);
 
   const withoutPoints = await supabase
     .from('user_profiles')
     .select('user_id, email, full_name, role')
     .order('email', { ascending: true });
-  if (!withoutPoints.error) return (withoutPoints.data || []) as UserProfile[];
+  if (!withoutPoints.error) return filterProductionStaffProfiles((withoutPoints.data || []) as UserProfile[]);
 
   const viaFn = await fetchDashboardTeamMetricsViaFunction('last7');
-  if (viaFn.ok && viaFn.profiles.length > 0) return viaFn.profiles;
+  if (viaFn.ok && viaFn.profiles.length > 0) return filterProductionStaffProfiles(viaFn.profiles);
 
   throw new Error(full.error.message || withoutPoints.error?.message || 'Could not load user profiles');
 }

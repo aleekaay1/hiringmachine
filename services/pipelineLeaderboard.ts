@@ -1,4 +1,9 @@
-import { buildRecruiterScopeTokens, recruiterOwnsNameKey, type UserProfile } from './accessControl';
+import {
+  buildRecruiterScopeTokens,
+  isDemoStaffProfile,
+  recruiterOwnsNameKey,
+  type UserProfile,
+} from './accessControl';
 import {
   buildLiveSessionRowsByEmail,
   liveSessionAttendedFromRegistrant,
@@ -27,7 +32,9 @@ const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
 const EXCLUDED_LEADERBOARD_NAMES = new Set(['unknown recruiter', 'unknown', 'admin']);
 
 export function excludedLeaderboardUserIds(profiles: UserProfile[]): Set<string> {
-  return new Set(profiles.filter((p) => p.role === 'admin').map((p) => p.user_id));
+  return new Set(
+    profiles.filter((p) => p.role === 'admin' || isDemoStaffProfile(p)).map((p) => p.user_id),
+  );
 }
 
 export function isExcludedLeaderboardParticipant(
@@ -39,6 +46,9 @@ export function isExcludedLeaderboardParticipant(
   if (!normalized || EXCLUDED_LEADERBOARD_NAMES.has(normalized)) return true;
   if (/^unknown(\s+recruiter)?$/i.test(normalized)) return true;
   if (normalized === 'administrator' || normalized === 'admin') return true;
+  if (normalized === 'demo leadership' || normalized === 'demo admin' || normalized.startsWith('demo ')) {
+    return true;
+  }
   if (recruiterUserId && excludedUserIds?.has(recruiterUserId)) return true;
   return false;
 }

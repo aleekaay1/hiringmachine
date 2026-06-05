@@ -104,6 +104,15 @@ Deno.serve(async (req) => {
       } else {
         profiles = (profileRows || []) as Array<Record<string, unknown>>;
       }
+      profiles = profiles.filter((row) => {
+        const email = String(row.email || '').trim().toLowerCase();
+        const local = email.split('@')[0] || '';
+        if (email.endsWith('@globelife-paz.com') && (local.startsWith('demo-') || local.startsWith('demo_'))) {
+          return false;
+        }
+        const name = String(row.full_name || '').trim().toLowerCase();
+        return name !== 'demo leadership' && name !== 'demo admin' && !name.startsWith('demo ');
+      });
       for (const row of profiles) {
         const r = String(row.role || 'viewer');
         roleCounts[r] = (roleCounts[r] || 0) + 1;
