@@ -90,7 +90,18 @@ function subscriptionRowsFromWgJson(json: Record<string, unknown>): Array<Record
   if (json.subscription && typeof json.subscription === 'object') {
     return [json.subscription as Record<string, unknown>];
   }
+  if (json.id != null && json.email != null) {
+    return [json];
+  }
   return [];
+}
+
+function wgErrorMessage(json: Record<string, unknown>, fallback: string): string {
+  const message = String(json.message || json.error || '').trim();
+  const code = String(json.code || '').trim();
+  if (message && code) return `${message} (${code})`;
+  if (message) return message;
+  return fallback;
 }
 
 function simplifySubscriptionRow(row: Record<string, unknown>) {
@@ -791,31 +802,23 @@ Deno.serve(async (req) => {
       }
 
       const effectiveCustomField = customField || settingsCustomField || null;
-      const payload: Record<string, unknown> = {
+      const subscriptionPayload: Record<string, unknown> = {
         email,
         firstname,
         surname: surname || undefined,
-        broadcast_id: broadcastId,
         custom_field: effectiveCustomField || undefined,
-        registration_source: 'paz_portal',
       };
 
-      let bookRes = await wgPost('/subscriptions', payload);
+      let bookRes = await wgPost(`/broadcasts/${encodeURIComponent(broadcastId)}/subscriptions`, subscriptionPayload);
       if (!bookRes.ok && webinarId) {
-        bookRes = await wgPost(`/webinars/${webinarId}/registrations`, {
-          email,
-          first_name: firstname,
-          last_name: surname || undefined,
-          firstname,
-          surname: surname || undefined,
-          custom_field: effectiveCustomField || undefined,
+        bookRes = await wgPost(`/webinars/${encodeURIComponent(webinarId)}/series_subscribe`, {
+          ...subscriptionPayload,
+          broadcasts: [Number(broadcastId) || broadcastId],
         });
       }
 
       const subscriptionRow = bookRes.ok
-        ? (bookRes.json.subscription && typeof bookRes.json.subscription === 'object'
-          ? bookRes.json.subscription as Record<string, unknown>
-          : subscriptionRowsFromWgJson(bookRes.json)[0] || null)
+        ? subscriptionRowsFromWgJson(bookRes.json)[0] || null
         : null;
 
       const auditRow = {
@@ -833,10 +836,11 @@ Deno.serve(async (req) => {
         status: bookRes.ok ? 'booked' : 'failed',
         error_message: bookRes.ok
           ? null
-          : String(bookRes.json.error || bookRes.json.message || `WebinarGeek booking failed (${bookRes.status})`),
+          : wgErrorMessage(bookRes.json, `WebinarGeek booking failed (${bookRes.status})`),
         metadata: {
-          registration_source: 'paz_portal',
+          registration_source: 'api',
           wg_status: bookRes.status,
+          wg_code: bookRes.json.code ?? null,
         },
       };
 
@@ -850,7 +854,8 @@ Deno.serve(async (req) => {
         return new Response(JSON.stringify({
           error: auditRow.error_message,
           source_status: bookRes.status,
-          attempted_payload: payload,
+          wg_code: bookRes.json.code ?? null,
+          attempted_endpoint: `/broadcasts/${broadcastId}/subscriptions`,
         }), {
           status: 502,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
