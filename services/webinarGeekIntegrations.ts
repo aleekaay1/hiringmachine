@@ -157,8 +157,9 @@ export async function fetchWebinarGeekUpcomingBroadcasts(accessToken: string, we
   return callWebinarGeek(accessToken, `?${params.toString()}`);
 }
 
-export async function fetchWebinarGeekBookingIdentities(accessToken: string) {
+export async function fetchWebinarGeekBookingIdentities(accessToken: string, refresh = false) {
   const params = new URLSearchParams({ mode: 'booking-identities' });
+  if (refresh) params.set('refresh', '1');
   return callWebinarGeek(accessToken, `?${params.toString()}`);
 }
 
@@ -170,8 +171,7 @@ export async function bookWebinarGeekBroadcast(
     surname?: string;
     broadcastId: string;
     webinarId?: string;
-    customField?: string;
-    bookingMode?: 'direct' | 'link';
+    customField: string;
     candidateId?: string;
   },
 ) {
@@ -184,8 +184,7 @@ export async function bookWebinarGeekBroadcast(
       surname: payload.surname?.trim() || undefined,
       broadcast_id: payload.broadcastId,
       webinar_id: payload.webinarId || undefined,
-      custom_field: payload.customField?.trim() || undefined,
-      booking_mode: payload.bookingMode || (payload.customField?.trim() ? 'link' : 'direct'),
+      custom_field: payload.customField.trim(),
       candidate_id: payload.candidateId || undefined,
     }),
   });

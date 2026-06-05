@@ -72,7 +72,6 @@ const WebinarVerifyPage: React.FC = () => {
   const [selectedBroadcastId, setSelectedBroadcastId] = React.useState('');
   const [bookingIdentities, setBookingIdentities] = React.useState<WebinarGeekBookingIdentity[]>([]);
   const [loadingIdentities, setLoadingIdentities] = React.useState(false);
-  const [bookingMode, setBookingMode] = React.useState<'direct' | 'link'>('link');
   const [selectedLinkTag, setSelectedLinkTag] = React.useState('');
 
   React.useEffect(() => {
@@ -120,7 +119,6 @@ const WebinarVerifyPage: React.FC = () => {
           if (prev && rows.some((row) => row.tag === prev)) return prev;
           return rows[0]?.tag || prev;
         });
-        setBookingMode(rows.length > 0 ? 'link' : 'direct');
       } finally {
         if (!cancelled) setLoadingIdentities(false);
       }
@@ -209,8 +207,8 @@ const WebinarVerifyPage: React.FC = () => {
       setError('Last name is required — WebinarGeek rejects bookings without a surname.');
       return;
     }
-    if (bookingMode === 'link' && !selectedLinkTag.trim()) {
-      setError('Choose a registration link to book as, or switch to direct portal booking.');
+    if (!selectedLinkTag.trim()) {
+      setError('Choose a Cooper/RMS registration link to book as.');
       return;
     }
     setBooking(true);
@@ -225,8 +223,7 @@ const WebinarVerifyPage: React.FC = () => {
         surname: surname.trim() || undefined,
         broadcastId: selectedBroadcastId,
         webinarId: selected?.webinar_id != null ? String(selected.webinar_id) : undefined,
-        bookingMode,
-        customField: bookingMode === 'link' ? selectedLinkTag.trim() : undefined,
+        customField: selectedLinkTag.trim(),
         candidateId: candidateId || undefined,
       });
       if (!result.ok) throw new Error(result.error);
@@ -339,8 +336,7 @@ const WebinarVerifyPage: React.FC = () => {
                 Book webinar
               </div>
               <p className="mt-1 text-xs text-[#6b84a8]">
-                Registers them via WebinarGeek API. Choose how this booking should be attributed — through your
-                Cooper/RMS registration link, or direct portal booking.
+                Registers them via WebinarGeek using your Cooper/RMS registration link.
               </p>
 
               <div className="mt-4 space-y-3 rounded-2xl border border-[#dbe8f8] bg-[#f8fbff] px-3 py-3">
@@ -353,7 +349,7 @@ const WebinarVerifyPage: React.FC = () => {
                       <label
                         key={identity.tag}
                         className={`flex cursor-pointer items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
-                          bookingMode === 'link' && selectedLinkTag === identity.tag
+                          selectedLinkTag === identity.tag
                             ? 'border-sky-300 bg-white text-[#0B1B34]'
                             : 'border-transparent bg-white/70 text-[#365274]'
                         }`}
@@ -362,11 +358,8 @@ const WebinarVerifyPage: React.FC = () => {
                           type="radio"
                           name="booking-as"
                           className="mt-0.5"
-                          checked={bookingMode === 'link' && selectedLinkTag === identity.tag}
-                          onChange={() => {
-                            setBookingMode('link');
-                            setSelectedLinkTag(identity.tag);
-                          }}
+                          checked={selectedLinkTag === identity.tag}
+                          onChange={() => setSelectedLinkTag(identity.tag)}
                         />
                         <span>
                           <span className="font-semibold">{identity.label}</span>
@@ -374,30 +367,10 @@ const WebinarVerifyPage: React.FC = () => {
                         </span>
                       </label>
                     ))}
-                    <label
-                      className={`flex cursor-pointer items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
-                        bookingMode === 'direct'
-                          ? 'border-sky-300 bg-white text-[#0B1B34]'
-                          : 'border-transparent bg-white/70 text-[#365274]'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="booking-as"
-                        className="mt-0.5"
-                        checked={bookingMode === 'direct'}
-                        onChange={() => setBookingMode('direct')}
-                      />
-                      <span>
-                        <span className="font-semibold">Direct portal booking</span>
-                        <span className="mt-0.5 block text-[#6b84a8]">
-                          No Cooper/RMS link tag — still logged as booked by you in Paz.
-                        </span>
-                      </span>
-                    </label>
                     {!bookingIdentities.length && (
                       <p className="text-[11px] text-amber-800">
-                        No Cooper/RMS links matched your account yet. Add a tag in Pipeline settings or book direct.
+                        No Cooper/RMS links matched your first name yet. Add a tag in Pipeline settings, or ask admin to
+                        run the booking-links SQL migration if this page is slow.
                       </p>
                     )}
                   </div>
@@ -453,7 +426,7 @@ const WebinarVerifyPage: React.FC = () => {
                 <Button
                   className="!min-h-0 h-11 px-5 bg-[#005EB8] hover:bg-[#004a93] text-white border-0"
                   onClick={() => void runBook()}
-                  disabled={booking || loadingBroadcasts}
+                  disabled={booking || loadingBroadcasts || !selectedLinkTag.trim() || !bookingIdentities.length}
                 >
                   {booking ? (
                     <>

@@ -1,6 +1,6 @@
 /**
  * WebinarGeek custom registration link tags: cooper_{slug} / rms_{slug}.
- * Shared by integrations-webinar-geek edge function.
+ * Match slugs to recruiters by first name (not email local-part segments).
  */
 
 export const BOOKING_LINK_CHANNELS = ['cooper', 'rms'] as const;
@@ -26,44 +26,47 @@ function splitIdentityWords(value: string): string[] {
     .filter((w) => w.length >= 2);
 }
 
-export function buildRecruiterScopeTokens(email: string | null, fullName: string | null): Set<string> {
-  const tokens = new Set<string>();
-  const add = (raw: string) => {
-    const token = normalizeIdentityToken(raw);
-    if (token) tokens.add(token);
-  };
-  const normalizedEmail = String(email || '').trim().toLowerCase();
-  const localPart = normalizedEmail.split('@')[0] || '';
-  add(normalizedEmail);
-  add(localPart);
-  add(localPart.replace(/[._-]+/g, ' '));
-  add(localPart.replace(/[._-]+/g, ''));
-  const name = String(fullName || '').trim().toLowerCase();
-  add(name);
-  add(name.replace(/\s+/g, ''));
-  for (const word of splitIdentityWords(localPart)) add(word);
-  for (const word of splitIdentityWords(name)) add(word);
-  return tokens;
+/** First name token used to match cooper_/rms_ link slugs. */
+export function bookingLinkFirstNameToken(fullName: string | null, email: string | null): string | null {
+  const nameParts = String(fullName || '').trim().split(/\s+/).filter(Boolean);
+  if (nameParts[0] && nameParts[0].length >= 2) {
+    return normalizeIdentityToken(nameParts[0]);
+  }
+  const localPart = String(email || '').trim().toLowerCase().split('@')[0] || '';
+  const firstSegment = localPart.split(/[._-]+/)[0]?.trim() || '';
+  if (firstSegment.length >= 2) return normalizeIdentityToken(firstSegment);
+  return null;
 }
 
-export function recruiterOwnsNameKey(nameKey: string | null, tokens: Set<string>): boolean {
-  if (!nameKey || tokens.size === 0) return false;
-  const normalized = normalizeIdentityToken(nameKey);
-  if (!normalized) return false;
-  if (tokens.has(normalized)) return true;
+/** Raw slug fragment for suggested tags, e.g. hassaan from "Hassaan Khalid". */
+export function bookingLinkFirstNameSlug(fullName: string | null, email: string | null): string | null {
+  const nameParts = String(fullName || '').trim().split(/\s+/).filter(Boolean);
+  if (nameParts[0] && nameParts[0].length >= 2) {
+    return nameParts[0].trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+  }
+  const localPart = String(email || '').trim().toLowerCase().split('@')[0] || '';
+  const firstSegment = localPart.split(/[._-]+/)[0]?.trim() || '';
+  return firstSegment.length >= 2 ? firstSegment.replace(/[^a-z0-9]+/g, '') : null;
+}
 
-  const words = splitIdentityWords(nameKey);
-  if (words.length > 0) {
-    const matchedWords = words.reduce((count, word) => (tokens.has(normalizeIdentityToken(word)) ? count + 1 : count), 0);
-    if (matchedWords >= 2) return true;
-    if (matchedWords >= 1 && words.length === 1 && words[0].length >= 5) return true;
+export function recruiterOwnsBookingLinkSlug(
+  slugKey: string | null,
+  fullName: string | null,
+  email: string | null,
+): boolean {
+  const firstName = bookingLinkFirstNameToken(fullName, email);
+  if (!firstName || !slugKey) return false;
+
+  const slugParts = splitIdentityWords(slugKey.replace(/_/g, ' '));
+  if (!slugParts.length) return false;
+
+  // Single-token slugs (cooper_hassaan) must match first name exactly.
+  if (slugParts.length === 1) {
+    return normalizeIdentityToken(slugParts[0]) === firstName;
   }
 
-  for (const token of tokens) {
-    if (token.length < 6) continue;
-    if (normalized.includes(token) || token.includes(normalized)) return true;
-  }
-  return false;
+  // Multi-part slugs must start with the recruiter first name; ignore trailing segments.
+  return normalizeIdentityToken(slugParts[0]) === firstName;
 }
 
 function titleCaseSlug(slug: string): string {
@@ -108,36 +111,10 @@ export function isBookingLinkTag(raw: string | null | undefined): boolean {
   return parseBookingLinkTag(raw) != null;
 }
 
-/** Slugs used to build cooper_/rms_ registration link tags for a recruiter account. */
-export function primaryRecruiterLinkSlugs(email: string | null, fullName: string | null): string[] {
-  const slugs = new Set<string>();
-  const localPart = String(email || '').trim().toLowerCase().split('@')[0] || '';
-  for (const part of localPart.split(/[._-]+/g)) {
-    const p = part.trim();
-    if (p.length >= 3) slugs.add(p);
-  }
-  const nameParts = String(fullName || '')
-    .trim()
-    .toLowerCase()
-    .split(/\s+/g)
-    .filter(Boolean);
-  if (nameParts[0] && nameParts[0].length >= 3) slugs.add(nameParts[0]);
-  if (nameParts.length >= 2) {
-    slugs.add(`${nameParts[0]}_${nameParts[1]}`);
-  }
-  return [...slugs];
-}
-
 export function suggestedBookingLinkTags(email: string | null, fullName: string | null): string[] {
-  const tokens = buildRecruiterScopeTokens(email, fullName);
-  const tags = new Set<string>();
-  for (const slug of primaryRecruiterLinkSlugs(email, fullName)) {
-    if (!recruiterOwnsNameKey(slug.replace(/_/g, ' '), tokens)) continue;
-    for (const channel of BOOKING_LINK_CHANNELS) {
-      tags.add(`${channel}_${slug}`);
-    }
-  }
-  return [...tags];
+  const slug = bookingLinkFirstNameSlug(fullName, email);
+  if (!slug) return [];
+  return BOOKING_LINK_CHANNELS.map((channel) => `${channel}_${slug}`);
 }
 
 export type BookingIdentityOption = {
@@ -154,13 +131,12 @@ export function buildBookingIdentitiesForUser(input: {
   observedTags: string[];
   settingsTag?: string | null;
 }): BookingIdentityOption[] {
-  const tokens = buildRecruiterScopeTokens(input.email, input.fullName);
   const byTag = new Map<string, BookingIdentityOption>();
 
   const add = (raw: string, source: BookingIdentityOption['source']) => {
     const parsed = parseBookingLinkTag(raw);
     if (!parsed) return;
-    if (!recruiterOwnsNameKey(parsed.slugKey, tokens)) return;
+    if (!recruiterOwnsBookingLinkSlug(parsed.slugKey, input.fullName, input.email)) return;
     const existing = byTag.get(parsed.tag);
     if (!existing || source === 'observed' || (source === 'settings' && existing.source === 'suggested')) {
       byTag.set(parsed.tag, {

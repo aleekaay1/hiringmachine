@@ -3,6 +3,7 @@ import {
   buildBookingIdentitiesForUser,
   isBookingLinkTag,
   parseBookingLinkTag,
+  recruiterOwnsBookingLinkSlug,
 } from '../_shared/webinarGeekBookingLinks.ts';
 
 const corsHeaders = {
@@ -186,6 +187,143 @@ function subscriptionBroadcastId(row: Record<string, unknown>): string | null {
     : null;
   const id = broadcast?.id ?? row.broadcast_id;
   return id != null && String(id).trim() ? String(id) : null;
+}
+
+const WG_LINK_CATALOG_ID = 'default';
+const WG_BOOKING_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+type CachedBookingIdentity = {
+  tag: string;
+  channel: string;
+  slug: string;
+  label: string;
+  source: string;
+};
+
+function parseCachedIdentities(raw: unknown): CachedBookingIdentity[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((row) => row && typeof row === 'object')
+    .map((row) => row as Record<string, unknown>)
+    .filter((row) => typeof row.tag === 'string' && row.tag.trim())
+    .map((row) => ({
+      tag: String(row.tag),
+      channel: String(row.channel || ''),
+      slug: String(row.slug || ''),
+      label: String(row.label || row.tag),
+      source: String(row.source || 'cached'),
+    }));
+}
+
+function cacheIsFresh(syncedAt: string | null | undefined, maxAgeMs = WG_BOOKING_CACHE_MAX_AGE_MS): boolean {
+  if (!syncedAt) return false;
+  const ms = Date.parse(syncedAt);
+  if (!Number.isFinite(ms)) return false;
+  return Date.now() - ms <= maxAgeMs;
+}
+
+async function loadUserBookingIdentitiesCache(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+): Promise<{ identities: CachedBookingIdentity[]; syncedAt: string | null } | null> {
+  try {
+    const { data, error } = await admin
+      .from('webinar_geek_user_booking_identities')
+      .select('identities, synced_at')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) return null;
+    return {
+      identities: parseCachedIdentities((data as { identities?: unknown } | null)?.identities),
+      syncedAt: String((data as { synced_at?: string } | null)?.synced_at || '') || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function saveUserBookingIdentitiesCache(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  identities: CachedBookingIdentity[],
+): Promise<void> {
+  try {
+    const nowIso = new Date().toISOString();
+    await admin.from('webinar_geek_user_booking_identities').upsert({
+      user_id: userId,
+      identities,
+      synced_at: nowIso,
+    }, { onConflict: 'user_id' });
+  } catch (err) {
+    console.error('webinar_geek_user_booking_identities upsert failed:', err);
+  }
+}
+
+async function loadRegistrationLinkCatalog(
+  admin: ReturnType<typeof createClient>,
+): Promise<{ tags: string[]; syncedAt: string | null } | null> {
+  try {
+    const { data, error } = await admin
+      .from('webinar_geek_registration_link_catalog')
+      .select('tags, synced_at')
+      .eq('id', WG_LINK_CATALOG_ID)
+      .maybeSingle();
+    if (error) return null;
+    const tags = Array.isArray((data as { tags?: unknown } | null)?.tags)
+      ? ((data as { tags: unknown[] }).tags.map((tag) => String(tag).trim().toLowerCase()).filter(Boolean))
+      : [];
+    return {
+      tags,
+      syncedAt: String((data as { synced_at?: string } | null)?.synced_at || '') || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function saveRegistrationLinkCatalog(
+  admin: ReturnType<typeof createClient>,
+  tags: string[],
+): Promise<void> {
+  try {
+    const nowIso = new Date().toISOString();
+    await admin.from('webinar_geek_registration_link_catalog').upsert({
+      id: WG_LINK_CATALOG_ID,
+      tags,
+      synced_at: nowIso,
+    }, { onConflict: 'id' });
+  } catch (err) {
+    console.error('webinar_geek_registration_link_catalog upsert failed:', err);
+  }
+}
+
+async function scanObservedRegistrationLinkTags(): Promise<string[]> {
+  const observedTags = new Set<string>();
+  const subscriptionsScan = await wgGetAllSubscriptions(
+    { per_page: 250, nested_resources: 'broadcast,webinar' },
+    { maxPages: 20 },
+  );
+  if (!subscriptionsScan.ok) return [];
+  for (const row of subscriptionsScan.rows) {
+    const customField = String(row.custom_field || '').trim();
+    if (isBookingLinkTag(customField)) observedTags.add(customField.toLowerCase());
+    const pageName = String(row.registration_page_name || '').trim();
+    if (isBookingLinkTag(pageName)) observedTags.add(pageName.toLowerCase());
+  }
+  return [...observedTags].sort();
+}
+
+async function resolveObservedRegistrationLinkTags(
+  admin: ReturnType<typeof createClient>,
+  forceRefresh: boolean,
+): Promise<string[]> {
+  const catalog = await loadRegistrationLinkCatalog(admin);
+  if (!forceRefresh && catalog && cacheIsFresh(catalog.syncedAt) && catalog.tags.length) {
+    return catalog.tags;
+  }
+  const scanned = await scanObservedRegistrationLinkTags();
+  if (scanned.length) await saveRegistrationLinkCatalog(admin, scanned);
+  return scanned.length ? scanned : (catalog?.tags ?? []);
 }
 
 async function resolveBroadcastContext(broadcastId: string, webinarIdHint?: string) {
@@ -619,6 +757,7 @@ Deno.serve(async (req) => {
     }
 
     if (req.method === 'GET' && mode === 'booking-identities') {
+      const forceRefresh = url.searchParams.get('refresh') === '1';
       const profileRes = await admin
         .from('user_profiles')
         .select('full_name, email')
@@ -639,33 +778,40 @@ Deno.serve(async (req) => {
         // Column may not exist yet before migration.
       }
 
-      const observedTags = new Set<string>();
-      const subscriptionsScan = await wgGetAllSubscriptions(
-        { per_page: 250, nested_resources: 'broadcast,webinar' },
-        { maxPages: 20 },
-      );
-      if (subscriptionsScan.ok) {
-        for (const row of subscriptionsScan.rows) {
-          const customField = String(row.custom_field || '').trim();
-          if (isBookingLinkTag(customField)) observedTags.add(customField.toLowerCase());
-          const pageName = String(row.registration_page_name || '').trim();
-          if (isBookingLinkTag(pageName)) observedTags.add(pageName.toLowerCase());
+      if (!forceRefresh) {
+        const userCache = await loadUserBookingIdentitiesCache(admin, user.id);
+        if (userCache && cacheIsFresh(userCache.syncedAt) && userCache.identities.length) {
+          return new Response(JSON.stringify({
+            ok: true,
+            user_email: userEmail || null,
+            user_name: userFullName || null,
+            identities: userCache.identities,
+            from_cache: true,
+            checked_at: userCache.syncedAt,
+          }), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
         }
       }
 
+      const observedTags = await resolveObservedRegistrationLinkTags(admin, forceRefresh);
       const identities = buildBookingIdentitiesForUser({
         email: userEmail,
         fullName: userFullName,
-        observedTags: [...observedTags],
+        observedTags,
         settingsTag,
       });
+
+      await saveUserBookingIdentitiesCache(admin, user.id, identities);
 
       return new Response(JSON.stringify({
         ok: true,
         user_email: userEmail || null,
         user_name: userFullName || null,
         identities,
-        observed_link_count: observedTags.size,
+        from_cache: false,
+        observed_link_count: observedTags.length,
         checked_at: new Date().toISOString(),
       }), {
         status: 200,
@@ -964,7 +1110,6 @@ Deno.serve(async (req) => {
         broadcast_id?: string | number;
         webinar_id?: string | number;
         custom_field?: string;
-        booking_mode?: 'direct' | 'link';
         candidate_id?: string;
       };
       const email = normalizeLookupEmail(body.email || '');
@@ -973,7 +1118,6 @@ Deno.serve(async (req) => {
       const broadcastId = String(body.broadcast_id || '').trim();
       const webinarId = String(body.webinar_id || '').trim();
       const customField = String(body.custom_field || '').trim();
-      const bookingMode = body.booking_mode === 'direct' ? 'direct' : 'link';
       const candidateId = String(body.candidate_id || '').trim() || null;
 
       if (!email || !firstname || !broadcastId) {
@@ -992,6 +1136,8 @@ Deno.serve(async (req) => {
         String((profileRes.data as { full_name?: string } | null)?.full_name || '').trim() ||
         String(user.email || '').trim() ||
         user.id;
+      const userEmail = String((profileRes.data as { email?: string } | null)?.email || user.email || '').trim();
+      const userFullName = String((profileRes.data as { full_name?: string } | null)?.full_name || '').trim();
 
       let settingsCustomField = '';
       try {
@@ -1006,19 +1152,25 @@ Deno.serve(async (req) => {
       }
 
       let effectiveCustomField: string | null = null;
-      if (bookingMode === 'link') {
-        const requestedTag = customField || settingsCustomField || '';
-        const parsedTag = parseBookingLinkTag(requestedTag);
-        if (!parsedTag) {
-          return new Response(JSON.stringify({
-            error: 'Select a registration link to book as, or choose direct portal booking.',
-          }), {
-            status: 400,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          });
-        }
-        effectiveCustomField = parsedTag.tag;
+      const requestedTag = customField || settingsCustomField || '';
+      const parsedTag = parseBookingLinkTag(requestedTag);
+      if (!parsedTag) {
+        return new Response(JSON.stringify({
+          error: 'Select a Cooper/RMS registration link to book as.',
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
       }
+      if (!recruiterOwnsBookingLinkSlug(parsedTag.slugKey, userFullName, userEmail)) {
+        return new Response(JSON.stringify({
+          error: 'That registration link does not match your account.',
+        }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      effectiveCustomField = parsedTag.tag;
 
       const broadcastContext = await resolveBroadcastContext(broadcastId, webinarId || undefined);
       if (!broadcastContext.ok) {
@@ -1114,7 +1266,7 @@ Deno.serve(async (req) => {
           ? null
           : wgErrorMessage(bookRes.json, `WebinarGeek booking failed (${bookRes.status})`),
         metadata: {
-          booking_mode: bookingMode,
+          registration_link: effectiveCustomField,
           registration_source: 'api',
           wg_status: bookRes.status,
           wg_code: bookRes.json.code ?? null,
