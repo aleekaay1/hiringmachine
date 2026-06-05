@@ -2,6 +2,7 @@ import React from 'react';
 import PipelineAuthShell from '../PipelineAuthShell';
 import CoinWalletBadge from './CoinWalletBadge';
 import type { AppRole, UserProfile } from '../../services/accessControl';
+import { HomeRefreshButton } from './EmptyHomePrompt';
 
 const ROLE_LABELS: Record<AppRole, string> = {
   admin: 'Administrator',
@@ -51,13 +52,41 @@ function displayFirstName(profile: UserProfile): string {
   return email.charAt(0).toUpperCase() + email.slice(1);
 }
 
+function formatRefreshedAt(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString('en-CA', {
+      timeZone: 'America/Toronto',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
+}
+
 type DashboardShellProps = {
   profile: UserProfile | null;
   loading?: boolean;
+  refreshedAt?: string | null;
+  fromCache?: boolean;
+  showRefresh?: boolean;
+  refreshing?: boolean;
+  onRefresh?: () => void;
   children: React.ReactNode;
 };
 
-const DashboardShell: React.FC<DashboardShellProps> = ({ profile, loading, children }) => {
+const DashboardShell: React.FC<DashboardShellProps> = ({
+  profile,
+  loading,
+  refreshedAt,
+  fromCache,
+  showRefresh,
+  refreshing,
+  onRefresh,
+  children,
+}) => {
   return (
     <PipelineAuthShell
       title="Your dashboard"
@@ -86,10 +115,25 @@ const DashboardShell: React.FC<DashboardShellProps> = ({ profile, loading, child
                   Welcome, {profile ? displayFirstName(profile) : '…'}
                 </h1>
                 <p className="mt-1 max-w-2xl text-xs text-[#4f6886]">
-                  {loading ? 'Loading your overview…' : 'Your home base for today’s work, goals, and quick links.'}
+                  {loading
+                    ? 'Loading your overview…'
+                    : refreshedAt
+                      ? `${fromCache !== false ? 'Saved snapshot' : 'Updated'} · ${formatRefreshedAt(refreshedAt)}`
+                      : 'Your home base for today’s work, goals, and quick links.'}
                 </p>
               </div>
               <div className="flex flex-wrap items-start justify-end gap-3">
+                {showRefresh && onRefresh ? (
+                  <HomeRefreshButton
+                    onRefresh={onRefresh}
+                    refreshing={Boolean(refreshing)}
+                    title={
+                      refreshedAt
+                        ? `Last saved ${formatRefreshedAt(refreshedAt)}. Click to refresh.`
+                        : 'Load latest stats'
+                    }
+                  />
+                ) : null}
                 {profile && profile.role !== 'viewer' && profile.role !== 'hr' ? (
                   <CoinWalletBadge
                     profileBalance={profile.points}

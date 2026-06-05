@@ -12,7 +12,7 @@ create table if not exists public.email_send_logs (
   to_email text not null,
   cc_email text,
   subject text not null,
-  candidate_id text references public.candidates (id) on delete set null,
+  candidate_id text,
   sent_by_user_id uuid references auth.users (id) on delete set null,
   status text not null default 'sent' check (status in ('sent', 'failed')),
   error_message text,

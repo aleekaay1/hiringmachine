@@ -31,7 +31,19 @@ export async function insertEmailSendLog(supabase: SupabaseClient, row: EmailSen
     error_message: row.error_message ?? null,
     metadata: row.metadata ?? null,
   };
-  const { error } = await supabase.from('email_send_logs').insert(payload);
+  let { error } = await supabase.from('email_send_logs').insert(payload);
+  if (error && payload.candidate_id) {
+    const fallback = {
+      ...payload,
+      candidate_id: null,
+      metadata: {
+        ...(payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}),
+        pipeline_candidate_id: payload.candidate_id,
+      },
+    };
+    const retry = await supabase.from('email_send_logs').insert(fallback);
+    error = retry.error;
+  }
   if (error) {
     console.error('insertEmailSendLog failed:', error.message, payload);
   }

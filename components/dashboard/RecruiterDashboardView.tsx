@@ -1,93 +1,34 @@
 import React from 'react';
 import type { UserProfile } from '../../services/accessControl';
 import { isOpsConsoleEmail } from '../../services/accessControl';
-import { loadRecruiterPersonalMetrics, type RecruiterPersonalMetrics } from '../../services/dashboardPersonalMetrics';
-import HomeLoadingScreen from './HomeLoadingScreen';
+import type { HomeDashboardPayload } from '../../services/homeDashboardCache';
 import { DayNotesPanel, GoalRow, QuickLinkCard, StatTile } from './DashboardWidgets';
 import RecruiterCoinsPanel from './RecruiterCoinsPanel';
-import { loadRecruiterCoinWallet, type RecruiterCoinWallet } from '../../services/recruiterCoinService';
+import { EmptyHomePrompt } from './EmptyHomePrompt';
 
 function pct(n: number): string {
   return `${Math.round(n * 100)}%`;
 }
 
-const RecruiterDashboardView: React.FC<{ profile: UserProfile }> = ({ profile }) => {
-  const [metrics, setMetrics] = React.useState<RecruiterPersonalMetrics | null>(null);
-  const [wallet, setWallet] = React.useState<RecruiterCoinWallet | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(true);
-  const [progress, setProgress] = React.useState({ pct: 6, label: 'Loading your stats…' });
+type Props = {
+  profile: UserProfile;
+  payload: HomeDashboardPayload | null;
+  refreshing: boolean;
+  onRefresh: () => void;
+};
 
-  React.useEffect(() => {
-    let cancelled = false;
-    let tick: number | undefined;
-    setLoading(true);
-    setError(null);
-    setProgress({ pct: 8, label: 'Loading personal metrics…' });
-
-    tick = window.setInterval(() => {
-      setProgress((prev) => ({
-        ...prev,
-        pct: Math.min(prev.pct + 3, 92),
-      }));
-    }, 320);
-
-    void Promise.all([
-      loadRecruiterPersonalMetrics(profile).then((data) => {
-        if (!cancelled) {
-          setProgress({ pct: 55, label: 'Loading Paz Coins…' });
-          return data;
-        }
-        return null;
-      }),
-      loadRecruiterCoinWallet({
-        profileBalance: Number(profile.points || 0),
-        email: profile.email,
-        fullName: profile.full_name,
-      }).then((coinWallet) => {
-        if (!cancelled) setProgress({ pct: 85, label: 'Preparing dashboard…' });
-        return coinWallet;
-      }),
-    ])
-      .then(([data, coinWallet]) => {
-        if (cancelled || !data) return;
-        setMetrics(data);
-        setWallet(coinWallet);
-        setProgress({ pct: 100, label: 'Ready' });
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        if (tick) window.clearInterval(tick);
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-      if (tick) window.clearInterval(tick);
-    };
-  }, [profile]);
-
-  if (error) {
+const RecruiterDashboardView: React.FC<Props> = ({ profile, payload }) => {
+  if (!payload || payload.kind !== 'recruiter') {
     return (
-      <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">{error}</div>
+      <EmptyHomePrompt message="No saved stats yet. Tap refresh in the top right to load your week at a glance." />
     );
   }
 
-  if (loading || !metrics) {
-    return (
-      <HomeLoadingScreen
-        progress={progress}
-        title="Loading your stats"
-        subtitle="Rank, calls, bookings, and coin balance for your week."
-      />
-    );
-  }
+  const { metrics, wallet } = payload;
 
   return (
     <>
-      <RecruiterCoinsPanel wallet={wallet} loading={!wallet && !error} />
+      <RecruiterCoinsPanel wallet={wallet} loading={false} />
 
       <div className="rounded-3xl border border-[#d9e5f6] bg-white/80 p-4 backdrop-blur-xl">
         <p className="text-[10px] uppercase tracking-[0.2em] text-[#2f6ea8]">Your week at a glance</p>
@@ -95,16 +36,8 @@ const RecruiterDashboardView: React.FC<{ profile: UserProfile }> = ({ profile })
         <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           <StatTile label="Rank" value={metrics.rank != null ? `#${metrics.rank}` : '—'} sub={metrics.rankDelta !== 0 ? `${metrics.rankDelta > 0 ? '+' : ''}${metrics.rankDelta} vs last period` : undefined} />
           <StatTile label="Score" value={metrics.score.toFixed(1)} />
-          <StatTile
-            label="Webinar booked"
-            value={metrics.webinarBooked}
-            sub={`${metrics.webinarShowed} showed`}
-          />
-          <StatTile
-            label="Live session"
-            value={metrics.liveSessionBooked}
-            sub={`${metrics.liveSessionShowed} showed`}
-          />
+          <StatTile label="Webinar booked" value={metrics.webinarBooked} sub={`${metrics.webinarShowed} showed`} />
+          <StatTile label="Live session" value={metrics.liveSessionBooked} sub={`${metrics.liveSessionShowed} showed`} />
           <StatTile label="Combined show rate" value={pct(metrics.showRatio)} />
           <StatTile label="Calls" value={metrics.calls} sub={`${metrics.bookedCalls} booked on calls`} />
         </div>

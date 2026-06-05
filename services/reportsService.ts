@@ -468,10 +468,12 @@ export async function loadRecruiterReport(
       fromIso: range.fromIso,
       toIso: range.toIso,
       limit: 3000,
+      candidateEmails: [...candidateEmailById.values()],
     }),
     listPipelineIncomingEmailLogsByCandidates(candidateIds, {
       fromIso: range.fromIso,
       toIso: range.toIso,
+      candidateEmails: [...candidateEmailById.values()],
     }),
   ]);
 

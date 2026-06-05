@@ -72,6 +72,105 @@ async function wgGet(path: string, params?: Record<string, string | number | boo
   return wgRequest(`${path}${suffix}`, { method: 'GET' });
 }
 
+async function wgPost(path: string, body: Record<string, unknown>) {
+  return wgRequest(path, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+function normalizeLookupEmail(value: string): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+function subscriptionRowsFromWgJson(json: Record<string, unknown>): Array<Record<string, unknown>> {
+  if (Array.isArray(json.subscriptions)) {
+    return json.subscriptions as Array<Record<string, unknown>>;
+  }
+  if (json.subscription && typeof json.subscription === 'object') {
+    return [json.subscription as Record<string, unknown>];
+  }
+  return [];
+}
+
+function simplifySubscriptionRow(row: Record<string, unknown>) {
+  const broadcast = row.broadcast && typeof row.broadcast === 'object'
+    ? row.broadcast as Record<string, unknown>
+    : null;
+  const webinar = row.webinar && typeof row.webinar === 'object'
+    ? row.webinar as Record<string, unknown>
+    : null;
+  return {
+    id: row.id ?? null,
+    email: row.email ?? null,
+    firstname: row.firstname ?? null,
+    surname: row.surname ?? null,
+    email_verified: row.email_verified === true,
+    watched: row.watched === true,
+    custom_field: row.custom_field ?? null,
+    registration_source: row.registration_source ?? null,
+    created_at: row.created_at ?? null,
+    broadcast_id: broadcast?.id ?? row.broadcast_id ?? null,
+    broadcast_title: broadcast?.title ?? broadcast?.name ?? null,
+    broadcast_date: broadcast?.date ?? null,
+    webinar_id: webinar?.id ?? row.webinar_id ?? null,
+    webinar_title: webinar?.title ?? webinar?.name ?? null,
+  };
+}
+
+async function findSubscriptionsByEmail(email: string): Promise<Array<Record<string, unknown>>> {
+  const normalized = normalizeLookupEmail(email);
+  if (!normalized) return [];
+
+  const nested = { nested_resources: 'broadcast,webinar', per_page: 50 };
+  const passes: Array<Record<string, string | number | boolean | undefined>> = [
+    { ...nested, email: normalized },
+    { ...nested, email: normalized, email_verified: false },
+    { ...nested, email: normalized, include_unverified: true },
+  ];
+
+  const merged = new Map<string, Record<string, unknown>>();
+  for (const params of passes) {
+    const res = await wgGet('/subscriptions', params);
+    if (!res.ok) continue;
+    for (const row of subscriptionRowsFromWgJson(res.json)) {
+      const id = row.id != null ? String(row.id) : '';
+      const key = id || `${String(row.email || '')}|${String(row.created_at || '')}`;
+      if (!merged.has(key)) merged.set(key, row);
+    }
+    if (merged.size > 0) break;
+  }
+
+  if (merged.size === 0) {
+    const recent = await wgGetAllSubscriptions(
+      { per_page: 250, nested_resources: 'broadcast,webinar' },
+      { maxPages: 10, sinceMs: Date.now() - 45 * 24 * 60 * 60 * 1000 },
+    );
+    if (recent.ok) {
+      for (const row of recent.rows) {
+        if (normalizeLookupEmail(String(row.email || '')) !== normalized) continue;
+        const id = row.id != null ? String(row.id) : '';
+        const key = id || `${String(row.email || '')}|${String(row.created_at || '')}`;
+        if (!merged.has(key)) merged.set(key, row);
+      }
+    }
+  }
+
+  return [...merged.values()];
+}
+
+function upcomingBroadcastRows(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const nowMs = Date.now();
+  return rows
+    .map((row) => {
+      const ms = unixMsFromField(row.date);
+      return { row, ms };
+    })
+    .filter(({ ms }) => ms == null || ms >= nowMs - 6 * 60 * 60 * 1000)
+    .sort((a, b) => (a.ms ?? Number.MAX_SAFE_INTEGER) - (b.ms ?? Number.MAX_SAFE_INTEGER))
+    .map(({ row }) => row);
+}
+
 function unixMsFromField(value: unknown): number | null {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
@@ -301,6 +400,62 @@ Deno.serve(async (req) => {
         error: ping.ok ? null : (ping.json.error || ping.json.message || 'WebinarGeek request failed'),
       }), {
         status: ping.ok ? 200 : 502,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (req.method === 'GET' && mode === 'verify') {
+      const email = normalizeLookupEmail(url.searchParams.get('email') || '');
+      if (!email) {
+        return new Response(JSON.stringify({ error: 'Missing email query parameter.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const rows = await findSubscriptionsByEmail(email);
+      const simplified = rows.map(simplifySubscriptionRow);
+      const verified = simplified.some((row) => row.email_verified === true);
+      const scheduled = simplified.length > 0;
+      const status = !scheduled ? 'not_found' : verified ? 'verified_scheduled' : 'pending_verification';
+      return new Response(JSON.stringify({
+        ok: true,
+        email,
+        found: scheduled,
+        verified,
+        scheduled,
+        status,
+        subscriptions: simplified,
+        checked_at: new Date().toISOString(),
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (req.method === 'GET' && mode === 'upcoming-broadcasts') {
+      const webinarId = url.searchParams.get('webinar_id')?.trim();
+      const broadcastsRes = await wgGet('/broadcasts', webinarId ? { webinar_id: webinarId, per_page: 100 } : { per_page: 100 });
+      if (!broadcastsRes.ok) {
+        return new Response(JSON.stringify({
+          error: String(broadcastsRes.json.error || broadcastsRes.json.message || 'Unable to load broadcasts'),
+          source_status: broadcastsRes.status,
+        }), {
+          status: 502,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const rawRows = Array.isArray(broadcastsRes.json.broadcasts)
+        ? broadcastsRes.json.broadcasts as Array<Record<string, unknown>>
+        : [];
+      const upcoming = upcomingBroadcastRows(rawRows).slice(0, 40).map((row) => ({
+        id: row.id ?? null,
+        title: row.title ?? row.name ?? null,
+        date: row.date ?? null,
+        webinar_id: row.webinar_id ?? null,
+        subscriptions_count: row.subscriptions_count ?? null,
+      }));
+      return new Response(JSON.stringify({ ok: true, broadcasts: upcoming }), {
+        status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
@@ -582,6 +737,137 @@ Deno.serve(async (req) => {
           name_matches: nameMatches,
         },
         unmatched_samples: unmatched.slice(0, 25),
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (req.method === 'POST' && mode === 'book') {
+      const body = (await req.json().catch(() => ({}))) as {
+        email?: string;
+        firstname?: string;
+        surname?: string;
+        broadcast_id?: string | number;
+        webinar_id?: string | number;
+        custom_field?: string;
+        candidate_id?: string;
+      };
+      const email = normalizeLookupEmail(body.email || '');
+      const firstname = String(body.firstname || '').trim();
+      const surname = String(body.surname || '').trim();
+      const broadcastId = String(body.broadcast_id || '').trim();
+      const webinarId = String(body.webinar_id || '').trim();
+      const customField = String(body.custom_field || '').trim();
+      const candidateId = String(body.candidate_id || '').trim() || null;
+
+      if (!email || !firstname || !broadcastId) {
+        return new Response(JSON.stringify({ error: 'email, firstname, and broadcast_id are required.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const profileRes = await admin
+        .from('user_profiles')
+        .select('full_name, email')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      const bookedByLabel =
+        String((profileRes.data as { full_name?: string } | null)?.full_name || '').trim() ||
+        String(user.email || '').trim() ||
+        user.id;
+
+      let settingsCustomField = '';
+      try {
+        const { data: settingsRow } = await admin
+          .from('pipeline_user_call_settings')
+          .select('webinar_geek_custom_field')
+          .eq('user_id', user.id)
+          .maybeSingle();
+        settingsCustomField = String((settingsRow as { webinar_geek_custom_field?: string } | null)?.webinar_geek_custom_field || '').trim();
+      } catch {
+        // Column may not exist yet before migration.
+      }
+
+      const effectiveCustomField = customField || settingsCustomField || null;
+      const payload: Record<string, unknown> = {
+        email,
+        firstname,
+        surname: surname || undefined,
+        broadcast_id: broadcastId,
+        custom_field: effectiveCustomField || undefined,
+        registration_source: 'paz_portal',
+      };
+
+      let bookRes = await wgPost('/subscriptions', payload);
+      if (!bookRes.ok && webinarId) {
+        bookRes = await wgPost(`/webinars/${webinarId}/registrations`, {
+          email,
+          first_name: firstname,
+          last_name: surname || undefined,
+          firstname,
+          surname: surname || undefined,
+          custom_field: effectiveCustomField || undefined,
+        });
+      }
+
+      const subscriptionRow = bookRes.ok
+        ? (bookRes.json.subscription && typeof bookRes.json.subscription === 'object'
+          ? bookRes.json.subscription as Record<string, unknown>
+          : subscriptionRowsFromWgJson(bookRes.json)[0] || null)
+        : null;
+
+      const auditRow = {
+        booked_by_user_id: user.id,
+        booked_by_label: bookedByLabel,
+        candidate_email: email,
+        candidate_first_name: firstname,
+        candidate_last_name: surname || null,
+        candidate_id: candidateId,
+        broadcast_id: broadcastId,
+        webinar_id: webinarId || null,
+        custom_field: effectiveCustomField,
+        wg_subscription_id: subscriptionRow?.id != null ? String(subscriptionRow.id) : null,
+        email_verified: subscriptionRow?.email_verified === true,
+        status: bookRes.ok ? 'booked' : 'failed',
+        error_message: bookRes.ok
+          ? null
+          : String(bookRes.json.error || bookRes.json.message || `WebinarGeek booking failed (${bookRes.status})`),
+        metadata: {
+          registration_source: 'paz_portal',
+          wg_status: bookRes.status,
+        },
+      };
+
+      try {
+        await admin.from('webinar_geek_portal_bookings').insert(auditRow);
+      } catch (auditErr) {
+        console.error('webinar_geek_portal_bookings insert failed:', auditErr);
+      }
+
+      if (!bookRes.ok) {
+        return new Response(JSON.stringify({
+          error: auditRow.error_message,
+          source_status: bookRes.status,
+          attempted_payload: payload,
+        }), {
+          status: 502,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const simplified = subscriptionRow ? simplifySubscriptionRow(subscriptionRow) : null;
+      return new Response(JSON.stringify({
+        ok: true,
+        booked: true,
+        subscription: simplified,
+        email_verified: simplified?.email_verified === true,
+        custom_field: effectiveCustomField,
+        booked_by: bookedByLabel,
+        message: simplified?.email_verified
+          ? 'Registered and email already verified in WebinarGeek.'
+          : 'Registered — candidate must confirm the WebinarGeek email to appear as verified.',
       }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

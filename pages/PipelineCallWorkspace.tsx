@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckCircle2, Phone, RefreshCw, Settings } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Phone, RefreshCw, Settings, Video } from 'lucide-react';
 import CandidateResumeDetailsCard from '../components/pipeline/CandidateResumeDetailsCard';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
@@ -48,6 +48,15 @@ type QueueFilter = 'all' | 'callbacks' | 'not_interested' | 'booked' | 'booked_n
 type CandidateBookedOutcomeMap = Map<string, BookedOutcomeBucket>;
 
 const AUTO_ADVANCE = true;
+
+function webinarVerifyHref(candidate: PipelineCandidate): string {
+  const params = new URLSearchParams();
+  if (candidate.email?.trim()) params.set('email', candidate.email.trim());
+  if (candidate.full_name?.trim()) params.set('name', candidate.full_name.trim());
+  params.set('candidateId', candidate.id);
+  const query = params.toString();
+  return `/pipeline/webinar-verify${query ? `?${query}` : ''}`;
+}
 
 const TERMINAL_EXCLUDED_DISPOSITIONS = new Set(['not interested', 'do not call']);
 const RETRY_PRIORITY_ORDER: Record<string, number> = {
@@ -766,13 +775,25 @@ const PipelineCallWorkspace: React.FC = () => {
                         <p className={`mt-1 text-xs ${tone.panelLabel}`}>Stage: {currentCandidate.journey_stage}</p>
                       )}
                     </div>
-                    <Button
-                      className="!min-h-0 h-12 shrink-0 px-6 text-base"
-                      onClick={() => void placeCall(currentCandidate, phoneInput)}
-                    >
-                      <Phone size={18} className="mr-2" />
-                      Place call
-                    </Button>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <Button
+                        className="!min-h-0 h-12 shrink-0 px-6 text-base"
+                        onClick={() => void placeCall(currentCandidate, phoneInput)}
+                      >
+                        <Phone size={18} className="mr-2" />
+                        Place call
+                      </Button>
+                      <a
+                        href={webinarVerifyHref(currentCandidate)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={`inline-flex h-12 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold ${tone.actionButton}`}
+                      >
+                        <Video size={16} />
+                        Webinar verify
+                        <ExternalLink size={13} className="opacity-70" />
+                      </a>
+                    </div>
                   </div>
 
                   <CandidateResumeDetailsCard

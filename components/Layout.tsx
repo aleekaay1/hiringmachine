@@ -63,6 +63,7 @@ const Layout: React.FC<LayoutProps> = ({
     if (location.pathname === '/pipeline/call') return 'pipeline-call';
     if (location.pathname === '/pipeline/performance') return 'pipeline-performance';
     if (location.pathname === '/pipeline/email') return 'pipeline-email';
+    if (location.pathname === '/pipeline/webinar-verify') return 'pipeline-webinar-verify';
     if (location.pathname === '/pipeline/uploads') return 'pipeline-uploads';
     if (location.pathname === '/pipeline-settings') return 'pipeline-settings';
     if (location.pathname === '/calls-analytics') return 'calls-analytics';

@@ -1,50 +1,25 @@
 import React from 'react';
 import type { UserProfile } from '../../services/accessControl';
-import { loadLeadershipTeamMetrics, type LeadershipTeamMetrics } from '../../services/dashboardPersonalMetrics';
-import { DayNotesPanel, formatLeaderboardRefreshed, QuickLinkCard, RecruiterStandingsBoard, StatTile } from './DashboardWidgets';
-import HomeLoadingScreen from './HomeLoadingScreen';
 import { isOpsConsoleEmail } from '../../services/accessControl';
+import type { HomeDashboardPayload } from '../../services/homeDashboardCache';
+import { DayNotesPanel, formatLeaderboardRefreshed, QuickLinkCard, RecruiterStandingsBoard, StatTile } from './DashboardWidgets';
+import { EmptyHomePrompt } from './EmptyHomePrompt';
 
-const LeadershipDashboardView: React.FC<{ profile: UserProfile }> = ({ profile }) => {
-  const [metrics, setMetrics] = React.useState<LeadershipTeamMetrics | null>(null);
-  const [loading, setLoading] = React.useState(true);
-  const [progress, setProgress] = React.useState({ pct: 6, label: 'Loading team overview…' });
+type Props = {
+  profile: UserProfile;
+  payload: HomeDashboardPayload | null;
+  refreshing: boolean;
+  onRefresh: () => void;
+};
 
-  React.useEffect(() => {
-    let cancelled = false;
-    let tick: number | undefined;
-    setLoading(true);
-    tick = window.setInterval(() => {
-      setProgress((prev) => ({ ...prev, pct: Math.min(prev.pct + 3, 92) }));
-    }, 320);
-    void loadLeadershipTeamMetrics()
-      .then((data) => {
-        if (!cancelled) {
-          setMetrics(data);
-          setProgress({ pct: 100, label: 'Ready' });
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          if (tick) window.clearInterval(tick);
-          setLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-      if (tick) window.clearInterval(tick);
-    };
-  }, []);
-
-  if (loading || !metrics) {
+const LeadershipDashboardView: React.FC<Props> = ({ profile, payload }) => {
+  if (!payload || payload.kind !== 'leadership') {
     return (
-      <HomeLoadingScreen
-        progress={progress}
-        title="Loading team overview"
-        subtitle="Leadership metrics and standings for this week."
-      />
+      <EmptyHomePrompt message="No saved team overview yet. Tap refresh in the top right to load this week's pulse." />
     );
   }
+
+  const metrics = payload.metrics;
 
   return (
     <>

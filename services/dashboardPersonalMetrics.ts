@@ -230,7 +230,7 @@ function emptyTeamMetrics(windowLabel: string, teamSize = 0): LeadershipTeamMetr
   };
 }
 
-async function computeLeadershipTeamMetricsLive(): Promise<LeadershipTeamMetrics | null> {
+export async function computeLeadershipTeamMetricsLive(): Promise<LeadershipTeamMetrics | null> {
   try {
     const windows = buildLeaderboardWindows('last7');
     const [currentRecords, profiles, scopedWebinarRows, liveRegistrants] = await Promise.all([

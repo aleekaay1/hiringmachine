@@ -16,6 +16,7 @@ export type AppSection =
   | 'pipeline-call'
   | 'pipeline-performance'
   | 'pipeline-email'
+  | 'pipeline-webinar-verify'
   | 'pipeline-uploads'
   | 'pipeline-settings'
   | 'leaderboard'
@@ -156,6 +157,7 @@ const PIPELINE_OPERATIONAL_SECTIONS: AppSection[] = [
   'pipeline-call',
   'pipeline-uploads',
   'pipeline-email',
+  'pipeline-webinar-verify',
   'pipeline-performance',
   'pipeline-settings',
 ];
@@ -215,7 +217,7 @@ export function canAccessSection(
     );
   }
   if (role === 'webinar') {
-    return section === 'home' || section === 'overview' || section === 'webinar-geek' || section === 'calls-analytics' || section === 'leaderboard' || section === 'support';
+    return section === 'home' || section === 'overview' || section === 'webinar-geek' || section === 'pipeline-webinar-verify' || section === 'calls-analytics' || section === 'leaderboard' || section === 'support';
   }
   if (role === 'hr') {
     return (

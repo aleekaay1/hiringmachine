@@ -190,6 +190,35 @@ Deno.serve(async (req) => {
       .upsert(withCandidate, { onConflict: 'message_id' });
     if (upErr) throw upErr;
 
+    const { data: unmappedRows } = await admin
+      .from('email_inbox_logs')
+      .select('id, from_email')
+      .is('candidate_id', null)
+      .limit(500);
+    if (unmappedRows?.length) {
+      const fromEmails = [...new Set(unmappedRows.map((r) => String(r.from_email || '').trim().toLowerCase()).filter(Boolean))];
+      if (fromEmails.length) {
+        const { data: extraCandidates } = await admin
+          .from('pipeline_candidates')
+          .select('id,email')
+          .in('email', fromEmails);
+        const extraMap = new Map<string, string>();
+        for (const c of extraCandidates || []) {
+          const email = String((c as Record<string, unknown>).email || '').trim().toLowerCase();
+          const id = String((c as Record<string, unknown>).id || '');
+          if (email && id) extraMap.set(email, id);
+        }
+        for (const row of unmappedRows) {
+          const mappedId = extraMap.get(String(row.from_email || '').trim().toLowerCase());
+          if (!mappedId) continue;
+          await admin
+            .from('email_inbox_logs')
+            .update({ candidate_id: mappedId, updated_at: new Date().toISOString() })
+            .eq('id', row.id);
+        }
+      }
+    }
+
     const mapped = withCandidate.filter((r) => !!r.candidate_id).length;
     return new Response(JSON.stringify({ ok: true, synced: withCandidate.length, mapped }), {
       status: 200,

@@ -186,6 +186,8 @@ export interface PipelineUserCallSettings {
   dialing_locale: string | null;
   daily_upload_target: number | null;
   daily_webinar_booking_target: number | null;
+  webinar_geek_custom_field: string | null;
+  webinar_geek_default_broadcast_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -924,6 +926,8 @@ export async function savePipelineUserCallSettings(input: {
   dialingLocale?: string | null;
   dailyUploadTarget?: number | null;
   dailyWebinarBookingTarget?: number | null;
+  webinarGeekCustomField?: string | null;
+  webinarGeekDefaultBroadcastId?: string | null;
 }): Promise<PipelineUserCallSettings> {
   const { data: auth } = await supabase.auth.getUser();
   const userId = auth.user?.id;
@@ -942,10 +946,16 @@ export async function savePipelineUserCallSettings(input: {
     daily_webinar_booking_target: Number.isFinite(input.dailyWebinarBookingTarget)
       ? Math.max(0, Math.round(Number(input.dailyWebinarBookingTarget)))
       : null,
+    webinar_geek_custom_field: input.webinarGeekCustomField?.trim() || null,
+    webinar_geek_default_broadcast_id: input.webinarGeekDefaultBroadcastId?.trim() || null,
   };
   const isMissingColumn = (
     error: { code?: string | null; message?: string | null; details?: string | null; hint?: string | null } | null | undefined,
-    column: 'daily_upload_target' | 'daily_webinar_booking_target',
+    column:
+      | 'daily_upload_target'
+      | 'daily_webinar_booking_target'
+      | 'webinar_geek_custom_field'
+      | 'webinar_geek_default_broadcast_id',
   ): boolean => {
     if (!error) return false;
     const combined = `${String(error.message || '')} ${String(error.details || '')} ${String(error.hint || '')}`.toLowerCase();
@@ -963,6 +973,10 @@ export async function savePipelineUserCallSettings(input: {
     daily_upload_target: typeof row.daily_upload_target === 'number' ? row.daily_upload_target : null,
     daily_webinar_booking_target:
       typeof row.daily_webinar_booking_target === 'number' ? row.daily_webinar_booking_target : null,
+    webinar_geek_custom_field:
+      typeof row.webinar_geek_custom_field === 'string' ? row.webinar_geek_custom_field : null,
+    webinar_geek_default_broadcast_id:
+      typeof row.webinar_geek_default_broadcast_id === 'string' ? row.webinar_geek_default_broadcast_id : null,
   });
 
   // Avoid upsert/on_conflict to support environments where unique constraints or schema cache differ.
@@ -997,10 +1011,14 @@ export async function savePipelineUserCallSettings(input: {
   // Backward compatibility: retry with progressively smaller payload when new columns are missing.
   const uploadMissing = isMissingColumn(error, 'daily_upload_target');
   const webinarMissing = isMissingColumn(error, 'daily_webinar_booking_target');
-  if (uploadMissing || webinarMissing) {
+  const wgFieldMissing = isMissingColumn(error, 'webinar_geek_custom_field');
+  const wgBroadcastMissing = isMissingColumn(error, 'webinar_geek_default_broadcast_id');
+  if (uploadMissing || webinarMissing || wgFieldMissing || wgBroadcastMissing) {
     const retryPayload: Record<string, unknown> = { ...payloadWithDailyTarget } as Record<string, unknown>;
     if (uploadMissing) delete retryPayload.daily_upload_target;
     if (webinarMissing) delete retryPayload.daily_webinar_booking_target;
+    if (wgFieldMissing) delete retryPayload.webinar_geek_custom_field;
+    if (wgBroadcastMissing) delete retryPayload.webinar_geek_default_broadcast_id;
     const { data: retryData, error: retryError } = await writeAndSelect(retryPayload);
     if (!retryError) {
       return normalizeSettingsRow(retryData as Record<string, unknown>);
@@ -1871,44 +1889,81 @@ export async function logPipelineCallAction(input: {
   return data as PipelineCallLog;
 }
 
-export async function listPipelineIncomingEmailLogs(candidateId: string): Promise<PipelineIncomingEmailLog[]> {
-  const { data, error } = await supabase
-    .from('email_inbox_logs')
-    .select('*')
-    .eq('candidate_id', candidateId)
-    .order('received_at', { ascending: false })
-    .limit(200);
-  if (error) throw error;
-  return (data || []) as PipelineIncomingEmailLog[];
+function normalizePipelineLogEmail(value: string | null | undefined): string {
+  return String(value || '').trim().toLowerCase();
 }
 
-export async function listPipelineEmailSendLogs(candidateId: string): Promise<PipelineEmailSendLog[]> {
-  const { data, error } = await supabase
+function dedupePipelineEmailLogs<T extends { id: string }>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    out.push(row);
+  }
+  return out;
+}
+
+export async function listPipelineIncomingEmailLogs(
+  candidateId: string,
+  candidateEmail?: string | null,
+): Promise<PipelineIncomingEmailLog[]> {
+  const email = normalizePipelineLogEmail(candidateEmail);
+  let query = supabase.from('email_inbox_logs').select('*').order('received_at', { ascending: false }).limit(200);
+  if (email) {
+    query = query.or(`candidate_id.eq.${candidateId},from_email.eq.${email}`);
+  } else {
+    query = query.eq('candidate_id', candidateId);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+  return dedupePipelineEmailLogs((data || []) as PipelineIncomingEmailLog[]);
+}
+
+export async function listPipelineEmailSendLogs(
+  candidateId: string,
+  candidateEmail?: string | null,
+): Promise<PipelineEmailSendLog[]> {
+  const email = normalizePipelineLogEmail(candidateEmail);
+  let query = supabase
     .from('email_send_logs')
     .select('id,source,trigger_label,from_email,to_email,cc_email,subject,candidate_id,status,created_at,error_message')
-    .eq('candidate_id', candidateId)
     .order('created_at', { ascending: false })
     .limit(150);
+  if (email) {
+    query = query.or(`candidate_id.eq.${candidateId},to_email.eq.${email}`);
+  } else {
+    query = query.eq('candidate_id', candidateId);
+  }
+  const { data, error } = await query;
   if (error) throw error;
-  return (data || []) as PipelineEmailSendLog[];
+  return dedupePipelineEmailLogs((data || []) as PipelineEmailSendLog[]);
 }
 
 export async function listPipelineEmailSendLogsByCandidates(
   candidateIds: string[],
-  input?: { fromIso?: string | null; toIso?: string | null; limit?: number },
+  input?: {
+    fromIso?: string | null;
+    toIso?: string | null;
+    limit?: number;
+    candidateEmails?: string[];
+  },
 ): Promise<PipelineEmailSendLog[]> {
   if (!candidateIds.length) return [];
+  const emails = [...new Set((input?.candidateEmails || []).map(normalizePipelineLogEmail).filter(Boolean))];
+  const orParts = [`candidate_id.in.(${candidateIds.join(',')})`];
+  if (emails.length) orParts.push(`to_email.in.(${emails.join(',')})`);
   let query = supabase
     .from('email_send_logs')
     .select('id,source,trigger_label,from_email,to_email,cc_email,subject,candidate_id,status,created_at,error_message')
-    .in('candidate_id', candidateIds)
+    .or(orParts.join(','))
     .order('created_at', { ascending: false })
     .limit(input?.limit ?? 3000);
   if (input?.fromIso) query = query.gte('created_at', input.fromIso);
   if (input?.toIso) query = query.lte('created_at', input.toIso);
   const { data, error } = await query;
   if (error) throw error;
-  return (data || []) as PipelineEmailSendLog[];
+  return dedupePipelineEmailLogs((data || []) as PipelineEmailSendLog[]);
 }
 
 export async function listPipelineCallRecords(input?: {
@@ -2037,20 +2092,23 @@ export async function listPipelineResumesForCandidates(candidateIds: string[]): 
 
 export async function listPipelineIncomingEmailLogsByCandidates(
   candidateIds: string[],
-  input?: { fromIso?: string | null; toIso?: string | null },
+  input?: { fromIso?: string | null; toIso?: string | null; candidateEmails?: string[] },
 ): Promise<PipelineIncomingEmailLog[]> {
   if (!candidateIds.length) return [];
+  const emails = [...new Set((input?.candidateEmails || []).map(normalizePipelineLogEmail).filter(Boolean))];
+  const orParts = [`candidate_id.in.(${candidateIds.join(',')})`];
+  if (emails.length) orParts.push(`from_email.in.(${emails.join(',')})`);
   let query = supabase
     .from('email_inbox_logs')
     .select('*')
-    .in('candidate_id', candidateIds)
+    .or(orParts.join(','))
     .order('received_at', { ascending: false })
     .limit(3000);
   if (input?.fromIso) query = query.gte('received_at', input.fromIso);
   if (input?.toIso) query = query.lte('received_at', input.toIso);
   const { data, error } = await query;
   if (error) throw error;
-  return (data || []) as PipelineIncomingEmailLog[];
+  return dedupePipelineEmailLogs((data || []) as PipelineIncomingEmailLog[]);
 }
 
 export async function listPipelineCallLogs(input?: {

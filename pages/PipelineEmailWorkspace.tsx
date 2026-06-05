@@ -7,6 +7,7 @@ import {
   listPipelineEmailSendLogsByCandidates,
   listPipelineIncomingEmailLogsByCandidates,
   listPipelineManualCandidates,
+  syncPipelineIncomingEmails,
   type PipelineCandidate,
   type PipelineEmailSendLog,
   type PipelineIncomingEmailLog,
@@ -61,6 +62,7 @@ const PipelineEmailWorkspace: React.FC = () => {
   const [useHtmlCompose, setUseHtmlCompose] = React.useState(false);
   const [composeView, setComposeView] = React.useState<ComposeView>('write');
   const [sending, setSending] = React.useState(false);
+  const [syncingInbox, setSyncingInbox] = React.useState(false);
   const [message, setMessage] = React.useState<string | null>(null);
   const [inReplyTo, setInReplyTo] = React.useState<string | null>(null);
   const [references, setReferences] = React.useState<string | null>(null);
@@ -88,13 +90,28 @@ const PipelineEmailWorkspace: React.FC = () => {
     [candidates],
   );
 
-  const loadWorkspace = React.useCallback(async () => {
+  const loadWorkspace = React.useCallback(async (options?: { syncInbox?: boolean }) => {
     setLoading(true);
     setError(null);
     try {
+      if (options?.syncInbox) {
+        setSyncingInbox(true);
+        try {
+          const result = await syncPipelineIncomingEmails(14, 120);
+          setMessage(`Inbox synced: ${result.synced} checked, ${result.mapped} mapped to candidates.`);
+        } catch (syncErr) {
+          setMessage(syncErr instanceof Error ? syncErr.message : String(syncErr));
+        } finally {
+          setSyncingInbox(false);
+        }
+      }
+
       const rows = await listPipelineManualCandidates();
       setCandidates(rows);
       const candidateIds = rows.map((row) => row.id);
+      const candidateEmails = rows
+        .map((row) => String(row.email || '').trim().toLowerCase())
+        .filter(Boolean);
       if (candidateIds.length === 0) {
         setIncomingLogs([]);
         setSendLogs([]);
@@ -102,23 +119,24 @@ const PipelineEmailWorkspace: React.FC = () => {
         return;
       }
       const [incoming, sends] = await Promise.all([
-        listPipelineIncomingEmailLogsByCandidates(candidateIds),
-        listPipelineEmailSendLogsByCandidates(candidateIds),
+        listPipelineIncomingEmailLogsByCandidates(candidateIds, { candidateEmails }),
+        listPipelineEmailSendLogsByCandidates(candidateIds, { candidateEmails }),
       ]);
       setIncomingLogs(incoming);
       setSendLogs(sends);
-      if (!selectedCandidateId || !rows.some((row) => row.id === selectedCandidateId)) {
-        setSelectedCandidateId(rows[0]?.id || '');
-      }
+      setSelectedCandidateId((prev) => {
+        if (!prev || !rows.some((row) => row.id === prev)) return rows[0]?.id || '';
+        return prev;
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [selectedCandidateId]);
+  }, []);
 
   React.useEffect(() => {
-    void loadWorkspace();
+    void loadWorkspace({ syncInbox: true });
   }, [loadWorkspace]);
 
   React.useEffect(() => {
@@ -377,16 +395,26 @@ const PipelineEmailWorkspace: React.FC = () => {
           className="mt-4 grid gap-4 lg:grid-cols-2"
         >
           <section className={`rounded-2xl border p-3 space-y-2 ${tone.glassPanel}`}>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <p className={`text-xs font-semibold ${tone.panelTitle}`}>Inbox ({filteredInbox.length})</p>
-              <Button
-                variant="outline"
-                className={`!min-h-0 h-8 px-2 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
-                onClick={() => void loadWorkspace()}
-                disabled={loading}
-              >
-                {loading ? 'Refreshing...' : 'Refresh'}
-              </Button>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  className={`!min-h-0 h-8 px-2 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
+                  onClick={() => void loadWorkspace({ syncInbox: true })}
+                  disabled={loading || syncingInbox}
+                >
+                  {syncingInbox ? 'Syncing...' : 'Sync inbox'}
+                </Button>
+                <Button
+                  variant="outline"
+                  className={`!min-h-0 h-8 px-2 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
+                  onClick={() => void loadWorkspace()}
+                  disabled={loading || syncingInbox}
+                >
+                  {loading ? 'Refreshing...' : 'Refresh'}
+                </Button>
+              </div>
             </div>
             <div className="space-y-1.5 max-h-[42vh] min-h-[200px] overflow-auto">
               {filteredInbox.map((log) => (

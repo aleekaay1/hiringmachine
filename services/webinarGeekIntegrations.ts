@@ -25,6 +25,33 @@ export interface WebinarGeekSyncPayload {
   maxPages?: number;
 }
 
+export type WebinarGeekVerifyStatus = 'verified_scheduled' | 'pending_verification' | 'not_found';
+
+export type WebinarGeekVerifySubscription = {
+  id: string | number | null;
+  email: string | null;
+  firstname: string | null;
+  surname: string | null;
+  email_verified: boolean;
+  watched: boolean;
+  custom_field: string | null;
+  registration_source: string | null;
+  created_at: unknown;
+  broadcast_id: string | number | null;
+  broadcast_title: string | null;
+  broadcast_date: unknown;
+  webinar_id: string | number | null;
+  webinar_title: string | null;
+};
+
+export type WebinarGeekUpcomingBroadcast = {
+  id: string | number | null;
+  title: string | null;
+  date: unknown;
+  webinar_id: string | number | null;
+  subscriptions_count: unknown;
+};
+
 function buildFunctionUrl(path: string): string | null {
   if (!SUPABASE_URL) return null;
   return `${SUPABASE_URL}/functions/v1/integrations-webinar-geek${path}`;
@@ -97,6 +124,44 @@ export async function syncWebinarGeekCandidates(
       since: payload.since || undefined,
       until: payload.until || undefined,
       max_pages: payload.maxPages ?? 25,
+    }),
+  });
+}
+
+export async function verifyWebinarGeekEmail(accessToken: string, email: string) {
+  const params = new URLSearchParams({ mode: 'verify', email: email.trim().toLowerCase() });
+  return callWebinarGeek(accessToken, `?${params.toString()}`);
+}
+
+export async function fetchWebinarGeekUpcomingBroadcasts(accessToken: string, webinarId?: string) {
+  const params = new URLSearchParams({ mode: 'upcoming-broadcasts' });
+  if (webinarId?.trim()) params.set('webinar_id', webinarId.trim());
+  return callWebinarGeek(accessToken, `?${params.toString()}`);
+}
+
+export async function bookWebinarGeekBroadcast(
+  accessToken: string,
+  payload: {
+    email: string;
+    firstname: string;
+    surname?: string;
+    broadcastId: string;
+    webinarId?: string;
+    customField?: string;
+    candidateId?: string;
+  },
+) {
+  const params = new URLSearchParams({ mode: 'book' });
+  return callWebinarGeek(accessToken, `?${params.toString()}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      email: payload.email.trim().toLowerCase(),
+      firstname: payload.firstname.trim(),
+      surname: payload.surname?.trim() || undefined,
+      broadcast_id: payload.broadcastId,
+      webinar_id: payload.webinarId || undefined,
+      custom_field: payload.customField?.trim() || undefined,
+      candidate_id: payload.candidateId || undefined,
     }),
   });
 }

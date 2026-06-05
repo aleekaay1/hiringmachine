@@ -648,10 +648,10 @@ const Pipeline: React.FC = () => {
     setProfileSkills(profile.skills_summary || '');
     setProfileSummary(profile.work_summary || '');
     setProfileMsg(null);
-    void listPipelineIncomingEmailLogs(c.id)
+    void listPipelineIncomingEmailLogs(c.id, c.email)
       .then(setIncomingEmailLogs)
       .catch((e) => setIncomingMsg(e instanceof Error ? e.message : String(e)));
-    void listPipelineEmailSendLogs(c.id)
+    void listPipelineEmailSendLogs(c.id, c.email)
       .then(setEmailSendLogs)
       .catch(() => setEmailSendLogs([]));
     void loadTimeline(c.id);
@@ -1218,7 +1218,10 @@ const Pipeline: React.FC = () => {
       await loadSelectedBundle(selectedBundle.candidate.id);
       await loadTimeline(selectedBundle.candidate.id);
       try {
-        const out = await listPipelineEmailSendLogs(selectedBundle.candidate.id);
+        const out = await listPipelineEmailSendLogs(
+          selectedBundle.candidate.id,
+          selectedBundle.candidate.email,
+        );
         setEmailSendLogs(out);
       } catch {
         /* ignore */
@@ -1236,7 +1239,10 @@ const Pipeline: React.FC = () => {
     setIncomingMsg(null);
     try {
       const result = await syncPipelineIncomingEmails(14, 120);
-      const rows = await listPipelineIncomingEmailLogs(selectedBundle.candidate.id);
+      const rows = await listPipelineIncomingEmailLogs(
+        selectedBundle.candidate.id,
+        selectedBundle.candidate.email,
+      );
       setIncomingEmailLogs(rows);
       setIncomingMsg(`Inbox synced: ${result.synced} messages checked, ${result.mapped} mapped.`);
     } catch (e) {

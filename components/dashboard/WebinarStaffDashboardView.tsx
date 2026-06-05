@@ -1,42 +1,24 @@
 import React from 'react';
 import type { UserProfile } from '../../services/accessControl';
-import { loadScopedWebinarRowsForViewer } from '../../services/pipelineBookedOutcomes';
-import { buildLeaderboardWindows } from '../../services/pipelineLeaderboard';
-import { fmtHrScheduledDateKey } from '../../services/webinarGeekRecruiterAnalytics';
+import type { HomeDashboardPayload } from '../../services/homeDashboardCache';
 import { DayNotesPanel, QuickLinkCard, StatTile } from './DashboardWidgets';
+import { EmptyHomePrompt } from './EmptyHomePrompt';
 
-const WebinarStaffDashboardView: React.FC<{ profile: UserProfile }> = ({ profile }) => {
-  const [booked, setBooked] = React.useState(0);
-  const [attended, setAttended] = React.useState(0);
-  const [windowLabel, setWindowLabel] = React.useState('');
+type Props = {
+  profile: UserProfile;
+  payload: HomeDashboardPayload | null;
+  refreshing: boolean;
+  onRefresh: () => void;
+};
 
-  React.useEffect(() => {
-    const windows = buildLeaderboardWindows('last7');
-    setWindowLabel(windows.current.label);
-    let cancelled = false;
-    void loadScopedWebinarRowsForViewer({
-      role: 'webinar',
-      viewerEmail: profile.email ?? null,
-      viewerFullName: profile.full_name,
-    }).then((rows) => {
-      if (cancelled) return;
-      const since = windows.current.sinceYmd;
-      const until = windows.current.untilYmd;
-      let b = 0;
-      let a = 0;
-      for (const row of rows) {
-        const key = fmtHrScheduledDateKey(row);
-        if (key === 'unknown' || key < since || key > until) continue;
-        b += 1;
-        if (row.watched === true) a += 1;
-      }
-      setBooked(b);
-      setAttended(a);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [profile]);
+const WebinarStaffDashboardView: React.FC<Props> = ({ profile, payload }) => {
+  if (!payload || payload.kind !== 'webinar') {
+    return (
+      <EmptyHomePrompt message="No saved webinar stats yet. Tap refresh in the top right to load your week." />
+    );
+  }
+
+  const { booked, attended, windowLabel } = payload;
 
   return (
     <>
