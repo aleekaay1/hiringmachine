@@ -1,13 +1,13 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckCircle2, ExternalLink, Phone, RefreshCw, Settings } from 'lucide-react';
+import { CheckCircle2, Phone, RefreshCw, Settings } from 'lucide-react';
+import CandidateResumeDetailsCard from '../components/pipeline/CandidateResumeDetailsCard';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import {
   stringifySupabaseError,
   getPipelineUserCallSettings,
-  getPipelineResumeOpenInNewTabUrl,
   isPipelinePhoneInputClean,
   listPipelineCallRecords,
   listPipelineManualCandidates,
@@ -762,23 +762,9 @@ const PipelineCallWorkspace: React.FC = () => {
                       <h2 className={`mt-1 text-2xl font-semibold ${tone.panelTitle}`}>
                         {currentCandidate.full_name || 'Unknown Candidate'}
                       </h2>
-                      <div className={`mt-2 space-y-1 text-sm ${tone.panelMuted}`}>
-                        {currentCandidate.email && <p>{currentCandidate.email}</p>}
-                        {currentCandidate.journey_stage && (
-                          <p className="text-xs">Stage: {currentCandidate.journey_stage}</p>
-                        )}
-                        {selectedResumes[0] && (
-                          <a
-                            href={getPipelineResumeOpenInNewTabUrl(selectedResumes[0]) || '#'}
-                            target="_blank"
-                            rel="noreferrer"
-                            className={`inline-flex items-center gap-1 text-xs font-semibold text-[#005EB8] hover:underline`}
-                          >
-                            <ExternalLink size={12} />
-                            {selectedResumes[0].original_filename}
-                          </a>
-                        )}
-                      </div>
+                      {currentCandidate.journey_stage && (
+                        <p className={`mt-1 text-xs ${tone.panelLabel}`}>Stage: {currentCandidate.journey_stage}</p>
+                      )}
                     </div>
                     <Button
                       className="!min-h-0 h-12 shrink-0 px-6 text-base"
@@ -788,6 +774,12 @@ const PipelineCallWorkspace: React.FC = () => {
                       Place call
                     </Button>
                   </div>
+
+                  <CandidateResumeDetailsCard
+                    candidate={currentCandidate}
+                    resumes={selectedResumes}
+                    tone={tone}
+                  />
 
                   <div className={`rounded-2xl border p-4 ${tone.subtle}`}>
                     <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Phone number</p>
@@ -813,6 +805,11 @@ const PipelineCallWorkspace: React.FC = () => {
                     <p className={`mt-2 text-[11px] ${tone.panelLabel}`}>
                       Dial preview: {normalizeDialDestination(phoneInput) || '—'}
                     </p>
+                    {currentPhoneInfo?.originalExtractedPhone && (
+                      <p className={`mt-1 text-[11px] ${tone.panelLabel}`}>
+                        OCR extracted phone: {currentPhoneInfo.originalExtractedPhone}
+                      </p>
+                    )}
                     {phoneMsg && <p className="mt-1 text-xs text-emerald-700">{phoneMsg}</p>}
                   </div>
                 </div>
