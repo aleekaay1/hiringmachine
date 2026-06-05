@@ -90,7 +90,11 @@ async function callWebinarGeek(
     if (res.status === 401) {
       return { ok: false, error: 'Unauthorized (session expired). Please sign in again.' };
     }
-    const base = (json.error as string) || res.statusText || 'Request failed';
+    const base = typeof json.error === 'string'
+      ? json.error
+      : typeof json.error === 'object' && json.error
+      ? wgDetailsToText(json.error as Record<string, unknown>)
+      : res.statusText || 'Request failed';
     const details = json.wg_details && typeof json.wg_details === 'object'
       ? wgDetailsToText(json.wg_details as Record<string, unknown>)
       : '';
@@ -101,9 +105,33 @@ async function callWebinarGeek(
 }
 
 function wgDetailsToText(json: Record<string, unknown>): string {
-  const message = String(json.message || json.error || '').trim();
-  if (message) return message;
-  return JSON.stringify(json);
+  const title = String(json.title || '').trim();
+  const message = String(json.message || '').trim();
+  if (Array.isArray(json.errors)) {
+    const parts = json.errors
+      .map((entry) => {
+        if (entry && typeof entry === 'object') {
+          const row = entry as Record<string, unknown>;
+          const field = String(row.field || '').trim();
+          const msg = String(row.message || '').trim();
+          if (field && msg) return `${field} ${msg}`;
+          return msg;
+        }
+        return String(entry || '').trim();
+      })
+      .filter(Boolean);
+    if (parts.length) {
+      const joined = parts.join('; ');
+      return title ? `${title}: ${joined}` : joined;
+    }
+  }
+  if (message) return title ? `${title}: ${message}` : message;
+  if (title) return title;
+  try {
+    return JSON.stringify(json);
+  } catch {
+    return 'Request failed';
+  }
 }
 
 export async function fetchWebinarGeekHealth(accessToken: string) {

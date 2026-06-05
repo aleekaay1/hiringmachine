@@ -111,29 +111,61 @@ function subscriptionRowsFromWgJson(json: Record<string, unknown>): Array<Record
 }
 
 function wgErrorMessage(json: Record<string, unknown>, fallback: string): string {
-  const message = String(json.message || json.error || json.detail || '').trim();
+  const title = String(json.title || '').trim();
+  const message = String(json.message || json.detail || '').trim();
+  const errorRaw = json.error;
+  const errorText = typeof errorRaw === 'string'
+    ? errorRaw.trim()
+    : errorRaw && typeof errorRaw === 'object'
+    ? wgErrorMessage(errorRaw as Record<string, unknown>, '')
+    : '';
   const code = String(json.code || '').trim();
-  if (message && code) return `${message} (${code})`;
-  if (message) return message;
 
+  const fieldErrors: string[] = [];
   if (Array.isArray(json.errors)) {
-    const joined = json.errors.map((entry) => String(entry)).filter(Boolean).join('; ');
-    if (joined) return joined;
-  }
-  if (json.errors && typeof json.errors === 'object') {
-    const parts: string[] = [];
-    for (const [key, value] of Object.entries(json.errors as Record<string, unknown>)) {
-      if (Array.isArray(value)) parts.push(`${key}: ${value.map(String).join(', ')}`);
-      else parts.push(`${key}: ${String(value)}`);
+    for (const entry of json.errors) {
+      if (entry && typeof entry === 'object') {
+        const row = entry as Record<string, unknown>;
+        const field = String(row.field || row.attribute || '').trim();
+        const msg = String(row.message || '').trim();
+        if (field && msg) fieldErrors.push(`${field} ${msg}`);
+        else if (msg) fieldErrors.push(msg);
+      } else {
+        const text = String(entry || '').trim();
+        if (text) fieldErrors.push(text);
+      }
     }
-    if (parts.length) return parts.join('; ');
+  }
+
+  const parts = [
+    title,
+    message || errorText,
+    fieldErrors.length ? fieldErrors.join('; ') : '',
+    code ? `(${code})` : '',
+  ].filter(Boolean);
+
+  if (parts.length) return parts.join(': ').replace(/: \(/, ' (');
+
+  if (json.errors && typeof json.errors === 'object' && !Array.isArray(json.errors)) {
+    const nested: string[] = [];
+    for (const [key, value] of Object.entries(json.errors as Record<string, unknown>)) {
+      if (Array.isArray(value)) nested.push(`${key}: ${value.map(String).join(', ')}`);
+      else nested.push(`${key}: ${String(value)}`);
+    }
+    if (nested.length) return nested.join('; ');
   }
 
   const rawBody = String(json.raw_body || '').trim();
   if (rawBody) return rawBody.slice(0, 240);
 
   const keys = Object.keys(json).filter((key) => key !== 'ok');
-  if (keys.length) return JSON.stringify(json);
+  if (keys.length) {
+    try {
+      return JSON.stringify(json);
+    } catch {
+      /* fall through */
+    }
+  }
   return fallback;
 }
 
@@ -167,14 +199,9 @@ function buildSubscriptionPayload(input: {
   const extraFields: Record<string, string> = {};
   for (const field of input.registrationFields || []) {
     const name = String(field.name || '').trim();
-    if (!name || !field.mandatory) continue;
-    if (name === 'email' || name === 'firstname' || name === 'surname' || name === 'custom_field') continue;
-    if (field.extra_field) {
-      const option = field.field_options?.[0]?.label;
-      extraFields[name] = String(option || 'Yes');
-      continue;
-    }
-    if (payload[name] == null) payload[name] = '-';
+    if (!name || !field.mandatory || !field.extra_field) continue;
+    const option = field.field_options?.[0]?.label;
+    extraFields[name] = String(option || 'Yes');
   }
   if (Object.keys(extraFields).length) payload.extra_fields = extraFields;
 
@@ -462,7 +489,12 @@ function upcomingBroadcastRows(rows: Array<Record<string, unknown>>): Array<Reco
       const ms = unixMsFromField(row.date);
       return { row, ms };
     })
-    .filter(({ ms }) => ms == null || ms >= nowMs - 6 * 60 * 60 * 1000)
+    .filter(({ row, ms }) => {
+      if (row.cancelled === true) return false;
+      if (row.has_ended === true) return false;
+      if (ms == null) return false;
+      return ms >= nowMs;
+    })
     .sort((a, b) => (a.ms ?? Number.MAX_SAFE_INTEGER) - (b.ms ?? Number.MAX_SAFE_INTEGER))
     .map(({ row }) => row);
 }
