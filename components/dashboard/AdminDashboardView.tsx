@@ -14,18 +14,46 @@ import {
 const AdminDashboardView: React.FC<{ profile: UserProfile }> = ({ profile }) => {
   const [metrics, setMetrics] = React.useState<LeadershipTeamMetrics | null>(null);
   const [roleCounts, setRoleCounts] = React.useState<Record<string, number>>({});
+  const [loadError, setLoadError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
-    void Promise.all([loadAdminOverviewMetrics(), listAllUserProfiles().catch(() => [])]).then(([team, profiles]) => {
-      if (cancelled) return;
-      setMetrics(team);
-      const counts: Record<string, number> = {};
-      for (const p of profiles) {
-        counts[p.role] = (counts[p.role] || 0) + 1;
-      }
-      setRoleCounts(counts);
-    });
+    setLoadError(null);
+    void loadAdminOverviewMetrics()
+      .then((team) => {
+        if (cancelled) return;
+        setMetrics(team);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setLoadError(e instanceof Error ? e.message : String(e));
+        setMetrics({
+          windowLabel: 'This week',
+          teamSize: 0,
+          totalWebinarBooked: 0,
+          totalWebinarShowed: 0,
+          totalLiveBooked: 0,
+          totalLiveShowed: 0,
+          totalCalls: 0,
+          totalBooked: 0,
+          showRatePct: 0,
+          topPerformers: [],
+          performerBars: [],
+          refreshedAt: null,
+        });
+      });
+
+    void listAllUserProfiles()
+      .then((profiles) => {
+        if (cancelled) return;
+        const counts: Record<string, number> = {};
+        for (const p of profiles) {
+          counts[p.role] = (counts[p.role] || 0) + 1;
+        }
+        setRoleCounts(counts);
+      })
+      .catch(() => undefined);
+
     return () => {
       cancelled = true;
     };
@@ -46,6 +74,12 @@ const AdminDashboardView: React.FC<{ profile: UserProfile }> = ({ profile }) => 
 
   return (
     <>
+      {loadError ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Some dashboard data could not be loaded from the database ({loadError}). Showing cached or live estimates where available.
+          Open the leadership board and click Refresh for the latest team numbers.
+        </div>
+      ) : null}
       <div className="rounded-3xl border border-[#d9e5f6] bg-white/80 p-4 backdrop-blur-xl">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
           <div className="flex flex-col">

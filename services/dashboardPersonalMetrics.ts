@@ -213,6 +213,73 @@ export async function loadRecruiterPersonalMetrics(profile: UserProfile): Promis
   };
 }
 
+function emptyTeamMetrics(windowLabel: string, teamSize = 0): LeadershipTeamMetrics {
+  return {
+    windowLabel,
+    teamSize,
+    totalWebinarBooked: 0,
+    totalWebinarShowed: 0,
+    totalLiveBooked: 0,
+    totalLiveShowed: 0,
+    totalCalls: 0,
+    totalBooked: 0,
+    showRatePct: 0,
+    topPerformers: [],
+    performerBars: [],
+    refreshedAt: null,
+  };
+}
+
+async function computeLeadershipTeamMetricsLive(): Promise<LeadershipTeamMetrics | null> {
+  try {
+    const windows = buildLeaderboardWindows('last7');
+    const [currentRecords, profiles, scopedWebinarRows, liveRegistrants] = await Promise.all([
+      listPipelineCallRecords({
+        fromIso: windows.current.fromIso,
+        toIso: windows.current.toIso,
+        limit: 6000,
+      }),
+      listAllUserProfiles().catch(() => []),
+      loadScopedWebinarRowsForViewer({
+        role: 'admin',
+        viewerEmail: null,
+        viewerFullName: null,
+      }),
+      loadLiveSessionRegistrantsForMatching().catch(() => []),
+    ]);
+
+    const candidateIds = [...new Set(currentRecords.map((r) => r.candidate_id).filter(Boolean))];
+    const candidateEmailById = await loadCandidateEmailsById(candidateIds).catch(() => new Map<string, string>());
+    const liveSessionByEmail = buildLiveSessionRowsByEmail(liveRegistrants);
+    const recruiterDirectory = new Map(
+      profiles.map((item) => [item.user_id, { fullName: item.full_name, email: item.email ?? null }]),
+    );
+    const rows = buildCompositeLeaderboard({
+      webinarRows: scopedWebinarRows as Array<Record<string, unknown>>,
+      currentWindow: windows.current,
+      previousWindow: windows.previous,
+      currentRecords,
+      previousRecords: [],
+      recruiterDirectory,
+      recruiterSeeds: seedsFromProfiles(profiles),
+      candidateEmailById,
+      liveSessionByEmail,
+    });
+
+    if (!rows.length) return null;
+    const summary = summarizeLeaderboardRows(rows);
+    return {
+      windowLabel: windows.current.label,
+      ...summary,
+      topPerformers: rows.slice(0, 8),
+      performerBars: performerBarsFromRows(rows),
+      refreshedAt: null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function loadLeadershipTeamMetrics(): Promise<LeadershipTeamMetrics> {
   const windows = buildLeaderboardWindows('last7');
   const snapshot = await loadLeaderboardSnapshot('last7');
@@ -229,22 +296,12 @@ export async function loadLeadershipTeamMetrics(): Promise<LeadershipTeamMetrics
     };
   }
 
+  const live = await computeLeadershipTeamMetricsLive();
+  if (live) return live;
+
   const profiles = await listAllUserProfiles().catch(() => []);
   const recruiters = profiles.filter((p) => p.role === 'recruiter' || p.role === 'webinar');
-  return {
-    windowLabel: windows.current.label,
-    teamSize: recruiters.length,
-    totalWebinarBooked: 0,
-    totalWebinarShowed: 0,
-    totalLiveBooked: 0,
-    totalLiveShowed: 0,
-    totalCalls: 0,
-    totalBooked: 0,
-    showRatePct: 0,
-    topPerformers: [],
-    performerBars: [],
-    refreshedAt: null,
-  };
+  return emptyTeamMetrics(windows.current.label, recruiters.length);
 }
 
 export async function loadAdminOverviewMetrics(): Promise<LeadershipTeamMetrics> {

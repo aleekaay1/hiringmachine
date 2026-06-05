@@ -1,10 +1,8 @@
 import React from 'react';
 import { Coins } from 'lucide-react';
-import { loadRecruiterCoinWallet, syncAllRecruiterCoins } from '../../services/recruiterCoinService';
+import { loadRecruiterCoinWallet } from '../../services/recruiterCoinService';
 import type { AppRole } from '../../services/accessControl';
 import { COINS_PER_SHOW } from '../../services/recruiterCoins';
-
-const BACKFILL_SESSION_KEY = 'paz_coins_team_backfill_v4';
 
 type CoinWalletBadgeProps = {
   profileBalance?: number | null;
@@ -29,11 +27,6 @@ const CoinWalletBadge: React.FC<CoinWalletBadgeProps> = ({
     setSyncing(true);
 
     const run = async () => {
-      const isAdmin = role === 'admin' || role === 'leadership';
-      if (isAdmin && !sessionStorage.getItem(BACKFILL_SESSION_KEY)) {
-        await syncAllRecruiterCoins().catch(() => undefined);
-        sessionStorage.setItem(BACKFILL_SESSION_KEY, '1');
-      }
       const wallet = await loadRecruiterCoinWallet({
         profileBalance: Number(profileBalance || 0),
         email: profileEmail,
@@ -48,7 +41,7 @@ const CoinWalletBadge: React.FC<CoinWalletBadgeProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [profileBalance, profileEmail, profileFullName, role]);
+  }, [profileBalance, profileEmail, profileFullName]);
 
   return (
     <div

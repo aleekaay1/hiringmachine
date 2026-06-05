@@ -1,4 +1,5 @@
 import type { User } from '@supabase/supabase-js';
+import { fetchDashboardTeamMetricsViaFunction } from './dashboardTeamMetricsService';
 import { supabase } from './supabaseClient';
 
 export type AppRole = 'admin' | 'leadership' | 'recruiter' | 'webinar' | 'hr' | 'viewer';
@@ -204,13 +205,23 @@ export function defaultRouteForRole(_role: AppRole | null): string {
 }
 
 export async function listAllUserProfiles(): Promise<UserProfile[]> {
-  const { data, error } = await supabase
+  const full = await supabase
     .from('user_profiles')
     .select('user_id, email, full_name, role, points, points_updated_at')
-    .order('full_name', { ascending: true, nullsFirst: false })
-    .order('email', { ascending: true, nullsFirst: false });
-  if (error) throw error;
-  return (data || []) as UserProfile[];
+    .order('full_name', { ascending: true })
+    .order('email', { ascending: true });
+  if (!full.error) return (full.data || []) as UserProfile[];
+
+  const withoutPoints = await supabase
+    .from('user_profiles')
+    .select('user_id, email, full_name, role')
+    .order('email', { ascending: true });
+  if (!withoutPoints.error) return (withoutPoints.data || []) as UserProfile[];
+
+  const viaFn = await fetchDashboardTeamMetricsViaFunction('last7');
+  if (viaFn.ok && viaFn.profiles.length > 0) return viaFn.profiles;
+
+  throw new Error(full.error.message || withoutPoints.error?.message || 'Could not load user profiles');
 }
 
 function normalizeIdentityToken(value: string): string {
