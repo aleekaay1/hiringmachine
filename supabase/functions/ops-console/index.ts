@@ -19,12 +19,17 @@ function isOpsUser(email: string | null | undefined): boolean {
   return OPS_EMAILS.has(normalized);
 }
 
-async function probeUrl(label: string, url: string, timeoutMs = 12000): Promise<Record<string, unknown>> {
+async function probeUrl(
+  label: string,
+  url: string,
+  init?: RequestInit,
+  timeoutMs = 12000,
+): Promise<Record<string, unknown>> {
   const started = Date.now();
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
-    const res = await fetch(url, { method: 'GET', signal: controller.signal });
+    const res = await fetch(url, { ...init, signal: controller.signal });
     clearTimeout(timer);
     return {
       label,
@@ -48,6 +53,8 @@ async function probeUrl(label: string, url: string, timeoutMs = 12000): Promise<
 async function runHealthChecks(admin: ReturnType<typeof createClient>): Promise<Record<string, unknown>> {
   const checks: Array<Record<string, unknown>> = [];
   const started = Date.now();
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
+  const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.trim() || '';
 
   const profileProbe = await admin.from('user_profiles').select('user_id', { count: 'exact', head: true });
   checks.push({
@@ -78,10 +85,41 @@ async function runHealthChecks(admin: ReturnType<typeof createClient>): Promise<
   });
 
   checks.push(await probeUrl('Vercel app', PRODUCTION_APP_URL));
-  checks.push(await probeUrl('Supabase REST', `${Deno.env.get('SUPABASE_URL')}/rest/v1/`));
 
-  const edgeBase = `${Deno.env.get('SUPABASE_URL')}/functions/v1`;
-  checks.push(await probeUrl('Edge · dashboard-team-metrics', `${edgeBase}/dashboard-team-metrics`));
+  if (serviceRole && supabaseUrl) {
+    const restProbe = await probeUrl('Supabase REST · user_profiles', `${supabaseUrl}/rest/v1/user_profiles?select=user_id&limit=1`, {
+      method: 'GET',
+      headers: {
+        apikey: serviceRole,
+        Authorization: `Bearer ${serviceRole}`,
+      },
+    });
+    checks.push({
+      ...restProbe,
+      label: 'Supabase REST',
+      detail: restProbe.ok ? 'Authenticated REST query ok' : 'REST query failed',
+    });
+  } else {
+    checks.push({
+      label: 'Supabase REST',
+      ok: false,
+      detail: 'Skipped — missing service role key in edge secrets',
+    });
+  }
+
+  const edgeBase = `${supabaseUrl}/functions/v1`;
+  const edgeOptionsProbe = await probeUrl('Edge · dashboard-team-metrics', `${edgeBase}/dashboard-team-metrics`, {
+    method: 'OPTIONS',
+  });
+  checks.push({
+    ...edgeOptionsProbe,
+    label: 'Edge · dashboard-team-metrics',
+    ok: edgeOptionsProbe.status === 204,
+    detail:
+      edgeOptionsProbe.status === 204
+        ? 'Edge function reachable (CORS preflight ok)'
+        : `Expected 204 preflight, got HTTP ${edgeOptionsProbe.status ?? 0}`,
+  });
 
   const openTickets = await admin
     .from('support_tickets')
