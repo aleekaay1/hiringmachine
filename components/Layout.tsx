@@ -28,6 +28,7 @@ const Layout: React.FC<LayoutProps> = ({
   const navigate = useNavigate();
   const location = useLocation();
   const [role, setRole] = React.useState<AppRole | null>(null);
+  const [userEmail, setUserEmail] = React.useState<string | null>(null);
   const [roleResolved, setRoleResolved] = React.useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
 
@@ -87,6 +88,7 @@ const Layout: React.FC<LayoutProps> = ({
     void getCurrentUserProfile().then((profile) => {
       if (!cancelled) {
         setRole(profile?.role ?? null);
+        setUserEmail(profile?.email ?? null);
         setRoleResolved(true);
       }
     });
@@ -97,14 +99,14 @@ const Layout: React.FC<LayoutProps> = ({
 
   React.useEffect(() => {
     if (!isAdmin || !roleResolved) return;
-    if (canAccessSection(role, currentSection)) return;
+    if (canAccessSection(role, currentSection, userEmail)) return;
     const fallback = defaultRouteForRole(role);
     if (fallback !== `${location.pathname}${location.search}`) {
       navigate(fallback, { replace: true });
     }
-  }, [isAdmin, roleResolved, role, currentSection, location.pathname, location.search, navigate]);
+  }, [isAdmin, roleResolved, role, userEmail, currentSection, location.pathname, location.search, navigate]);
 
-  const visibleAdminMenu = adminMenu.filter((item) => canAccessSection(role, item.section));
+  const visibleAdminMenu = adminMenu.filter((item) => canAccessSection(role, item.section, userEmail));
 
   const handleLogout = React.useCallback(async () => {
     try {

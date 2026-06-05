@@ -1171,6 +1171,18 @@ const AdminDashboard: React.FC = () => {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
         <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-sm">
+          <div className="flex justify-center mb-5">
+            <div className="h-24 w-24 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center overflow-hidden">
+              <img
+                src="/logo.png"
+                alt="Paz Hiring Journey"
+                className="h-20 w-20 object-contain"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                }}
+              />
+            </div>
+          </div>
           <h2 className="text-2xl font-bold text-[#005EB8] mb-6 text-center">Admin Access</h2>
           <form onSubmit={handleLogin} className="space-y-4">
             <div>

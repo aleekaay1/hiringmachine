@@ -54,6 +54,18 @@ const PipelineAuthShell: React.FC<PipelineAuthShellProps> = ({
     return (
       <div className="min-h-screen bg-gradient-to-b from-[#f7fbff] to-[#eef6ff] flex items-center justify-center p-4">
         <div className="bg-white border border-[#d9e9fb] p-8 rounded-[24px] shadow w-full max-w-sm">
+          <div className="flex justify-center mb-5">
+            <div className="h-24 w-24 rounded-full bg-white border border-[#d6deea] shadow-sm flex items-center justify-center overflow-hidden">
+              <img
+                src="/logo.png"
+                alt="Paz Hiring Journey"
+                className="h-20 w-20 object-contain"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                }}
+              />
+            </div>
+          </div>
           <h2 className="text-xl font-bold text-[#0B1B34] mb-1 text-center">{title}</h2>
           <p className="text-sm text-[#6f7b8d] text-center mb-6">{subtitle}</p>
           <form

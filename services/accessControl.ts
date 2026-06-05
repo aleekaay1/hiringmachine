@@ -129,7 +129,7 @@ const ADMIN_DATA_SECTIONS: AppSection[] = [
   'pipeline-settings',
 ];
 
-/** Recruiter-style pipeline: own uploads + dialer. Leadership included; admins excluded. */
+/** Recruiter-style pipeline: own uploads + dialer. Leadership included; most admins excluded. */
 const PIPELINE_OPERATIONAL_SECTIONS: AppSection[] = [
   'pipeline',
   'pipeline-call',
@@ -139,10 +139,30 @@ const PIPELINE_OPERATIONAL_SECTIONS: AppSection[] = [
   'pipeline-settings',
 ];
 
-export function canAccessSection(role: AppRole | null, section: AppSection): boolean {
+/** Admins who also need call + email workspace (same nav as leadership recruiters). */
+const ADMIN_PIPELINE_OPERATIONAL_EMAILS = new Set(['hr.licensing@globelife-paz.com']);
+
+export function adminHasPipelineOperationalAccess(
+  role: AppRole | null,
+  email: string | null | undefined,
+): boolean {
+  if (role !== 'admin') return false;
+  const normalized = String(email || '').trim().toLowerCase();
+  return normalized.length > 0 && ADMIN_PIPELINE_OPERATIONAL_EMAILS.has(normalized);
+}
+
+export function canAccessSection(
+  role: AppRole | null,
+  section: AppSection,
+  email?: string | null,
+): boolean {
   if (!role) return section === 'overview' || section === 'home';
   if (role === 'admin') {
-    return ADMIN_DATA_SECTIONS.includes(section);
+    if (ADMIN_DATA_SECTIONS.includes(section)) return true;
+    if (adminHasPipelineOperationalAccess(role, email) && PIPELINE_OPERATIONAL_SECTIONS.includes(section)) {
+      return true;
+    }
+    return false;
   }
   if (role === 'leadership') {
     return (
