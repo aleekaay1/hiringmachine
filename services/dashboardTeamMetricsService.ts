@@ -12,6 +12,45 @@ export type DashboardTeamSnapshot = {
   fetchedAt: string | null;
 };
 
+export async function fetchPipelineCandidateEmailsViaFunction(candidateIds: string[]): Promise<
+  | { ok: true; emails: Map<string, string> }
+  | { ok: false; error: string }
+> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return { ok: false, error: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY' };
+  }
+  const unique = [...new Set(candidateIds.filter(Boolean))];
+  if (!unique.length) return { ok: true, emails: new Map() };
+
+  const token = await getAccessToken();
+  if (!token) return { ok: false, error: 'Not signed in' };
+
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/pipeline-candidate-emails`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ candidateIds: unique }),
+    });
+    const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok) {
+      return { ok: false, error: (json.error as string) || res.statusText || 'Request failed' };
+    }
+    const raw = json.emails && typeof json.emails === 'object' ? (json.emails as Record<string, string>) : {};
+    const emails = new Map<string, string>();
+    for (const [id, email] of Object.entries(raw)) {
+      const normalized = String(email || '').trim().toLowerCase();
+      if (id && normalized) emails.set(id, normalized);
+    }
+    return { ok: true, emails };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 export function isSupabaseNetworkError(message: string): boolean {
   const m = message.toLowerCase();
   return (

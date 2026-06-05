@@ -3,6 +3,10 @@
  * from live_session_registrants (synced on Live Sessions refresh).
  */
 
+import {
+  fetchPipelineCandidateEmailsViaFunction,
+  isSupabaseNetworkError,
+} from './dashboardTeamMetricsService';
 import { supabase } from './supabaseClient';
 import { torontoYmdFromDate } from './webinarGeekDates';
 
@@ -62,21 +66,73 @@ export function liveSessionAttendedFromRegistrant(row: LiveSessionRegistrantRow)
   return row.attended_zoom === true;
 }
 
-export async function loadCandidateEmailsById(candidateIds: string[]): Promise<Map<string, string>> {
+function mergeEmailRows(map: Map<string, string>, rows: Array<{ id?: string; email?: string }>): void {
+  for (const row of rows) {
+    const id = String(row.id || '').trim();
+    const email = normalizeLiveSessionEmail(row.email);
+    if (id && email) map.set(id, email);
+  }
+}
+
+async function loadPipelineCandidateEmailsChunk(slice: string[]): Promise<Map<string, string>> {
   const map = new Map<string, string>();
+  if (!slice.length) return map;
+
+  const { data: rpcData, error: rpcError } = await supabase.rpc('get_pipeline_candidate_emails', {
+    p_ids: slice,
+  });
+  if (!rpcError && Array.isArray(rpcData)) {
+    mergeEmailRows(map, rpcData as Array<{ id?: string; email?: string }>);
+    return map;
+  }
+
+  const rpcMissing =
+    rpcError?.code === 'PGRST202' ||
+    /function.*does not exist|schema cache/i.test(rpcError?.message || '');
+
+  try {
+    const { data, error } = await supabase
+      .from('pipeline_candidates')
+      .select('id, email')
+      .in('id', slice);
+    if (!error) {
+      mergeEmailRows(map, (data || []) as Array<{ id?: string; email?: string }>);
+      if (map.size > 0 || !rpcMissing) return map;
+    } else if (!isSupabaseNetworkError(error.message) && !rpcMissing) {
+      throw error;
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!isSupabaseNetworkError(msg) && !rpcMissing) throw e;
+  }
+
+  const viaFn = await fetchPipelineCandidateEmailsViaFunction(slice);
+  if (viaFn.ok) {
+    for (const [id, email] of viaFn.emails) map.set(id, email);
+    return map;
+  }
+
+  if (rpcError && !rpcMissing) throw rpcError;
+  if (!viaFn.ok && viaFn.error) throw new Error(viaFn.error);
+  return map;
+}
+
+/** pipeline_call_records.candidate_id → pipeline_candidates.email (not CRM candidates table). */
+export async function loadCandidateEmailsById(candidateIds: string[]): Promise<Map<string, string>> {
   const unique = [...new Set(candidateIds.filter(Boolean))];
-  const chunk = 200;
+  if (!unique.length) return new Map();
+
+  const viaFn = await fetchPipelineCandidateEmailsViaFunction(unique);
+  if (viaFn.ok) return viaFn.emails;
+
+  const map = new Map<string, string>();
+  const chunk = 150;
   for (let i = 0; i < unique.length; i += chunk) {
     const slice = unique.slice(i, i + chunk);
-    if (!slice.length) continue;
-    const { data, error } = await supabase.from('candidates').select('id, email').in('id', slice);
-    if (error) throw error;
-    for (const row of data || []) {
-      const id = String((row as { id?: string }).id || '').trim();
-      const email = normalizeLiveSessionEmail((row as { email?: string }).email);
-      if (id && email) map.set(id, email);
-    }
+    const part = await loadPipelineCandidateEmailsChunk(slice);
+    for (const [id, email] of part) map.set(id, email);
   }
+  if (map.size === 0 && !viaFn.ok) throw new Error(viaFn.error);
   return map;
 }
 
