@@ -147,11 +147,11 @@ const PipelineSettings: React.FC = () => {
               />
             </label>
             <label className="text-sm text-[#0B1B34] md:col-span-2">
-              WebinarGeek recruiter tag
+              WebinarGeek recruiter tag (optional override)
               <input
                 value={webinarGeekCustomField}
                 onChange={(e) => setWebinarGeekCustomField(e.target.value)}
-                placeholder="e.g. cooper_jane_smith (same as your WG registration link tag)"
+                placeholder="e.g. cooper_hassaan — auto-detected from your email when possible"
                 className="mt-1 w-full rounded-xl border border-[#b8d2ef] bg-white px-3 py-2 text-sm text-[#0B1B34]"
               />
             </label>

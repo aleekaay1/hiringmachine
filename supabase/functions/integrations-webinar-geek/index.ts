@@ -1,4 +1,9 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import {
+  buildBookingIdentitiesForUser,
+  isBookingLinkTag,
+  parseBookingLinkTag,
+} from '../_shared/webinarGeekBookingLinks.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -471,6 +476,61 @@ Deno.serve(async (req) => {
       });
     }
 
+    if (req.method === 'GET' && mode === 'booking-identities') {
+      const profileRes = await admin
+        .from('user_profiles')
+        .select('full_name, email')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      const userEmail = String((profileRes.data as { email?: string } | null)?.email || user.email || '').trim();
+      const userFullName = String((profileRes.data as { full_name?: string } | null)?.full_name || '').trim();
+
+      let settingsTag = '';
+      try {
+        const { data: settingsRow } = await admin
+          .from('pipeline_user_call_settings')
+          .select('webinar_geek_custom_field')
+          .eq('user_id', user.id)
+          .maybeSingle();
+        settingsTag = String((settingsRow as { webinar_geek_custom_field?: string } | null)?.webinar_geek_custom_field || '').trim();
+      } catch {
+        // Column may not exist yet before migration.
+      }
+
+      const observedTags = new Set<string>();
+      const subscriptionsScan = await wgGetAllSubscriptions(
+        { per_page: 250, nested_resources: 'broadcast,webinar' },
+        { maxPages: 20 },
+      );
+      if (subscriptionsScan.ok) {
+        for (const row of subscriptionsScan.rows) {
+          const customField = String(row.custom_field || '').trim();
+          if (isBookingLinkTag(customField)) observedTags.add(customField.toLowerCase());
+          const pageName = String(row.registration_page_name || '').trim();
+          if (isBookingLinkTag(pageName)) observedTags.add(pageName.toLowerCase());
+        }
+      }
+
+      const identities = buildBookingIdentitiesForUser({
+        email: userEmail,
+        fullName: userFullName,
+        observedTags: [...observedTags],
+        settingsTag,
+      });
+
+      return new Response(JSON.stringify({
+        ok: true,
+        user_email: userEmail || null,
+        user_name: userFullName || null,
+        identities,
+        observed_link_count: observedTags.size,
+        checked_at: new Date().toISOString(),
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     if (req.method === 'GET' && mode === 'dashboard') {
       const webinarId = url.searchParams.get('webinar_id')?.trim();
       const broadcastId = url.searchParams.get('broadcast_id')?.trim();
@@ -762,6 +822,7 @@ Deno.serve(async (req) => {
         broadcast_id?: string | number;
         webinar_id?: string | number;
         custom_field?: string;
+        booking_mode?: 'direct' | 'link';
         candidate_id?: string;
       };
       const email = normalizeLookupEmail(body.email || '');
@@ -770,6 +831,7 @@ Deno.serve(async (req) => {
       const broadcastId = String(body.broadcast_id || '').trim();
       const webinarId = String(body.webinar_id || '').trim();
       const customField = String(body.custom_field || '').trim();
+      const bookingMode = body.booking_mode === 'direct' ? 'direct' : 'link';
       const candidateId = String(body.candidate_id || '').trim() || null;
 
       if (!email || !firstname || !broadcastId) {
@@ -801,7 +863,21 @@ Deno.serve(async (req) => {
         // Column may not exist yet before migration.
       }
 
-      const effectiveCustomField = customField || settingsCustomField || null;
+      let effectiveCustomField: string | null = null;
+      if (bookingMode === 'link') {
+        const requestedTag = customField || settingsCustomField || '';
+        const parsedTag = parseBookingLinkTag(requestedTag);
+        if (!parsedTag) {
+          return new Response(JSON.stringify({
+            error: 'Select a registration link to book as, or choose direct portal booking.',
+          }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+        effectiveCustomField = parsedTag.tag;
+      }
+
       const subscriptionPayload: Record<string, unknown> = {
         email,
         firstname,
@@ -838,6 +914,7 @@ Deno.serve(async (req) => {
           ? null
           : wgErrorMessage(bookRes.json, `WebinarGeek booking failed (${bookRes.status})`),
         metadata: {
+          booking_mode: bookingMode,
           registration_source: 'api',
           wg_status: bookRes.status,
           wg_code: bookRes.json.code ?? null,

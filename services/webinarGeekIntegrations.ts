@@ -52,6 +52,14 @@ export type WebinarGeekUpcomingBroadcast = {
   subscriptions_count: unknown;
 };
 
+export type WebinarGeekBookingIdentity = {
+  tag: string;
+  channel: 'cooper' | 'rms';
+  slug: string;
+  label: string;
+  source: 'observed' | 'suggested' | 'settings';
+};
+
 function buildFunctionUrl(path: string): string | null {
   if (!SUPABASE_URL) return null;
   return `${SUPABASE_URL}/functions/v1/integrations-webinar-geek${path}`;
@@ -139,6 +147,11 @@ export async function fetchWebinarGeekUpcomingBroadcasts(accessToken: string, we
   return callWebinarGeek(accessToken, `?${params.toString()}`);
 }
 
+export async function fetchWebinarGeekBookingIdentities(accessToken: string) {
+  const params = new URLSearchParams({ mode: 'booking-identities' });
+  return callWebinarGeek(accessToken, `?${params.toString()}`);
+}
+
 export async function bookWebinarGeekBroadcast(
   accessToken: string,
   payload: {
@@ -148,6 +161,7 @@ export async function bookWebinarGeekBroadcast(
     broadcastId: string;
     webinarId?: string;
     customField?: string;
+    bookingMode?: 'direct' | 'link';
     candidateId?: string;
   },
 ) {
@@ -161,6 +175,7 @@ export async function bookWebinarGeekBroadcast(
       broadcast_id: payload.broadcastId,
       webinar_id: payload.webinarId || undefined,
       custom_field: payload.customField?.trim() || undefined,
+      booking_mode: payload.bookingMode || (payload.customField?.trim() ? 'link' : 'direct'),
       candidate_id: payload.candidateId || undefined,
     }),
   });

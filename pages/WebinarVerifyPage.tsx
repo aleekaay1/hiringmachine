@@ -8,8 +8,10 @@ import { getPipelineUserCallSettings } from '../services/pipelineService';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import {
   bookWebinarGeekBroadcast,
+  fetchWebinarGeekBookingIdentities,
   fetchWebinarGeekUpcomingBroadcasts,
   verifyWebinarGeekEmail,
+  type WebinarGeekBookingIdentity,
   type WebinarGeekUpcomingBroadcast,
   type WebinarGeekVerifyStatus,
   type WebinarGeekVerifySubscription,
@@ -68,7 +70,10 @@ const WebinarVerifyPage: React.FC = () => {
   const [subscriptions, setSubscriptions] = React.useState<WebinarGeekVerifySubscription[]>([]);
   const [broadcasts, setBroadcasts] = React.useState<WebinarGeekUpcomingBroadcast[]>([]);
   const [selectedBroadcastId, setSelectedBroadcastId] = React.useState('');
-  const [recruiterTag, setRecruiterTag] = React.useState('');
+  const [bookingIdentities, setBookingIdentities] = React.useState<WebinarGeekBookingIdentity[]>([]);
+  const [loadingIdentities, setLoadingIdentities] = React.useState(false);
+  const [bookingMode, setBookingMode] = React.useState<'direct' | 'link'>('link');
+  const [selectedLinkTag, setSelectedLinkTag] = React.useState('');
 
   React.useEffect(() => {
     const name = searchParams.get('name') || '';
@@ -85,10 +90,39 @@ const WebinarVerifyPage: React.FC = () => {
       try {
         const settings = await getPipelineUserCallSettings();
         if (cancelled) return;
-        setRecruiterTag(settings?.webinar_geek_custom_field || '');
         setSelectedBroadcastId(settings?.webinar_geek_default_broadcast_id || '');
+        const settingsTag = settings?.webinar_geek_custom_field || '';
+        if (settingsTag) setSelectedLinkTag(settingsTag);
       } catch {
         /* optional settings */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      setLoadingIdentities(true);
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData.session?.access_token;
+        if (!token) return;
+        const result = await fetchWebinarGeekBookingIdentities(token);
+        if (cancelled || !result.ok) return;
+        const rows = Array.isArray(result.data.identities)
+          ? (result.data.identities as WebinarGeekBookingIdentity[])
+          : [];
+        setBookingIdentities(rows);
+        setSelectedLinkTag((prev) => {
+          if (prev && rows.some((row) => row.tag === prev)) return prev;
+          return rows[0]?.tag || prev;
+        });
+        setBookingMode(rows.length > 0 ? 'link' : 'direct');
+      } finally {
+        if (!cancelled) setLoadingIdentities(false);
       }
     })();
     return () => {
@@ -171,6 +205,10 @@ const WebinarVerifyPage: React.FC = () => {
       setError('Email, first name, and a broadcast slot are required to book.');
       return;
     }
+    if (bookingMode === 'link' && !selectedLinkTag.trim()) {
+      setError('Choose a registration link to book as, or switch to direct portal booking.');
+      return;
+    }
     setBooking(true);
     setError(null);
     setMessage(null);
@@ -183,7 +221,8 @@ const WebinarVerifyPage: React.FC = () => {
         surname: surname.trim() || undefined,
         broadcastId: selectedBroadcastId,
         webinarId: selected?.webinar_id != null ? String(selected.webinar_id) : undefined,
-        customField: recruiterTag.trim() || undefined,
+        bookingMode,
+        customField: bookingMode === 'link' ? selectedLinkTag.trim() : undefined,
         candidateId: candidateId || undefined,
       });
       if (!result.ok) throw new Error(result.error);
@@ -296,10 +335,70 @@ const WebinarVerifyPage: React.FC = () => {
                 Book webinar
               </div>
               <p className="mt-1 text-xs text-[#6b84a8]">
-                Registers them via WebinarGeek API using their email. Your recruiter tag (
-                {recruiterTag.trim() || 'not set — add in Pipeline settings'}) is stored as{' '}
-                <code className="rounded bg-slate-100 px-1">custom_field</code> so bookings stay attributed to you.
+                Registers them via WebinarGeek API. Choose how this booking should be attributed — through your
+                Cooper/RMS registration link, or direct portal booking.
               </p>
+
+              <div className="mt-4 space-y-3 rounded-2xl border border-[#dbe8f8] bg-[#f8fbff] px-3 py-3">
+                <p className="text-xs font-semibold text-[#0B1B34]">Book as</p>
+                {loadingIdentities ? (
+                  <p className="text-xs text-[#6b84a8]">Loading your registration links…</p>
+                ) : (
+                  <div className="space-y-2">
+                    {bookingIdentities.map((identity) => (
+                      <label
+                        key={identity.tag}
+                        className={`flex cursor-pointer items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
+                          bookingMode === 'link' && selectedLinkTag === identity.tag
+                            ? 'border-sky-300 bg-white text-[#0B1B34]'
+                            : 'border-transparent bg-white/70 text-[#365274]'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="booking-as"
+                          className="mt-0.5"
+                          checked={bookingMode === 'link' && selectedLinkTag === identity.tag}
+                          onChange={() => {
+                            setBookingMode('link');
+                            setSelectedLinkTag(identity.tag);
+                          }}
+                        />
+                        <span>
+                          <span className="font-semibold">{identity.label}</span>
+                          <span className="mt-0.5 block font-mono text-[10px] text-[#6b84a8]">{identity.tag}</span>
+                        </span>
+                      </label>
+                    ))}
+                    <label
+                      className={`flex cursor-pointer items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
+                        bookingMode === 'direct'
+                          ? 'border-sky-300 bg-white text-[#0B1B34]'
+                          : 'border-transparent bg-white/70 text-[#365274]'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="booking-as"
+                        className="mt-0.5"
+                        checked={bookingMode === 'direct'}
+                        onChange={() => setBookingMode('direct')}
+                      />
+                      <span>
+                        <span className="font-semibold">Direct portal booking</span>
+                        <span className="mt-0.5 block text-[#6b84a8]">
+                          No Cooper/RMS link tag — still logged as booked by you in Paz.
+                        </span>
+                      </span>
+                    </label>
+                    {!bookingIdentities.length && (
+                      <p className="text-[11px] text-amber-800">
+                        No Cooper/RMS links matched your account yet. Add a tag in Pipeline settings or book direct.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <label className="text-xs font-medium text-[#365274]">
@@ -366,7 +465,7 @@ const WebinarVerifyPage: React.FC = () => {
                   rel="noreferrer"
                   className="inline-flex items-center gap-1 text-xs font-semibold text-[#005EB8] hover:underline"
                 >
-                  Set recruiter tag
+                  Pipeline settings
                   <ExternalLink className="h-3 w-3" />
                 </a>
               </div>
