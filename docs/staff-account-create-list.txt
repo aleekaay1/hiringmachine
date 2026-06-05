@@ -3,6 +3,7 @@ PazTemp#2026
 
 Admins
 - ali@globelife-paz.com
+- alex@globelife-paz.com
 - reginald_bentajado@globelife-paz.com
 - hr.licensing@globelife-paz.com
 
@@ -35,3 +36,5 @@ After users are created:
 - Run:
   supabase/sql/paste_multi_user_roles_phase1_step1_enum.sql
   supabase/sql/paste_multi_user_roles_phase1.sql
+- Or for a single new admin (e.g. alex@globelife-paz.com):
+  supabase/sql/paste_alex_admin_role.sql
