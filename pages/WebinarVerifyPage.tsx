@@ -113,7 +113,11 @@ const WebinarVerifyPage: React.FC = () => {
         const token = sessionData.session?.access_token;
         if (!token) return;
         const result = await fetchWebinarGeekBookingIdentities(token);
-        if (cancelled || !result.ok) return;
+        if (cancelled) return;
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
         const rows = Array.isArray(result.data.identities)
           ? (result.data.identities as WebinarGeekBookingIdentity[])
           : [];
@@ -140,7 +144,11 @@ const WebinarVerifyPage: React.FC = () => {
         const token = sessionData.session?.access_token;
         if (!token) return;
         const result = await fetchWebinarGeekUpcomingBroadcasts(token);
-        if (cancelled || !result.ok) return;
+        if (cancelled) return;
+        if (!result.ok) {
+          setError(result.error);
+          return;
+        }
         const rows = Array.isArray(result.data.broadcasts)
           ? (result.data.broadcasts as WebinarGeekUpcomingBroadcast[])
           : [];
@@ -424,8 +432,11 @@ const WebinarVerifyPage: React.FC = () => {
                     ))}
                     {!bookingIdentities.length && (
                       <p className="text-[11px] text-amber-800">
-                        No Cooper/RMS links matched your first name yet. Add a tag in Pipeline settings, or ask admin to
-                        run the booking-links SQL migration if this page is slow.
+                        No Cooper/RMS links matched your first name yet. Set your registration tag in{' '}
+                        <a href="/pipeline-settings" target="_blank" rel="noreferrer" className="font-semibold underline">
+                          Pipeline settings
+                        </a>{' '}
+                        (e.g. cooper_yourname) — you can still book using that saved tag.
                       </p>
                     )}
                   </div>
@@ -481,7 +492,7 @@ const WebinarVerifyPage: React.FC = () => {
                 <Button
                   className="!min-h-0 h-11 px-5 bg-[#005EB8] hover:bg-[#004a93] text-white border-0"
                   onClick={() => void runBook()}
-                  disabled={booking || loadingBroadcasts || !selectedLinkTag.trim() || !bookingIdentities.length}
+                  disabled={booking || loadingBroadcasts || !selectedBroadcastId || !selectedLinkTag.trim()}
                 >
                   {booking ? 'Booking…' : 'Book webinar'}
                 </Button>

@@ -54,7 +54,14 @@ function parseBool(value: string | null): boolean | undefined {
 
 async function wgRequest(path: string, init: RequestInit = {}): Promise<{ ok: boolean; status: number; json: Record<string, unknown>; raw: string }> {
   const token = Deno.env.get('WEBINARGEEK_API_TOKEN')?.trim();
-  if (!token) throw new Error('Missing WEBINARGEEK_API_TOKEN secret');
+  if (!token) {
+    return {
+      ok: false,
+      status: 503,
+      json: { error: 'Missing WEBINARGEEK_API_TOKEN secret on the server.' },
+      raw: '',
+    };
+  }
   const url = `${WEBINARGEEK_BASE}${path.startsWith('/') ? '' : '/'}${path}`;
   const res = await fetch(url, {
     ...init,
@@ -324,20 +331,25 @@ async function saveRegistrationLinkCatalog(
   }
 }
 
-async function scanObservedRegistrationLinkTags(): Promise<string[]> {
-  const observedTags = new Set<string>();
-  const subscriptionsScan = await wgGetAllSubscriptions(
-    { per_page: 250, nested_resources: 'broadcast,webinar' },
-    { maxPages: 20 },
-  );
-  if (!subscriptionsScan.ok) return [];
-  for (const row of subscriptionsScan.rows) {
-    const customField = String(row.custom_field || '').trim();
-    if (isBookingLinkTag(customField)) observedTags.add(customField.toLowerCase());
-    const pageName = String(row.registration_page_name || '').trim();
-    if (isBookingLinkTag(pageName)) observedTags.add(pageName.toLowerCase());
+async function scanObservedRegistrationLinkTags(maxPages = 4): Promise<string[]> {
+  try {
+    const observedTags = new Set<string>();
+    const subscriptionsScan = await wgGetAllSubscriptions(
+      { per_page: 100, nested_resources: 'broadcast,webinar' },
+      { maxPages },
+    );
+    if (!subscriptionsScan.ok) return [];
+    for (const row of subscriptionsScan.rows) {
+      const customField = String(row.custom_field || '').trim();
+      if (isBookingLinkTag(customField)) observedTags.add(customField.toLowerCase());
+      const pageName = String(row.registration_page_name || '').trim();
+      if (isBookingLinkTag(pageName)) observedTags.add(pageName.toLowerCase());
+    }
+    return [...observedTags].sort();
+  } catch (err) {
+    console.error('scanObservedRegistrationLinkTags failed:', err);
+    return [];
   }
-  return [...observedTags].sort();
 }
 
 async function resolveObservedRegistrationLinkTags(
@@ -345,12 +357,30 @@ async function resolveObservedRegistrationLinkTags(
   forceRefresh: boolean,
 ): Promise<string[]> {
   const catalog = await loadRegistrationLinkCatalog(admin);
-  if (!forceRefresh && catalog && cacheIsFresh(catalog.syncedAt) && catalog.tags.length) {
-    return catalog.tags;
+  if (!forceRefresh) {
+    if (catalog && cacheIsFresh(catalog.syncedAt)) return catalog.tags;
+    return catalog?.tags ?? [];
   }
-  const scanned = await scanObservedRegistrationLinkTags();
+  const scanned = await scanObservedRegistrationLinkTags(6);
   if (scanned.length) await saveRegistrationLinkCatalog(admin, scanned);
   return scanned.length ? scanned : (catalog?.tags ?? []);
+}
+
+async function loadUserWebinarSettingsTag(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+): Promise<string> {
+  try {
+    const { data, error } = await admin
+      .from('pipeline_user_call_settings')
+      .select('webinar_geek_custom_field')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) return '';
+    return String((data as { webinar_geek_custom_field?: string } | null)?.webinar_geek_custom_field || '').trim();
+  } catch {
+    return '';
+  }
 }
 
 async function resolveBroadcastContext(broadcastId: string, webinarIdHint?: string) {
@@ -730,7 +760,14 @@ Deno.serve(async (req) => {
     const supabase = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: authHeader } },
     });
-    const admin = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+    const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')?.trim();
+    if (!serviceRole) {
+      return new Response(JSON.stringify({ error: 'Missing SUPABASE_SERVICE_ROLE_KEY on the server.' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    const admin = createClient(supabaseUrl, serviceRole);
     const { data: { user }, error: authErr } = await supabase.auth.getUser();
     if (authErr || !user) {
       return new Response(JSON.stringify({ error: 'Invalid or expired session' }), {
@@ -744,13 +781,14 @@ Deno.serve(async (req) => {
 
     if (req.method === 'GET' && mode === 'health') {
       const ping = await wgGet('/account');
+      const errText = String(ping.json.error || ping.json.message || '').trim();
       return new Response(JSON.stringify({
         ok: ping.ok,
         status: ping.status,
         connected: ping.ok,
-        error: ping.ok ? null : (ping.json.error || ping.json.message || 'WebinarGeek request failed'),
+        error: ping.ok ? null : (errText || 'WebinarGeek request failed'),
       }), {
-        status: ping.ok ? 200 : 502,
+        status: ping.ok ? 200 : (ping.status === 503 ? 503 : 502),
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
@@ -1182,9 +1220,9 @@ Deno.serve(async (req) => {
         });
       }
 
-      const [profileRes, settingsRow, broadcastContext, existingRows] = await Promise.all([
+      const [profileRes, settingsCustomField, broadcastContext, existingRows] = await Promise.all([
         admin.from('user_profiles').select('full_name, email').eq('user_id', user.id).maybeSingle(),
-        admin.from('pipeline_user_call_settings').select('webinar_geek_custom_field').eq('user_id', user.id).maybeSingle().catch(() => ({ data: null })),
+        loadUserWebinarSettingsTag(admin, user.id),
         resolveBroadcastContext(broadcastId, webinarId || undefined),
         findSubscriptionForBroadcast(email, broadcastId),
       ]);
@@ -1195,7 +1233,6 @@ Deno.serve(async (req) => {
         user.id;
       const userEmail = String((profileRes.data as { email?: string } | null)?.email || user.email || '').trim();
       const userFullName = String((profileRes.data as { full_name?: string } | null)?.full_name || '').trim();
-      const settingsCustomField = String((settingsRow.data as { webinar_geek_custom_field?: string } | null)?.webinar_geek_custom_field || '').trim();
 
       let effectiveCustomField: string | null = null;
       const requestedTag = customField || settingsCustomField || '';
@@ -1208,9 +1245,13 @@ Deno.serve(async (req) => {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
-      if (!recruiterOwnsBookingLinkSlug(parsedTag.slugKey, userFullName, userEmail)) {
+      const ownsViaSettings = Boolean(
+        settingsCustomField
+        && parseBookingLinkTag(settingsCustomField)?.tag === parsedTag.tag,
+      );
+      if (!ownsViaSettings && !recruiterOwnsBookingLinkSlug(parsedTag.slugKey, userFullName, userEmail)) {
         return new Response(JSON.stringify({
-          error: 'That registration link does not match your account.',
+          error: 'That registration link does not match your account. Set your tag in Pipeline settings or pick a Cooper/RMS link matched to your first name.',
         }), {
           status: 403,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },

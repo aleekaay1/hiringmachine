@@ -90,6 +90,17 @@ async function callWebinarGeek(
     if (res.status === 401) {
       return { ok: false, error: 'Unauthorized (session expired). Please sign in again.' };
     }
+    if (res.status === 500) {
+      const serverErr = typeof json.error === 'string' ? json.error : '';
+      return {
+        ok: false,
+        error: serverErr || 'WebinarGeek server error (500). The edge function may need redeploying or WEBINARGEEK_API_TOKEN may be missing.',
+      };
+    }
+    if (res.status === 503) {
+      const serverErr = typeof json.error === 'string' ? json.error : '';
+      return { ok: false, error: serverErr || 'WebinarGeek is not configured on the server.' };
+    }
     const base = typeof json.error === 'string'
       ? json.error
       : typeof json.error === 'object' && json.error
