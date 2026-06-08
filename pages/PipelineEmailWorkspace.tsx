@@ -4,9 +4,11 @@ import { Moon, Sun } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import {
-  listPipelineEmailSendLogsByCandidates,
-  listPipelineIncomingEmailLogsByCandidates,
+  listPipelineEmailSendLogs,
+  listPipelineIncomingEmailLogs,
   listPipelineManualCandidates,
+  readPipelineCandidateEmail,
+  savePipelineCandidateEmailOverride,
   syncPipelineIncomingEmails,
   type PipelineCandidate,
   type PipelineEmailSendLog,
@@ -14,7 +16,12 @@ import {
 } from '../services/pipelineService';
 import { sendEmail } from '../services/emailService';
 import { appendEmailSignatureToHtml, SIGNATURE_LOGO_URL } from '../services/emailSignatureHtml';
-import { normalizeMessageIdForHeader, subjectForReply } from '../services/inboundEmailFormat';
+import {
+  cleanSubjectForDisplay,
+  normalizeMessageIdForHeader,
+  splitInboundSnippet,
+  subjectForReply,
+} from '../services/inboundEmailFormat';
 import { supabase } from '../services/supabaseClient';
 import { EMAIL_TEMPLATES, mergeTemplate } from '../services/emailTemplates';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
@@ -38,6 +45,13 @@ function wrapEmailPreviewShell(innerHtml: string): string {
 ${innerHtml}
 </div>
 </div>`;
+}
+
+function readSendLogBody(log: PipelineEmailSendLog): { html: string | null; text: string | null } {
+  const meta = log.metadata && typeof log.metadata === 'object' ? log.metadata : {};
+  const html = typeof meta.body_html === 'string' && meta.body_html.trim() ? meta.body_html : null;
+  const text = typeof meta.body_text === 'string' && meta.body_text.trim() ? meta.body_text : null;
+  return { html, text };
 }
 
 const PipelineEmailWorkspace: React.FC = () => {
@@ -67,6 +81,9 @@ const PipelineEmailWorkspace: React.FC = () => {
   const [inReplyTo, setInReplyTo] = React.useState<string | null>(null);
   const [references, setReferences] = React.useState<string | null>(null);
   const [themeMode, setThemeMode] = React.useState<WorkspaceThemeMode>('dark');
+  const [candidateEmailInput, setCandidateEmailInput] = React.useState('');
+  const [savingEmail, setSavingEmail] = React.useState(false);
+  const [emailMsg, setEmailMsg] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -85,12 +102,26 @@ const PipelineEmailWorkspace: React.FC = () => {
     () => candidates.find((candidate) => candidate.id === selectedCandidateId) || null,
     [candidates, selectedCandidateId],
   );
+  const selectedCandidateEmailInfo = React.useMemo(
+    () => (selectedCandidate ? readPipelineCandidateEmail(selectedCandidate) : null),
+    [selectedCandidate],
+  );
   const candidateNameById = React.useMemo(
     () => new Map(candidates.map((candidate) => [candidate.id, candidate.full_name || 'Unknown Candidate'])),
     [candidates],
   );
 
-  const loadWorkspace = React.useCallback(async (options?: { syncInbox?: boolean }) => {
+  const loadCandidateMailLogs = React.useCallback(async (candidate: PipelineCandidate) => {
+    const emailInfo = readPipelineCandidateEmail(candidate);
+    const [incoming, sends] = await Promise.all([
+      listPipelineIncomingEmailLogs(candidate.id, emailInfo.effectiveEmail),
+      listPipelineEmailSendLogs(candidate.id, emailInfo.effectiveEmail),
+    ]);
+    setIncomingLogs(incoming);
+    setSendLogs(sends);
+  }, []);
+
+  const loadWorkspace = React.useCallback(async (options?: { syncInbox?: boolean; candidateId?: string }) => {
     setLoading(true);
     setError(null);
     try {
@@ -108,40 +139,43 @@ const PipelineEmailWorkspace: React.FC = () => {
 
       const rows = await listPipelineManualCandidates();
       setCandidates(rows);
-      const candidateIds = rows.map((row) => row.id);
-      const candidateEmails = rows
-        .map((row) => String(row.email || '').trim().toLowerCase())
-        .filter(Boolean);
-      if (candidateIds.length === 0) {
+      if (rows.length === 0) {
         setIncomingLogs([]);
         setSendLogs([]);
         setSelectedCandidateId('');
         return;
       }
-      const [incoming, sends] = await Promise.all([
-        listPipelineIncomingEmailLogsByCandidates(candidateIds, { candidateEmails }),
-        listPipelineEmailSendLogsByCandidates(candidateIds, { candidateEmails }),
-      ]);
-      setIncomingLogs(incoming);
-      setSendLogs(sends);
+      let nextCandidateId = '';
       setSelectedCandidateId((prev) => {
-        if (!prev || !rows.some((row) => row.id === prev)) return rows[0]?.id || '';
-        return prev;
+        const preferred = options?.candidateId || prev;
+        if (preferred && rows.some((row) => row.id === preferred)) {
+          nextCandidateId = preferred;
+          return preferred;
+        }
+        nextCandidateId = rows[0]?.id || '';
+        return nextCandidateId;
       });
+      const active = rows.find((row) => row.id === nextCandidateId);
+      if (active) await loadCandidateMailLogs(active);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadCandidateMailLogs]);
 
   React.useEffect(() => {
     void loadWorkspace({ syncInbox: true });
-  }, [loadWorkspace]);
+    // Mount-only inbox sync + candidate list load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   React.useEffect(() => {
     if (!selectedCandidate) return;
-    setToEmail(selectedCandidate.email || '');
+    const emailInfo = readPipelineCandidateEmail(selectedCandidate);
+    setCandidateEmailInput(emailInfo.effectiveEmail);
+    setEmailMsg(null);
+    setToEmail(emailInfo.effectiveEmail);
     setSubject('Quick follow-up from Paz Organization');
     setBodyPlain(`Hi ${(selectedCandidate.full_name || '').trim() || 'there'},\n\n`);
     setBodyHtml('');
@@ -149,7 +183,32 @@ const PipelineEmailWorkspace: React.FC = () => {
     setComposeView('write');
     setInReplyTo(null);
     setReferences(null);
-  }, [selectedCandidate?.id]);
+    void loadCandidateMailLogs(selectedCandidate).catch((e) => {
+      setError(e instanceof Error ? e.message : String(e));
+    });
+  }, [selectedCandidate?.id, loadCandidateMailLogs]);
+
+  const saveCandidateEmailOverride = async () => {
+    if (!selectedCandidate) return;
+    setSavingEmail(true);
+    setEmailMsg(null);
+    try {
+      const updated = await savePipelineCandidateEmailOverride({
+        candidateId: selectedCandidate.id,
+        emailInput: candidateEmailInput,
+        source: 'pipeline_email_workspace',
+      });
+      setCandidates((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
+      setCandidateEmailInput(readPipelineCandidateEmail(updated).effectiveEmail);
+      setToEmail(readPipelineCandidateEmail(updated).effectiveEmail);
+      await loadCandidateMailLogs(updated);
+      setEmailMsg('Email saved. Inbox remapped to this address.');
+    } catch (e) {
+      setEmailMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingEmail(false);
+    }
+  };
 
   const filteredInbox = React.useMemo(() => {
     const query = listQuery.trim().toLowerCase();
@@ -209,6 +268,18 @@ const PipelineEmailWorkspace: React.FC = () => {
     () => filteredOutbox.find((log) => log.id === selectedOutboxId) || null,
     [filteredOutbox, selectedOutboxId],
   );
+  const selectedInboxPreview = React.useMemo(() => {
+    if (!selectedInbox?.snippet) return { latest: '', quoted: null as string | null };
+    return splitInboundSnippet(selectedInbox.snippet);
+  }, [selectedInbox]);
+  const selectedOutboxBody = React.useMemo(
+    () => (selectedOutbox ? readSendLogBody(selectedOutbox) : { html: null, text: null }),
+    [selectedOutbox],
+  );
+  const selectedOutboxPreviewHtml = React.useMemo(() => {
+    if (!selectedOutboxBody.html) return '';
+    return wrapEmailPreviewShell(selectedOutboxBody.html);
+  }, [selectedOutboxBody.html]);
 
   const applyTemplateToCompose = async () => {
     if (!selectedCandidate || !templateId) return;
@@ -275,7 +346,7 @@ const PipelineEmailWorkspace: React.FC = () => {
       });
       if (!('ok' in result)) throw new Error(result.error || 'Failed to send email.');
       setMessage('Email sent.');
-      await loadWorkspace();
+      await loadCandidateMailLogs(selectedCandidate);
     } catch (e) {
       setMessage(e instanceof Error ? e.message : String(e));
     } finally {
@@ -452,16 +523,30 @@ const PipelineEmailWorkspace: React.FC = () => {
                 </p>
               )}
             </div>
-            <div className={`rounded-lg border p-2.5 ${tone.subtle}`}>
+            <div className={`rounded-lg border p-2.5 max-h-[28vh] overflow-auto ${tone.subtle}`}>
               <p className={`text-[11px] font-semibold ${tone.panelTitle}`}>Inbox detail</p>
               {selectedInbox ? (
-                <div className={`mt-1 space-y-1 text-[11px] ${tone.panelMuted}`}>
+                <div className={`mt-1 space-y-2 text-[11px] ${tone.panelMuted}`}>
                   <p><span className="font-semibold">From:</span> {selectedInbox.from_email}</p>
                   <p><span className="font-semibold">To:</span> {selectedInbox.to_email || '—'}</p>
-                  <p><span className="font-semibold">Subject:</span> {selectedInbox.subject || '(no subject)'}</p>
-                  <p className={`whitespace-pre-wrap ${tone.panelLabel}`}>{selectedInbox.snippet || 'No preview snippet.'}</p>
+                  <p><span className="font-semibold">Subject:</span> {cleanSubjectForDisplay(selectedInbox.subject)}</p>
+                  <div className={`rounded-lg border px-2 py-2 whitespace-pre-wrap leading-relaxed ${tone.neutralCard}`}>
+                    {selectedInboxPreview.latest || 'No preview snippet.'}
+                  </div>
+                  {selectedInboxPreview.quoted && (
+                    <details className={`rounded-lg border px-2 py-1 ${tone.neutralCard}`}>
+                      <summary className="cursor-pointer py-1 font-semibold">Earlier thread / quoted content</summary>
+                      <div className="pb-2 whitespace-pre-wrap leading-relaxed">{selectedInboxPreview.quoted}</div>
+                    </details>
+                  )}
                 </div>
-              ) : <p className={`mt-1 text-[11px] ${tone.panelLabel}`}>Select an inbox row.</p>}
+              ) : (
+                <p className={`mt-1 text-[11px] ${tone.panelLabel}`}>
+                  {selectedCandidate
+                    ? 'No inbox messages matched this candidate yet. Sync inbox or correct the resume email below if OCR picked the wrong address.'
+                    : 'Select an inbox row.'}
+                </p>
+              )}
             </div>
           </section>
 
@@ -492,6 +577,42 @@ const PipelineEmailWorkspace: React.FC = () => {
                 <p className={`rounded-lg border border-dashed px-2 py-2 text-xs ${tone.input}`}>
                   No outbox messages match current filters.
                 </p>
+              )}
+            </div>
+            <div className={`rounded-lg border p-2.5 max-h-[28vh] overflow-auto ${tone.subtle}`}>
+              <p className={`text-[11px] font-semibold ${tone.panelTitle}`}>Outbox detail</p>
+              {selectedOutbox ? (
+                <div className={`mt-1 space-y-2 text-[11px] ${tone.panelMuted}`}>
+                  <p><span className="font-semibold">To:</span> {selectedOutbox.to_email}</p>
+                  <p><span className="font-semibold">Subject:</span> {selectedOutbox.subject}</p>
+                  <p>
+                    <span className="font-semibold">Status:</span>{' '}
+                    <span className={String(selectedOutbox.status).toLowerCase() === 'sent' ? 'text-emerald-700' : 'text-red-700'}>
+                      {selectedOutbox.status}
+                    </span>
+                    {' · '}
+                    {formatDateTimeCanadaEastern(selectedOutbox.created_at)}
+                  </p>
+                  {selectedOutbox.error_message && (
+                    <p className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-red-700">{selectedOutbox.error_message}</p>
+                  )}
+                  {selectedOutboxPreviewHtml ? (
+                    <iframe
+                      title="Outbox email body"
+                      srcDoc={selectedOutboxPreviewHtml}
+                      className="w-full min-h-[180px] rounded-lg border border-slate-200 bg-white"
+                      sandbox=""
+                    />
+                  ) : selectedOutboxBody.text ? (
+                    <div className={`rounded-lg border px-2 py-2 whitespace-pre-wrap leading-relaxed ${tone.neutralCard}`}>
+                      {selectedOutboxBody.text}
+                    </div>
+                  ) : (
+                    <p className={`${tone.panelLabel}`}>Body not stored for this send (older logs). New sends include full content.</p>
+                  )}
+                </div>
+              ) : (
+                <p className={`mt-1 text-[11px] ${tone.panelLabel}`}>Click an outbox row to read the full email.</p>
               )}
             </div>
           </section>
@@ -591,6 +712,38 @@ const PipelineEmailWorkspace: React.FC = () => {
                 )}
               </div>
 
+              <div className={`rounded-xl border p-3 ${tone.subtle}`}>
+                <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${tone.panelTitle}`}>Resume email (for inbox matching)</p>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <input
+                    value={candidateEmailInput}
+                    onChange={(e) => {
+                      setCandidateEmailInput(e.target.value);
+                      setEmailMsg(null);
+                    }}
+                    placeholder="candidate@example.com"
+                    className={`min-w-0 flex-1 rounded-xl border px-3 py-2.5 text-sm ${tone.input}`}
+                  />
+                  <Button
+                    variant="outline"
+                    className="!min-h-0 h-10 shrink-0 px-4 text-sm"
+                    onClick={() => void saveCandidateEmailOverride()}
+                    disabled={savingEmail || !selectedCandidate}
+                  >
+                    {savingEmail ? 'Saving...' : 'Save email'}
+                  </Button>
+                </div>
+                {selectedCandidateEmailInfo?.originalExtractedEmail && (
+                  <p className={`mt-2 text-[11px] ${tone.panelLabel}`}>
+                    OCR extracted email: {selectedCandidateEmailInfo.originalExtractedEmail}
+                  </p>
+                )}
+                <p className={`mt-1 text-[11px] ${tone.panelLabel}`}>
+                  Inbox sync matches incoming mail by this address. Fix it here if OCR picked the wrong email.
+                </p>
+                {emailMsg && <p className="mt-1 text-xs text-emerald-700">{emailMsg}</p>}
+              </div>
+
               <div>
                 <label htmlFor="compose-to" className={`mb-1 block text-xs font-semibold ${tone.panelTitle}`}>
                   To (email)
@@ -670,15 +823,6 @@ const PipelineEmailWorkspace: React.FC = () => {
                   </div>
                 )}
               </div>
-              {selectedOutbox && (
-                <div className={`mt-3 rounded-xl border p-3 text-xs ${tone.subtle} ${tone.panelMuted}`}>
-                  <p className={`font-semibold ${tone.panelTitle}`}>Last selected outbox</p>
-                  <p>To: {selectedOutbox.to_email}</p>
-                  <p>Status: {selectedOutbox.status}</p>
-                  <p>When: {formatDateTimeCanadaEastern(selectedOutbox.created_at)}</p>
-                  {selectedOutbox.error_message && <p className="text-red-600 mt-1">{selectedOutbox.error_message}</p>}
-                </div>
-              )}
             </div>
           </div>
 

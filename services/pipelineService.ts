@@ -178,6 +178,7 @@ export interface PipelineEmailSendLog {
   status: string;
   created_at: string;
   error_message: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface PipelineUserCallSettings {
@@ -374,6 +375,36 @@ export function normalizeDialDestination(raw: string): string {
   if (normalizedPlus.startsWith('+1')) return normalizedPlus.slice(1);
   if (normalizedPlus.startsWith('+')) return normalizedPlus.slice(1);
   return normalizedPlus;
+}
+
+function isPipelineEmailInputClean(value: string): boolean {
+  const v = String(value || '').trim();
+  if (!v) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+}
+
+export function readPipelineCandidateEmail(candidate: Pick<PipelineCandidate, 'email' | 'metadata'>): {
+  effectiveEmail: string;
+  overrideEmail: string | null;
+  originalExtractedEmail: string | null;
+} {
+  const metadata = candidate?.metadata && typeof candidate.metadata === 'object'
+    ? (candidate.metadata as Record<string, unknown>)
+    : {};
+  const overrideEmailRaw = metadata.email_override;
+  const originalExtractedRaw = metadata.email_original_extracted;
+  const overrideEmail = typeof overrideEmailRaw === 'string' && overrideEmailRaw.trim()
+    ? overrideEmailRaw.trim()
+    : null;
+  const originalExtractedEmail = typeof originalExtractedRaw === 'string' && originalExtractedRaw.trim()
+    ? originalExtractedRaw.trim()
+    : null;
+  const effectiveEmail = overrideEmail || String(candidate.email || '').trim();
+  return {
+    effectiveEmail,
+    overrideEmail,
+    originalExtractedEmail,
+  };
 }
 
 export function readPipelineCandidatePhone(candidate: Pick<PipelineCandidate, 'phone' | 'metadata'>): {
@@ -1656,6 +1687,71 @@ export async function updatePipelineCandidateProfile(input: {
   if (error) throw error;
 }
 
+export async function savePipelineCandidateEmailOverride(input: {
+  candidateId: string;
+  emailInput: string;
+  source?: string | null;
+}): Promise<PipelineCandidate> {
+  const emailInput = String(input.emailInput || '').trim().toLowerCase();
+  if (!isPipelineEmailInputClean(emailInput)) {
+    throw new Error('Enter a valid email address.');
+  }
+  const { data: existing, error: getErr } = await supabase
+    .from('pipeline_candidates')
+    .select('id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at')
+    .eq('id', input.candidateId)
+    .maybeSingle();
+  if (getErr) throw getErr;
+  if (!existing) throw new Error('Candidate not found.');
+
+  const row = existing as PipelineCandidate;
+  const metadata = row.metadata && typeof row.metadata === 'object'
+    ? { ...(row.metadata as Record<string, unknown>) }
+    : {};
+  const existingOriginal = typeof metadata.email_original_extracted === 'string'
+    ? String(metadata.email_original_extracted || '').trim()
+    : '';
+  const currentEmail = String(row.email || '').trim();
+  const originalExtracted = existingOriginal || currentEmail || null;
+
+  const nextMetadata: Record<string, unknown> = {
+    ...metadata,
+    email_override: emailInput,
+    email_original_extracted: originalExtracted,
+    email_override_updated_at: new Date().toISOString(),
+    email_override_source: String(input.source || 'manual').trim() || 'manual',
+  };
+
+  const { data, error } = await supabase
+    .from('pipeline_candidates')
+    .update({
+      email: emailInput,
+      metadata: nextMetadata,
+    })
+    .eq('id', input.candidateId)
+    .select('id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at')
+    .single();
+  if (error) throw error;
+
+  await remapPipelineInboxLogsForEmail(emailInput, input.candidateId);
+  return data as PipelineCandidate;
+}
+
+export async function remapPipelineInboxLogsForEmail(
+  email: string,
+  candidateId: string,
+): Promise<number> {
+  const normalized = normalizePipelineLogEmail(email);
+  if (!normalized || !candidateId) return 0;
+  const { data, error } = await supabase
+    .from('email_inbox_logs')
+    .update({ candidate_id: candidateId, updated_at: new Date().toISOString() })
+    .eq('from_email', normalized)
+    .select('id');
+  if (error) throw error;
+  return (data || []).length;
+}
+
 export async function savePipelineCandidatePhoneOverride(input: {
   candidateId: string;
   phoneInput: string;
@@ -1904,20 +2000,93 @@ function dedupePipelineEmailLogs<T extends { id: string }>(rows: T[]): T[] {
   return out;
 }
 
+const PIPELINE_EMAIL_SEND_LOG_SELECT =
+  'id,source,trigger_label,from_email,to_email,cc_email,subject,candidate_id,status,created_at,error_message,metadata';
+
+async function listPipelineIncomingEmailLogsMerged(
+  candidateIds: string[],
+  emails: string[],
+  input?: { fromIso?: string | null; toIso?: string | null; limit?: number },
+): Promise<PipelineIncomingEmailLog[]> {
+  if (!candidateIds.length && !emails.length) return [];
+  const limit = input?.limit ?? 3000;
+  const queries: ReturnType<typeof supabase.from>[] = [];
+  if (candidateIds.length) {
+    let byId = supabase
+      .from('email_inbox_logs')
+      .select('*')
+      .in('candidate_id', candidateIds)
+      .order('received_at', { ascending: false })
+      .limit(limit);
+    if (input?.fromIso) byId = byId.gte('received_at', input.fromIso);
+    if (input?.toIso) byId = byId.lte('received_at', input.toIso);
+    queries.push(byId);
+  }
+  if (emails.length) {
+    let byEmail = supabase
+      .from('email_inbox_logs')
+      .select('*')
+      .in('from_email', emails)
+      .order('received_at', { ascending: false })
+      .limit(limit);
+    if (input?.fromIso) byEmail = byEmail.gte('received_at', input.fromIso);
+    if (input?.toIso) byEmail = byEmail.lte('received_at', input.toIso);
+    queries.push(byEmail);
+  }
+  const results = await Promise.all(queries.map((query) => query));
+  const firstError = results.find((result) => result.error)?.error;
+  if (firstError) throw firstError;
+  const merged = results.flatMap((result) => (result.data || []) as PipelineIncomingEmailLog[]);
+  return dedupePipelineEmailLogs(merged)
+    .sort((a, b) => new Date(b.received_at).getTime() - new Date(a.received_at).getTime())
+    .slice(0, limit);
+}
+
+async function listPipelineEmailSendLogsMerged(
+  candidateIds: string[],
+  emails: string[],
+  input?: { fromIso?: string | null; toIso?: string | null; limit?: number },
+): Promise<PipelineEmailSendLog[]> {
+  if (!candidateIds.length && !emails.length) return [];
+  const limit = input?.limit ?? 3000;
+  const queries: ReturnType<typeof supabase.from>[] = [];
+  if (candidateIds.length) {
+    let byId = supabase
+      .from('email_send_logs')
+      .select(PIPELINE_EMAIL_SEND_LOG_SELECT)
+      .in('candidate_id', candidateIds)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (input?.fromIso) byId = byId.gte('created_at', input.fromIso);
+    if (input?.toIso) byId = byId.lte('created_at', input.toIso);
+    queries.push(byId);
+  }
+  if (emails.length) {
+    let byEmail = supabase
+      .from('email_send_logs')
+      .select(PIPELINE_EMAIL_SEND_LOG_SELECT)
+      .in('to_email', emails)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (input?.fromIso) byEmail = byEmail.gte('created_at', input.fromIso);
+    if (input?.toIso) byEmail = byEmail.lte('created_at', input.toIso);
+    queries.push(byEmail);
+  }
+  const results = await Promise.all(queries.map((query) => query));
+  const firstError = results.find((result) => result.error)?.error;
+  if (firstError) throw firstError;
+  const merged = results.flatMap((result) => (result.data || []) as PipelineEmailSendLog[]);
+  return dedupePipelineEmailLogs(merged)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, limit);
+}
+
 export async function listPipelineIncomingEmailLogs(
   candidateId: string,
   candidateEmail?: string | null,
 ): Promise<PipelineIncomingEmailLog[]> {
   const email = normalizePipelineLogEmail(candidateEmail);
-  let query = supabase.from('email_inbox_logs').select('*').order('received_at', { ascending: false }).limit(200);
-  if (email) {
-    query = query.or(`candidate_id.eq.${candidateId},from_email.eq.${email}`);
-  } else {
-    query = query.eq('candidate_id', candidateId);
-  }
-  const { data, error } = await query;
-  if (error) throw error;
-  return dedupePipelineEmailLogs((data || []) as PipelineIncomingEmailLog[]);
+  return listPipelineIncomingEmailLogsMerged([candidateId], email ? [email] : [], { limit: 200 });
 }
 
 export async function listPipelineEmailSendLogs(
@@ -1925,19 +2094,7 @@ export async function listPipelineEmailSendLogs(
   candidateEmail?: string | null,
 ): Promise<PipelineEmailSendLog[]> {
   const email = normalizePipelineLogEmail(candidateEmail);
-  let query = supabase
-    .from('email_send_logs')
-    .select('id,source,trigger_label,from_email,to_email,cc_email,subject,candidate_id,status,created_at,error_message')
-    .order('created_at', { ascending: false })
-    .limit(150);
-  if (email) {
-    query = query.or(`candidate_id.eq.${candidateId},to_email.eq.${email}`);
-  } else {
-    query = query.eq('candidate_id', candidateId);
-  }
-  const { data, error } = await query;
-  if (error) throw error;
-  return dedupePipelineEmailLogs((data || []) as PipelineEmailSendLog[]);
+  return listPipelineEmailSendLogsMerged([candidateId], email ? [email] : [], { limit: 150 });
 }
 
 export async function listPipelineEmailSendLogsByCandidates(
@@ -1951,19 +2108,11 @@ export async function listPipelineEmailSendLogsByCandidates(
 ): Promise<PipelineEmailSendLog[]> {
   if (!candidateIds.length) return [];
   const emails = [...new Set((input?.candidateEmails || []).map(normalizePipelineLogEmail).filter(Boolean))];
-  const orParts = [`candidate_id.in.(${candidateIds.join(',')})`];
-  if (emails.length) orParts.push(`to_email.in.(${emails.join(',')})`);
-  let query = supabase
-    .from('email_send_logs')
-    .select('id,source,trigger_label,from_email,to_email,cc_email,subject,candidate_id,status,created_at,error_message')
-    .or(orParts.join(','))
-    .order('created_at', { ascending: false })
-    .limit(input?.limit ?? 3000);
-  if (input?.fromIso) query = query.gte('created_at', input.fromIso);
-  if (input?.toIso) query = query.lte('created_at', input.toIso);
-  const { data, error } = await query;
-  if (error) throw error;
-  return dedupePipelineEmailLogs((data || []) as PipelineEmailSendLog[]);
+  return listPipelineEmailSendLogsMerged(candidateIds, emails, {
+    fromIso: input?.fromIso,
+    toIso: input?.toIso,
+    limit: input?.limit,
+  });
 }
 
 export async function listPipelineCallRecords(input?: {
@@ -2096,19 +2245,11 @@ export async function listPipelineIncomingEmailLogsByCandidates(
 ): Promise<PipelineIncomingEmailLog[]> {
   if (!candidateIds.length) return [];
   const emails = [...new Set((input?.candidateEmails || []).map(normalizePipelineLogEmail).filter(Boolean))];
-  const orParts = [`candidate_id.in.(${candidateIds.join(',')})`];
-  if (emails.length) orParts.push(`from_email.in.(${emails.join(',')})`);
-  let query = supabase
-    .from('email_inbox_logs')
-    .select('*')
-    .or(orParts.join(','))
-    .order('received_at', { ascending: false })
-    .limit(3000);
-  if (input?.fromIso) query = query.gte('received_at', input.fromIso);
-  if (input?.toIso) query = query.lte('received_at', input.toIso);
-  const { data, error } = await query;
-  if (error) throw error;
-  return dedupePipelineEmailLogs((data || []) as PipelineIncomingEmailLog[]);
+  return listPipelineIncomingEmailLogsMerged(candidateIds, emails, {
+    fromIso: input?.fromIso,
+    toIso: input?.toIso,
+    limit: 3000,
+  });
 }
 
 export async function listPipelineCallLogs(input?: {

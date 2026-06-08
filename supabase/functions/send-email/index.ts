@@ -159,7 +159,11 @@ Deno.serve(async (req) => {
           sent_by_user_id: user.id,
           status: 'failed',
           error_message: sendErr instanceof Error ? sendErr.message : String(sendErr),
-          metadata: { attachmentCount: attachments.length },
+          metadata: {
+            attachmentCount: attachments.length,
+            body_html: htmlBody ? htmlBody.slice(0, 50000) : null,
+            body_text: textBody ? textBody.slice(0, 20000) : null,
+          },
         });
       }
       throw sendErr;
@@ -178,7 +182,11 @@ Deno.serve(async (req) => {
         candidate_id: logCandidateId,
         sent_by_user_id: user.id,
         status: 'sent',
-        metadata: { attachmentCount: attachments.length },
+        metadata: {
+          attachmentCount: attachments.length,
+          body_html: htmlBody ? htmlBody.slice(0, 50000) : null,
+          body_text: textBody ? textBody.slice(0, 20000) : null,
+        },
       });
     }
 
