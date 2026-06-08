@@ -231,17 +231,6 @@ const WebinarVerifyPage: React.FC = () => {
     }
   };
 
-  const refreshVerifyQuietly = async (token: string, normalized: string) => {
-    const result = await verifyWebinarGeekEmail(token, normalized);
-    if (!result.ok) return;
-    const status = (result.data.status as WebinarGeekVerifyStatus) || 'not_found';
-    const rows = Array.isArray(result.data.subscriptions)
-      ? (result.data.subscriptions as WebinarGeekVerifySubscription[])
-      : [];
-    setVerifyStatus(status);
-    setSubscriptions(rows);
-  };
-
   const runBook = async () => {
     const normalized = email.trim().toLowerCase();
     if (!normalized || !firstname.trim() || !selectedBroadcastId) {
@@ -273,12 +262,9 @@ const WebinarVerifyPage: React.FC = () => {
         candidateId: candidateId || undefined,
       });
       if (!result.ok) throw new Error(result.error);
-      const successText = String(
-        result.data.message || 'Webinar booked successfully — candidate is registered in WebinarGeek.',
-      );
       setBookingProgress({ pct: 100, label: 'Booked successfully!' });
-      setBookSuccess(successText);
-      void refreshVerifyQuietly(token, normalized);
+      setBookSuccess(String(result.data.message || 'Webinar booked through the portal.'));
+      await runVerify();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBookingProgress(null);
@@ -513,6 +499,21 @@ const WebinarVerifyPage: React.FC = () => {
                   <div>
                     <p className="font-semibold">Booking confirmed</p>
                     <p className="mt-1 text-xs opacity-90">{bookSuccess}</p>
+                    {verifyStatus === 'pending_verification' && (
+                      <p className="mt-1 text-xs text-amber-800">
+                        They are registered in WebinarGeek but still need to confirm the invitation email.
+                      </p>
+                    )}
+                    {verifyStatus === 'verified_scheduled' && (
+                      <p className="mt-1 text-xs text-emerald-800">
+                        Verified in WebinarGeek — see the registration details above.
+                      </p>
+                    )}
+                    {verifyStatus === 'not_found' && (
+                      <p className="mt-1 text-xs text-amber-800">
+                        Registration is still syncing. Click Check again in a few seconds.
+                      </p>
+                    )}
                   </div>
                 </div>
               )}

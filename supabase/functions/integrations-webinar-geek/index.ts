@@ -481,17 +481,41 @@ async function findSubscriptionForBroadcast(
   const normalized = normalizeLookupEmail(email);
   if (!normalized || !broadcastId) return [];
 
-  const res = await wgGet('/subscriptions', {
+  const baseParams = {
     email: normalized,
     broadcast_id: broadcastId,
-    per_page: 10,
+    per_page: 50,
     nested_resources: 'broadcast,webinar',
-  });
-  if (!res.ok) return [];
+  };
+  const passes: Array<Record<string, string | number | boolean | undefined>> = [
+    baseParams,
+    { ...baseParams, email_verified: false },
+    { ...baseParams, include_unverified: true },
+  ];
 
-  return subscriptionRowsFromWgJson(res.json).filter(
-    (row) => subscriptionBroadcastId(row) === broadcastId,
-  );
+  const merged = new Map<string, Record<string, unknown>>();
+  for (const params of passes) {
+    const res = await wgGet('/subscriptions', params);
+    if (!res.ok) continue;
+    for (const row of subscriptionRowsFromWgJson(res.json)) {
+      if (subscriptionBroadcastId(row) !== broadcastId) continue;
+      const id = row.id != null ? String(row.id) : '';
+      const key = id || `${String(row.email || '')}|${String(row.created_at || '')}`;
+      if (!merged.has(key)) merged.set(key, row);
+    }
+    if (merged.size > 0) break;
+  }
+
+  if (merged.size === 0) {
+    for (const row of await findSubscriptionsByEmail(normalized)) {
+      if (subscriptionBroadcastId(row) !== broadcastId) continue;
+      const id = row.id != null ? String(row.id) : '';
+      const key = id || `${String(row.email || '')}|${String(row.created_at || '')}`;
+      if (!merged.has(key)) merged.set(key, row);
+    }
+  }
+
+  return [...merged.values()];
 }
 
 async function findSubscriptionsByEmail(email: string): Promise<Array<Record<string, unknown>>> {
@@ -1282,7 +1306,7 @@ Deno.serve(async (req) => {
           email_verified: simplified.some((row) => row.email_verified === true),
           custom_field: effectiveCustomField,
           booked_by: bookedByLabel,
-          message: 'Already registered for this session in WebinarGeek.',
+          message: 'Webinar booked through the portal. Already registered for this session.',
         }), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -1328,9 +1352,13 @@ Deno.serve(async (req) => {
         }
       }
 
-      const subscriptionRow = bookRes.ok
+      let subscriptionRow = bookRes.ok
         ? subscriptionRowsFromWgJson(bookRes.json)[0] || null
         : null;
+      if (bookRes.ok && !subscriptionRow) {
+        const confirmedRows = await findSubscriptionForBroadcast(email, broadcastId);
+        subscriptionRow = confirmedRows[0] || null;
+      }
 
       const auditRow = {
         booked_by_user_id: user.id,
@@ -1382,20 +1410,34 @@ Deno.serve(async (req) => {
         });
       }
 
-      const simplified = subscriptionRow ? simplifySubscriptionRow(subscriptionRow) : null;
+      if (!subscriptionRow) {
+        return new Response(JSON.stringify({
+          error: 'WebinarGeek accepted the request but the registration could not be confirmed. Try Check above, or book again in a moment.',
+          source_status: bookRes.status,
+          wg_details: bookRes.json,
+          attempted_endpoint: bookRes.endpoint,
+          attempted_payload: usedPayload,
+        }), {
+          status: 502,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const simplified = simplifySubscriptionRow(subscriptionRow);
       return new Response(JSON.stringify({
         ok: true,
         booked: true,
+        confirmed_in_webinargeek: true,
         subscription: simplified,
-        email_verified: simplified?.email_verified === true,
+        email_verified: simplified.email_verified === true,
         custom_field: effectiveCustomField,
         dropped_custom_field: droppedCustomField,
         booked_by: bookedByLabel,
         message: droppedCustomField
-          ? 'Registered, but WebinarGeek rejected the Cooper/RMS link tag — booked without link attribution.'
-          : simplified?.email_verified
-          ? 'Registered and email already verified in WebinarGeek.'
-          : 'Registered — candidate must confirm the WebinarGeek email to appear as verified.',
+          ? 'Webinar booked through the portal (without Cooper/RMS link tag — WebinarGeek rejected the tag).'
+          : simplified.email_verified
+          ? 'Webinar booked through the portal. They are verified in WebinarGeek.'
+          : 'Webinar booked through the portal.',
       }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
