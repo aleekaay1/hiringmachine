@@ -2285,6 +2285,20 @@ export async function listPipelineCallLogs(input?: {
   return (data || []) as PipelineCallLog[];
 }
 
+export async function deletePipelineIncomingEmailLog(logId: string): Promise<void> {
+  const id = String(logId || '').trim();
+  if (!id) throw new Error('Missing inbox log id.');
+  const { error } = await supabase.from('email_inbox_logs').delete().eq('id', id);
+  if (error) throw error;
+}
+
+export async function deletePipelineEmailSendLog(logId: string): Promise<void> {
+  const id = String(logId || '').trim();
+  if (!id) throw new Error('Missing outbox log id.');
+  const { error } = await supabase.from('email_send_logs').delete().eq('id', id);
+  if (error) throw error;
+}
+
 export async function syncPipelineIncomingEmails(days = 10, limit = 80): Promise<{ synced: number; mapped: number }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;

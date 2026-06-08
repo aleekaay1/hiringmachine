@@ -1,9 +1,11 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Moon, Sun } from 'lucide-react';
+import { Moon, Sun, Trash2 } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import {
+  deletePipelineEmailSendLog,
+  deletePipelineIncomingEmailLog,
   listPipelineEmailSendLogs,
   listPipelineIncomingEmailLogs,
   listPipelineManualCandidates,
@@ -84,6 +86,8 @@ const PipelineEmailWorkspace: React.FC = () => {
   const [candidateEmailInput, setCandidateEmailInput] = React.useState('');
   const [savingEmail, setSavingEmail] = React.useState(false);
   const [emailMsg, setEmailMsg] = React.useState<string | null>(null);
+  const [deletingInbox, setDeletingInbox] = React.useState(false);
+  const [deletingOutbox, setDeletingOutbox] = React.useState(false);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -187,6 +191,41 @@ const PipelineEmailWorkspace: React.FC = () => {
       setError(e instanceof Error ? e.message : String(e));
     });
   }, [selectedCandidate?.id, loadCandidateMailLogs]);
+
+  const deleteSelectedInbox = async () => {
+    if (!selectedInbox) return;
+    const subject = cleanSubjectForDisplay(selectedInbox.subject) || '(no subject)';
+    if (!window.confirm(`Delete inbox message "${subject}" from ${selectedInbox.from_email}?`)) return;
+    setDeletingInbox(true);
+    setMessage(null);
+    try {
+      await deletePipelineIncomingEmailLog(selectedInbox.id);
+      setIncomingLogs((prev) => prev.filter((log) => log.id !== selectedInbox.id));
+      setSelectedInboxId(null);
+      setMessage('Inbox message deleted.');
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeletingInbox(false);
+    }
+  };
+
+  const deleteSelectedOutbox = async () => {
+    if (!selectedOutbox) return;
+    if (!window.confirm(`Delete outbox log "${selectedOutbox.subject}" to ${selectedOutbox.to_email}?`)) return;
+    setDeletingOutbox(true);
+    setMessage(null);
+    try {
+      await deletePipelineEmailSendLog(selectedOutbox.id);
+      setSendLogs((prev) => prev.filter((log) => log.id !== selectedOutbox.id));
+      setSelectedOutboxId(null);
+      setMessage('Outbox message deleted.');
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeletingOutbox(false);
+    }
+  };
 
   const saveCandidateEmailOverride = async () => {
     if (!selectedCandidate) return;
@@ -524,7 +563,20 @@ const PipelineEmailWorkspace: React.FC = () => {
               )}
             </div>
             <div className={`rounded-lg border p-2.5 max-h-[28vh] overflow-auto ${tone.subtle}`}>
-              <p className={`text-[11px] font-semibold ${tone.panelTitle}`}>Inbox detail</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className={`text-[11px] font-semibold ${tone.panelTitle}`}>Inbox detail</p>
+                {selectedInbox && (
+                  <Button
+                    variant="outline"
+                    className={`!min-h-0 h-7 gap-1 px-2 text-[10px] ${isDark ? '!border-red-300/30 !text-red-200 hover:!bg-red-500/15' : '!border-red-200 !text-red-700 hover:!bg-red-50'}`}
+                    onClick={() => void deleteSelectedInbox()}
+                    disabled={deletingInbox}
+                  >
+                    <Trash2 size={12} aria-hidden />
+                    {deletingInbox ? 'Deleting...' : 'Delete'}
+                  </Button>
+                )}
+              </div>
               {selectedInbox ? (
                 <div className={`mt-1 space-y-2 text-[11px] ${tone.panelMuted}`}>
                   <p><span className="font-semibold">From:</span> {selectedInbox.from_email}</p>
@@ -580,7 +632,20 @@ const PipelineEmailWorkspace: React.FC = () => {
               )}
             </div>
             <div className={`rounded-lg border p-2.5 max-h-[28vh] overflow-auto ${tone.subtle}`}>
-              <p className={`text-[11px] font-semibold ${tone.panelTitle}`}>Outbox detail</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className={`text-[11px] font-semibold ${tone.panelTitle}`}>Outbox detail</p>
+                {selectedOutbox && (
+                  <Button
+                    variant="outline"
+                    className={`!min-h-0 h-7 gap-1 px-2 text-[10px] ${isDark ? '!border-red-300/30 !text-red-200 hover:!bg-red-500/15' : '!border-red-200 !text-red-700 hover:!bg-red-50'}`}
+                    onClick={() => void deleteSelectedOutbox()}
+                    disabled={deletingOutbox}
+                  >
+                    <Trash2 size={12} aria-hidden />
+                    {deletingOutbox ? 'Deleting...' : 'Delete'}
+                  </Button>
+                )}
+              </div>
               {selectedOutbox ? (
                 <div className={`mt-1 space-y-2 text-[11px] ${tone.panelMuted}`}>
                   <p><span className="font-semibold">To:</span> {selectedOutbox.to_email}</p>
