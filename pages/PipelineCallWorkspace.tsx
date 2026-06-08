@@ -15,8 +15,10 @@ import {
   logPipelineCallAction,
   normalizeDialDestination,
   readCallRecordMeta,
+  readPipelineCandidateEmail,
   readPipelineCandidatePhone,
   savePipelineCallDisposition,
+  savePipelineCandidateEmailOverride,
   savePipelineCandidatePhoneOverride,
   type PipelineCallRecord,
   type PipelineCandidate,
@@ -103,6 +105,9 @@ const PipelineCallWorkspace: React.FC = () => {
   const [phoneInput, setPhoneInput] = React.useState('');
   const [savingPhone, setSavingPhone] = React.useState(false);
   const [phoneMsg, setPhoneMsg] = React.useState<string | null>(null);
+  const [emailInput, setEmailInput] = React.useState('');
+  const [savingEmail, setSavingEmail] = React.useState(false);
+  const [emailMsg, setEmailMsg] = React.useState<string | null>(null);
   const [showDispositionModal, setShowDispositionModal] = React.useState(false);
   const [submitAttempted, setSubmitAttempted] = React.useState(false);
   const [candidates, setCandidates] = React.useState<PipelineCandidate[]>([]);
@@ -353,16 +358,24 @@ const PipelineCallWorkspace: React.FC = () => {
     () => (currentCandidate ? readPipelineCandidatePhone(currentCandidate) : null),
     [currentCandidate],
   );
+  const currentEmailInfo = React.useMemo(
+    () => (currentCandidate ? readPipelineCandidateEmail(currentCandidate) : null),
+    [currentCandidate],
+  );
 
   React.useEffect(() => {
     if (!currentCandidate) {
       setPhoneInput('');
       setPhoneMsg(null);
+      setEmailInput('');
+      setEmailMsg(null);
       return;
     }
     setPhoneInput(currentPhoneInfo?.effectivePhone || '');
     setPhoneMsg(null);
-  }, [currentCandidate?.id, currentPhoneInfo?.effectivePhone]);
+    setEmailInput(currentEmailInfo?.effectiveEmail || '');
+    setEmailMsg(null);
+  }, [currentCandidate?.id, currentPhoneInfo?.effectivePhone, currentEmailInfo?.effectiveEmail]);
 
   const disposedInFilteredCount = React.useMemo(
     () => filteredCandidates.filter((candidate) => latestByCandidate.has(candidate.id)).length,
@@ -498,6 +511,27 @@ const PipelineCallWorkspace: React.FC = () => {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setSavingPhone(false);
+    }
+  };
+
+  const saveCandidateEmailOverride = async () => {
+    if (!currentCandidate) return;
+    setSavingEmail(true);
+    setError(null);
+    setEmailMsg(null);
+    try {
+      const updated = await savePipelineCandidateEmailOverride({
+        candidateId: currentCandidate.id,
+        emailInput,
+        source: 'call_workspace',
+      });
+      setCandidates((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
+      setEmailInput(readPipelineCandidateEmail(updated).effectiveEmail);
+      setEmailMsg('Corrected email saved for this candidate.');
+    } catch (e) {
+      setEmailMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingEmail(false);
     }
   };
 
@@ -832,6 +866,42 @@ const PipelineCallWorkspace: React.FC = () => {
                       </p>
                     )}
                     {phoneMsg && <p className="mt-1 text-xs text-emerald-700">{phoneMsg}</p>}
+                  </div>
+
+                  <div className={`rounded-2xl border p-4 ${tone.subtle}`}>
+                    <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Email address</p>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <input
+                        value={emailInput}
+                        onChange={(e) => {
+                          setEmailInput(e.target.value);
+                          setEmailMsg(null);
+                        }}
+                        placeholder="candidate@example.com"
+                        className={`min-w-0 flex-1 rounded-xl border px-3 py-2.5 text-sm ${tone.input}`}
+                      />
+                      <Button
+                        variant="outline"
+                        className="!min-h-0 h-10 shrink-0 px-4 text-sm"
+                        onClick={() => void saveCandidateEmailOverride()}
+                        disabled={savingEmail || !currentCandidate}
+                      >
+                        {savingEmail ? 'Saving...' : 'Save email'}
+                      </Button>
+                    </div>
+                    {currentEmailInfo?.originalExtractedEmail && (
+                      <p className={`mt-2 text-[11px] ${tone.panelLabel}`}>
+                        OCR extracted email: {currentEmailInfo.originalExtractedEmail}
+                      </p>
+                    )}
+                    <p className={`mt-1 text-[11px] ${tone.panelLabel}`}>
+                      Used for inbox matching and outbound email to this resume.
+                    </p>
+                    {emailMsg && (
+                      <p className={`mt-1 text-xs ${emailMsg.startsWith('Corrected') ? 'text-emerald-700' : 'text-red-600'}`}>
+                        {emailMsg}
+                      </p>
+                    )}
                   </div>
                 </div>
               ) : (

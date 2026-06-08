@@ -2,6 +2,7 @@ import React from 'react';
 import { Briefcase, ExternalLink, FileText, GraduationCap, MapPin, Sparkles } from 'lucide-react';
 import {
   getPipelineResumeOpenInNewTabUrl,
+  readPipelineCandidateEmail,
   readPipelineCandidateProfile,
   readPipelineCandidatePhone,
   type PipelineCandidate,
@@ -51,6 +52,7 @@ function DetailItem({
 const CandidateResumeDetailsCard: React.FC<CandidateResumeDetailsCardProps> = ({ candidate, resumes, tone }) => {
   const profile = readPipelineCandidateProfile(candidate);
   const phoneInfo = readPipelineCandidatePhone(candidate);
+  const emailInfo = readPipelineCandidateEmail(candidate);
   const metadata = candidate.metadata && typeof candidate.metadata === 'object' ? candidate.metadata : {};
   const sourceFile = String((metadata as Record<string, unknown>).original_file_name || '').trim();
   const hasProfile =
@@ -104,7 +106,10 @@ const CandidateResumeDetailsCard: React.FC<CandidateResumeDetailsCardProps> = ({
       )}
 
       <div className={`flex flex-wrap items-center gap-3 border-t pt-3 text-xs ${tone.panelMuted}`}>
-        {candidate.email && <span>{candidate.email}</span>}
+        {emailInfo.effectiveEmail && <span>{emailInfo.effectiveEmail}</span>}
+        {emailInfo.originalExtractedEmail && emailInfo.originalExtractedEmail !== emailInfo.effectiveEmail && (
+          <span className={tone.panelLabel}>OCR email: {emailInfo.originalExtractedEmail}</span>
+        )}
         {phoneInfo.effectivePhone && <span>{phoneInfo.effectivePhone}</span>}
         {phoneInfo.originalExtractedPhone && phoneInfo.originalExtractedPhone !== phoneInfo.effectivePhone && (
           <span className={tone.panelLabel}>OCR phone: {phoneInfo.originalExtractedPhone}</span>

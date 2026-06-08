@@ -743,6 +743,42 @@ const PipelineEmailWorkspace: React.FC = () => {
                 </select>
               </div>
 
+              <div className={`rounded-xl border p-3 ${tone.subtle}`}>
+                <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${tone.panelTitle}`}>Resume email (correct if OCR is wrong)</p>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <input
+                    value={candidateEmailInput}
+                    onChange={(e) => {
+                      setCandidateEmailInput(e.target.value);
+                      setEmailMsg(null);
+                    }}
+                    placeholder="candidate@example.com"
+                    className={`min-w-0 flex-1 rounded-xl border px-3 py-2.5 text-sm ${tone.input}`}
+                  />
+                  <Button
+                    variant="outline"
+                    className="!min-h-0 h-10 shrink-0 px-4 text-sm"
+                    onClick={() => void saveCandidateEmailOverride()}
+                    disabled={savingEmail || !selectedCandidate}
+                  >
+                    {savingEmail ? 'Saving...' : 'Save email'}
+                  </Button>
+                </div>
+                {selectedCandidateEmailInfo?.originalExtractedEmail && (
+                  <p className={`mt-2 text-[11px] ${tone.panelLabel}`}>
+                    OCR extracted email: {selectedCandidateEmailInfo.originalExtractedEmail}
+                  </p>
+                )}
+                <p className={`mt-1 text-[11px] ${tone.panelLabel}`}>
+                  Saved on this candidate/resume and used for inbox matching.
+                </p>
+                {emailMsg && (
+                  <p className={`mt-1 text-xs ${emailMsg.includes('saved') ? 'text-emerald-700' : 'text-red-600'}`}>
+                    {emailMsg}
+                  </p>
+                )}
+              </div>
+
               <div>
                 <label htmlFor="compose-template" className={`mb-1 block text-xs font-semibold ${tone.panelTitle}`}>
                   Email template
@@ -775,38 +811,6 @@ const PipelineEmailWorkspace: React.FC = () => {
                     Rich HTML template loaded — calendar button and formatting are preserved on send.
                   </p>
                 )}
-              </div>
-
-              <div className={`rounded-xl border p-3 ${tone.subtle}`}>
-                <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${tone.panelTitle}`}>Resume email (for inbox matching)</p>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <input
-                    value={candidateEmailInput}
-                    onChange={(e) => {
-                      setCandidateEmailInput(e.target.value);
-                      setEmailMsg(null);
-                    }}
-                    placeholder="candidate@example.com"
-                    className={`min-w-0 flex-1 rounded-xl border px-3 py-2.5 text-sm ${tone.input}`}
-                  />
-                  <Button
-                    variant="outline"
-                    className="!min-h-0 h-10 shrink-0 px-4 text-sm"
-                    onClick={() => void saveCandidateEmailOverride()}
-                    disabled={savingEmail || !selectedCandidate}
-                  >
-                    {savingEmail ? 'Saving...' : 'Save email'}
-                  </Button>
-                </div>
-                {selectedCandidateEmailInfo?.originalExtractedEmail && (
-                  <p className={`mt-2 text-[11px] ${tone.panelLabel}`}>
-                    OCR extracted email: {selectedCandidateEmailInfo.originalExtractedEmail}
-                  </p>
-                )}
-                <p className={`mt-1 text-[11px] ${tone.panelLabel}`}>
-                  Inbox sync matches incoming mail by this address. Fix it here if OCR picked the wrong email.
-                </p>
-                {emailMsg && <p className="mt-1 text-xs text-emerald-700">{emailMsg}</p>}
               </div>
 
               <div>

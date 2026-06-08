@@ -1730,10 +1730,17 @@ export async function savePipelineCandidateEmailOverride(input: {
     })
     .eq('id', input.candidateId)
     .select('id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at')
-    .single();
+    .maybeSingle();
   if (error) throw error;
+  if (!data) {
+    throw new Error('Could not save email. You may not have permission to edit this candidate.');
+  }
 
-  await remapPipelineInboxLogsForEmail(emailInput, input.candidateId);
+  try {
+    await remapPipelineInboxLogsForEmail(emailInput, input.candidateId);
+  } catch {
+    // Inbox remap is best-effort; candidate email save should still succeed.
+  }
   return data as PipelineCandidate;
 }
 
