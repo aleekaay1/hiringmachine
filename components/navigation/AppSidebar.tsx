@@ -16,6 +16,7 @@ type AppSidebarProps = {
   displayName: string;
   roleLabel: string;
   avatarUrl: string | null;
+  roleResolved: boolean;
   onLogout: () => void;
 };
 
@@ -25,6 +26,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
   displayName,
   roleLabel,
   avatarUrl,
+  roleResolved,
   onLogout,
 }) => {
   const navigate = useNavigate();
@@ -34,17 +36,27 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
   const [collapsed, setCollapsed] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
-  const [openGroups, setOpenGroups] = React.useState<Set<string>>(() => new Set(['home']));
+  const [openGroups, setOpenGroups] = React.useState<Set<string>>(
+    () => new Set(NAV_GROUPS.map((group) => group.id)),
+  );
   const [hoverGroup, setHoverGroup] = React.useState<string | null>(null);
 
-  const visibleGroups = React.useMemo(
-    () =>
-      NAV_GROUPS.map((group) => ({
-        ...group,
-        items: group.items.filter((item) => canAccessSection(role, item.section, userEmail)),
-      })).filter((group) => group.items.length > 0),
-    [role, userEmail],
-  );
+  const visibleGroups = React.useMemo(() => {
+    if (!roleResolved) return NAV_GROUPS;
+    return NAV_GROUPS.map((group) => ({
+      ...group,
+      items: group.items.filter((item) => canAccessSection(role, item.section, userEmail)),
+    })).filter((group) => group.items.length > 0);
+  }, [role, userEmail, roleResolved]);
+
+  React.useEffect(() => {
+    if (!visibleGroups.length) return;
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      visibleGroups.forEach((group) => next.add(group.id));
+      return next;
+    });
+  }, [visibleGroups]);
 
   React.useEffect(() => {
     const active = visibleGroups.find((group) => isGroupActive(group, pathname, search));
@@ -125,7 +137,10 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         </button>
       </div>
 
-      <nav className="flex-1 overflow-y-auto overflow-x-hidden py-3">
+      <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-3">
+        {!roleResolved && (
+          <p className="px-4 pb-2 text-[11px] text-slate-500">Loading menu…</p>
+        )}
         {visibleGroups.map((group) => {
           const GroupIcon = group.icon;
           const groupOpen = openGroups.has(group.id);
@@ -268,7 +283,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-[280px] flex-col bg-[#11101d] text-white shadow-2xl transition-transform duration-300 lg:static lg:z-auto lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex h-screen w-[280px] min-h-0 flex-col bg-[#11101d] text-white shadow-2xl transition-transform duration-300 lg:sticky lg:top-0 lg:z-auto lg:translate-x-0 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         } ${collapsed ? 'lg:w-[78px]' : 'lg:w-[260px]'}`}
       >

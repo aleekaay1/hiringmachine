@@ -124,8 +124,19 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
     return data as UserProfile;
   }
 
+  if (error) {
+    const { data: fallbackData, error: fallbackErr } = await supabase
+      .from('user_profiles')
+      .select('user_id, email, full_name, role, points, points_updated_at')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!fallbackErr && fallbackData) {
+      return { ...(fallbackData as UserProfile), avatar_url: null };
+    }
+  }
+
   if (error?.code === 'PGRST116') {
-    return null;
+    return staffProfileFromAuthUser(user);
   }
 
   if (error && isMissingUserProfilesRelation(error)) {
@@ -133,7 +144,7 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
     return staffProfileFromAuthUser(user);
   }
 
-  return null;
+  return staffProfileFromAuthUser(user);
 }
 
 const ADMIN_DATA_SECTIONS: AppSection[] = [
@@ -227,7 +238,10 @@ export function canAccessSection(
   if (role === 'admin') {
     if (ADMIN_DATA_SECTIONS.includes(section)) return true;
     if (canAccessHrLeadDistribution(role, email) && section === 'pipeline-hr-leads') return true;
-    if (adminHasPipelineOperationalAccess(role, email) && PIPELINE_OPERATIONAL_SECTIONS.includes(section)) {
+    if (
+      (adminHasPipelineOperationalAccess(role, email) || isOpsConsoleEmail(email) || isHrLeadDistributorEmail(email))
+      && PIPELINE_OPERATIONAL_SECTIONS.includes(section)
+    ) {
       return true;
     }
     return false;

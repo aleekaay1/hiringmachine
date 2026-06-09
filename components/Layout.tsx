@@ -131,6 +131,7 @@ const Layout: React.FC<LayoutProps> = ({
           displayName={displayName}
           roleLabel={roleLabel}
           avatarUrl={avatarUrl}
+          roleResolved={roleResolved}
           onLogout={() => void handleLogout()}
         />
       )}
