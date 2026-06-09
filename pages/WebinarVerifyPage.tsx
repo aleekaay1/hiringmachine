@@ -419,7 +419,7 @@ const WebinarVerifyPage: React.FC = () => {
                     {!bookingIdentities.length && (
                       <p className="text-[11px] text-amber-800">
                         No Cooper/RMS links matched your first name yet. Set your registration tag in{' '}
-                        <a href="/pipeline-settings" target="_blank" rel="noreferrer" className="font-semibold underline">
+                        <a href="/account#recruiter-call-settings" target="_blank" rel="noreferrer" className="font-semibold underline">
                           Pipeline settings
                         </a>{' '}
                         (e.g. cooper_yourname) — you can still book using that saved tag.
@@ -483,7 +483,7 @@ const WebinarVerifyPage: React.FC = () => {
                   {booking ? 'Booking…' : 'Book webinar'}
                 </Button>
                 <a
-                  href="/pipeline-settings"
+                  href="/account#recruiter-call-settings"
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex items-center gap-1 text-xs font-semibold text-[#005EB8] hover:underline"

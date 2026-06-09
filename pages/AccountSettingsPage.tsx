@@ -1,7 +1,9 @@
 import React from 'react';
 import { Camera, Hash, Mail, Phone, Save, User } from 'lucide-react';
 import { Button } from '../components/UI';
-import { getCurrentUserProfile, type AppRole } from '../services/accessControl';
+import RecruiterCallSettingsPanel from '../components/account/RecruiterCallSettingsPanel';
+import PageGuidePanel from '../components/tour/PageGuidePanel';
+import { canAccessSection, getCurrentUserProfile, type AppRole } from '../services/accessControl';
 import { removeProfileAvatar, uploadProfileAvatar } from '../services/profileAvatarService';
 import { updateUserProfileDetails } from '../services/profileService';
 
@@ -18,6 +20,7 @@ const AccountSettingsPage: React.FC = () => {
   const [phone, setPhone] = React.useState('');
   const [extension, setExtension] = React.useState('');
   const [avatarUrl, setAvatarUrl] = React.useState<string | null>(null);
+  const [showCallSettings, setShowCallSettings] = React.useState(false);
 
   const loadProfile = React.useCallback(async () => {
     const profile = await getCurrentUserProfile();
@@ -27,12 +30,22 @@ const AccountSettingsPage: React.FC = () => {
     setPhone(profile?.phone || '');
     setExtension(profile?.extension || '');
     setAvatarUrl(profile?.avatar_url || null);
+    setShowCallSettings(canAccessSection(profile?.role ?? null, 'pipeline-settings', profile?.email));
     setLoading(false);
   }, []);
 
   React.useEffect(() => {
     void loadProfile();
   }, [loadProfile]);
+
+  React.useEffect(() => {
+    if (!showCallSettings) return;
+    if (window.location.hash === '#recruiter-call-settings') {
+      window.requestAnimationFrame(() => {
+        document.getElementById('recruiter-call-settings')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+  }, [showCallSettings, loading]);
 
   const initials = fullName
     .split(/\s+/)
@@ -103,7 +116,7 @@ const AccountSettingsPage: React.FC = () => {
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Account</p>
             <h1 className="mt-1 text-2xl font-bold tracking-tight md:text-3xl">My profile</h1>
             <p className="mt-2 max-w-xl text-sm text-slate-300">
-              Update how you appear in the app, add contact details for your team, and manage admin tools in one place.
+              Update how you appear in the app, contact details, and recruiter call settings in one place.
             </p>
 
             <div className="mt-6 flex flex-col gap-5 sm:flex-row sm:items-end">
@@ -166,6 +179,8 @@ const AccountSettingsPage: React.FC = () => {
         {message && (
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{message}</div>
         )}
+
+        <PageGuidePanel guideId="account" />
 
         <section className="rounded-2xl border border-[#d6deea] bg-white p-6 shadow-sm md:p-8">
           <div className="mb-6">
@@ -244,6 +259,8 @@ const AccountSettingsPage: React.FC = () => {
             </div>
           )}
         </section>
+
+        {showCallSettings && <RecruiterCallSettingsPanel />}
       </div>
   );
 };

@@ -24,7 +24,6 @@ import PipelineCallWorkspace from './pages/PipelineCallWorkspace';
 import PipelinePerformance from './pages/PipelinePerformance';
 import PipelineEmailWorkspace from './pages/PipelineEmailWorkspace';
 import PipelineUploadsWorkspace from './pages/PipelineUploadsWorkspace';
-import PipelineSettings from './pages/PipelineSettings';
 import WebinarVerifyPage from './pages/WebinarVerifyPage';
 import RoleHome from './pages/RoleHome';
 import Reports from './pages/Reports';
@@ -70,7 +69,7 @@ const App: React.FC = () => {
           <Route path="/pipeline/email" element={<PipelineEmailWorkspace />} />
           <Route path="/pipeline/webinar-verify" element={<WebinarVerifyPage />} />
           <Route path="/pipeline/uploads" element={<PipelineUploadsWorkspace />} />
-          <Route path="/pipeline-settings" element={<PipelineSettings />} />
+          <Route path="/pipeline-settings" element={<Navigate to="/account#recruiter-call-settings" replace />} />
           <Route path="/superdashboard" element={<Navigate to="/home" replace />} />
           <Route path="/qr" element={<QrCodes />} />
           <Route path="/email-log" element={<EmailLog />} />

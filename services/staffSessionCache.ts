@@ -4,6 +4,7 @@ import { getCurrentUserProfile } from './accessControl';
 import { supabase } from './supabaseClient';
 
 export type StaffSessionSnapshot = {
+  userId: string | null;
   role: AppRole | null;
   userEmail: string | null;
   displayName: string;
@@ -14,6 +15,7 @@ export type StaffSessionSnapshot = {
 let authReady = false;
 let authenticated = false;
 let profileSnapshot: StaffSessionSnapshot = {
+  userId: null,
   role: null,
   userEmail: null,
   displayName: 'Staff',
@@ -34,6 +36,7 @@ export function getStaffSessionSnapshot(): StaffSessionSnapshot {
 
 function applyProfile(profile: Awaited<ReturnType<typeof getCurrentUserProfile>>, email: string | null): StaffSessionSnapshot {
   profileSnapshot = {
+    userId: profile?.user_id ?? null,
     role: profile?.role ?? null,
     userEmail: email ?? profile?.email ?? null,
     displayName: profile?.full_name || email || 'Staff',
@@ -48,6 +51,7 @@ export function primeStaffAuth(session: Session | null): void {
   authenticated = Boolean(session);
   if (!session) {
     profileSnapshot = {
+      userId: null,
       role: null,
       userEmail: null,
       displayName: 'Staff',
@@ -93,6 +97,7 @@ export function clearStaffSessionCache(): void {
   authReady = false;
   authenticated = false;
   profileSnapshot = {
+    userId: null,
     role: null,
     userEmail: null,
     displayName: 'Staff',

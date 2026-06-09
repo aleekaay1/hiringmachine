@@ -2,6 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { Moon, Sun, Trash2 } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
+import PageGuidePanel from '../components/tour/PageGuidePanel';
 import { Button } from '../components/UI';
 import {
   deletePipelineEmailSendLog,
@@ -434,7 +435,8 @@ const PipelineEmailWorkspace: React.FC = () => {
       subtitle="Sign in to use recruiter email workflow"
       redirectPath="/pipeline/email"
     >
-      <div className={`mx-auto w-full max-w-[1460px] ${tone.page} ${tone.pageTheme}`}>
+      <div className={`mx-auto w-full max-w-[1460px] space-y-3 ${tone.page} ${tone.pageTheme}`}>
+        <PageGuidePanel guideId="pipeline-email" />
         <div className={`pointer-events-none absolute -top-24 left-[-10%] h-72 w-72 rounded-full bg-gradient-to-br blur-3xl ${tone.orbA}`} />
         <div className={`pointer-events-none absolute top-40 right-[-8%] h-80 w-80 rounded-full bg-gradient-to-br blur-3xl ${tone.orbB}`} />
         <div className={`pointer-events-none absolute bottom-[-6rem] left-1/3 h-72 w-72 rounded-full bg-gradient-to-tr blur-3xl ${tone.orbC}`} />

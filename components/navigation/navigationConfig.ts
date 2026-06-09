@@ -11,8 +11,6 @@ import {
   MonitorPlay,
   PhoneCall,
   QrCode,
-  SlidersHorizontal,
-  Trophy,
   User,
   UserPlus,
   Users,
@@ -32,19 +30,24 @@ export type NavGroup = {
   label: string;
   icon: LucideIcon;
   items: NavItem[];
+  tourId?: string;
 };
+
+export const LEADERBOARD_ROUTE = '/calls-analytics/leaderboard';
 
 export const NAV_GROUPS: NavGroup[] = [
   {
     id: 'home',
     label: 'Home',
     icon: Home,
+    tourId: 'nav-home',
     items: [{ name: 'My dashboard', route: '/home', icon: Home, section: 'home' }],
   },
   {
     id: 'hiring',
     label: 'Hiring',
     icon: Users,
+    tourId: 'nav-hiring',
     items: [
       { name: 'Overview', route: '/dashboard?view=overview', icon: LayoutDashboard, section: 'overview' },
       { name: 'Candidates', route: '/dashboard?view=candidates', icon: Users, section: 'candidates' },
@@ -53,22 +56,32 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    id: 'pipeline',
-    label: 'Pipeline',
+    id: 'workstation',
+    label: 'Workstation',
     icon: PhoneCall,
+    tourId: 'nav-workstation',
     items: [
-      { name: 'Call workspace', route: '/pipeline/call', icon: PhoneCall, section: 'pipeline-call' },
-      { name: 'Resume uploads', route: '/pipeline/uploads', icon: FileUp, section: 'pipeline-uploads' },
+      { name: 'Phone workspace', route: '/pipeline/call', icon: PhoneCall, section: 'pipeline-call' },
       { name: 'Email workspace', route: '/pipeline/email', icon: Mail, section: 'pipeline-email' },
+      { name: 'Resume uploads', route: '/pipeline/uploads', icon: FileUp, section: 'pipeline-uploads' },
+    ],
+  },
+  {
+    id: 'insights',
+    label: 'Insights',
+    icon: BarChart3,
+    tourId: 'nav-insights',
+    items: [
       { name: 'Performance', route: '/pipeline/performance', icon: BarChart3, section: 'pipeline-performance' },
-      { name: 'Pipeline settings', route: '/pipeline-settings', icon: SlidersHorizontal, section: 'pipeline-settings' },
-      { name: 'Legacy pipeline', route: '/pipeline', icon: PhoneCall, section: 'pipeline' },
+      { name: 'Calls analytics', route: '/calls-analytics', icon: BarChart3, section: 'calls-analytics' },
+      { name: 'Email log', route: '/email-log', icon: Mail, section: 'email-log' },
     ],
   },
   {
     id: 'hr-leads',
     label: 'HR & Leads',
     icon: UserPlus,
+    tourId: 'nav-hr',
     items: [
       { name: 'Lead distribution', route: '/hr/lead-distribution', icon: UserPlus, section: 'pipeline-hr-leads' },
       { name: 'All leads', route: '/hr/leads', icon: FileSpreadsheet, section: 'pipeline-hr-leads' },
@@ -79,31 +92,24 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'sessions',
     label: 'Sessions',
     icon: Video,
+    tourId: 'nav-sessions',
     items: [
       { name: 'Live Sessions', route: '/live-sessions', icon: Video, section: 'live-sessions' },
       { name: 'Webinar Geek', route: '/webinar-geek', icon: MonitorPlay, section: 'webinar-geek' },
     ],
   },
   {
-    id: 'analytics',
-    label: 'Analytics',
-    icon: BarChart3,
-    items: [
-      { name: 'Calls Analytics', route: '/calls-analytics', icon: BarChart3, section: 'calls-analytics' },
-      { name: 'Leadership Board', route: '/calls-analytics/leaderboard', icon: Trophy, section: 'leaderboard' },
-      { name: 'Email log', route: '/email-log', icon: Mail, section: 'email-log' },
-    ],
-  },
-  {
     id: 'account',
     label: 'Account',
     icon: User,
+    tourId: 'nav-account',
     items: [{ name: 'My profile', route: '/account', icon: User, section: 'account' }],
   },
   {
     id: 'support',
     label: 'Support',
     icon: LifeBuoy,
+    tourId: 'nav-support',
     items: [{ name: 'Support', route: '/support', icon: LifeBuoy, section: 'support' }],
   },
 ];

@@ -9,6 +9,7 @@ import {
   type AppSection,
 } from '../services/accessControl';
 import AppSidebar from './navigation/AppSidebar';
+import PortalTour from './tour/PortalTour';
 import {
   clearStaffSessionCache,
   getStaffSessionSnapshot,
@@ -37,6 +38,7 @@ const Layout: React.FC<LayoutProps> = ({
   const [displayName, setDisplayName] = React.useState(cachedSession.displayName);
   const [avatarUrl, setAvatarUrl] = React.useState<string | null>(cachedSession.avatarUrl);
   const [roleResolved, setRoleResolved] = React.useState(cachedSession.resolved);
+  const [userId, setUserId] = React.useState<string | null>(cachedSession.userId);
   const accessCheckedRef = React.useRef<string | null>(null);
 
   const currentSection = React.useMemo<AppSection>(() => {
@@ -70,6 +72,7 @@ const Layout: React.FC<LayoutProps> = ({
   }, [location.pathname, location.search]);
 
   const applySessionSnapshot = React.useCallback((snapshot: ReturnType<typeof getStaffSessionSnapshot>) => {
+    setUserId(snapshot.userId);
     setRole(snapshot.role);
     setUserEmail(snapshot.userEmail);
     setDisplayName(snapshot.displayName);
@@ -155,6 +158,7 @@ const Layout: React.FC<LayoutProps> = ({
       className="min-h-screen flex items-start font-sans text-gray-800"
       style={{ backgroundColor: isAdmin ? '#eef2f7' : COLORS.background }}
     >
+      {isAdmin && <PortalTour userId={userId} enabled={roleResolved} />}
       {isAdmin && (
         <AppSidebar
           role={role}
@@ -199,7 +203,7 @@ const Layout: React.FC<LayoutProps> = ({
             <div className="h-1 w-full bg-gradient-to-r from-[#005EB8] to-[#37B06D]" />
           </header>
         )}
-        <main className={`flex-grow flex flex-col min-h-0 relative overflow-x-hidden px-safe-area ${isAdmin ? 'pt-14 lg:pt-0' : ''}`}>
+        <main className={`flex-grow flex flex-col min-h-0 relative overflow-x-hidden px-safe-area ${isAdmin ? 'max-lg:pl-[4.75rem]' : ''}`}>
           {children}
         </main>
         {!isAdmin && (

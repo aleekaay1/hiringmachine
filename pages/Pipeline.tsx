@@ -1374,7 +1374,7 @@ const Pipeline: React.FC = () => {
               <RefreshCw size={14} className={loading ? 'mr-1 animate-spin' : 'mr-1'} />
               Refresh
             </Button>
-            <Link to="/pipeline-settings" className="inline-flex items-center gap-1 rounded-xl border border-[#b8d2ef] px-3 py-2 text-xs text-[#0B1B34] hover:bg-[#f2f8ff]">
+            <Link to="/account#recruiter-call-settings" className="inline-flex items-center gap-1 rounded-xl border border-[#b8d2ef] px-3 py-2 text-xs text-[#0B1B34] hover:bg-[#f2f8ff]">
               <Settings2 size={13} />
               Pipeline settings
             </Link>
@@ -1537,7 +1537,7 @@ const Pipeline: React.FC = () => {
                           Logs
                         </button>
                         <Link
-                          to="/pipeline-settings"
+                          to="/account#recruiter-call-settings"
                           className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-[11px] text-slate-700 hover:bg-slate-100"
                         >
                           <Settings2 size={12} />

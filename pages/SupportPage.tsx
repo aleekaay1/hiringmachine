@@ -1,7 +1,10 @@
 import React from 'react';
 import { LifeBuoy, Send, Ticket } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
+import PageGuidePanel from '../components/tour/PageGuidePanel';
 import { Button } from '../components/UI';
+import { PORTAL_FAQS } from '../content/portalTourContent';
+import { requestPortalTour } from '../services/portalTourService';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { getCurrentUserProfile } from '../services/accessControl';
 import {
@@ -117,6 +120,32 @@ const SupportPage: React.FC = () => {
 
         {error && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900">{error}</div>}
         {message && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">{message}</div>}
+
+        <section className="rounded-2xl border border-[#d9e5f6] bg-white p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-[#0B1B34]">Portal training</h2>
+              <p className="mt-1 text-xs text-[#5c7594]">Walk through the menu, profile, and leaderboard — skip anytime.</p>
+            </div>
+            <Button variant="outline" className="!min-h-0 h-9 text-xs" onClick={() => requestPortalTour()}>
+              Start portal tour
+            </Button>
+          </div>
+        </section>
+
+        <PageGuidePanel guideId="support" />
+
+        <section className="rounded-2xl border border-[#d9e5f6] bg-white p-4 shadow-sm">
+          <h2 className="text-sm font-semibold text-[#0B1B34]">Frequently asked questions</h2>
+          <div className="mt-3 space-y-2">
+            {PORTAL_FAQS.map((item) => (
+              <details key={item.q} className="rounded-xl border border-[#e8eef5] bg-[#f8fbff] px-3 py-2">
+                <summary className="cursor-pointer text-sm font-medium text-[#0B1B34]">{item.q}</summary>
+                <p className="mt-2 pb-1 text-sm text-[#4b6d95]">{item.a}</p>
+              </details>
+            ))}
+          </div>
+        </section>
 
         <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
           <section className="rounded-2xl border border-[#d9e5f6] bg-white p-4 shadow-sm">

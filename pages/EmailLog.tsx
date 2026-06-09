@@ -7,6 +7,7 @@ import { getCandidates } from '../services/storageService';
 import { sendEmail } from '../services/emailService';
 import { mergeTemplate } from '../services/emailTemplates';
 import { getSiteOriginForEmail } from '../services/emailSignature';
+import PageGuidePanel from '../components/tour/PageGuidePanel';
 import { fetchLiveSessionsDashboard, type PastMeetingRow, type UpcomingMeetingRow } from '../services/liveSessionsIntegrations';
 import { sessionLabelsFromStartIso } from '../services/liveSessionOccurrences';
 import {
@@ -908,6 +909,7 @@ const EmailLog: React.FC = () => {
 
   return (
       <div className="w-full p-5 lg:p-6 space-y-5 text-[#1A2942]">
+        <PageGuidePanel guideId="email-log" />
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-5 py-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <div className="h-10 w-10 rounded-xl bg-[#005EB8]/10 flex items-center justify-center shrink-0">

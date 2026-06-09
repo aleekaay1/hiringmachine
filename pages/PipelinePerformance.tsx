@@ -2,6 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { Moon, RefreshCw, Sun } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
+import PageGuidePanel from '../components/tour/PageGuidePanel';
 import { Button } from '../components/UI';
 import {
   listPipelineCallLogs,
@@ -278,7 +279,8 @@ const PipelinePerformance: React.FC = () => {
       subtitle={isAdminView ? 'Sign in to view team KPI metrics' : 'Sign in to view your KPI metrics'}
       redirectPath="/pipeline/performance"
     >
-      <div className={`mx-auto w-full max-w-[1320px] ${tone.page} ${tone.pageTheme}`}>
+      <div className={`mx-auto w-full max-w-[1320px] space-y-3 ${tone.page} ${tone.pageTheme}`}>
+        <PageGuidePanel guideId="pipeline-performance" />
         <div className={`pointer-events-none absolute -top-24 left-[-10%] h-72 w-72 rounded-full bg-gradient-to-br blur-3xl ${tone.orbA}`} />
         <div className={`pointer-events-none absolute top-40 right-[-8%] h-80 w-80 rounded-full bg-gradient-to-br blur-3xl ${tone.orbB}`} />
         <div className={`pointer-events-none absolute bottom-[-6rem] left-1/3 h-72 w-72 rounded-full bg-gradient-to-tr blur-3xl ${tone.orbC}`} />

@@ -1,11 +1,13 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { ChevronDown, LogOut, Menu, X } from 'lucide-react';
+import { ChevronDown, Crown, LogOut, Menu, X } from 'lucide-react';
 import type { AppRole } from '../../services/accessControl';
 import { canAccessSection } from '../../services/accessControl';
+import { getStaffSessionSnapshot } from '../../services/staffSessionCache';
 import {
   isGroupActive,
   isItemActive,
+  LEADERBOARD_ROUTE,
   NAV_GROUPS,
   type NavGroup,
 } from './navigationConfig';
@@ -20,36 +22,39 @@ type AppSidebarProps = {
   onLogout: () => void;
 };
 
-function SidebarLogo({ compact = false }: { compact?: boolean }) {
-  return (
-    <div
-      className={`flex shrink-0 items-center justify-center rounded-full bg-white shadow-[0_4px_18px_-6px_rgba(0,0,0,0.45)] ${
-        compact ? 'h-[3.25rem] w-[3.25rem]' : 'h-[4.25rem] w-[4.25rem]'
-      }`}
-    >
-      <img
-        src="/logo.png"
-        alt="Paz Organization"
-        className={`object-contain ${compact ? 'h-[2.65rem] w-[2.65rem]' : 'h-[3.5rem] w-[3.5rem]'}`}
-      />
-    </div>
-  );
-}
+const SIDEBAR_LOGO_SRC = '/white%20logo.png';
 
-function SidebarBrand({ compact = false }: { compact?: boolean }) {
-  if (compact) {
-    return <SidebarLogo compact />;
+function SidebarBrand({
+  compact = false,
+  onLogoClick,
+}: {
+  compact?: boolean;
+  onLogoClick?: () => void;
+}) {
+  const logo = (
+    <img
+      src={SIDEBAR_LOGO_SRC}
+      alt="Paz Organization"
+      className={`block w-auto object-contain object-left ${
+        compact ? 'h-9 max-w-[2.85rem]' : 'h-12 max-w-[11.5rem]'
+      }`}
+    />
+  );
+
+  if (onLogoClick) {
+    return (
+      <button
+        type="button"
+        onClick={onLogoClick}
+        className="min-w-0 shrink transition opacity-95 hover:opacity-100"
+        aria-label="Expand menu"
+      >
+        {logo}
+      </button>
+    );
   }
 
-  return (
-    <div className="flex min-w-0 items-center gap-3">
-      <SidebarLogo />
-      <div className="min-w-0 leading-none" style={{ fontFamily: 'Outfit, Segoe UI, system-ui, sans-serif' }}>
-        <p className="truncate text-[1.65rem] font-extrabold tracking-tight text-white">PAZ</p>
-        <p className="truncate text-[0.72rem] font-semibold uppercase tracking-[0.34em] text-slate-400">HRMS</p>
-      </div>
-    </div>
-  );
+  return <div className="min-w-0 flex-1">{logo}</div>;
 }
 
 const AppSidebar: React.FC<AppSidebarProps> = ({
@@ -68,16 +73,35 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
   const [collapsed, setCollapsed] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
+  const [isMobile, setIsMobile] = React.useState(false);
   const [openGroups, setOpenGroups] = React.useState<Set<string>>(() => new Set());
   const [hoverGroup, setHoverGroup] = React.useState<string | null>(null);
+  const [leaderboardHover, setLeaderboardHover] = React.useState(false);
+
+  React.useEffect(() => {
+    const media = window.matchMedia('(max-width: 1023px)');
+    const sync = () => setIsMobile(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
+  }, []);
+
+  const isRailView = collapsed || (isMobile && !mobileOpen);
+
+  const sessionSnapshot = getStaffSessionSnapshot();
+  const menuRole = role ?? sessionSnapshot.role;
+  const menuEmail = userEmail ?? sessionSnapshot.userEmail;
+
+  const showLeaderboard = canAccessSection(menuRole, 'leaderboard', menuEmail);
+  const leaderboardActive =
+    pathname === '/calls-analytics/leaderboard' || pathname === '/leaderboard';
 
   const visibleGroups = React.useMemo(() => {
-    if (!roleResolved) return NAV_GROUPS;
     return NAV_GROUPS.map((group) => ({
       ...group,
-      items: group.items.filter((item) => canAccessSection(role, item.section, userEmail)),
+      items: group.items.filter((item) => canAccessSection(menuRole, item.section, menuEmail)),
     })).filter((group) => group.items.length > 0);
-  }, [role, userEmail, roleResolved]);
+  }, [menuRole, menuEmail]);
 
   React.useEffect(() => {
     const active = visibleGroups.find((group) => isGroupActive(group, pathname, search));
@@ -99,9 +123,28 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     });
   };
 
-  const go = (route: string) => {
+  const openFullSidebar = React.useCallback(() => {
+    setCollapsed(false);
+    if (isMobile) setMobileOpen(true);
+  }, [isMobile]);
+
+  const go = (route: string, options?: { keepOpen?: boolean }) => {
     navigate(route);
-    setMobileOpen(false);
+    if (!options?.keepOpen) setMobileOpen(false);
+  };
+
+  const handleMenuToggle = () => {
+    if (isMobile) {
+      if (mobileOpen) setMobileOpen(false);
+      else openFullSidebar();
+      return;
+    }
+    setCollapsed((prev) => !prev);
+  };
+
+  const handleCollapsedNavClick = (group: NavGroup, singleItem: boolean) => {
+    openFullSidebar();
+    if (!singleItem) toggleGroup(group.id);
   };
 
   const initials = displayName
@@ -128,7 +171,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
               }`}
             >
               <Icon size={18} className="shrink-0" />
-              {(!collapsed || flyout) && <span className="truncate">{item.name}</span>}
+              {(!isRailView || flyout) && <span className="truncate">{item.name}</span>}
             </button>
           </li>
         );
@@ -138,53 +181,48 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
   const sidebarInner = (
     <>
-      <div
-        className={`shrink-0 border-b border-white/10 ${
-          collapsed ? 'flex flex-col items-center gap-2 px-2 py-3' : 'flex items-center justify-between gap-2 px-4 py-4'
-        }`}
-      >
-        <SidebarBrand compact={collapsed} />
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/10 px-3 py-3.5 lg:px-4 lg:py-4">
+        <SidebarBrand compact={isRailView} onLogoClick={isRailView ? openFullSidebar : undefined} />
         <button
           type="button"
-          onClick={() => setCollapsed((prev) => !prev)}
+          onClick={handleMenuToggle}
           className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-300 hover:bg-white/10 hover:text-white ${
-            collapsed ? '' : 'hidden lg:inline-flex'
+            isRailView ? 'inline-flex' : 'hidden lg:inline-flex'
           }`}
-          aria-label={collapsed ? 'Expand menu' : 'Collapse menu'}
+          aria-label={isRailView ? 'Expand menu' : 'Collapse menu'}
         >
           <Menu size={20} />
         </button>
       </div>
 
-      <nav className={`shrink-0 py-2 ${collapsed ? 'space-y-0' : 'space-y-0.5'}`}>
-        {!roleResolved && (
-          <p className="px-4 pb-2 text-[11px] text-slate-500">Loading menu…</p>
-        )}
+      <nav className={`shrink-0 py-2 ${isRailView ? 'space-y-0' : 'space-y-0.5'}`} data-tour="sidebar-nav">
         {visibleGroups.map((group) => {
           const GroupIcon = group.icon;
           const groupOpen = openGroups.has(group.id);
           const groupActive = isGroupActive(group, pathname, search);
           const singleItem = group.items.length === 1;
 
-          if (collapsed) {
+          if (isRailView) {
             return (
               <div
                 key={group.id}
+                data-tour={group.tourId}
                 className="relative px-1.5 py-0.5"
                 onMouseEnter={() => setHoverGroup(group.id)}
                 onMouseLeave={() => setHoverGroup(null)}
               >
                 <button
                   type="button"
-                  onClick={() => (singleItem ? go(group.items[0].route) : toggleGroup(group.id))}
+                  onClick={() => handleCollapsedNavClick(group, singleItem)}
                   className={`flex w-full items-center justify-center rounded-xl p-2 transition ${
                     groupActive ? 'bg-white text-[#11101d]' : 'text-slate-300 hover:bg-white/10 hover:text-white'
                   }`}
                   title={group.label}
+                  aria-label={group.label}
                 >
                   <GroupIcon size={20} />
                 </button>
-                {hoverGroup === group.id && (
+                {hoverGroup === group.id && !isMobile && (
                   <div className="absolute left-full top-0 z-50 ml-2 min-w-[200px] rounded-xl border border-white/10 bg-[#1d1b31] py-2 shadow-2xl">
                     <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{group.label}</p>
                     {renderGroupItems(group, true)}
@@ -199,7 +237,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             const Icon = item.icon;
             const active = isItemActive(pathname, search, item.route);
             return (
-              <div key={group.id} className="px-2 py-0.5">
+              <div key={group.id} data-tour={group.tourId} className="px-2 py-0.5">
                 <button
                   type="button"
                   onClick={() => go(item.route)}
@@ -215,7 +253,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
           }
 
           return (
-            <div key={group.id} className="px-2 py-0.5">
+            <div key={group.id} data-tour={group.tourId} className="px-2 py-0.5">
               <button
                 type="button"
                 onClick={() => toggleGroup(group.id)}
@@ -235,12 +273,46 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         })}
       </nav>
 
-      <div className={`mt-auto shrink-0 border-t border-white/10 ${collapsed ? 'p-2' : 'p-3'}`}>
+      {showLeaderboard && (
+        <div
+          className={`relative shrink-0 ${isRailView ? 'px-1.5 pb-1' : 'px-3 pb-2'}`}
+          data-tour="leaderboard-fab"
+          onMouseEnter={() => setLeaderboardHover(true)}
+          onMouseLeave={() => setLeaderboardHover(false)}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              if (isRailView) openFullSidebar();
+              else go(LEADERBOARD_ROUTE);
+            }}
+            className={`flex w-full items-center justify-center gap-2 rounded-xl border py-2.5 transition ${
+              leaderboardActive
+                ? 'border-amber-200/40 bg-amber-400/10 text-amber-100'
+                : 'border-white/10 bg-white/[0.04] text-white/90 hover:border-white/20 hover:bg-white/[0.08]'
+            } ${isRailView ? 'px-2' : 'px-3'}`}
+            aria-label="Leadership board"
+          >
+            <Crown size={isRailView ? 20 : 18} className="shrink-0" strokeWidth={1.75} />
+            {!isRailView && <span className="text-sm font-medium tracking-wide">Leadership board</span>}
+          </button>
+          {isRailView && leaderboardHover && !isMobile && (
+            <div className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1d1b31] px-3 py-1.5 text-xs font-medium text-white shadow-xl">
+              Leadership board
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className={`mt-auto shrink-0 border-t border-white/10 ${isRailView ? 'p-2' : 'p-3'}`}>
         <button
           type="button"
-          onClick={() => go('/account')}
+          onClick={() => {
+            if (isRailView) openFullSidebar();
+            else go('/account');
+          }}
           className={`flex w-full items-center gap-3 rounded-xl p-2 transition hover:bg-white/10 ${
-            collapsed ? 'justify-center' : ''
+            isRailView ? 'justify-center' : ''
           }`}
         >
           <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-[#2a2847] ring-2 ring-white/10">
@@ -250,14 +322,14 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
               <div className="flex h-full w-full items-center justify-center text-sm font-semibold text-white">{initials}</div>
             )}
           </div>
-          {!collapsed && (
+          {!isRailView && (
             <div className="min-w-0 flex-1 text-left">
               <p className="truncate text-sm font-semibold text-white">{displayName}</p>
               <p className="truncate text-[11px] text-slate-400">{roleLabel}</p>
             </div>
           )}
         </button>
-        {!collapsed && (
+        {!isRailView && (
           <button
             type="button"
             onClick={onLogout}
@@ -267,7 +339,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             Logout
           </button>
         )}
-        {collapsed && (
+        {isRailView && (
           <button
             type="button"
             onClick={onLogout}
@@ -283,16 +355,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setMobileOpen(true)}
-        className="fixed left-4 top-4 z-50 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-[#11101d] text-white shadow-lg lg:hidden"
-        aria-label="Open menu"
-      >
-        <Menu size={22} />
-      </button>
-
-      {mobileOpen && (
+      {isMobile && mobileOpen && (
         <button
           type="button"
           className="fixed inset-0 z-40 bg-black/50 lg:hidden"
@@ -302,9 +365,10 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-[280px] flex-col bg-[#11101d] text-white shadow-2xl transition-[transform,width] duration-300 lg:sticky lg:top-0 lg:z-auto lg:h-auto lg:min-h-screen lg:self-start lg:overflow-visible lg:translate-x-0 ${
-          mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-        } ${collapsed ? 'lg:w-[4.75rem]' : 'lg:w-[17.5rem]'}`}
+        data-tour="app-sidebar"
+        className={`fixed inset-y-0 left-0 z-50 flex flex-col bg-[#11101d] text-white shadow-2xl transition-[width] duration-300 translate-x-0 lg:sticky lg:top-0 lg:z-auto lg:h-auto lg:min-h-screen lg:self-start lg:overflow-visible ${
+          isMobile ? (mobileOpen ? 'w-[17.5rem]' : 'w-[4.75rem]') : collapsed ? 'w-[4.75rem]' : 'w-[17.5rem]'
+        }`}
       >
         <button
           type="button"

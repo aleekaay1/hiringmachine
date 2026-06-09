@@ -7,6 +7,7 @@ import { supabase } from '../services/supabaseClient';
 import {
   ensureStaffAuth,
   getStaffAuthState,
+  getStaffSessionSnapshot,
   resolveStaffSession,
   subscribeStaffAuth,
 } from '../services/staffSessionCache';
@@ -14,7 +15,9 @@ import {
 const AdminShell: React.FC = () => {
   const location = useLocation();
   const initialAuth = React.useMemo(() => getStaffAuthState(), []);
+  const initialSession = React.useMemo(() => getStaffSessionSnapshot(), []);
   const [authReady, setAuthReady] = React.useState(initialAuth.authReady);
+  const [sessionReady, setSessionReady] = React.useState(initialSession.resolved);
   const [isAuthenticated, setIsAuthenticated] = React.useState(initialAuth.isAuthenticated);
   const [email, setEmail] = React.useState('admin@globelife-paz.com');
   const [password, setPassword] = React.useState('');
@@ -29,19 +32,26 @@ const AdminShell: React.FC = () => {
 
   React.useEffect(() => {
     let cancelled = false;
-    void ensureStaffAuth().then((authed) => {
+    void (async () => {
+      const authed = await ensureStaffAuth();
       if (cancelled) return;
       syncAuth();
-      if (authed) void resolveStaffSession();
+      if (authed) await resolveStaffSession();
+      if (!cancelled) setSessionReady(true);
+    })();
+    const unsubscribe = subscribeStaffAuth(() => {
+      syncAuth();
+      void resolveStaffSession().then(() => {
+        if (!cancelled) setSessionReady(true);
+      });
     });
-    const unsubscribe = subscribeStaffAuth(syncAuth);
     return () => {
       cancelled = true;
       unsubscribe();
     };
   }, [syncAuth]);
 
-  if (!authReady) {
+  if (!authReady || (isAuthenticated && !sessionReady)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#eef2f7]">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#005EB8] border-t-transparent" />

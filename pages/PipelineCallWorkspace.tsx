@@ -5,6 +5,7 @@ import { CheckCircle2, ExternalLink, Phone, RefreshCw, Settings, Video } from 'l
 import CandidateResumeDetailsCard from '../components/pipeline/CandidateResumeDetailsCard';
 import LeadBatchAccordion from '../components/pipeline/LeadBatchAccordion';
 import PipelineAuthShell from '../components/PipelineAuthShell';
+import PageGuidePanel from '../components/tour/PageGuidePanel';
 import { Button } from '../components/UI';
 import {
   stringifySupabaseError,
@@ -814,7 +815,8 @@ const PipelineCallWorkspace: React.FC = () => {
       subtitle="Sign in to continue recruiter calling workflow"
       redirectPath="/pipeline/call"
     >
-      <div className={`mx-auto w-full max-w-[1520px] ${tone.page} ${tone.pageTheme}`}>
+      <div className={`mx-auto w-full max-w-[1520px] space-y-3 ${tone.page} ${tone.pageTheme}`}>
+        <PageGuidePanel guideId="pipeline-call" />
         <div className={`pointer-events-none absolute -top-24 left-[-10%] h-72 w-72 rounded-full bg-gradient-to-br blur-3xl ${tone.orbA}`} />
         <div className={`pointer-events-none absolute top-40 right-[-8%] h-80 w-80 rounded-full bg-gradient-to-br blur-3xl ${tone.orbB}`} />
         <div className={`pointer-events-none absolute bottom-[-6rem] left-1/3 h-72 w-72 rounded-full bg-gradient-to-tr blur-3xl ${tone.orbC}`} />
@@ -832,7 +834,7 @@ const PipelineCallWorkspace: React.FC = () => {
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <Link
-                to="/pipeline-settings"
+                to="/account#recruiter-call-settings"
                 className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold ${tone.actionButton}`}
               >
                 <Settings size={14} />

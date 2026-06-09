@@ -243,7 +243,7 @@ export function AdminQuickLinksStrip() {
     { title: 'Leaderboard', to: '/calls-analytics/leaderboard' },
     { title: 'Reports', to: '/reports' },
     { title: 'Webinar data', to: '/webinar-geek' },
-    { title: 'Pipeline', to: '/pipeline-settings' },
+    { title: 'Profile settings', to: '/account' },
   ] as const;
 
   return (
