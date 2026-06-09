@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { FileSpreadsheet, RefreshCw, Upload, UserPlus, Users } from 'lucide-react';
+import { FileSpreadsheet, History, RefreshCw, Trash2, Upload, UserPlus, Users } from 'lucide-react';
 import Layout from '../components/Layout';
 import HomeLoadingScreen from '../components/dashboard/HomeLoadingScreen';
 import { Button } from '../components/UI';
@@ -13,6 +13,9 @@ import {
 import { parseHrLeadCsv } from '../services/pipelineCsvParse';
 import {
   assignHrLeads,
+  deleteHrBatchPool,
+  deleteHrPoolLeads,
+  fetchHrLeadBatches,
   fetchHrLeadPool,
   fetchHrLeadSummary,
   fetchHrRecruiterLeads,
@@ -22,6 +25,7 @@ import {
   type HrRecruiterOverview,
   type PipelineLeadBatch,
 } from '../services/pipelineHrLeadsService';
+import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import HrRecruiterTrackingPanel from '../components/pipeline/HrRecruiterTrackingPanel';
 import LeadBatchAccordion from '../components/pipeline/LeadBatchAccordion';
 import { uploadResumeForPipelineCandidate } from '../services/pipelineService';
@@ -47,6 +51,9 @@ const HrLeadDistributionPage: React.FC = () => {
   const [assignToUserId, setAssignToUserId] = React.useState('');
   const [assignCount, setAssignCount] = React.useState<number | ''>(10);
   const [importLabel, setImportLabel] = React.useState('');
+  const [importSourceFilename, setImportSourceFilename] = React.useState('');
+  const [uploadHistory, setUploadHistory] = React.useState<PipelineLeadBatch[]>([]);
+  const [deleting, setDeleting] = React.useState(false);
   const [parsedPreview, setParsedPreview] = React.useState<ReturnType<typeof parseHrLeadCsv> | null>(null);
   const [importing, setImporting] = React.useState(false);
   const [importProgress, setImportProgress] = React.useState<{ pct: number; label: string } | null>(null);
@@ -65,10 +72,11 @@ const HrLeadDistributionPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [summaryRes, poolRes, overviewRes, profiles] = await Promise.all([
+      const [summaryRes, poolRes, overviewRes, historyRes, profiles] = await Promise.all([
         fetchHrLeadSummary(),
         fetchHrLeadPool(selectedBatchId || undefined),
         fetchHrRecruiterOverview(selectedBatchId || undefined),
+        fetchHrLeadBatches(30),
         listAllUserProfiles(),
       ]);
       if (!summaryRes.ok) throw new Error(summaryRes.error);
@@ -79,8 +87,10 @@ const HrLeadDistributionPage: React.FC = () => {
       });
       if (!poolRes.ok) throw new Error(poolRes.error);
       if (!overviewRes.ok) throw new Error(overviewRes.error);
+      if (!historyRes.ok) throw new Error(historyRes.error);
       setPool(poolRes.pool);
       setRecruiterOverview(overviewRes.recruiters);
+      setUploadHistory(historyRes.batches);
       setRecruiters(
         profiles.filter((p) => p.role === 'recruiter' || p.role === 'leadership' || p.role === 'admin'),
       );
@@ -98,7 +108,8 @@ const HrLeadDistributionPage: React.FC = () => {
 
   const poolBatchGroups = React.useMemo((): LeadBatchGroup<HrPoolLead>[] => {
     const rows = selectedBatchId ? pool.filter((lead) => lead.lead_batch_id === selectedBatchId) : pool;
-    return groupHrLeadsByBatchId(rows, summary?.recent_batches || []).map((group) => ({
+    const batchCatalog = uploadHistory.length ? uploadHistory : summary?.recent_batches || [];
+    return groupHrLeadsByBatchId(rows, batchCatalog).map((group) => ({
       key: group.key,
       kind: 'hr_batch' as const,
       batchNumber: null,
@@ -110,7 +121,7 @@ const HrLeadDistributionPage: React.FC = () => {
       inProgressCount: 0,
       doneCount: 0,
     }));
-  }, [pool, selectedBatchId, summary?.recent_batches]);
+  }, [pool, selectedBatchId, summary?.recent_batches, uploadHistory]);
 
   React.useEffect(() => {
     if (!poolBatchGroups.length) return;
@@ -132,6 +143,7 @@ const HrLeadDistributionPage: React.FC = () => {
     const text = await file.text();
     const parsed = parseHrLeadCsv(text);
     setParsedPreview(parsed);
+    setImportSourceFilename(file.name);
     setImportLabel(file.name.replace(/\.[^.]+$/, ''));
     if (parsed.errors.length) {
       setError(parsed.errors.slice(0, 5).join(' '));
@@ -150,7 +162,7 @@ const HrLeadDistributionPage: React.FC = () => {
     try {
       const result = await importHrLeadCsvWithProgress({
         label: importLabel || 'Weekly HR import',
-        sourceFilename: importLabel,
+        sourceFilename: importSourceFilename || importLabel,
         rows: parsedPreview.rows,
         chunkSize: CHUNK_SIZE,
         onProgress: (progress) => setImportProgress({ pct: progress.pct, label: progress.label }),
@@ -198,6 +210,58 @@ const HrLeadDistributionPage: React.FC = () => {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setAssigning(false);
+    }
+  };
+
+  const deletePoolLeads = async (candidateIds: string[], confirmText: string) => {
+    if (!candidateIds.length) return;
+    if (!window.confirm(confirmText)) return;
+    setDeleting(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await deleteHrPoolLeads(candidateIds);
+      if (!result.ok) throw new Error(result.error);
+      const errCount = (result.data.errors || []).length;
+      setMessage(
+        `Deleted ${result.data.deleted_count} lead(s).${errCount ? ` ${errCount} could not be deleted.` : ''}`,
+      );
+      setSelectedPoolIds(new Set());
+      if (result.data.removed_batch_ids?.includes(selectedBatchId)) {
+        setSelectedBatchId('');
+      }
+      await loadData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const deleteBatchPool = async (batch: PipelineLeadBatch) => {
+    const poolCount = batch.pool_count ?? 0;
+    if (!poolCount) {
+      setError('No unassigned leads in this batch.');
+      return;
+    }
+    const label = batch.source_filename || batch.label;
+    if (!window.confirm(`Delete ${poolCount} unassigned lead(s) from ${label}?`)) return;
+    setDeleting(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await deleteHrBatchPool(batch.id);
+      if (!result.ok) throw new Error(result.error);
+      const errCount = (result.data.errors || []).length;
+      setMessage(
+        `Deleted ${result.data.deleted_count} lead(s) from batch.${result.data.batch_removed ? ' Batch removed from history.' : ''}${errCount ? ` ${errCount} could not be deleted.` : ''}`,
+      );
+      if (selectedBatchId === batch.id) setSelectedBatchId('');
+      await loadData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -352,6 +416,60 @@ const HrLeadDistributionPage: React.FC = () => {
           )}
         </section>
 
+        <section className="rounded-2xl border border-[#cde0f4] bg-white p-5">
+          <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#0B1B34]">
+            <History size={16} />
+            Upload history
+          </div>
+          <div className="overflow-auto rounded-xl border border-[#e3edf8]">
+            <table className="min-w-full text-xs">
+              <thead className="bg-[#f4f8ff] text-left text-[#4b6d95]">
+                <tr>
+                  <th className="px-3 py-2">Uploaded</th>
+                  <th className="px-3 py-2">File</th>
+                  <th className="px-3 py-2">Batch</th>
+                  <th className="px-3 py-2">Imported</th>
+                  <th className="px-3 py-2">Assigned</th>
+                  <th className="px-3 py-2">Pool</th>
+                  <th className="px-3 py-2 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {uploadHistory.map((batch) => (
+                  <tr key={batch.id} className="border-t border-[#edf3fa]">
+                    <td className="px-3 py-2 whitespace-nowrap">{formatDateTimeCanadaEastern(batch.created_at)}</td>
+                    <td className="px-3 py-2 max-w-[220px] truncate" title={batch.source_filename || undefined}>
+                      {batch.source_filename || '—'}
+                    </td>
+                    <td className="px-3 py-2 max-w-[180px] truncate">{batch.label}</td>
+                    <td className="px-3 py-2">{batch.imported_count}</td>
+                    <td className="px-3 py-2">{batch.assigned_count}</td>
+                    <td className="px-3 py-2">{batch.pool_count ?? 0}</td>
+                    <td className="px-3 py-2 text-right">
+                      {(batch.pool_count ?? 0) > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => void deleteBatchPool(batch)}
+                          disabled={deleting}
+                          className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2 py-1 text-[11px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                        >
+                          <Trash2 size={12} />
+                          Delete pool
+                        </button>
+                      ) : (
+                        <span className="text-[#6b84a8]">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!uploadHistory.length && !loading && (
+              <p className="px-3 py-6 text-center text-xs text-[#6b84a8]">No uploads yet.</p>
+            )}
+          </div>
+        </section>
+
         <section className="relative rounded-2xl border border-[#cde0f4] bg-white p-5">
           {(resumeUploading && resumeProgress) && (
             <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-white/95 p-4">
@@ -415,20 +533,33 @@ const HrLeadDistributionPage: React.FC = () => {
 
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
           <div className="rounded-2xl border border-[#cde0f4] bg-white p-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <p className="text-sm font-semibold text-[#0B1B34]">Unassigned pool ({pool.length})</p>
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedPoolIds.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => void deletePoolLeads([...selectedPoolIds], `Delete ${selectedPoolIds.size} selected lead(s)?`)}
+                    disabled={deleting}
+                    className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2 py-1 text-[11px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    <Trash2 size={12} />
+                    Delete selected ({selectedPoolIds.size})
+                  </button>
+                )}
               <select
                 value={selectedBatchId}
                 onChange={(e) => setSelectedBatchId(e.target.value)}
                 className="rounded-lg border border-[#c8ddf4] px-2 py-1 text-xs"
               >
                 <option value="">All batches</option>
-                {(summary?.recent_batches || []).map((batch) => (
+                {(uploadHistory.length ? uploadHistory : summary?.recent_batches || []).map((batch) => (
                   <option key={batch.id} value={batch.id}>
-                    {batch.label} ({batch.imported_count})
+                    {batch.label} ({batch.pool_count ?? batch.imported_count})
                   </option>
                 ))}
               </select>
+              </div>
             </div>
             <div className="max-h-[42vh] overflow-auto">
               <LeadBatchAccordion
@@ -447,9 +578,9 @@ const HrLeadDistributionPage: React.FC = () => {
                 renderItem={(lead) => {
                   const checked = selectedPoolIds.has(lead.id);
                   return (
-                    <label
+                    <div
                       key={lead.id}
-                      className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2 py-2 text-xs ${checked ? 'border-sky-300 bg-sky-50' : 'border-[#edf3fa]'}`}
+                      className={`flex items-start gap-2 rounded-lg border px-2 py-2 text-xs ${checked ? 'border-sky-300 bg-sky-50' : 'border-[#edf3fa]'}`}
                     >
                       <input
                         type="checkbox"
@@ -464,11 +595,20 @@ const HrLeadDistributionPage: React.FC = () => {
                         }}
                         className="mt-0.5"
                       />
-                      <span>
+                      <span className="min-w-0 flex-1">
                         <span className="font-semibold text-[#0B1B34]">{lead.full_name}</span>
                         <span className="mt-0.5 block text-[#4b6d95]">{lead.email || '—'} · {lead.phone || '—'}</span>
                       </span>
-                    </label>
+                      <button
+                        type="button"
+                        onClick={() => void deletePoolLeads([lead.id], `Delete ${lead.full_name || 'this lead'}?`)}
+                        disabled={deleting}
+                        className="shrink-0 rounded-lg border border-red-200 p-1 text-red-700 hover:bg-red-50 disabled:opacity-50"
+                        title="Delete lead"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
                   );
                 }}
               />
@@ -497,7 +637,7 @@ const HrLeadDistributionPage: React.FC = () => {
             <div className="max-h-[min(72vh,720px)] overflow-auto">
               <HrRecruiterTrackingPanel
                 recruiters={recruiterOverview}
-                batches={summary?.recent_batches || []}
+                batches={uploadHistory.length ? uploadHistory : summary?.recent_batches || []}
                 selectedBatchId={selectedBatchId}
                 loading={loading}
                 onLoadRecruiterLeads={loadRecruiterLeads}

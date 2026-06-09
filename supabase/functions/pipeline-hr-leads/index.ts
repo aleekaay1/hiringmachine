@@ -63,6 +63,115 @@ function incrementDispositionCount(counts: Record<string, number>, disposition: 
   else counts.other += 1;
 }
 
+const PIPELINE_BUCKET = 'pipeline-resumes';
+
+async function listBatchesWithPoolCounts(
+  admin: ReturnType<typeof createClient>,
+  limit = 30,
+) {
+  const { data: batches, error } = await admin
+    .from('pipeline_lead_batches')
+    .select('id, label, created_at, source_filename, created_by_label, lead_team, total_rows, imported_count, assigned_count, skipped_duplicate_count, failed_count')
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  const rows = (batches || []) as Array<{ id: string }>;
+  const poolCounts = new Map<string, number>();
+  const batchIds = rows.map((row) => row.id);
+  if (batchIds.length) {
+    for (let offset = 0; offset < batchIds.length; offset += 100) {
+      const chunk = batchIds.slice(offset, offset + 100);
+      const { data: poolRows, error: poolErr } = await admin
+        .from('pipeline_candidates')
+        .select('lead_batch_id')
+        .eq('source', 'hr_csv_batch')
+        .is('assigned_to_user_id', null)
+        .in('lead_batch_id', chunk);
+      if (poolErr) throw poolErr;
+      for (const row of poolRows || []) {
+        const batchId = String((row as { lead_batch_id?: string | null }).lead_batch_id || '');
+        if (!batchId) continue;
+        poolCounts.set(batchId, (poolCounts.get(batchId) || 0) + 1);
+      }
+    }
+  }
+  return rows.map((batch) => ({
+    ...(batch as Record<string, unknown>),
+    pool_count: poolCounts.get(batch.id) || 0,
+  }));
+}
+
+async function deleteHrPoolCandidates(
+  admin: ReturnType<typeof createClient>,
+  candidateIds: string[],
+): Promise<{ deleted_ids: string[]; errors: Array<{ id: string; error: string }> }> {
+  const deletedIds: string[] = [];
+  const errors: Array<{ id: string; error: string }> = [];
+
+  for (const candidateId of [...new Set(candidateIds.map((id) => String(id).trim()).filter(Boolean))]) {
+    const { data: row, error: getErr } = await admin
+      .from('pipeline_candidates')
+      .select('id, source, assigned_to_user_id, lead_batch_id')
+      .eq('id', candidateId)
+      .maybeSingle();
+    if (getErr || !row) {
+      errors.push({ id: candidateId, error: 'Lead not found.' });
+      continue;
+    }
+    const candidate = row as Record<string, unknown>;
+    if (String(candidate.source || '') !== 'hr_csv_batch') {
+      errors.push({ id: candidateId, error: 'Not an HR import lead.' });
+      continue;
+    }
+    if (candidate.assigned_to_user_id) {
+      errors.push({ id: candidateId, error: 'Already assigned to a recruiter.' });
+      continue;
+    }
+
+    const { data: resumes, error: resumeErr } = await admin
+      .from('pipeline_resumes')
+      .select('storage_bucket, storage_path')
+      .eq('candidate_id', candidateId);
+    if (resumeErr) {
+      errors.push({ id: candidateId, error: resumeErr.message });
+      continue;
+    }
+
+    const grouped = new Map<string, string[]>();
+    for (const resume of resumes || []) {
+      const bucket = String((resume as { storage_bucket?: string }).storage_bucket || PIPELINE_BUCKET);
+      const path = String((resume as { storage_path?: string }).storage_path || '');
+      if (!path) continue;
+      if (!grouped.has(bucket)) grouped.set(bucket, []);
+      grouped.get(bucket)!.push(path);
+    }
+    for (const [bucket, paths] of grouped.entries()) {
+      if (paths.length) await admin.storage.from(bucket).remove(paths);
+    }
+
+    const { error: delErr } = await admin.from('pipeline_candidates').delete().eq('id', candidateId);
+    if (delErr) {
+      errors.push({ id: candidateId, error: delErr.message });
+      continue;
+    }
+    deletedIds.push(candidateId);
+  }
+
+  return { deleted_ids: deletedIds, errors };
+}
+
+async function cleanupBatchIfEmpty(admin: ReturnType<typeof createClient>, batchId: string): Promise<boolean> {
+  const { count, error } = await admin
+    .from('pipeline_candidates')
+    .select('id', { count: 'exact', head: true })
+    .eq('lead_batch_id', batchId);
+  if (error) throw error;
+  if ((count ?? 0) > 0) return false;
+  const { error: delErr } = await admin.from('pipeline_lead_batches').delete().eq('id', batchId);
+  if (delErr) throw delErr;
+  return true;
+}
+
 async function fetchDispositionMaps(
   admin: ReturnType<typeof createClient>,
   candidateIds: string[],
@@ -152,13 +261,9 @@ Deno.serve(async (req) => {
       || user.id;
 
     if (req.method === 'GET' && mode === 'batches') {
-      const { data, error } = await admin
-        .from('pipeline_lead_batches')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(50);
-      if (error) throw error;
-      return new Response(JSON.stringify({ ok: true, batches: data || [] }), {
+      const limit = Math.min(50, Math.max(1, Number(url.searchParams.get('limit') || 30)));
+      const batches = await listBatchesWithPoolCounts(admin, limit);
+      return new Response(JSON.stringify({ ok: true, batches }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
@@ -312,16 +417,12 @@ Deno.serve(async (req) => {
         .select('id', { count: 'exact', head: true })
         .eq('source', 'hr_csv_batch')
         .not('assigned_to_user_id', 'is', null);
-      const { data: batches } = await admin
-        .from('pipeline_lead_batches')
-        .select('id, label, created_at, imported_count, assigned_count, total_rows')
-        .order('created_at', { ascending: false })
-        .limit(10);
+      const recentBatches = await listBatchesWithPoolCounts(admin, 10);
       return new Response(JSON.stringify({
         ok: true,
         pool_count: poolCount ?? 0,
         assigned_count: assignedCount ?? 0,
-        recent_batches: batches || [],
+        recent_batches: recentBatches,
       }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -604,6 +705,74 @@ Deno.serve(async (req) => {
         assigned_ids: assigned,
         assigned_count: assigned.length,
         errors,
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (req.method === 'POST' && mode === 'delete-leads') {
+      const body = (await req.json().catch(() => ({}))) as { candidate_ids?: string[] };
+      const candidateIds = Array.isArray(body.candidate_ids)
+        ? body.candidate_ids.map((id) => String(id).trim()).filter(Boolean)
+        : [];
+      if (!candidateIds.length) {
+        return new Response(JSON.stringify({ error: 'No leads selected to delete.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const { data: pendingRows } = await admin
+        .from('pipeline_candidates')
+        .select('id, lead_batch_id')
+        .in('id', candidateIds);
+      const touchedBatches = new Set<string>();
+      for (const row of pendingRows || []) {
+        const batchId = String((row as { lead_batch_id?: string | null }).lead_batch_id || '');
+        if (batchId) touchedBatches.add(batchId);
+      }
+      const result = await deleteHrPoolCandidates(admin, candidateIds);
+      const removedBatches: string[] = [];
+      for (const batchId of touchedBatches) {
+        if (await cleanupBatchIfEmpty(admin, batchId)) removedBatches.push(batchId);
+      }
+      return new Response(JSON.stringify({
+        ok: true,
+        deleted_count: result.deleted_ids.length,
+        deleted_ids: result.deleted_ids,
+        removed_batch_ids: removedBatches,
+        errors: result.errors,
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (req.method === 'POST' && mode === 'delete-batch-pool') {
+      const body = (await req.json().catch(() => ({}))) as { batch_id?: string };
+      const batchId = String(body.batch_id || '').trim();
+      if (!batchId) {
+        return new Response(JSON.stringify({ error: 'batch_id is required.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const { data: poolRows, error: poolErr } = await admin
+        .from('pipeline_candidates')
+        .select('id')
+        .eq('source', 'hr_csv_batch')
+        .eq('lead_batch_id', batchId)
+        .is('assigned_to_user_id', null);
+      if (poolErr) throw poolErr;
+      const candidateIds = (poolRows || []).map((row) => String((row as { id: string }).id));
+      const result = await deleteHrPoolCandidates(admin, candidateIds);
+      const batchRemoved = await cleanupBatchIfEmpty(admin, batchId);
+      return new Response(JSON.stringify({
+        ok: true,
+        deleted_count: result.deleted_ids.length,
+        deleted_ids: result.deleted_ids,
+        batch_removed: batchRemoved,
+        errors: result.errors,
       }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

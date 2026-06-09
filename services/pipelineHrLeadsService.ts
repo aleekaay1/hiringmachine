@@ -17,6 +17,7 @@ export type PipelineLeadBatch = {
   skipped_duplicate_count: number;
   failed_count: number;
   assigned_count: number;
+  pool_count?: number;
 };
 
 export type HrPoolLead = {
@@ -105,8 +106,42 @@ export async function fetchHrLeadSummary() {
   }>('summary');
 }
 
-export async function fetchHrLeadBatches() {
-  return callHrLeads<{ batches: PipelineLeadBatch[] }>('batches');
+export async function fetchHrLeadBatches(limit = 30) {
+  const params = new URLSearchParams({ mode: 'batches', limit: String(limit) });
+  const token = await getToken();
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return { ok: false as const, error: 'Missing Supabase configuration.' };
+  }
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/pipeline-hr-leads?${params}`, {
+    headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY },
+  });
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) return { ok: false as const, error: String(json.error || 'Failed to load upload history') };
+  return { ok: true as const, batches: (json.batches || []) as PipelineLeadBatch[] };
+}
+
+export async function deleteHrPoolLeads(candidateIds: string[]) {
+  return callHrLeads<{
+    deleted_count: number;
+    deleted_ids: string[];
+    removed_batch_ids: string[];
+    errors: Array<{ id: string; error: string }>;
+  }>('delete-leads', {
+    method: 'POST',
+    body: JSON.stringify({ candidate_ids: candidateIds }),
+  });
+}
+
+export async function deleteHrBatchPool(batchId: string) {
+  return callHrLeads<{
+    deleted_count: number;
+    deleted_ids: string[];
+    batch_removed: boolean;
+    errors: Array<{ id: string; error: string }>;
+  }>('delete-batch-pool', {
+    method: 'POST',
+    body: JSON.stringify({ batch_id: batchId }),
+  });
 }
 
 export async function fetchHrLeadPool(batchId?: string) {
