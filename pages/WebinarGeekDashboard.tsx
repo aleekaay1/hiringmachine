@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import Layout from '../components/Layout';
+import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import { getCurrentUserProfile, type AppRole } from '../services/accessControl';
@@ -34,7 +34,6 @@ import {
   subscriptionsFromDashboardData,
 } from '../services/webinarGeekDashboardCache';
 import { signInWithGoogle } from '../services/googleAuth';
-import StaffLoginPage from '../components/StaffLoginPage';
 
 type AnyRow = Record<string, unknown>;
 type DashboardData = Record<string, unknown>;
@@ -289,7 +288,7 @@ function subscriptionKey(row: AnyRow): string {
 }
 
 const WebinarGeekDashboard: React.FC = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const isAuthenticated = useStaffAuthenticated();
   const [email, setEmail] = useState('admin@globelife-paz.com');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -882,25 +881,8 @@ const WebinarGeekDashboard: React.FC = () => {
     setGoogleLoading(false);
   };
 
-  if (!isAuthenticated) {
-    return (
-      <StaffLoginPage
-        title="WebinarGeek"
-        subtitle="Sign in with your staff account to view webinar registrations and attendance."
-        email={email}
-        onEmailChange={setEmail}
-        password={password}
-        onPasswordChange={setPassword}
-        authError={authError}
-        googleLoading={googleLoading}
-        onSubmit={(e) => void handleLogin(e)}
-        onGoogleSignIn={() => void handleGoogleLogin()}
-      />
-    );
-  }
 
   return (
-    <Layout isAdmin>
       <div className="w-full max-w-6xl mx-auto p-5 space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -1569,7 +1551,6 @@ const WebinarGeekDashboard: React.FC = () => {
           </div>
         )}
       </div>
-    </Layout>
   );
 };
 

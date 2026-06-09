@@ -1,7 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { ChevronDown, RefreshCw, Search } from 'lucide-react';
-import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import {
   canAccessHrLeadDistribution,
@@ -125,18 +124,15 @@ const HrAllLeadsPage: React.FC = () => {
 
   if (allowed === false) {
     return (
-      <Layout isAdmin>
         <div className="mx-auto max-w-2xl p-8">
           <h1 className="text-xl font-semibold text-slate-900">All leads</h1>
           <p className="mt-2 text-sm text-slate-600">You do not have access.</p>
           <Link to="/home" className="mt-4 inline-block text-sm font-semibold text-[#005EB8] hover:underline">Back to home</Link>
         </div>
-      </Layout>
     );
   }
 
   return (
-    <Layout isAdmin>
       <div className="mx-auto max-w-[1400px] space-y-5 p-4 md:p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -308,7 +304,6 @@ const HrAllLeadsPage: React.FC = () => {
           )}
         </div>
       </div>
-    </Layout>
   );
 };
 

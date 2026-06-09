@@ -1,9 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import Layout from '../components/Layout';
+import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import { signInWithGoogle } from '../services/googleAuth';
-import StaffLoginPage from '../components/StaffLoginPage';
 import { fetchHrDashboard, runHrAutomation, runHrRollup, type HrDashboardPayload } from '../services/hrDashboardService';
 
 type CandidateLite = {
@@ -76,7 +75,7 @@ function getDialedNumber(payload: Record<string, unknown> | null): string {
 }
 
 const SuperDashboard: React.FC = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const isAuthenticated = useStaffAuthenticated();
   const [email, setEmail] = useState('admin@globelife-paz.com');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -340,41 +339,8 @@ const SuperDashboard: React.FC = () => {
   const openTasks = Number(summary.open_tasks || 0);
   const activeRisks = Number(summary.active_risks || 0);
 
-  if (!isAuthenticated) {
-    return (
-      <StaffLoginPage
-        title="Super dashboard"
-        subtitle="Sign in with your admin account."
-        email={email}
-        onEmailChange={setEmail}
-        password={password}
-        onPasswordChange={setPassword}
-        authError={authError}
-        googleLoading={googleLoading}
-        onSubmit={async (e) => {
-          e.preventDefault();
-          setAuthError(null);
-          const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-          if (signInError) {
-            setAuthError('Invalid email or password.');
-            return;
-          }
-          setIsAuthenticated(true);
-          await load();
-        }}
-        onGoogleSignIn={async () => {
-          setAuthError(null);
-          setGoogleLoading(true);
-          const { error } = await signInWithGoogle('/super-dashboard');
-          if (error) setAuthError(error);
-          setGoogleLoading(false);
-        }}
-      />
-    );
-  }
 
   return (
-    <Layout isAdmin>
       <div className="w-full max-w-[1500px] mx-auto p-4 sm:p-6 space-y-5 text-slate-800" style={{ fontFamily: 'Manrope, sans-serif' }}>
         <div className="rounded-[24px] border border-[#dce7ff] bg-gradient-to-r from-[#ffffff] via-[#f6faff] to-[#f1f8ff] px-5 py-4 flex items-center justify-between gap-3">
           <div>
@@ -499,7 +465,6 @@ const SuperDashboard: React.FC = () => {
           </div>
         </Card>
       </div>
-    </Layout>
   );
 };
 

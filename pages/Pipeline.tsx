@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
-import Layout from '../components/Layout';
 import { CandidateMailbox } from '../components/CandidateMailbox';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
@@ -58,7 +58,6 @@ import { sendEmail } from '../services/emailService';
 import { normalizeMessageIdForHeader, subjectForReply } from '../services/inboundEmailFormat';
 import { appendEmailSignatureToHtml } from '../services/emailSignatureHtml';
 import { signInWithGoogle } from '../services/googleAuth';
-import StaffLoginPage from '../components/StaffLoginPage';
 import { ChevronDown, ChevronUp, ExternalLink, FileUp, Logs, Maximize2, Minimize2, Phone, RefreshCw, Search, Settings2, Trash2, Volume2, X } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
@@ -402,7 +401,7 @@ function uploadStageLabel(stage: PipelineUploadProgress['stage']): string {
 }
 
 const Pipeline: React.FC = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const isAuthenticated = useStaffAuthenticated();
   const [email, setEmail] = useState('admin@globelife-paz.com');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -1349,40 +1348,9 @@ const Pipeline: React.FC = () => {
     }
   };
 
-  if (!isAuthenticated) {
-    return (
-      <StaffLoginPage
-        title="Legacy pipeline"
-        subtitle="Sign in with your staff account to open the recruiter pipeline."
-        email={email}
-        onEmailChange={setEmail}
-        password={password}
-        onPasswordChange={setPassword}
-        authError={authError}
-        googleLoading={googleLoading}
-        onSubmit={async (e) => {
-          e.preventDefault();
-          setAuthError(null);
-          const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-          if (signInError) {
-            setAuthError('Invalid email or password.');
-            return;
-          }
-          setIsAuthenticated(true);
-        }}
-        onGoogleSignIn={async () => {
-          setAuthError(null);
-          setGoogleLoading(true);
-          const { error } = await signInWithGoogle('/pipeline');
-          if (error) setAuthError(error);
-          setGoogleLoading(false);
-        }}
-      />
-    );
-  }
 
   return (
-    <Layout isAdmin>
+    <>
       <div className="w-full max-w-[1500px] mx-auto p-4 space-y-4">
         <div className="rounded-3xl border border-[#c8ddf4] bg-gradient-to-br from-white to-[#f4f9ff] p-4 shadow-[0_20px_55px_-34px_rgba(11,27,52,0.35)] flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -2149,7 +2117,7 @@ const Pipeline: React.FC = () => {
           </div>
         </div>
       )}
-    </Layout>
+    </>
   );
 };
 

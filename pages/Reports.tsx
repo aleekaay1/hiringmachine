@@ -1,7 +1,6 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { FileSpreadsheet, FileText, RefreshCw, Search, UserCircle } from 'lucide-react';
-import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { useAdminSessionOnce } from '../components/reports/useAdminSessionOnce';
 import { ReportDateRangeBar } from '../components/reports/ReportDateRangeBar';
@@ -146,7 +145,6 @@ const Reports: React.FC = () => {
   };
 
   return (
-    <Layout isAdmin>
       <div className="mx-auto w-full min-w-0 max-w-6xl p-4 md:p-6 space-y-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -280,7 +278,6 @@ const Reports: React.FC = () => {
           </Link>
         </p>
       </div>
-    </Layout>
   );
 };
 

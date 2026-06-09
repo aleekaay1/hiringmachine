@@ -1,5 +1,4 @@
 import React, { useCallback } from 'react';
-import Layout from '../components/Layout';
 import { Card, Button } from '../components/UI';
 import QRCode from 'react-qr-code';
 import * as QRCodeLib from 'qrcode';
@@ -85,7 +84,6 @@ const QrCodes: React.FC = () => {
   }, [assessmentUrl]);
 
   return (
-    <Layout isAdmin>
       <div className="max-w-4xl mx-auto w-full p-6 space-y-8">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">QR Codes</h1>
@@ -127,7 +125,6 @@ const QrCodes: React.FC = () => {
           </p>
         </div>
       </div>
-    </Layout>
   );
 };
 

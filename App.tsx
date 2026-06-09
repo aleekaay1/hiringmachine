@@ -1,5 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import AdminShell from './components/AdminShell';
 import Landing from './pages/Landing';
 import InterviewForm from './pages/InterviewForm';
 import PostInterview from './pages/PostInterview';
@@ -49,32 +50,36 @@ const App: React.FC = () => {
         <Route path="/assessment-lookup" element={<AssessmentLookup />} />
         <Route path="/thank-you" element={<ThankYou />} />
         <Route path="/not-eligible" element={<NotEligible />} />
-        <Route path="/home" element={<RoleHome />} />
-        <Route path="/dashboard" element={<AdminDashboard />} />
-        <Route path="/admin" element={<Navigate to="/home" replace />} />
-        <Route path="/live-sessions" element={<LiveSessionsDashboard />} />
-        <Route path="/webinar-geek" element={<WebinarGeekDashboard />} />
-        <Route path="/calls-analytics" element={<CallsAnalytics />} />
-        <Route path="/calls-analytics/leaderboard" element={<LeadershipLeaderboard />} />
-        <Route path="/leaderboard" element={<Navigate to="/calls-analytics/leaderboard" replace />} />
-        <Route path="/hr-dashboard" element={<HRDashboard />} />
-        <Route path="/hr/lead-distribution" element={<HrLeadDistributionPage />} />
-        <Route path="/hr/leads" element={<HrAllLeadsPage />} />
-        <Route path="/account" element={<AccountSettingsPage />} />
-        <Route path="/pipeline" element={<Pipeline />} />
-        <Route path="/pipeline/call" element={<PipelineCallWorkspace />} />
-        <Route path="/pipeline/performance" element={<PipelinePerformance />} />
-        <Route path="/pipeline/email" element={<PipelineEmailWorkspace />} />
-        <Route path="/pipeline/webinar-verify" element={<WebinarVerifyPage />} />
-        <Route path="/pipeline/uploads" element={<PipelineUploadsWorkspace />} />
-        <Route path="/pipeline-settings" element={<PipelineSettings />} />
-        <Route path="/superdashboard" element={<Navigate to="/home" replace />} />
-        <Route path="/qr" element={<QrCodes />} />
-        <Route path="/email-log" element={<EmailLog />} />
-        <Route path="/reports" element={<Reports />} />
-        <Route path="/reports/:userId" element={<ReportDetail />} />
-        <Route path="/support" element={<SupportPage />} />
-        <Route path="/ops-console" element={<OpsConsolePage />} />
+
+        <Route element={<AdminShell />}>
+          <Route path="/home" element={<RoleHome />} />
+          <Route path="/dashboard" element={<AdminDashboard />} />
+          <Route path="/admin" element={<Navigate to="/home" replace />} />
+          <Route path="/live-sessions" element={<LiveSessionsDashboard />} />
+          <Route path="/webinar-geek" element={<WebinarGeekDashboard />} />
+          <Route path="/calls-analytics" element={<CallsAnalytics />} />
+          <Route path="/calls-analytics/leaderboard" element={<LeadershipLeaderboard />} />
+          <Route path="/leaderboard" element={<Navigate to="/calls-analytics/leaderboard" replace />} />
+          <Route path="/hr-dashboard" element={<HRDashboard />} />
+          <Route path="/hr/lead-distribution" element={<HrLeadDistributionPage />} />
+          <Route path="/hr/leads" element={<HrAllLeadsPage />} />
+          <Route path="/account" element={<AccountSettingsPage />} />
+          <Route path="/pipeline" element={<Pipeline />} />
+          <Route path="/pipeline/call" element={<PipelineCallWorkspace />} />
+          <Route path="/pipeline/performance" element={<PipelinePerformance />} />
+          <Route path="/pipeline/email" element={<PipelineEmailWorkspace />} />
+          <Route path="/pipeline/webinar-verify" element={<WebinarVerifyPage />} />
+          <Route path="/pipeline/uploads" element={<PipelineUploadsWorkspace />} />
+          <Route path="/pipeline-settings" element={<PipelineSettings />} />
+          <Route path="/superdashboard" element={<Navigate to="/home" replace />} />
+          <Route path="/qr" element={<QrCodes />} />
+          <Route path="/email-log" element={<EmailLog />} />
+          <Route path="/reports" element={<Reports />} />
+          <Route path="/reports/:userId" element={<ReportDetail />} />
+          <Route path="/support" element={<SupportPage />} />
+          <Route path="/ops-console" element={<OpsConsolePage />} />
+        </Route>
+
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

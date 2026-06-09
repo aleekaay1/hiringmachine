@@ -1,7 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { FileSpreadsheet, History, RefreshCw, Trash2, Upload, UserPlus, Users } from 'lucide-react';
-import Layout from '../components/Layout';
 import HomeLoadingScreen from '../components/dashboard/HomeLoadingScreen';
 import { Button } from '../components/UI';
 import {
@@ -306,18 +305,15 @@ const HrLeadDistributionPage: React.FC = () => {
 
   if (allowed === false) {
     return (
-      <Layout isAdmin>
         <div className="mx-auto max-w-2xl p-8">
           <h1 className="text-xl font-semibold text-slate-900">Lead distribution</h1>
           <p className="mt-2 text-sm text-slate-600">You do not have access to HR lead distribution.</p>
           <Link to="/home" className="mt-4 inline-block text-sm font-semibold text-[#005EB8] hover:underline">Back to home</Link>
         </div>
-      </Layout>
     );
   }
 
   return (
-    <Layout isAdmin>
       <div className="mx-auto max-w-6xl space-y-6 p-4 md:p-8">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -650,7 +646,6 @@ const HrLeadDistributionPage: React.FC = () => {
           </div>
         </section>
       </div>
-    </Layout>
   );
 };
 

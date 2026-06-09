@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import {
@@ -62,7 +61,6 @@ const PipelineSettings: React.FC = () => {
 
   if (!authenticated) {
     return (
-      <Layout isAdmin>
         <div className="mx-auto w-full max-w-3xl p-6">
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <h1 className="text-xl font-semibold text-slate-900">Pipeline settings</h1>
@@ -74,12 +72,10 @@ const PipelineSettings: React.FC = () => {
             </Link>
           </div>
         </div>
-      </Layout>
     );
   }
 
   return (
-    <Layout isAdmin>
       <div className="mx-auto w-full max-w-3xl p-6">
         <div className="rounded-3xl border border-[#c8ddf4] bg-white p-6 shadow-[0_24px_64px_-36px_rgba(11,27,52,0.45)]">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -206,7 +202,6 @@ const PipelineSettings: React.FC = () => {
           </div>
         </div>
       </div>
-    </Layout>
   );
 };
 

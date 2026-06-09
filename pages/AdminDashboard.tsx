@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import Layout from '../components/Layout';
 import {
   getCandidates,
   getCandidatesForAdminList,
@@ -37,16 +36,14 @@ import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import {
   canAccessSection,
-  defaultRouteForRole,
-  getCurrentUserProfile,
   type AppRole,
 } from '../services/accessControl';
 import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { hasResumeOrLinkedInMaterial } from '../services/linkedinUrl';
 import { listSourceCandidateIdsInPipeline, sendCandidatesToPipelineFromAdmin } from '../services/pipelineService';
 import { syncRecruiterCoinsAfterCandidateHired } from '../services/recruiterCoinService';
-import { signInWithGoogle } from '../services/googleAuth';
-import StaffLoginPage from '../components/StaffLoginPage';
+import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
+import { resolveStaffSession } from '../services/staffSessionCache';
 
 const SUGGESTED_TAGS = ['Strong fit', 'Follow up', 'Licensing needed', 'High potential', 'Second interview', 'Offer extended'];
 
@@ -127,13 +124,9 @@ const CANDIDATES_PAGE_SIZE = 25;
 const AdminDashboard: React.FC = () => {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [email, setEmail] = useState('admin@globelife-paz.com');
-  const [password, setPassword] = useState('');
+  const isAuthenticated = useStaffAuthenticated();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [googleLoading, setGoogleLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [sendingToPipeline, setSendingToPipeline] = useState(false);
   const [showAnswers, setShowAnswers] = useState(false);
@@ -333,17 +326,9 @@ const AdminDashboard: React.FC = () => {
   }, [candidates]);
 
   useEffect(() => {
-    // Check if an admin session already exists
-    const checkSession = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (data.session) {
-        setIsAuthenticated(true);
-        const profile = await getCurrentUserProfile();
-        setRole(profile?.role ?? null);
-      }
-    };
-    checkSession();
-  }, []);
+    if (!isAuthenticated) return;
+    void resolveStaffSession().then((snapshot) => setRole(snapshot.role));
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -376,44 +361,6 @@ const AdminDashboard: React.FC = () => {
       if (!full) return;
       setSelectedCandidate((prev) => (prev?.id === id ? full : prev));
     });
-  };
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError(null);
-    try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (error) {
-        setAuthError('Invalid email or password.');
-        return;
-      }
-      setIsAuthenticated(true);
-      const profile = await getCurrentUserProfile();
-      setRole(profile?.role ?? null);
-      navigate(defaultRouteForRole(profile?.role ?? null), { replace: true });
-    } catch (err) {
-      console.error(err);
-      setAuthError('Unable to log in. Please try again.');
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    setAuthError(null);
-    setGoogleLoading(true);
-    const { error } = await signInWithGoogle('/home');
-    if (error) setAuthError(error);
-    setGoogleLoading(false);
-  };
-
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
-    setIsAuthenticated(false);
-    setRole(null);
-    setCandidates([]);
-    setSelectedCandidate(null);
   };
 
   const getStatusColor = (status: string) => {
@@ -1147,27 +1094,7 @@ const AdminDashboard: React.FC = () => {
     });
   }, [liveNow]);
 
-  if (!isAuthenticated) {
-    return (
-      <StaffLoginPage
-        title="Admin access"
-        subtitle="Sign in to manage candidates, sessions, and team analytics."
-        footerNote="Use your Globe Life Paz staff credentials."
-        email={email}
-        onEmailChange={setEmail}
-        password={password}
-        onPasswordChange={setPassword}
-        authError={authError}
-        googleLoading={googleLoading}
-        submitLabel="Sign in"
-        onSubmit={(e) => void handleLogin(e)}
-        onGoogleSignIn={() => void handleGoogleLogin()}
-      />
-    );
-  }
-
   return (
-    <Layout isAdmin>
       <div
         className={`w-full p-5 lg:p-6 flex flex-col flex-1 min-h-0 ${
           effectiveAdminView === 'candidates' && !selectedCandidate ? 'gap-4' : 'space-y-5'
@@ -2604,7 +2531,6 @@ const AdminDashboard: React.FC = () => {
           </div>
         )}
       </div>
-    </Layout>
   );
 };
 

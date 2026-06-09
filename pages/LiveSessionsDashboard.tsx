@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import Layout from '../components/Layout';
+import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import {
@@ -20,7 +20,6 @@ import {
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { ChevronDown, ChevronRight, Mail, RefreshCw, Users, Video, X } from 'lucide-react';
 import { signInWithGoogle } from '../services/googleAuth';
-import StaffLoginPage from '../components/StaffLoginPage';
 
 const EM_DASH = '\u2014';
 const MIDDLE_DOT = '\u00B7';
@@ -78,7 +77,7 @@ function inviteesForSession(row: LiveSessionScheduleRow): InviteeRow[] {
 }
 
 const LiveSessionsDashboard: React.FC = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const isAuthenticated = useStaffAuthenticated();
   const [email, setEmail] = useState('admin@globelife-paz.com');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -271,25 +270,8 @@ const LiveSessionsDashboard: React.FC = () => {
     setPipelineSelected(pipelineMatches.filter((m) => m.canSendAssessment).map((m) => m.email));
   };
 
-  if (!isAuthenticated) {
-    return (
-      <StaffLoginPage
-        title="Live Online Career Session"
-        subtitle="Sign in with your admin account to manage Zoom and Calendly sessions."
-        email={email}
-        onEmailChange={setEmail}
-        password={password}
-        onPasswordChange={setPassword}
-        authError={authError}
-        googleLoading={googleLoading}
-        onSubmit={(e) => void handleLogin(e)}
-        onGoogleSignIn={() => void handleGoogleLogin()}
-      />
-    );
-  }
 
   return (
-    <Layout isAdmin>
       <div className="w-full max-w-[1200px] mx-auto p-5 lg:p-6 space-y-5 text-[#1A2942]">
         <header className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-5 py-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
@@ -382,7 +364,6 @@ const LiveSessionsDashboard: React.FC = () => {
           />
         )}
       </div>
-    </Layout>
   );
 };
 

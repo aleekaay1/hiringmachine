@@ -1,3 +1,4 @@
+import { resolveStaffSession } from './staffSessionCache';
 import { supabase } from './supabaseClient';
 
 export type ProfileDetailsUpdate = {
@@ -28,5 +29,6 @@ export async function updateUserProfileDetails(update: ProfileDetailsUpdate): Pr
   if (error) throw error;
 
   await supabase.auth.refreshSession();
+  await resolveStaffSession(true);
   notifyProfileUpdated();
 }

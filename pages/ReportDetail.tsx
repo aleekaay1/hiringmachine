@@ -10,7 +10,6 @@ import {
   UserCheck,
   Video,
 } from 'lucide-react';
-import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { useAdminSessionOnce } from '../components/reports/useAdminSessionOnce';
 import { ReportDataTable } from '../components/reports/ReportDataTable';
@@ -150,7 +149,6 @@ const ReportDetail: React.FC = () => {
   const displayName = report?.profile.full_name || report?.profile.email?.split('@')[0] || 'Team member';
 
   return (
-    <Layout isAdmin>
         <div className="mx-auto w-full min-w-0 max-w-5xl p-4 md:p-6 space-y-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -396,7 +394,6 @@ const ReportDetail: React.FC = () => {
             </>
           )}
         </div>
-    </Layout>
   );
 };
 

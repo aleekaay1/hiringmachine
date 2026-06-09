@@ -1,4 +1,5 @@
 import { notifyProfileUpdated } from './profileService';
+import { resolveStaffSession } from './staffSessionCache';
 import { supabase } from './supabaseClient';
 
 const AVATAR_BUCKET = 'profile-avatars';
@@ -28,6 +29,7 @@ export async function uploadProfileAvatar(file: File): Promise<string> {
   if (profileErr) throw profileErr;
 
   await supabase.auth.refreshSession();
+  await resolveStaffSession(true);
   notifyProfileUpdated();
   return avatarUrl;
 }
@@ -62,5 +64,6 @@ export async function removeProfileAvatar(): Promise<void> {
   if (error) throw error;
 
   await supabase.auth.refreshSession();
+  await resolveStaffSession(true);
   notifyProfileUpdated();
 }

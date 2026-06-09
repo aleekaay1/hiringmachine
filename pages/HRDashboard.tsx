@@ -1,9 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Layout from '../components/Layout';
+import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import { signInWithGoogle } from '../services/googleAuth';
-import StaffLoginPage from '../components/StaffLoginPage';
 import { fetchHrDashboard, hrDashboardAction, runHrAutomation, runHrRollup, type HrDashboardPayload } from '../services/hrDashboardService';
 import { AlertTriangle, BarChart3, CheckCircle2, Clock3, RefreshCw, Sparkles, Users, X } from 'lucide-react';
 
@@ -21,7 +20,7 @@ const PIPELINE_FLOW = [
 const STAGE_ORDER: string[] = [...PIPELINE_FLOW];
 
 const HRDashboard: React.FC = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const isAuthenticated = useStaffAuthenticated();
   const [email, setEmail] = useState('admin@globelife-paz.com');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -205,25 +204,8 @@ const HRDashboard: React.FC = () => {
     setInterviewComment(String(selectedCandidate.next_step || ''));
   }, [selectedCandidate]);
 
-  if (!isAuthenticated) {
-    return (
-      <StaffLoginPage
-        title="HR command center"
-        subtitle="Admin access only — licensing, onboarding, and candidate workflows."
-        email={email}
-        onEmailChange={setEmail}
-        password={password}
-        onPasswordChange={setPassword}
-        authError={authError}
-        googleLoading={googleLoading}
-        onSubmit={(e) => void handleLogin(e)}
-        onGoogleSignIn={() => void handleGoogleLogin()}
-      />
-    );
-  }
 
   return (
-    <Layout isAdmin>
       <div className="w-full p-5 lg:p-6 space-y-5 text-[#1A2942]">
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-5 py-4 flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -520,7 +502,6 @@ const HRDashboard: React.FC = () => {
           </div>
         )}
       </div>
-    </Layout>
   );
 };
 

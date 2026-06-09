@@ -1,7 +1,6 @@
 import React from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Camera, Hash, Mail, Phone, Save, User } from 'lucide-react';
-import Layout from '../components/Layout';
 import StaffDirectoryPanel from '../components/account/StaffDirectoryPanel';
 import { Button } from '../components/UI';
 import { getCurrentUserProfile, type AppRole } from '../services/accessControl';
@@ -101,7 +100,6 @@ const AccountSettingsPage: React.FC = () => {
   };
 
   return (
-    <Layout isAdmin>
       <div className="mx-auto max-w-3xl space-y-6 p-4 pb-10 md:p-8">
         <div className="overflow-hidden rounded-3xl border border-[#2a2847]/20 bg-gradient-to-br from-[#11101d] via-[#1a1830] to-[#252244] text-white shadow-xl">
           <div className="relative px-6 pb-6 pt-8 md:px-8 md:pb-8">
@@ -268,7 +266,6 @@ const AccountSettingsPage: React.FC = () => {
           </div>
         )}
       </div>
-    </Layout>
   );
 };
 

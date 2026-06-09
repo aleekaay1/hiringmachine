@@ -5,11 +5,16 @@ import { supabase } from '../services/supabaseClient';
 import {
   canAccessSection,
   defaultRouteForRole,
-  getCurrentUserProfile,
   type AppRole,
   type AppSection,
 } from '../services/accessControl';
 import AppSidebar from './navigation/AppSidebar';
+import {
+  clearStaffSessionCache,
+  getStaffSessionSnapshot,
+  resolveStaffSession,
+  subscribeStaffAuth,
+} from '../services/staffSessionCache';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -26,11 +31,13 @@ const Layout: React.FC<LayoutProps> = ({
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const [role, setRole] = React.useState<AppRole | null>(null);
-  const [userEmail, setUserEmail] = React.useState<string | null>(null);
-  const [displayName, setDisplayName] = React.useState('Staff');
-  const [avatarUrl, setAvatarUrl] = React.useState<string | null>(null);
-  const [roleResolved, setRoleResolved] = React.useState(false);
+  const cachedSession = React.useMemo(() => getStaffSessionSnapshot(), []);
+  const [role, setRole] = React.useState<AppRole | null>(cachedSession.role);
+  const [userEmail, setUserEmail] = React.useState<string | null>(cachedSession.userEmail);
+  const [displayName, setDisplayName] = React.useState(cachedSession.displayName);
+  const [avatarUrl, setAvatarUrl] = React.useState<string | null>(cachedSession.avatarUrl);
+  const [roleResolved, setRoleResolved] = React.useState(cachedSession.resolved);
+  const accessCheckedRef = React.useRef<string | null>(null);
 
   const currentSection = React.useMemo<AppSection>(() => {
     if (location.pathname === '/home') return 'home';
@@ -62,48 +69,61 @@ const Layout: React.FC<LayoutProps> = ({
     return 'overview';
   }, [location.pathname, location.search]);
 
-  const refreshLayoutProfile = React.useCallback(async () => {
-    const [profile, authRes] = await Promise.all([getCurrentUserProfile(), supabase.auth.getUser()]);
-    setRole(profile?.role ?? null);
-    setUserEmail(authRes.data.user?.email ?? profile?.email ?? null);
-    setDisplayName(profile?.full_name || authRes.data.user?.email || 'Staff');
-    setAvatarUrl(profile?.avatar_url ?? null);
-    setRoleResolved(true);
+  const applySessionSnapshot = React.useCallback((snapshot: ReturnType<typeof getStaffSessionSnapshot>) => {
+    setRole(snapshot.role);
+    setUserEmail(snapshot.userEmail);
+    setDisplayName(snapshot.displayName);
+    setAvatarUrl(snapshot.avatarUrl);
+    setRoleResolved(snapshot.resolved);
   }, []);
 
   React.useEffect(() => {
     if (!isAdmin) return;
     let cancelled = false;
-    void refreshLayoutProfile().then(() => {
-      if (cancelled) return;
+    void resolveStaffSession().then((snapshot) => {
+      if (!cancelled) applySessionSnapshot(snapshot);
     });
+    const unsubscribe = subscribeStaffAuth(() => {
+      if (!cancelled) applySessionSnapshot(getStaffSessionSnapshot());
+    });
+    const onProfileUpdated = () => {
+      void resolveStaffSession(true).then((snapshot) => {
+        if (!cancelled) applySessionSnapshot(snapshot);
+      });
+    };
+    window.addEventListener('pohiring:profile-updated', onProfileUpdated);
     return () => {
       cancelled = true;
+      unsubscribe();
+      window.removeEventListener('pohiring:profile-updated', onProfileUpdated);
     };
-  }, [isAdmin, refreshLayoutProfile]);
-
-  React.useEffect(() => {
-    if (!isAdmin) return;
-    const handler = () => {
-      void refreshLayoutProfile();
-    };
-    window.addEventListener('pohiring:profile-updated', handler);
-    return () => window.removeEventListener('pohiring:profile-updated', handler);
-  }, [isAdmin, refreshLayoutProfile]);
+  }, [isAdmin, applySessionSnapshot]);
 
   React.useEffect(() => {
     if (!isAdmin || !roleResolved) return;
-    if (canAccessSection(role, currentSection, userEmail)) return;
-    const fallback = defaultRouteForRole(role);
-    if (fallback !== `${location.pathname}${location.search}`) {
-      navigate(fallback, { replace: true });
+    const currentPath = `${location.pathname}${location.search}`;
+    if (canAccessSection(role, currentSection, userEmail)) {
+      accessCheckedRef.current = currentPath;
+      return;
     }
+    if (accessCheckedRef.current === currentPath) return;
+    const timer = window.setTimeout(() => {
+      if (!canAccessSection(role, currentSection, userEmail)) {
+        accessCheckedRef.current = currentPath;
+        const fallback = defaultRouteForRole(role);
+        if (fallback !== currentPath) {
+          navigate(fallback, { replace: true });
+        }
+      }
+    }, 120);
+    return () => window.clearTimeout(timer);
   }, [isAdmin, roleResolved, role, userEmail, currentSection, location.pathname, location.search, navigate]);
 
   const handleLogout = React.useCallback(async () => {
     try {
       await supabase.auth.signOut({ scope: 'global' });
     } finally {
+      clearStaffSessionCache();
       if (typeof window !== 'undefined') {
         try {
           const keysToRemove: string[] = [];

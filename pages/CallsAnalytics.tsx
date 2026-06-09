@@ -1,6 +1,6 @@
 ﻿import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
 import { Link } from 'react-router-dom';
-import Layout from '../components/Layout';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import { getCurrentUserProfile, type AppRole } from '../services/accessControl';
@@ -33,7 +33,6 @@ import {
   type RecruiterBookingProfile,
 } from '../services/webinarGeekRecruiterAnalytics';
 import { signInWithGoogle } from '../services/googleAuth';
-import StaffLoginPage from '../components/StaffLoginPage';
 import {
   candidateDisplayNameFromRow,
   hrScheduledMsFromRow,
@@ -85,8 +84,7 @@ function toCsvCell(value: unknown): string {
 }
 
 const CallsAnalytics: React.FC = () => {
-  const [authChecked, setAuthChecked] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const isAuthenticated = useStaffAuthenticated();
   const [email, setEmail] = useState('admin@globelife-paz.com');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -333,12 +331,6 @@ const CallsAnalytics: React.FC = () => {
     URL.revokeObjectURL(url);
   }, [filteredRows]);
 
-  useEffect(() => {
-    void supabase.auth.getSession().then(({ data: s }) => {
-      if (s.session) setIsAuthenticated(true);
-      setAuthChecked(true);
-    });
-  }, []);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -383,48 +375,9 @@ const CallsAnalytics: React.FC = () => {
     setSelectedDayYmd(null);
   }, [monthAnchorYmd]);
 
-  if (!authChecked) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-[#e8f2fc] via-[#f0f6ff] to-[#e6eef8] flex items-center justify-center">
-        <p className="text-sm text-slate-500">Loading...</p>
-      </div>
-    );
-  }
 
-  if (!isAuthenticated) {
-    return (
-      <StaffLoginPage
-        title="Recruiter analytics"
-        subtitle="Staff sign-in for booking and attendance analytics."
-        email={email}
-        onEmailChange={setEmail}
-        password={password}
-        onPasswordChange={setPassword}
-        authError={authError}
-        googleLoading={googleLoading}
-        onSubmit={async (e) => {
-          e.preventDefault();
-          setAuthError(null);
-          const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-          if (signInError) {
-            setAuthError('Invalid email or password.');
-            return;
-          }
-          setIsAuthenticated(true);
-        }}
-        onGoogleSignIn={async () => {
-          setAuthError(null);
-          setGoogleLoading(true);
-          const { error } = await signInWithGoogle('/calls-analytics');
-          if (error) setAuthError(error);
-          setGoogleLoading(false);
-        }}
-      />
-    );
-  }
 
   return (
-    <Layout isAdmin>
       <div className="min-h-screen min-w-0 overflow-x-hidden bg-gradient-to-br from-[#e8f2fc] via-[#f0f6ff] to-[#e6eef8]">
         <CallsAnalyticsPage
           scopeTitle={scopeTitle}
@@ -461,7 +414,6 @@ const CallsAnalytics: React.FC = () => {
           onCsv={handleCsvExport}
         />
       </div>
-    </Layout>
   );
 };
 
