@@ -21,8 +21,14 @@ import {
   type HrPoolLead,
   type PipelineLeadBatch,
 } from '../services/pipelineHrLeadsService';
+import LeadBatchAccordion from '../components/pipeline/LeadBatchAccordion';
 import { uploadResumeForPipelineCandidate } from '../services/pipelineService';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
+import {
+  defaultExpandedGroupKeys,
+  groupHrLeadsByBatchId,
+  type LeadBatchGroup,
+} from '../services/pipelineLeadGrouping';
 
 const CHUNK_SIZE = 40;
 
@@ -46,6 +52,8 @@ const HrLeadDistributionPage: React.FC = () => {
   const [assigning, setAssigning] = React.useState(false);
   const [resumeUploading, setResumeUploading] = React.useState(false);
   const [resumeProgress, setResumeProgress] = React.useState<{ pct: number; label: string } | null>(null);
+  const [expandedPoolBatchKeys, setExpandedPoolBatchKeys] = React.useState<Set<string>>(() => new Set());
+  const [expandedAssignBatchKeys, setExpandedAssignBatchKeys] = React.useState<Set<string>>(() => new Set());
 
   React.useEffect(() => {
     void getCurrentUserProfile().then((profile) => {
@@ -87,6 +95,48 @@ const HrLeadDistributionPage: React.FC = () => {
     if (!allowed) return;
     void loadData();
   }, [allowed, loadData]);
+
+  const poolBatchGroups = React.useMemo((): LeadBatchGroup<HrPoolLead>[] => {
+    const rows = selectedBatchId ? pool.filter((lead) => lead.lead_batch_id === selectedBatchId) : pool;
+    return groupHrLeadsByBatchId(rows, summary?.recent_batches || []).map((group) => ({
+      key: group.key,
+      kind: 'hr_batch' as const,
+      batchNumber: null,
+      title: group.title,
+      subtitle: `${group.items.length} unassigned · ${group.subtitle}`,
+      sortTimestamp: group.sortTimestamp,
+      items: group.items,
+      newCount: group.items.length,
+      inProgressCount: 0,
+      doneCount: 0,
+    }));
+  }, [pool, selectedBatchId, summary?.recent_batches]);
+
+  const assignmentBatchGroups = React.useMemo((): LeadBatchGroup<HrAssignmentLead>[] => {
+    const rows = selectedBatchId ? assignments.filter((lead) => lead.lead_batch_id === selectedBatchId) : assignments;
+    return groupHrLeadsByBatchId(rows, summary?.recent_batches || []).map((group) => ({
+      key: group.key,
+      kind: 'hr_batch' as const,
+      batchNumber: null,
+      title: group.title,
+      subtitle: `${group.items.length} assigned · ${group.subtitle}`,
+      sortTimestamp: group.sortTimestamp,
+      items: group.items,
+      newCount: 0,
+      inProgressCount: group.items.length,
+      doneCount: 0,
+    }));
+  }, [assignments, selectedBatchId, summary?.recent_batches]);
+
+  React.useEffect(() => {
+    if (!poolBatchGroups.length) return;
+    setExpandedPoolBatchKeys((prev) => (prev.size ? prev : defaultExpandedGroupKeys(poolBatchGroups)));
+  }, [poolBatchGroups]);
+
+  React.useEffect(() => {
+    if (!assignmentBatchGroups.length) return;
+    setExpandedAssignBatchKeys((prev) => (prev.size ? prev : defaultExpandedGroupKeys(assignmentBatchGroups)));
+  }, [assignmentBatchGroups]);
 
   const onCsvFile = async (file: File) => {
     setError(null);
@@ -405,32 +455,48 @@ const HrLeadDistributionPage: React.FC = () => {
                 ))}
               </select>
             </div>
-            <div className="max-h-[42vh] space-y-1 overflow-auto">
-              {pool.map((lead) => {
-                const checked = selectedPoolIds.has(lead.id);
-                return (
-                  <label key={lead.id} className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2 py-2 text-xs ${checked ? 'border-sky-300 bg-sky-50' : 'border-[#edf3fa]'}`}>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => {
-                        setSelectedPoolIds((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(lead.id)) next.delete(lead.id);
-                          else next.add(lead.id);
-                          return next;
-                        });
-                      }}
-                      className="mt-0.5"
-                    />
-                    <span>
-                      <span className="font-semibold text-[#0B1B34]">{lead.full_name}</span>
-                      <span className="mt-0.5 block text-[#4b6d95]">{lead.email || '—'} · {lead.phone || '—'}</span>
-                    </span>
-                  </label>
-                );
-              })}
-              {!pool.length && !loading && <p className="text-xs text-[#6b84a8]">No unassigned leads in pool.</p>}
+            <div className="max-h-[42vh] overflow-auto">
+              <LeadBatchAccordion
+                groups={poolBatchGroups}
+                expandedKeys={expandedPoolBatchKeys}
+                onToggle={(key) => {
+                  setExpandedPoolBatchKeys((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(key)) next.delete(key);
+                    else next.add(key);
+                    return next;
+                  });
+                }}
+                emptyMessage="No unassigned leads in pool."
+                compact
+                renderItem={(lead) => {
+                  const checked = selectedPoolIds.has(lead.id);
+                  return (
+                    <label
+                      key={lead.id}
+                      className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2 py-2 text-xs ${checked ? 'border-sky-300 bg-sky-50' : 'border-[#edf3fa]'}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          setSelectedPoolIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(lead.id)) next.delete(lead.id);
+                            else next.add(lead.id);
+                            return next;
+                          });
+                        }}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        <span className="font-semibold text-[#0B1B34]">{lead.full_name}</span>
+                        <span className="mt-0.5 block text-[#4b6d95]">{lead.email || '—'} · {lead.phone || '—'}</span>
+                      </span>
+                    </label>
+                  );
+                }}
+              />
             </div>
           </div>
 
@@ -439,18 +505,31 @@ const HrLeadDistributionPage: React.FC = () => {
               <Users size={15} />
               Assigned tracking ({assignments.length})
             </p>
-            <div className="max-h-[42vh] space-y-1 overflow-auto">
-              {assignments.map((lead) => (
-                <div key={lead.id} className="rounded-lg border border-[#edf3fa] px-2 py-2 text-xs">
-                  <p className="font-semibold text-[#0B1B34]">{lead.full_name}</p>
-                  <p className="text-[#4b6d95]">{lead.email || '—'} · {lead.phone || '—'}</p>
-                  <p className="mt-1 text-[#6b84a8]">
-                    Assigned to <span className="font-semibold text-[#0B1B34]">{lead.assigned_to_label || '—'}</span>
-                    {lead.assigned_at ? ` · ${formatDateTimeCanadaEastern(lead.assigned_at)}` : ''}
-                  </p>
-                </div>
-              ))}
-              {!assignments.length && !loading && <p className="text-xs text-[#6b84a8]">No assigned leads yet.</p>}
+            <div className="max-h-[42vh] overflow-auto">
+              <LeadBatchAccordion
+                groups={assignmentBatchGroups}
+                expandedKeys={expandedAssignBatchKeys}
+                onToggle={(key) => {
+                  setExpandedAssignBatchKeys((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(key)) next.delete(key);
+                    else next.add(key);
+                    return next;
+                  });
+                }}
+                emptyMessage="No assigned leads yet."
+                compact
+                renderItem={(lead) => (
+                  <div key={lead.id} className="rounded-lg border border-[#edf3fa] px-2 py-2 text-xs">
+                    <p className="font-semibold text-[#0B1B34]">{lead.full_name}</p>
+                    <p className="text-[#4b6d95]">{lead.email || '—'} · {lead.phone || '—'}</p>
+                    <p className="mt-1 text-[#6b84a8]">
+                      Assigned to <span className="font-semibold text-[#0B1B34]">{lead.assigned_to_label || '—'}</span>
+                      {lead.assigned_at ? ` · ${formatDateTimeCanadaEastern(lead.assigned_at)}` : ''}
+                    </p>
+                  </div>
+                )}
+              />
             </div>
           </div>
         </section>

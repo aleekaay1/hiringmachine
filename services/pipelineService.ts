@@ -31,6 +31,10 @@ export interface PipelineCandidate {
   status: PipelineStatus | string;
   uploader_user_id: string | null;
   uploader_label: string | null;
+  lead_batch_id?: string | null;
+  assigned_to_user_id?: string | null;
+  assigned_to_label?: string | null;
+  assigned_at?: string | null;
   scheduled_for: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
@@ -757,7 +761,7 @@ function resumeExtension(resume: PipelineResume): string {
 }
 
 const PIPELINE_CANDIDATE_SELECT =
-  'id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at';
+  'id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, lead_batch_id, assigned_to_user_id, assigned_to_label, assigned_at, scheduled_for, metadata, created_at, updated_at';
 
 type PipelineViewerScope = {
   userId: string | null;

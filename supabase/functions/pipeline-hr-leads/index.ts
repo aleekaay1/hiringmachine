@@ -204,6 +204,14 @@ Deno.serve(async (req) => {
         batchId = String((batch as { id: string }).id);
       }
 
+      const { data: batchInfo } = await admin
+        .from('pipeline_lead_batches')
+        .select('label, created_at, source_filename, lead_team')
+        .eq('id', batchId)
+        .maybeSingle();
+      const batchLabel = String((batchInfo as { label?: string } | null)?.label || body.label || body.source_filename || '').trim();
+      const batchCreatedAt = String((batchInfo as { created_at?: string } | null)?.created_at || new Date().toISOString());
+
       const imported: string[] = [];
       const skipped: Array<{ row_number: number; reason: string }> = [];
       const failed: Array<{ row_number: number; error: string }> = [];
@@ -252,6 +260,8 @@ Deno.serve(async (req) => {
               lead_age: row.lead_age || null,
               csv_row_number: rowNumber || null,
               import_source: 'hr_csv_batch',
+              lead_batch_label: batchLabel || null,
+              lead_batch_created_at: batchCreatedAt,
             },
           })
           .select('id')
@@ -355,7 +365,7 @@ Deno.serve(async (req) => {
       for (const candidateId of candidateIds) {
         const { data: existing, error: getErr } = await admin
           .from('pipeline_candidates')
-          .select('id, assigned_to_user_id, assigned_to_label, lead_batch_id, source')
+          .select('id, assigned_to_user_id, assigned_to_label, lead_batch_id, source, metadata')
           .eq('id', candidateId)
           .maybeSingle();
         if (getErr || !existing) {
@@ -375,6 +385,23 @@ Deno.serve(async (req) => {
           continue;
         }
 
+        const { data: batchRow } = row.lead_batch_id
+          ? await admin
+            .from('pipeline_lead_batches')
+            .select('label, created_at')
+            .eq('id', String(row.lead_batch_id))
+            .maybeSingle()
+          : { data: null };
+
+        const existingMeta =
+          row.metadata && typeof row.metadata === 'object'
+            ? (row.metadata as Record<string, unknown>)
+            : {};
+        const batchLabel = String((batchRow as { label?: string } | null)?.label || existingMeta.lead_batch_label || '').trim();
+        const batchCreatedAt = String(
+          (batchRow as { created_at?: string } | null)?.created_at || existingMeta.lead_batch_created_at || '',
+        ).trim();
+
         const { error: upErr } = await admin
           .from('pipeline_candidates')
           .update({
@@ -386,6 +413,12 @@ Deno.serve(async (req) => {
             assigned_by_user_id: user.id,
             status: 'open',
             journey_stage: 'new',
+            metadata: {
+              ...existingMeta,
+              lead_batch_label: batchLabel || existingMeta.lead_batch_label || null,
+              lead_batch_created_at: batchCreatedAt || existingMeta.lead_batch_created_at || null,
+              assigned_at: nowIso,
+            },
           })
           .eq('id', candidateId)
           .is('assigned_to_user_id', null);

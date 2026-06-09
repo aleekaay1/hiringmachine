@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { CheckCircle2, ExternalLink, Phone, RefreshCw, Settings, Video } from 'lucide-react';
 import CandidateResumeDetailsCard from '../components/pipeline/CandidateResumeDetailsCard';
+import LeadBatchAccordion from '../components/pipeline/LeadBatchAccordion';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import {
@@ -45,6 +46,10 @@ import {
   loadScopedWebinarRowsForViewer,
   type BookedOutcomeBucket,
 } from '../services/pipelineBookedOutcomes';
+import {
+  defaultExpandedGroupKeys,
+  groupPipelineCandidatesByBatch,
+} from '../services/pipelineLeadGrouping';
 
 type QueueFilter = 'all' | 'callbacks' | 'not_interested' | 'booked' | 'booked_no_show' | 'booked_didnt_watch';
 
@@ -124,6 +129,9 @@ const PipelineCallWorkspace: React.FC = () => {
   const [selfLeadNotes, setSelfLeadNotes] = React.useState('');
   const [savingSelfLead, setSavingSelfLead] = React.useState(false);
   const [selfLeadMsg, setSelfLeadMsg] = React.useState<string | null>(null);
+  const [activeBatchKey, setActiveBatchKey] = React.useState<string | 'all'>('all');
+  const [expandedQueueBatchKeys, setExpandedQueueBatchKeys] = React.useState<Set<string>>(() => new Set());
+  const [expandedDoneBatchKeys, setExpandedDoneBatchKeys] = React.useState<Set<string>>(() => new Set());
   const selectedCandidateIdRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
@@ -328,6 +336,66 @@ const PipelineCallWorkspace: React.FC = () => {
     });
   }, [filteredCandidates, latestByCandidate, queueActiveIds, queueFilter]);
 
+  const isCandidateNew = React.useCallback(
+    (candidate: PipelineCandidate) => !latestByCandidate.get(candidate.id),
+    [latestByCandidate],
+  );
+
+  const queueBatchGroups = React.useMemo(
+    () =>
+      groupPipelineCandidatesByBatch(queueList, {
+        isNew: isCandidateNew,
+        isInProgress: (candidate) => !isCandidateNew(candidate),
+      }),
+    [queueList, isCandidateNew],
+  );
+
+  const doneBatchGroups = React.useMemo(
+    () =>
+      groupPipelineCandidatesByBatch(doneList, {
+        isDone: () => true,
+      }),
+    [doneList],
+  );
+
+  const visibleQueueBatchGroups = React.useMemo(() => {
+    if (activeBatchKey === 'all') return queueBatchGroups;
+    return queueBatchGroups.filter((group) => group.key === activeBatchKey);
+  }, [queueBatchGroups, activeBatchKey]);
+
+  React.useEffect(() => {
+    if (!queueBatchGroups.length) return;
+    setExpandedQueueBatchKeys((prev) => (prev.size ? prev : defaultExpandedGroupKeys(queueBatchGroups)));
+  }, [queueBatchGroups]);
+
+  React.useEffect(() => {
+    if (!doneBatchGroups.length) return;
+    setExpandedDoneBatchKeys((prev) => {
+      if (prev.size) return prev;
+      const keys = defaultExpandedGroupKeys(doneBatchGroups);
+      if (doneBatchGroups.length > 2) keys.clear();
+      return keys;
+    });
+  }, [doneBatchGroups]);
+
+  const toggleQueueBatch = (key: string) => {
+    setExpandedQueueBatchKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleDoneBatch = (key: string) => {
+    setExpandedDoneBatchKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
   const emptyQueueGuidance = React.useMemo(() => {
     if (queueFilter === 'booked_no_show' || queueFilter === 'booked_didnt_watch') {
       return 'No candidates matched this booked outcome bucket. Try Booked filter or refresh WebinarGeek cache.';
@@ -470,6 +538,67 @@ const PipelineCallWorkspace: React.FC = () => {
     }),
     [isDark],
   );
+
+  const batchAccordionTone = React.useMemo(
+    () => ({
+      header: tone.panelTitle,
+      headerMuted: tone.panelMuted,
+      panel: tone.subtle,
+      badgeNew: 'bg-[#edf5ff] text-[#285082]',
+      badgeMuted: isDark ? 'bg-white/10 text-slate-300' : 'bg-slate-100 text-slate-600',
+    }),
+    [tone, isDark],
+  );
+
+  const renderQueueCandidate = (candidate: PipelineCandidate, indexInGroup: number) => {
+    const isSelected = candidate.id === currentCandidate?.id;
+    const latest = latestByCandidate.get(candidate.id);
+    const dispositionLabel = normalizeDispositionLabel(latest?.disposition);
+    const phoneInfo = readPipelineCandidatePhone(candidate);
+    const callbackAt = callbackAtByCandidate.get(candidate.id);
+    const isCallbackDue = callbackAt && new Date(callbackAt).getTime() <= Date.now();
+    return (
+      <button
+        key={candidate.id}
+        type="button"
+        onClick={() => setSelectedCandidateId(candidate.id)}
+        className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
+          isSelected
+            ? 'border-[#7eb3e7] bg-white shadow-[0_8px_24px_-16px_rgba(38,95,165,0.45)]'
+            : tone.doneCard
+        }`}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className={`truncate text-sm font-semibold ${tone.panelTitle}`}>
+              {indexInGroup + 1}. {candidate.full_name || 'Unknown Candidate'}
+            </p>
+            <p className={`mt-0.5 truncate text-xs ${tone.panelMuted}`}>
+              {phoneInfo.effectivePhone || 'No phone'}
+            </p>
+            {candidate.email && (
+              <p className={`truncate text-[11px] ${tone.panelLabel}`}>{candidate.email}</p>
+            )}
+          </div>
+          {dispositionLabel === 'callback requested' && (
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${isCallbackDue ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
+              {isCallbackDue ? 'Due' : 'Callback'}
+            </span>
+          )}
+          {!latest && (
+            <span className="shrink-0 rounded-full bg-[#edf5ff] px-2 py-0.5 text-[10px] font-semibold text-[#285082]">
+              New
+            </span>
+          )}
+          {latest && dispositionIsRetry(dispositionLabel) && dispositionLabel !== 'callback requested' && (
+            <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
+              Retry
+            </span>
+          )}
+        </div>
+      </button>
+    );
+  };
 
   const placeCall = async (candidate: PipelineCandidate, destinationRaw?: string) => {
     const destination = normalizeDialDestination(destinationRaw || candidate.phone || '');
@@ -772,62 +901,46 @@ const PipelineCallWorkspace: React.FC = () => {
             <div className="mb-3 flex items-center justify-between gap-2">
               <div>
                 <p className={`text-sm font-semibold ${tone.panelTitle}`}>To call</p>
-                <p className={`text-xs ${tone.panelMuted}`}>{queueList.length} in queue</p>
+                <p className={`text-xs ${tone.panelMuted}`}>
+                  {queueList.length} in queue · {queueBatchGroups.length} batch{queueBatchGroups.length === 1 ? '' : 'es'}
+                </p>
               </div>
             </div>
-            <div className="max-h-[min(70vh,640px)] space-y-2 overflow-y-auto pr-1">
-              {queueList.map((candidate, index) => {
-                const isSelected = candidate.id === currentCandidate?.id;
-                const latest = latestByCandidate.get(candidate.id);
-                const dispositionLabel = normalizeDispositionLabel(latest?.disposition);
-                const phoneInfo = readPipelineCandidatePhone(candidate);
-                const callbackAt = callbackAtByCandidate.get(candidate.id);
-                const isCallbackDue = callbackAt && new Date(callbackAt).getTime() <= Date.now();
-                return (
+            {queueBatchGroups.length > 1 && (
+              <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveBatchKey('all')}
+                  className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${
+                    activeBatchKey === 'all' ? 'border-[#7eb3e7] bg-[#e8f3ff] text-[#285082]' : tone.actionButton
+                  }`}
+                >
+                  All batches
+                </button>
+                {queueBatchGroups.map((group) => (
                   <button
-                    key={candidate.id}
+                    key={group.key}
                     type="button"
-                    onClick={() => setSelectedCandidateId(candidate.id)}
-                    className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
-                      isSelected
-                        ? 'border-[#7eb3e7] bg-white shadow-[0_8px_24px_-16px_rgba(38,95,165,0.45)]'
-                        : tone.doneCard
+                    onClick={() => setActiveBatchKey(group.key)}
+                    className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${
+                      activeBatchKey === group.key ? 'border-[#7eb3e7] bg-[#e8f3ff] text-[#285082]' : tone.actionButton
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className={`truncate text-sm font-semibold ${tone.panelTitle}`}>
-                          {index + 1}. {candidate.full_name || 'Unknown Candidate'}
-                        </p>
-                        <p className={`mt-0.5 truncate text-xs ${tone.panelMuted}`}>
-                          {phoneInfo.effectivePhone || 'No phone'}
-                        </p>
-                        {candidate.email && (
-                          <p className={`truncate text-[11px] ${tone.panelLabel}`}>{candidate.email}</p>
-                        )}
-                      </div>
-                      {dispositionLabel === 'callback requested' && (
-                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${isCallbackDue ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
-                          {isCallbackDue ? 'Due' : 'Callback'}
-                        </span>
-                      )}
-                      {!latest && (
-                        <span className="shrink-0 rounded-full bg-[#edf5ff] px-2 py-0.5 text-[10px] font-semibold text-[#285082]">
-                          New
-                        </span>
-                      )}
-                      {latest && dispositionIsRetry(dispositionLabel) && dispositionLabel !== 'callback requested' && (
-                        <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-                          Retry
-                        </span>
-                      )}
-                    </div>
+                    {group.batchNumber ? `#${group.batchNumber}` : group.title}
+                    {group.newCount > 0 ? ` · ${group.newCount} new` : ''}
                   </button>
-                );
-              })}
-              {!queueList.length && (
-                <p className={`rounded-xl border border-dashed p-4 text-center text-xs ${tone.panelMuted}`}>{emptyQueueGuidance}</p>
-              )}
+                ))}
+              </div>
+            )}
+            <div className="max-h-[min(70vh,640px)] overflow-y-auto pr-1">
+              <LeadBatchAccordion
+                groups={visibleQueueBatchGroups}
+                expandedKeys={expandedQueueBatchKeys}
+                onToggle={toggleQueueBatch}
+                renderItem={renderQueueCandidate}
+                emptyMessage={emptyQueueGuidance}
+                tone={batchAccordionTone}
+              />
             </div>
 
             <div className={`mt-4 rounded-xl border p-3 ${tone.subtle}`}>
@@ -1007,8 +1120,14 @@ const PipelineCallWorkspace: React.FC = () => {
                   <p className={`text-xs ${tone.panelMuted}`}>{doneList.length} completed</p>
                 </div>
               </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                {doneList.slice(0, 12).map((candidate) => {
+              <LeadBatchAccordion
+                groups={doneBatchGroups}
+                expandedKeys={expandedDoneBatchKeys}
+                onToggle={toggleDoneBatch}
+                compact
+                emptyMessage="Disposed candidates will appear here grouped by batch."
+                tone={batchAccordionTone}
+                renderItem={(candidate) => {
                   const latest = latestByCandidate.get(candidate.id);
                   const isSelected = candidate.id === currentCandidate?.id;
                   return (
@@ -1016,15 +1135,15 @@ const PipelineCallWorkspace: React.FC = () => {
                       key={candidate.id}
                       type="button"
                       onClick={() => setSelectedCandidateId(candidate.id)}
-                      className={`flex items-center justify-between rounded-xl border px-3 py-2.5 text-left transition ${
+                      className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left transition ${
                         isSelected ? 'border-[#9dc6ef] bg-[#e8f3ff]' : tone.doneCard
                       }`}
                     >
                       <div className="min-w-0 pr-2">
-                        <p className={`truncate text-sm font-semibold ${tone.panelTitle}`}>
+                        <p className={`truncate text-xs font-semibold ${tone.panelTitle}`}>
                           {candidate.full_name || 'Unknown Candidate'}
                         </p>
-                        <p className={`truncate text-xs ${tone.panelMuted}`}>{latest?.disposition || 'Disposed'}</p>
+                        <p className={`truncate text-[10px] ${tone.panelMuted}`}>{latest?.disposition || 'Disposed'}</p>
                       </div>
                       <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
                         <CheckCircle2 size={11} />
@@ -1032,13 +1151,8 @@ const PipelineCallWorkspace: React.FC = () => {
                       </span>
                     </button>
                   );
-                })}
-                {!doneList.length && (
-                  <p className={`col-span-full rounded-xl border border-dashed p-4 text-center text-xs ${tone.panelMuted}`}>
-                    Disposed candidates will appear here.
-                  </p>
-                )}
-              </div>
+                }}
+              />
             </div>
           </section>
         </motion.div>

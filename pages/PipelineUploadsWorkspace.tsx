@@ -1,6 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { FileUp, Moon, RefreshCw, Search, Sun, Trash2 } from 'lucide-react';
+import LeadBatchAccordion from '../components/pipeline/LeadBatchAccordion';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import {
@@ -17,6 +18,10 @@ import { canAccessHrLeadDistribution, getCurrentUserProfile } from '../services/
 import { supabase } from '../services/supabaseClient';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { Link } from 'react-router-dom';
+import {
+  defaultExpandedGroupKeys,
+  groupPipelineCandidatesByBatch,
+} from '../services/pipelineLeadGrouping';
 
 type WorkspaceThemeMode = 'dark' | 'light';
 const WORKSPACE_THEME_STORAGE_KEY = 'pipeline-recruiter-workspace-theme';
@@ -67,6 +72,8 @@ const PipelineUploadsWorkspace: React.FC = () => {
   const [deleting, setDeleting] = React.useState(false);
   const [themeMode, setThemeMode] = React.useState<WorkspaceThemeMode>('dark');
   const [hrDistributor, setHrDistributor] = React.useState(false);
+  const [activeBatchKey, setActiveBatchKey] = React.useState<string | 'all'>('all');
+  const [expandedBatchKeys, setExpandedBatchKeys] = React.useState<Set<string>>(() => new Set());
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -161,6 +168,35 @@ const PipelineUploadsWorkspace: React.FC = () => {
       );
     });
   }, [candidates, search]);
+
+  const uploadBatchGroups = React.useMemo(
+    () =>
+      groupPipelineCandidatesByBatch(filteredCandidates, {
+        isNew: (candidate) =>
+          String(candidate.journey_stage || '').toLowerCase() === 'new' &&
+          String(candidate.status || '').toLowerCase() === 'open',
+      }),
+    [filteredCandidates],
+  );
+
+  const visibleUploadBatchGroups = React.useMemo(() => {
+    if (activeBatchKey === 'all') return uploadBatchGroups;
+    return uploadBatchGroups.filter((group) => group.key === activeBatchKey);
+  }, [uploadBatchGroups, activeBatchKey]);
+
+  React.useEffect(() => {
+    if (!uploadBatchGroups.length) return;
+    setExpandedBatchKeys((prev) => (prev.size ? prev : defaultExpandedGroupKeys(uploadBatchGroups)));
+  }, [uploadBatchGroups]);
+
+  const toggleUploadBatch = (key: string) => {
+    setExpandedBatchKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const toggleSelectedId = (id: string) => {
     setSelectedIds((prev) => {
@@ -434,8 +470,55 @@ const PipelineUploadsWorkspace: React.FC = () => {
               </div>
             </div>
 
-            <div className="space-y-1.5 max-h-[72vh] overflow-auto">
-              {filteredCandidates.map((candidate) => {
+            {uploadBatchGroups.length > 1 && (
+              <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveBatchKey('all')}
+                  className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${
+                    activeBatchKey === 'all'
+                      ? isDark
+                        ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-100'
+                        : 'border-[#7eb3e7] bg-[#e8f3ff] text-[#285082]'
+                      : tone.actionButton
+                  }`}
+                >
+                  All batches ({filteredCandidates.length})
+                </button>
+                {uploadBatchGroups.map((group) => (
+                  <button
+                    key={group.key}
+                    type="button"
+                    onClick={() => setActiveBatchKey(group.key)}
+                    className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${
+                      activeBatchKey === group.key
+                        ? isDark
+                          ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-100'
+                          : 'border-[#7eb3e7] bg-[#e8f3ff] text-[#285082]'
+                        : tone.actionButton
+                    }`}
+                  >
+                    {group.batchNumber ? `Batch ${group.batchNumber}` : group.title}
+                    {group.newCount > 0 ? ` · ${group.newCount} new` : ''}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="max-h-[72vh] overflow-auto">
+              <LeadBatchAccordion
+                groups={visibleUploadBatchGroups}
+                expandedKeys={expandedBatchKeys}
+                onToggle={toggleUploadBatch}
+                emptyMessage={search ? 'No leads match your search.' : 'No assigned leads yet.'}
+                tone={{
+                  header: tone.panelTitle,
+                  headerMuted: tone.panelMuted,
+                  panel: tone.listCard,
+                  badgeNew: isDark ? 'bg-cyan-500/15 text-cyan-100' : 'bg-[#edf5ff] text-[#285082]',
+                  badgeMuted: isDark ? 'bg-white/10 text-slate-300' : 'bg-slate-100 text-slate-600',
+                }}
+                renderItem={(candidate) => {
                 const fileLabel = candidateFileLabel(candidate);
                 const checked = selectedIds.has(candidate.id);
                 return (
@@ -461,7 +544,7 @@ const PipelineUploadsWorkspace: React.FC = () => {
                         )}
                         <p className={`text-[10px] ${tone.panelLabel}`}>
                           {candidate.phone || candidate.email || 'No contact info'} ·{' '}
-                          {formatDateTimeCanadaEastern(candidate.created_at)}
+                          {formatDateTimeCanadaEastern(candidate.assigned_at || candidate.created_at)}
                         </p>
                       </div>
                       <button
@@ -481,12 +564,8 @@ const PipelineUploadsWorkspace: React.FC = () => {
                     </div>
                   </div>
                 );
-              })}
-              {!loading && !filteredCandidates.length && (
-                <p className={`text-xs ${tone.panelLabel}`}>
-                  {candidates.length ? 'No uploads match your search.' : 'No uploads found yet.'}
-                </p>
-              )}
+              }}
+              />
             </div>
           </section>
         </motion.div>
