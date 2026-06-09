@@ -26,11 +26,11 @@ const SIDEBAR_LOGO_SRC = '/white%20logo.png';
 
 function SidebarBrand() {
   return (
-    <div className="min-w-0 flex-1">
+    <div className="min-w-0 flex-1 overflow-hidden pr-2">
       <img
         src={SIDEBAR_LOGO_SRC}
         alt="Paz Organization"
-        className="block h-24 w-auto max-w-[23rem] object-contain object-left"
+        className="block h-16 w-auto max-w-full object-contain object-left"
       />
     </div>
   );
@@ -168,14 +168,14 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     <>
       <div
         className={`flex shrink-0 items-center border-b border-white/10 ${
-          isRailView ? 'justify-center px-2 py-3' : 'justify-between gap-2 px-3 py-4 lg:px-4 lg:py-5'
+          isRailView ? 'justify-center px-2 py-3' : 'justify-between gap-3 px-3 py-3.5 lg:px-4 lg:py-4'
         }`}
       >
         {!isRailView && <SidebarBrand />}
         <button
           type="button"
           onClick={handleMenuToggle}
-          className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-300 hover:bg-white/10 hover:text-white ${
+          className={`relative z-10 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-300 hover:bg-white/10 hover:text-white ${
             isRailView ? 'inline-flex' : 'hidden lg:inline-flex'
           }`}
           aria-label={isRailView ? 'Expand menu' : 'Collapse menu'}
