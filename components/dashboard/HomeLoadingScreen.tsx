@@ -10,12 +10,14 @@ type HomeLoadingScreenProps = {
   progress: HomeLoadingProgress;
   title?: string;
   subtitle?: string;
+  compact?: boolean;
 };
 
 const HomeLoadingScreen: React.FC<HomeLoadingScreenProps> = ({
   progress,
   title = 'Loading your workspace',
   subtitle = 'Pulling your stats and quick links…',
+  compact = false,
 }) => {
   const pct = Math.max(0, Math.min(100, Math.round(progress.pct)));
 
@@ -41,7 +43,7 @@ const HomeLoadingScreen: React.FC<HomeLoadingScreenProps> = ({
         >
           {title}
         </h2>
-        <p className="mt-1 max-w-md text-xs text-[#5c7594]">{subtitle}</p>
+        {!compact && subtitle ? <p className="mt-1 max-w-md text-xs text-[#5c7594]">{subtitle}</p> : null}
       </div>
 
       <div className="mt-6">
@@ -67,9 +69,11 @@ const HomeLoadingScreen: React.FC<HomeLoadingScreenProps> = ({
             transition={{ duration: 1.8, repeat: Infinity, ease: 'linear' }}
           />
         </div>
-        <p className="mt-2 text-center text-[11px] text-[#6a839f]">
-          {pct >= 100 ? 'Almost there…' : 'If this stays below 100% for a long time, try Refresh or submit a Support ticket.'}
-        </p>
+        {!compact ? (
+          <p className="mt-2 text-center text-[11px] text-[#6a839f]">
+            {pct >= 100 ? 'Almost there…' : 'If this stays below 100% for a long time, try Refresh or submit a Support ticket.'}
+          </p>
+        ) : null}
       </div>
     </motion.div>
   );

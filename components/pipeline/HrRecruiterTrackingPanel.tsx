@@ -47,7 +47,7 @@ function DispositionBars({ counts, worked }: { counts: HrRecruiterOverview['disp
   ].filter((row) => row.value > 0);
 
   if (!worked || !items.length) {
-    return <p className="text-[11px] text-[#6b84a8]">No call dispositions logged yet for this recruiter.</p>;
+    return <p className="text-[11px] text-[#6b84a8]">No activity yet.</p>;
   }
 
   return (
@@ -120,7 +120,7 @@ const HrRecruiterTrackingPanel: React.FC<HrRecruiterTrackingPanelProps> = ({
         kind: 'hr_batch' as const,
         batchNumber: null,
         title: group.title,
-        subtitle: `${group.items.length} leads · ${notContacted} not contacted · ${booked} booked`,
+        subtitle: `${group.items.length} leads`,
         sortTimestamp: group.sortTimestamp,
         items: group.items,
         newCount: notContacted,
@@ -133,13 +133,13 @@ const HrRecruiterTrackingPanel: React.FC<HrRecruiterTrackingPanelProps> = ({
     return (
       <div className="flex items-center justify-center gap-2 py-12 text-sm text-[#4b6d95]">
         <Loader2 size={16} className="animate-spin" />
-        Loading recruiter analytics…
+        Loading…
       </div>
     );
   }
 
   if (!recruiters.length) {
-    return <p className="py-8 text-center text-xs text-[#6b84a8]">No assigned leads yet. Assign pool leads to recruiters to track progress here.</p>;
+    return <p className="py-8 text-center text-xs text-[#6b84a8]">No assigned leads.</p>;
   }
 
   return (
@@ -193,7 +193,7 @@ const HrRecruiterTrackingPanel: React.FC<HrRecruiterTrackingPanelProps> = ({
                 {loadingUserId === recruiter.user_id && (
                   <div className="mb-3 flex items-center gap-2 text-xs text-[#4b6d95]">
                     <Loader2 size={14} className="animate-spin" />
-                    Loading assigned leads…
+                    Loading…
                   </div>
                 )}
 
@@ -241,7 +241,7 @@ const HrRecruiterTrackingPanel: React.FC<HrRecruiterTrackingPanelProps> = ({
                         });
                       }}
                       compact
-                      emptyMessage="No leads for this recruiter."
+                      emptyMessage="No leads."
                       renderItem={(lead) => (
                         <div key={lead.id} className="rounded-lg border border-[#edf3fa] bg-white px-2 py-2 text-xs">
                           <div className="flex items-start justify-between gap-2">

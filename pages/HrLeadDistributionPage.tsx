@@ -103,7 +103,7 @@ const HrLeadDistributionPage: React.FC = () => {
       kind: 'hr_batch' as const,
       batchNumber: null,
       title: group.title,
-      subtitle: `${group.items.length} unassigned · ${group.subtitle}`,
+      subtitle: `${group.items.length} leads`,
       sortTimestamp: group.sortTimestamp,
       items: group.items,
       newCount: group.items.length,
@@ -257,12 +257,7 @@ const HrLeadDistributionPage: React.FC = () => {
       <div className="mx-auto max-w-6xl space-y-6 p-4 md:p-8">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#4b6d95]">HR operations</p>
-            <h1 className="text-2xl font-bold text-[#0B1B34]">Weekly lead distribution</h1>
-            <p className="mt-1 max-w-2xl text-sm text-[#365274]">
-              Import CSV leads (LEAD AGE, NAME, EMAIL, PHONE NUMBER), attach resumes, and assign locked leads to recruiters.
-              Assigned leads appear in each recruiter&apos;s call workspace.
-            </p>
+            <h1 className="text-2xl font-bold text-[#0B1B34]">Lead distribution</h1>
           </div>
           <Button variant="outline" className="!min-h-0 h-9 gap-1.5 text-xs" onClick={() => void loadData()} disabled={loading}>
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
@@ -294,15 +289,14 @@ const HrLeadDistributionPage: React.FC = () => {
           {(importing && importProgress) && (
             <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-white/95 p-4">
               <div className="w-full max-w-md">
-                <HomeLoadingScreen progress={importProgress} title="Importing CSV leads" subtitle="Creating pool leads with duplicate protection." />
+                <HomeLoadingScreen progress={importProgress} title="Importing leads" compact />
               </div>
             </div>
           )}
           <div className="flex items-center gap-2 text-sm font-semibold text-[#0B1B34]">
             <FileSpreadsheet size={16} />
-            1. Import CSV
+            Import CSV
           </div>
-          <p className="mt-1 text-xs text-[#6b84a8]">Headers: LEAD AGE, NAME, EMAIL, PHONE NUMBER (flexible matching).</p>
           <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
             <label className="flex-1 text-xs font-medium text-[#365274]">
               CSV file
@@ -322,7 +316,7 @@ const HrLeadDistributionPage: React.FC = () => {
                 value={importLabel}
                 onChange={(e) => setImportLabel(e.target.value)}
                 className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
-                placeholder="e.g. COOPER June 9 HRMS"
+                placeholder="Batch name"
               />
             </label>
             <Button className="!min-h-0 h-10 shrink-0" onClick={() => void runImport()} disabled={importing || !parsedPreview?.rows.length}>
@@ -354,9 +348,6 @@ const HrLeadDistributionPage: React.FC = () => {
                   ))}
                 </tbody>
               </table>
-              <p className="border-t border-[#edf3fa] px-3 py-2 text-[11px] text-[#6b84a8]">
-                Previewing {Math.min(8, parsedPreview.rows.length)} of {parsedPreview.rows.length} row(s).
-              </p>
             </div>
           )}
         </section>
@@ -365,15 +356,14 @@ const HrLeadDistributionPage: React.FC = () => {
           {(resumeUploading && resumeProgress) && (
             <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-white/95 p-4">
               <div className="w-full max-w-md">
-                <HomeLoadingScreen progress={resumeProgress} title="Attaching resumes" subtitle="Matching files to pool leads by email or name." />
+                <HomeLoadingScreen progress={resumeProgress} title="Attaching resumes" compact />
               </div>
             </div>
           )}
           <div className="flex items-center gap-2 text-sm font-semibold text-[#0B1B34]">
             <Upload size={16} />
-            2. Attach resumes (optional)
+            Attach resumes
           </div>
-          <p className="mt-1 text-xs text-[#6b84a8]">Upload resume files for unassigned pool leads. Filenames with email work best.</p>
           <input
             type="file"
             multiple
@@ -387,7 +377,7 @@ const HrLeadDistributionPage: React.FC = () => {
         <section className="rounded-2xl border border-[#cde0f4] bg-white p-5">
           <div className="flex items-center gap-2 text-sm font-semibold text-[#0B1B34]">
             <UserPlus size={16} />
-            3. Assign to recruiter
+            Assign to recruiter
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-4">
             <label className="text-xs font-medium text-[#365274] md:col-span-2">
@@ -406,7 +396,7 @@ const HrLeadDistributionPage: React.FC = () => {
               </select>
             </label>
             <label className="text-xs font-medium text-[#365274]">
-              Auto-assign count
+              Count
               <input
                 type="number"
                 min={1}
@@ -421,9 +411,6 @@ const HrLeadDistributionPage: React.FC = () => {
               </Button>
             </div>
           </div>
-          <p className="mt-2 text-[11px] text-[#6b84a8]">
-            Select rows below, or leave unchecked and use auto-assign count from the oldest unassigned pool leads.
-          </p>
         </section>
 
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
@@ -455,7 +442,7 @@ const HrLeadDistributionPage: React.FC = () => {
                     return next;
                   });
                 }}
-                emptyMessage="No unassigned leads in pool."
+                emptyMessage="No unassigned leads."
                 compact
                 renderItem={(lead) => {
                   const checked = selectedPoolIds.has(lead.id);
@@ -507,9 +494,6 @@ const HrLeadDistributionPage: React.FC = () => {
                 ))}
               </select>
             </div>
-            <p className="mb-3 text-[11px] text-[#6b84a8]">
-              Click a recruiter to see disposition analytics and their assigned leads grouped by weekly batch.
-            </p>
             <div className="max-h-[min(72vh,720px)] overflow-auto">
               <HrRecruiterTrackingPanel
                 recruiters={recruiterOverview}
