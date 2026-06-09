@@ -1,0 +1,462 @@
+import React from 'react';
+import { Link } from 'react-router-dom';
+import { FileSpreadsheet, RefreshCw, Upload, UserPlus, Users } from 'lucide-react';
+import Layout from '../components/Layout';
+import HomeLoadingScreen from '../components/dashboard/HomeLoadingScreen';
+import { Button } from '../components/UI';
+import {
+  canAccessHrLeadDistribution,
+  getCurrentUserProfile,
+  listAllUserProfiles,
+  type UserProfile,
+} from '../services/accessControl';
+import { parseHrLeadCsv } from '../services/pipelineCsvParse';
+import {
+  assignHrLeads,
+  fetchHrLeadAssignments,
+  fetchHrLeadPool,
+  fetchHrLeadSummary,
+  importHrLeadCsvWithProgress,
+  type HrAssignmentLead,
+  type HrPoolLead,
+  type PipelineLeadBatch,
+} from '../services/pipelineHrLeadsService';
+import { uploadResumeForPipelineCandidate } from '../services/pipelineService';
+import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
+
+const CHUNK_SIZE = 40;
+
+const HrLeadDistributionPage: React.FC = () => {
+  const [allowed, setAllowed] = React.useState<boolean | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+  const [message, setMessage] = React.useState<string | null>(null);
+  const [summary, setSummary] = React.useState<{ pool_count: number; assigned_count: number; recent_batches: PipelineLeadBatch[] } | null>(null);
+  const [pool, setPool] = React.useState<HrPoolLead[]>([]);
+  const [assignments, setAssignments] = React.useState<HrAssignmentLead[]>([]);
+  const [recruiters, setRecruiters] = React.useState<UserProfile[]>([]);
+  const [selectedBatchId, setSelectedBatchId] = React.useState('');
+  const [selectedPoolIds, setSelectedPoolIds] = React.useState<Set<string>>(() => new Set());
+  const [assignToUserId, setAssignToUserId] = React.useState('');
+  const [assignCount, setAssignCount] = React.useState<number | ''>(10);
+  const [importLabel, setImportLabel] = React.useState('');
+  const [parsedPreview, setParsedPreview] = React.useState<ReturnType<typeof parseHrLeadCsv> | null>(null);
+  const [importing, setImporting] = React.useState(false);
+  const [importProgress, setImportProgress] = React.useState<{ pct: number; label: string } | null>(null);
+  const [assigning, setAssigning] = React.useState(false);
+  const [resumeUploading, setResumeUploading] = React.useState(false);
+  const [resumeProgress, setResumeProgress] = React.useState<{ pct: number; label: string } | null>(null);
+
+  React.useEffect(() => {
+    void getCurrentUserProfile().then((profile) => {
+      setAllowed(canAccessHrLeadDistribution(profile?.role ?? null, profile?.email));
+    });
+  }, []);
+
+  const loadData = React.useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [summaryRes, poolRes, assignRes, profiles] = await Promise.all([
+        fetchHrLeadSummary(),
+        fetchHrLeadPool(selectedBatchId || undefined),
+        fetchHrLeadAssignments(selectedBatchId || undefined),
+        listAllUserProfiles(),
+      ]);
+      if (!summaryRes.ok) throw new Error(summaryRes.error);
+      setSummary({
+        pool_count: summaryRes.data.pool_count,
+        assigned_count: summaryRes.data.assigned_count,
+        recent_batches: summaryRes.data.recent_batches || [],
+      });
+      if (!poolRes.ok) throw new Error(poolRes.error);
+      if (!assignRes.ok) throw new Error(assignRes.error);
+      setPool(poolRes.pool);
+      setAssignments(assignRes.assignments);
+      setRecruiters(
+        profiles.filter((p) => p.role === 'recruiter' || p.role === 'leadership' || p.role === 'admin'),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedBatchId]);
+
+  React.useEffect(() => {
+    if (!allowed) return;
+    void loadData();
+  }, [allowed, loadData]);
+
+  const onCsvFile = async (file: File) => {
+    setError(null);
+    setMessage(null);
+    const text = await file.text();
+    const parsed = parseHrLeadCsv(text);
+    setParsedPreview(parsed);
+    setImportLabel(file.name.replace(/\.[^.]+$/, ''));
+    if (parsed.errors.length) {
+      setError(parsed.errors.slice(0, 5).join(' '));
+    }
+  };
+
+  const runImport = async () => {
+    if (!parsedPreview?.rows.length) {
+      setError('Upload a CSV with at least one valid row first.');
+      return;
+    }
+    setImporting(true);
+    setImportProgress({ pct: 4, label: 'Starting import…' });
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await importHrLeadCsvWithProgress({
+        label: importLabel || 'Weekly HR import',
+        sourceFilename: importLabel,
+        rows: parsedPreview.rows,
+        chunkSize: CHUNK_SIZE,
+        onProgress: (progress) => setImportProgress({ pct: progress.pct, label: progress.label }),
+      });
+      setMessage(
+        `Imported ${result.imported} leads. Skipped ${result.skipped} duplicates. Failed ${result.failed}.`,
+      );
+      if (result.batchId) setSelectedBatchId(result.batchId);
+      setParsedPreview(null);
+      await loadData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImporting(false);
+      setImportProgress(null);
+    }
+  };
+
+  const runAssign = async () => {
+    const recruiter = recruiters.find((row) => row.user_id === assignToUserId);
+    if (!recruiter) {
+      setError('Select a recruiter to assign leads to.');
+      return;
+    }
+    setAssigning(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const selectedIds = [...selectedPoolIds];
+      const result = await assignHrLeads({
+        assignToUserId: recruiter.user_id,
+        assignToLabel: recruiter.full_name || recruiter.email || recruiter.user_id,
+        candidateIds: selectedIds.length ? selectedIds : undefined,
+        count: selectedIds.length ? undefined : Number(assignCount || 0) || undefined,
+        batchId: selectedBatchId || undefined,
+      });
+      if (!result.ok) throw new Error(result.error);
+      const errCount = (result.data.errors || []).length;
+      setMessage(
+        `Assigned ${result.data.assigned_count} lead(s) to ${recruiter.full_name || recruiter.email}.${errCount ? ` ${errCount} could not be assigned.` : ''}`,
+      );
+      setSelectedPoolIds(new Set());
+      await loadData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  const attachResumes = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setResumeUploading(true);
+    setError(null);
+    setMessage(null);
+    const fileArr = [...files];
+    let attached = 0;
+    let missed = 0;
+    try {
+      for (let index = 0; index < fileArr.length; index += 1) {
+        const file = fileArr[index];
+        setResumeProgress({
+          pct: Math.round((index / fileArr.length) * 100),
+          label: `Attaching ${file.name}…`,
+        });
+        const emailGuess = String(file.name.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i)?.[0] || '').toLowerCase();
+        const match = pool.find((lead) => {
+          if (emailGuess && lead.email?.toLowerCase() === emailGuess) return true;
+          const base = file.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          const name = String(lead.full_name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          return base.length > 4 && name.includes(base.slice(0, Math.min(base.length, 8)));
+        });
+        if (!match) {
+          missed += 1;
+          continue;
+        }
+        await uploadResumeForPipelineCandidate(match.id, file);
+        attached += 1;
+      }
+      setMessage(`Attached ${attached} resume(s) to pool leads.${missed ? ` ${missed} file(s) had no email/name match in the pool.` : ''}`);
+      await loadData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setResumeUploading(false);
+      setResumeProgress(null);
+    }
+  };
+
+  if (allowed === false) {
+    return (
+      <Layout isAdmin>
+        <div className="mx-auto max-w-2xl p-8">
+          <h1 className="text-xl font-semibold text-slate-900">Lead distribution</h1>
+          <p className="mt-2 text-sm text-slate-600">You do not have access to HR lead distribution.</p>
+          <Link to="/home" className="mt-4 inline-block text-sm font-semibold text-[#005EB8] hover:underline">Back to home</Link>
+        </div>
+      </Layout>
+    );
+  }
+
+  return (
+    <Layout isAdmin>
+      <div className="mx-auto max-w-6xl space-y-6 p-4 md:p-8">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#4b6d95]">HR operations</p>
+            <h1 className="text-2xl font-bold text-[#0B1B34]">Weekly lead distribution</h1>
+            <p className="mt-1 max-w-2xl text-sm text-[#365274]">
+              Import CSV leads (LEAD AGE, NAME, EMAIL, PHONE NUMBER), attach resumes, and assign locked leads to recruiters.
+              Assigned leads appear in each recruiter&apos;s call workspace.
+            </p>
+          </div>
+          <Button variant="outline" className="!min-h-0 h-9 gap-1.5 text-xs" onClick={() => void loadData()} disabled={loading}>
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </Button>
+        </div>
+
+        {summary && (
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-2xl border border-[#cde0f4] bg-white p-4">
+              <p className="text-xs text-[#4b6d95]">Unassigned pool</p>
+              <p className="text-2xl font-bold text-[#0B1B34]">{summary.pool_count}</p>
+            </div>
+            <div className="rounded-2xl border border-[#cde0f4] bg-white p-4">
+              <p className="text-xs text-[#4b6d95]">Assigned leads</p>
+              <p className="text-2xl font-bold text-[#0B1B34]">{summary.assigned_count}</p>
+            </div>
+            <div className="rounded-2xl border border-[#cde0f4] bg-white p-4">
+              <p className="text-xs text-[#4b6d95]">Recent batches</p>
+              <p className="text-2xl font-bold text-[#0B1B34]">{summary.recent_batches.length}</p>
+            </div>
+          </div>
+        )}
+
+        {error && <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
+        {message && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{message}</div>}
+
+        <section className="relative rounded-2xl border border-[#cde0f4] bg-white p-5">
+          {(importing && importProgress) && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-white/95 p-4">
+              <div className="w-full max-w-md">
+                <HomeLoadingScreen progress={importProgress} title="Importing CSV leads" subtitle="Creating pool leads with duplicate protection." />
+              </div>
+            </div>
+          )}
+          <div className="flex items-center gap-2 text-sm font-semibold text-[#0B1B34]">
+            <FileSpreadsheet size={16} />
+            1. Import CSV
+          </div>
+          <p className="mt-1 text-xs text-[#6b84a8]">Headers: LEAD AGE, NAME, EMAIL, PHONE NUMBER (flexible matching).</p>
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+            <label className="flex-1 text-xs font-medium text-[#365274]">
+              CSV file
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                className="mt-1 block w-full text-sm"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void onCsvFile(file);
+                }}
+              />
+            </label>
+            <label className="flex-1 text-xs font-medium text-[#365274]">
+              Batch label
+              <input
+                value={importLabel}
+                onChange={(e) => setImportLabel(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
+                placeholder="e.g. COOPER June 9 HRMS"
+              />
+            </label>
+            <Button className="!min-h-0 h-10 shrink-0" onClick={() => void runImport()} disabled={importing || !parsedPreview?.rows.length}>
+              <Upload size={14} className="mr-1.5" />
+              Import leads
+            </Button>
+          </div>
+          {parsedPreview && (
+            <div className="mt-4 overflow-auto rounded-xl border border-[#e3edf8]">
+              <table className="min-w-full text-xs">
+                <thead className="bg-[#f4f8ff] text-left text-[#4b6d95]">
+                  <tr>
+                    <th className="px-3 py-2">#</th>
+                    <th className="px-3 py-2">Lead age</th>
+                    <th className="px-3 py-2">Name</th>
+                    <th className="px-3 py-2">Email</th>
+                    <th className="px-3 py-2">Phone</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parsedPreview.rows.slice(0, 8).map((row) => (
+                    <tr key={row.rowNumber} className="border-t border-[#edf3fa]">
+                      <td className="px-3 py-2">{row.rowNumber}</td>
+                      <td className="px-3 py-2">{row.leadAge || '—'}</td>
+                      <td className="px-3 py-2">{row.fullName}</td>
+                      <td className="px-3 py-2">{row.email || '—'}</td>
+                      <td className="px-3 py-2">{row.phone || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="border-t border-[#edf3fa] px-3 py-2 text-[11px] text-[#6b84a8]">
+                Previewing {Math.min(8, parsedPreview.rows.length)} of {parsedPreview.rows.length} row(s).
+              </p>
+            </div>
+          )}
+        </section>
+
+        <section className="relative rounded-2xl border border-[#cde0f4] bg-white p-5">
+          {(resumeUploading && resumeProgress) && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-white/95 p-4">
+              <div className="w-full max-w-md">
+                <HomeLoadingScreen progress={resumeProgress} title="Attaching resumes" subtitle="Matching files to pool leads by email or name." />
+              </div>
+            </div>
+          )}
+          <div className="flex items-center gap-2 text-sm font-semibold text-[#0B1B34]">
+            <Upload size={16} />
+            2. Attach resumes (optional)
+          </div>
+          <p className="mt-1 text-xs text-[#6b84a8]">Upload resume files for unassigned pool leads. Filenames with email work best.</p>
+          <input
+            type="file"
+            multiple
+            accept=".pdf,.doc,.docx,image/*"
+            className="mt-3 block w-full text-sm"
+            onChange={(e) => void attachResumes(e.target.files)}
+            disabled={!pool.length || resumeUploading}
+          />
+        </section>
+
+        <section className="rounded-2xl border border-[#cde0f4] bg-white p-5">
+          <div className="flex items-center gap-2 text-sm font-semibold text-[#0B1B34]">
+            <UserPlus size={16} />
+            3. Assign to recruiter
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-4">
+            <label className="text-xs font-medium text-[#365274] md:col-span-2">
+              Recruiter
+              <select
+                value={assignToUserId}
+                onChange={(e) => setAssignToUserId(e.target.value)}
+                className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
+              >
+                <option value="">Select recruiter…</option>
+                {recruiters.map((row) => (
+                  <option key={row.user_id} value={row.user_id}>
+                    {row.full_name || row.email || row.user_id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-medium text-[#365274]">
+              Auto-assign count
+              <input
+                type="number"
+                min={1}
+                value={assignCount}
+                onChange={(e) => setAssignCount(e.target.value === '' ? '' : Number(e.target.value))}
+                className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
+              />
+            </label>
+            <div className="flex items-end">
+              <Button className="!min-h-0 h-10 w-full" onClick={() => void runAssign()} disabled={assigning || !assignToUserId}>
+                {assigning ? 'Assigning…' : 'Assign leads'}
+              </Button>
+            </div>
+          </div>
+          <p className="mt-2 text-[11px] text-[#6b84a8]">
+            Select rows below, or leave unchecked and use auto-assign count from the oldest unassigned pool leads.
+          </p>
+        </section>
+
+        <section className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded-2xl border border-[#cde0f4] bg-white p-4">
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-[#0B1B34]">Unassigned pool ({pool.length})</p>
+              <select
+                value={selectedBatchId}
+                onChange={(e) => setSelectedBatchId(e.target.value)}
+                className="rounded-lg border border-[#c8ddf4] px-2 py-1 text-xs"
+              >
+                <option value="">All batches</option>
+                {(summary?.recent_batches || []).map((batch) => (
+                  <option key={batch.id} value={batch.id}>
+                    {batch.label} ({batch.imported_count})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="max-h-[42vh] space-y-1 overflow-auto">
+              {pool.map((lead) => {
+                const checked = selectedPoolIds.has(lead.id);
+                return (
+                  <label key={lead.id} className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2 py-2 text-xs ${checked ? 'border-sky-300 bg-sky-50' : 'border-[#edf3fa]'}`}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        setSelectedPoolIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(lead.id)) next.delete(lead.id);
+                          else next.add(lead.id);
+                          return next;
+                        });
+                      }}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <span className="font-semibold text-[#0B1B34]">{lead.full_name}</span>
+                      <span className="mt-0.5 block text-[#4b6d95]">{lead.email || '—'} · {lead.phone || '—'}</span>
+                    </span>
+                  </label>
+                );
+              })}
+              {!pool.length && !loading && <p className="text-xs text-[#6b84a8]">No unassigned leads in pool.</p>}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-[#cde0f4] bg-white p-4">
+            <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#0B1B34]">
+              <Users size={15} />
+              Assigned tracking ({assignments.length})
+            </p>
+            <div className="max-h-[42vh] space-y-1 overflow-auto">
+              {assignments.map((lead) => (
+                <div key={lead.id} className="rounded-lg border border-[#edf3fa] px-2 py-2 text-xs">
+                  <p className="font-semibold text-[#0B1B34]">{lead.full_name}</p>
+                  <p className="text-[#4b6d95]">{lead.email || '—'} · {lead.phone || '—'}</p>
+                  <p className="mt-1 text-[#6b84a8]">
+                    Assigned to <span className="font-semibold text-[#0B1B34]">{lead.assigned_to_label || '—'}</span>
+                    {lead.assigned_at ? ` · ${formatDateTimeCanadaEastern(lead.assigned_at)}` : ''}
+                  </p>
+                </div>
+              ))}
+              {!assignments.length && !loading && <p className="text-xs text-[#6b84a8]">No assigned leads yet.</p>}
+            </div>
+          </div>
+        </section>
+      </div>
+    </Layout>
+  );
+};
+
+export default HrLeadDistributionPage;

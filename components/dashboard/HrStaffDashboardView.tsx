@@ -7,6 +7,7 @@ const HrStaffDashboardView: React.FC<{ profile: UserProfile }> = ({ profile }) =
     <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
       <div className="grid gap-3 sm:grid-cols-2">
         <QuickLinkCard title="HR dashboard" description="Risk signals, stages, and follow-ups." to="/hr-dashboard" accent="border-[#b8e6cf] bg-[#f0faf4] hover:bg-[#e8f7ee]" />
+        <QuickLinkCard title="Lead distribution" description="Import weekly CSV leads and assign to recruiters." to="/hr/lead-distribution" accent="border-[#c8ddf4] bg-[#f4f8ff] hover:bg-[#e8f3ff]" />
         <QuickLinkCard title="Candidates" description="Search and review applicant records." to="/dashboard?view=candidates" />
         <QuickLinkCard title="Live sessions" description="Upcoming and past career sessions." to="/live-sessions" />
         <QuickLinkCard title="Email log" description="Communication history." to="/email-log" />

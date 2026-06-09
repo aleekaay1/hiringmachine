@@ -20,6 +20,7 @@ import {
   savePipelineCallDisposition,
   savePipelineCandidateEmailOverride,
   savePipelineCandidatePhoneOverride,
+  createPipelineSelfLead,
   type PipelineCallRecord,
   type PipelineCandidate,
   type PipelineResume,
@@ -116,6 +117,13 @@ const PipelineCallWorkspace: React.FC = () => {
   const [todaysCallCount, setTodaysCallCount] = React.useState(0);
   const [bookedOutcomeByCandidate, setBookedOutcomeByCandidate] = React.useState<CandidateBookedOutcomeMap>(new Map());
   const [currentUserId, setCurrentUserId] = React.useState<string | null>(null);
+  const [selfLeadName, setSelfLeadName] = React.useState('');
+  const [selfLeadEmail, setSelfLeadEmail] = React.useState('');
+  const [selfLeadPhone, setSelfLeadPhone] = React.useState('');
+  const [selfLeadSource, setSelfLeadSource] = React.useState('LinkedIn');
+  const [selfLeadNotes, setSelfLeadNotes] = React.useState('');
+  const [savingSelfLead, setSavingSelfLead] = React.useState(false);
+  const [selfLeadMsg, setSelfLeadMsg] = React.useState<string | null>(null);
   const selectedCandidateIdRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
@@ -330,7 +338,9 @@ const PipelineCallWorkspace: React.FC = () => {
     if (queueCap != null && queueCap <= 0) {
       return 'Daily queue cap reached. Increase daily target or continue tomorrow.';
     }
-    if (queueFilter === 'all' && undisposedQueue.length === 0 && retryQueue.length === 0) return 'Main pass and retry queue are complete.';
+    if (queueFilter === 'all' && undisposedQueue.length === 0 && retryQueue.length === 0) {
+      return 'No leads in queue. HR-assigned leads appear here automatically, or add your own below.';
+    }
     return 'Queue is empty for selected filters/cap.';
   }, [queueFilter, queueCap, undisposedQueue.length, retryQueue.length]);
 
@@ -532,6 +542,32 @@ const PipelineCallWorkspace: React.FC = () => {
       setEmailMsg(e instanceof Error ? e.message : String(e));
     } finally {
       setSavingEmail(false);
+    }
+  };
+
+  const submitSelfLead = async () => {
+    setSavingSelfLead(true);
+    setSelfLeadMsg(null);
+    setError(null);
+    try {
+      const created = await createPipelineSelfLead({
+        fullName: selfLeadName,
+        email: selfLeadEmail || null,
+        phone: selfLeadPhone || null,
+        notes: selfLeadNotes || null,
+        sourceLabel: selfLeadSource || 'manual',
+      });
+      setSelfLeadName('');
+      setSelfLeadEmail('');
+      setSelfLeadPhone('');
+      setSelfLeadNotes('');
+      setSelfLeadMsg(`Added ${created.full_name || 'lead'} to your queue.`);
+      await loadWorkspace('refresh');
+      setSelectedCandidateId(created.id);
+    } catch (e) {
+      setSelfLeadMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingSelfLead(false);
     }
   };
 
@@ -792,6 +828,61 @@ const PipelineCallWorkspace: React.FC = () => {
               {!queueList.length && (
                 <p className={`rounded-xl border border-dashed p-4 text-center text-xs ${tone.panelMuted}`}>{emptyQueueGuidance}</p>
               )}
+            </div>
+
+            <div className={`mt-4 rounded-xl border p-3 ${tone.subtle}`}>
+              <p className={`text-xs font-semibold ${tone.panelTitle}`}>Add your own lead</p>
+              <p className={`mt-0.5 text-[11px] ${tone.panelMuted}`}>LinkedIn, referral, or any candidate you found yourself.</p>
+              <div className="mt-2 space-y-2">
+                <input
+                  value={selfLeadName}
+                  onChange={(e) => setSelfLeadName(e.target.value)}
+                  placeholder="Full name *"
+                  className={`w-full rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}
+                />
+                <input
+                  value={selfLeadEmail}
+                  onChange={(e) => setSelfLeadEmail(e.target.value)}
+                  placeholder="Email"
+                  className={`w-full rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}
+                />
+                <input
+                  value={selfLeadPhone}
+                  onChange={(e) => setSelfLeadPhone(e.target.value)}
+                  placeholder="Phone"
+                  className={`w-full rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}
+                />
+                <select
+                  value={selfLeadSource}
+                  onChange={(e) => setSelfLeadSource(e.target.value)}
+                  className={`w-full rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}
+                >
+                  <option value="LinkedIn">LinkedIn</option>
+                  <option value="Referral">Referral</option>
+                  <option value="Indeed">Indeed</option>
+                  <option value="Other">Other</option>
+                </select>
+                <textarea
+                  value={selfLeadNotes}
+                  onChange={(e) => setSelfLeadNotes(e.target.value)}
+                  placeholder="Notes (optional)"
+                  rows={2}
+                  className={`w-full rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}
+                />
+                <Button
+                  variant="outline"
+                  className="!min-h-0 h-8 w-full text-xs"
+                  onClick={() => void submitSelfLead()}
+                  disabled={savingSelfLead || !selfLeadName.trim()}
+                >
+                  {savingSelfLead ? 'Adding...' : 'Add to my queue'}
+                </Button>
+                {selfLeadMsg && (
+                  <p className={`text-[11px] ${selfLeadMsg.includes('Added') ? 'text-emerald-700' : 'text-red-600'}`}>
+                    {selfLeadMsg}
+                  </p>
+                )}
+              </div>
             </div>
           </aside>
 

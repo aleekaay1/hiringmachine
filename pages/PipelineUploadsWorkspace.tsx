@@ -13,8 +13,10 @@ import {
   type PipelineCandidate,
   type PipelineUploadProgress,
 } from '../services/pipelineService';
+import { canAccessHrLeadDistribution, getCurrentUserProfile } from '../services/accessControl';
 import { supabase } from '../services/supabaseClient';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
+import { Link } from 'react-router-dom';
 
 type WorkspaceThemeMode = 'dark' | 'light';
 const WORKSPACE_THEME_STORAGE_KEY = 'pipeline-recruiter-workspace-theme';
@@ -64,6 +66,7 @@ const PipelineUploadsWorkspace: React.FC = () => {
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(() => new Set());
   const [deleting, setDeleting] = React.useState(false);
   const [themeMode, setThemeMode] = React.useState<WorkspaceThemeMode>('dark');
+  const [hrDistributor, setHrDistributor] = React.useState(false);
 
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -98,6 +101,12 @@ const PipelineUploadsWorkspace: React.FC = () => {
   React.useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  React.useEffect(() => {
+    void getCurrentUserProfile().then((profile) => {
+      setHrDistributor(canAccessHrLeadDistribution(profile?.role ?? null, profile?.email));
+    });
+  }, []);
 
   const saveTarget = async () => {
     setSavingTarget(true);
@@ -272,8 +281,17 @@ const PipelineUploadsWorkspace: React.FC = () => {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className={`text-[10px] uppercase tracking-[0.22em] ${tone.panelLabel}`}>Pipeline recruiter studio</p>
-              <h1 className={`text-lg font-semibold ${tone.panelTitle}`}>Resume Upload Workspace</h1>
-              <p className={`text-xs ${tone.panelMuted}`}>Bulk upload resumes + monitor uploaded queue for recruiter workflow.</p>
+              <h1 className={`text-lg font-semibold ${tone.panelTitle}`}>{hrDistributor ? 'Resume Upload Workspace' : 'My assigned leads'}</h1>
+              <p className={`text-xs ${tone.panelMuted}`}>
+                {hrDistributor
+                  ? 'HR bulk resume upload, or use Lead distribution for weekly CSV imports.'
+                  : 'Leads assigned to you by HR appear here. Add your own leads from the Call workspace.'}
+              </p>
+              {hrDistributor && (
+                <Link to="/hr/lead-distribution" className="mt-1 inline-block text-xs font-semibold text-[#005EB8] hover:underline">
+                  Open lead distribution →
+                </Link>
+              )}
             </div>
             <button
               type="button"
@@ -297,18 +315,25 @@ const PipelineUploadsWorkspace: React.FC = () => {
           className="mt-4 grid gap-4 xl:grid-cols-[380px_1fr]"
         >
           <section className={`rounded-2xl border p-4 space-y-3 ${tone.glassPanel}`}>
-            <label className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs cursor-pointer ${tone.actionButton}`}>
-              <FileUp size={14} />
-              {uploading ? 'Uploading...' : 'Bulk upload resumes'}
-              <input
-                type="file"
-                className="hidden"
-                multiple
-                accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.rtf,.txt"
-                onChange={(e) => void uploadFiles(e.target.files)}
-                disabled={uploading}
-              />
-            </label>
+            {hrDistributor ? (
+              <label className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs cursor-pointer ${tone.actionButton}`}>
+                <FileUp size={14} />
+                {uploading ? 'Uploading...' : 'Bulk upload resumes (HR)'}
+                <input
+                  type="file"
+                  className="hidden"
+                  multiple
+                  accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.rtf,.txt"
+                  onChange={(e) => void uploadFiles(e.target.files)}
+                  disabled={uploading}
+                />
+              </label>
+            ) : (
+              <div className={`rounded-xl border px-3 py-2 text-xs ${tone.subtle} ${tone.panelMuted}`}>
+                Weekly leads are distributed by HR. To add a LinkedIn or referral lead yourself, use{' '}
+                <Link to="/pipeline/call" className="font-semibold text-[#005EB8] hover:underline">Call workspace → Add your own lead</Link>.
+              </div>
+            )}
 
             <div className={`rounded-xl border p-3 space-y-2 ${tone.subtle}`}>
               <p className={`text-xs font-semibold ${tone.panelTitle}`}>Daily upload target</p>

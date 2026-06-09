@@ -9,7 +9,7 @@ import {
   type AppRole,
   type AppSection,
 } from '../services/accessControl';
-import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut, MonitorPlay, Mail, PhoneCall, SlidersHorizontal, FileUp, Trophy, LayoutDashboard, FileText, LifeBuoy } from 'lucide-react';
+import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut, MonitorPlay, Mail, PhoneCall, SlidersHorizontal, FileUp, Trophy, LayoutDashboard, FileText, LifeBuoy, UserPlus } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -52,6 +52,7 @@ const Layout: React.FC<LayoutProps> = ({
     { name: 'Pipeline settings', route: '/pipeline-settings', icon: SlidersHorizontal, section: 'pipeline-settings' as const },
     { name: 'Analytics', route: '/dashboard?view=analytics', icon: BarChart3, section: 'analytics' as const },
     { name: 'Settings', route: '/dashboard?view=settings', icon: Settings, section: 'settings' as const },
+    { name: 'Lead distribution', route: '/hr/lead-distribution', icon: UserPlus, section: 'pipeline-hr-leads' as const },
     { name: 'Email log', route: '/email-log', icon: Mail, section: 'email-log' as const },
     { name: 'Reports', route: '/reports', icon: FileText, section: 'reports' as const },
     { name: 'Support', route: '/support', icon: LifeBuoy, section: 'support' as const },
@@ -71,6 +72,7 @@ const Layout: React.FC<LayoutProps> = ({
     if (location.pathname === '/webinar-geek') return 'webinar-geek';
     if (location.pathname === '/live-sessions') return 'live-sessions';
     if (location.pathname === '/hr-dashboard') return 'hr-dashboard';
+    if (location.pathname === '/hr/lead-distribution') return 'pipeline-hr-leads';
     if (location.pathname === '/qr') return 'qr';
     if (location.pathname === '/email-log') return 'email-log';
     if (location.pathname === '/reports' || location.pathname.startsWith('/reports/')) return 'reports';

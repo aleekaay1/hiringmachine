@@ -30,6 +30,7 @@ import Reports from './pages/Reports';
 import ReportDetail from './pages/ReportDetail';
 import SupportPage from './pages/SupportPage';
 import OpsConsolePage from './pages/OpsConsolePage';
+import HrLeadDistributionPage from './pages/HrLeadDistributionPage';
 
 const App: React.FC = () => {
   return (
@@ -55,6 +56,7 @@ const App: React.FC = () => {
         <Route path="/calls-analytics/leaderboard" element={<LeadershipLeaderboard />} />
         <Route path="/leaderboard" element={<Navigate to="/calls-analytics/leaderboard" replace />} />
         <Route path="/hr-dashboard" element={<HRDashboard />} />
+        <Route path="/hr/lead-distribution" element={<HrLeadDistributionPage />} />
         <Route path="/pipeline" element={<Pipeline />} />
         <Route path="/pipeline/call" element={<PipelineCallWorkspace />} />
         <Route path="/pipeline/performance" element={<PipelinePerformance />} />

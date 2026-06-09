@@ -1687,6 +1687,82 @@ export async function updatePipelineCandidateProfile(input: {
   if (error) throw error;
 }
 
+export async function createPipelineSelfLead(input: {
+  fullName: string;
+  email?: string | null;
+  phone?: string | null;
+  notes?: string | null;
+  sourceLabel?: string | null;
+}): Promise<PipelineCandidate> {
+  const fullName = String(input.fullName || '').trim();
+  if (!fullName) throw new Error('Name is required.');
+  const email = String(input.email || '').trim().toLowerCase() || null;
+  const phone = String(input.phone || '').trim() || null;
+  if (!email && !phone) throw new Error('Email or phone is required.');
+
+  const { data: auth } = await supabase.auth.getUser();
+  const userId = auth.user?.id;
+  if (!userId) throw new Error('You must be signed in.');
+
+  const actorLabel =
+    String(auth.user?.user_metadata?.full_name || auth.user?.user_metadata?.name || auth.user?.email || '').trim() || null;
+
+  const { data, error } = await supabase
+    .from('pipeline_candidates')
+    .insert({
+      full_name: fullName,
+      email,
+      phone,
+      source: 'self_lead',
+      uploader_user_id: userId,
+      uploader_label: actorLabel,
+      metadata: {
+        self_added: true,
+        self_added_at: new Date().toISOString(),
+        self_added_source: String(input.sourceLabel || 'manual').trim() || 'manual',
+        self_added_notes: String(input.notes || '').trim() || null,
+      },
+    })
+    .select('id, full_name, phone, email, source, journey_stage, status, uploader_user_id, uploader_label, scheduled_for, metadata, created_at, updated_at')
+    .single();
+  if (error) throw error;
+  return data as PipelineCandidate;
+}
+
+export async function uploadResumeForPipelineCandidate(
+  candidateId: string,
+  file: File,
+  actorLabel?: string,
+): Promise<PipelineResume> {
+  const cleanName = sanitizeFilename(file.name);
+  const path = `${candidateId}/${Date.now()}-${cleanName}`;
+  const { error: upErr } = await supabase.storage.from(PIPELINE_BUCKET).upload(path, file, {
+    cacheControl: '3600',
+    upsert: false,
+    contentType: file.type || 'application/octet-stream',
+  });
+  if (upErr) throw upErr;
+  const { data: pub } = supabase.storage.from(PIPELINE_BUCKET).getPublicUrl(path);
+  const { data: resume, error: rErr } = await supabase
+    .from('pipeline_resumes')
+    .insert({
+      candidate_id: candidateId,
+      storage_bucket: PIPELINE_BUCKET,
+      storage_path: path,
+      public_url: pub.publicUrl,
+      original_filename: file.name,
+      mime_type: file.type || null,
+      size_bytes: file.size,
+      conversion_status: 'not_required',
+      resume_source: 'bulk_upload',
+    })
+    .select('*')
+    .single();
+  if (rErr) throw rErr;
+  void actorLabel;
+  return resume as PipelineResume;
+}
+
 export async function savePipelineCandidateEmailOverride(input: {
   candidateId: string;
   emailInput: string;

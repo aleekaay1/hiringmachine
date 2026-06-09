@@ -26,7 +26,8 @@ export type AppSection =
   | 'reports'
   | 'support'
   | 'ops-console'
-  | 'superdashboard';
+  | 'superdashboard'
+  | 'pipeline-hr-leads';
 
 export interface UserProfile {
   user_id: string;
@@ -165,6 +166,25 @@ const PIPELINE_OPERATIONAL_SECTIONS: AppSection[] = [
 /** Hidden ops console — ali@globelife-paz.com only (auth email, not role-based). */
 export const OPS_CONSOLE_EMAIL = 'ali@globelife-paz.com';
 
+/** HR weekly CSV import + lead assignment to recruiters. */
+export const HR_LEAD_DISTRIBUTION_EMAILS = new Set([
+  OPS_CONSOLE_EMAIL,
+  'hr.licensing@globelife-paz.com',
+]);
+
+export function isHrLeadDistributorEmail(email: string | null | undefined): boolean {
+  const normalized = String(email || '').trim().toLowerCase();
+  return normalized.length > 0 && HR_LEAD_DISTRIBUTION_EMAILS.has(normalized);
+}
+
+export function canAccessHrLeadDistribution(
+  role: AppRole | null,
+  email: string | null | undefined,
+): boolean {
+  if (isHrLeadDistributorEmail(email)) return true;
+  return role === 'hr';
+}
+
 export function isOpsConsoleEmail(email: string | null | undefined): boolean {
   const normalized = String(email || '').trim().toLowerCase();
   return normalized === OPS_CONSOLE_EMAIL;
@@ -198,10 +218,12 @@ export function canAccessSection(
   email?: string | null,
 ): boolean {
   if (section === 'ops-console') return isOpsConsoleEmail(email);
+  if (section === 'pipeline-hr-leads') return canAccessHrLeadDistribution(role, email);
   if (section === 'support') return Boolean(role);
   if (!role) return section === 'overview' || section === 'home';
   if (role === 'admin') {
     if (ADMIN_DATA_SECTIONS.includes(section)) return true;
+    if (canAccessHrLeadDistribution(role, email) && section === 'pipeline-hr-leads') return true;
     if (adminHasPipelineOperationalAccess(role, email) && PIPELINE_OPERATIONAL_SECTIONS.includes(section)) {
       return true;
     }
@@ -211,6 +233,7 @@ export function canAccessSection(
     return (
       ADMIN_DATA_SECTIONS.includes(section) ||
       PIPELINE_OPERATIONAL_SECTIONS.includes(section) ||
+      (canAccessHrLeadDistribution(role, email) && section === 'pipeline-hr-leads') ||
       section === 'support'
     );
   }
@@ -236,6 +259,7 @@ export function canAccessSection(
       section === 'support' ||
       section === 'candidates' ||
       section === 'hr-dashboard' ||
+      section === 'pipeline-hr-leads' ||
       section === 'live-sessions' ||
       section === 'email-log' ||
       section === 'leaderboard'

@@ -37,7 +37,8 @@ $functions = @(
   "hr-automation-runner",
   "email-inbox-sync",
   "threecx-call-control",
-  "pipeline-convert-resume"
+  "pipeline-convert-resume",
+  "pipeline-hr-leads"
 )
 
 Write-Host "Deploying $($functions.Count) functions to project $ProjectRef ..." -ForegroundColor Green
