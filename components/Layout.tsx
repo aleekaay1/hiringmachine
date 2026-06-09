@@ -62,22 +62,34 @@ const Layout: React.FC<LayoutProps> = ({
     return 'overview';
   }, [location.pathname, location.search]);
 
+  const refreshLayoutProfile = React.useCallback(async () => {
+    const [profile, authRes] = await Promise.all([getCurrentUserProfile(), supabase.auth.getUser()]);
+    setRole(profile?.role ?? null);
+    setUserEmail(authRes.data.user?.email ?? profile?.email ?? null);
+    setDisplayName(profile?.full_name || authRes.data.user?.email || 'Staff');
+    setAvatarUrl(profile?.avatar_url ?? null);
+    setRoleResolved(true);
+  }, []);
+
   React.useEffect(() => {
     if (!isAdmin) return;
     let cancelled = false;
-    void Promise.all([getCurrentUserProfile(), supabase.auth.getUser()]).then(([profile, authRes]) => {
-      if (!cancelled) {
-        setRole(profile?.role ?? null);
-        setUserEmail(authRes.data.user?.email ?? profile?.email ?? null);
-        setDisplayName(profile?.full_name || authRes.data.user?.email || 'Staff');
-        setAvatarUrl(profile?.avatar_url ?? null);
-        setRoleResolved(true);
-      }
+    void refreshLayoutProfile().then(() => {
+      if (cancelled) return;
     });
     return () => {
       cancelled = true;
     };
-  }, [isAdmin]);
+  }, [isAdmin, refreshLayoutProfile]);
+
+  React.useEffect(() => {
+    if (!isAdmin) return;
+    const handler = () => {
+      void refreshLayoutProfile();
+    };
+    window.addEventListener('pohiring:profile-updated', handler);
+    return () => window.removeEventListener('pohiring:profile-updated', handler);
+  }, [isAdmin, refreshLayoutProfile]);
 
   React.useEffect(() => {
     if (!isAdmin || !roleResolved) return;

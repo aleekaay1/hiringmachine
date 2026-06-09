@@ -11,7 +11,6 @@ import {
   MonitorPlay,
   PhoneCall,
   QrCode,
-  Settings,
   SlidersHorizontal,
   Trophy,
   User,
@@ -99,10 +98,7 @@ export const NAV_GROUPS: NavGroup[] = [
     id: 'account',
     label: 'Account',
     icon: User,
-    items: [
-      { name: 'My profile', route: '/account', icon: User, section: 'account' },
-      { name: 'System settings', route: '/dashboard?view=settings', icon: Settings, section: 'settings' },
-    ],
+    items: [{ name: 'My profile', route: '/account', icon: User, section: 'account' }],
   },
   {
     id: 'support',

@@ -1,3 +1,4 @@
+import { notifyProfileUpdated } from './profileService';
 import { supabase } from './supabaseClient';
 
 const AVATAR_BUCKET = 'profile-avatars';
@@ -26,6 +27,8 @@ export async function uploadProfileAvatar(file: File): Promise<string> {
     .eq('user_id', userId);
   if (profileErr) throw profileErr;
 
+  await supabase.auth.refreshSession();
+  notifyProfileUpdated();
   return avatarUrl;
 }
 
@@ -57,4 +60,7 @@ export async function removeProfileAvatar(): Promise<void> {
     .update({ avatar_url: null })
     .eq('user_id', userId);
   if (error) throw error;
+
+  await supabase.auth.refreshSession();
+  notifyProfileUpdated();
 }

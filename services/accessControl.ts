@@ -38,6 +38,8 @@ export interface UserProfile {
   points?: number | null;
   points_updated_at?: string | null;
   avatar_url?: string | null;
+  phone?: string | null;
+  extension?: string | null;
 }
 
 /** Training / sandbox accounts (demo-*@globelife-paz.com) — hidden from leaderboard, reports, and staff lists. */
@@ -115,7 +117,7 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
 
   const { data, error } = await supabase
     .from('user_profiles')
-    .select('user_id, email, full_name, role, points, points_updated_at, avatar_url')
+    .select('user_id, email, full_name, role, points, points_updated_at, avatar_url, phone, extension')
     .eq('user_id', userId)
     .maybeSingle();
 
@@ -127,11 +129,19 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
   if (error) {
     const { data: fallbackData, error: fallbackErr } = await supabase
       .from('user_profiles')
-      .select('user_id, email, full_name, role, points, points_updated_at')
+      .select('user_id, email, full_name, role, points, points_updated_at, avatar_url')
       .eq('user_id', userId)
       .maybeSingle();
     if (!fallbackErr && fallbackData) {
-      return { ...(fallbackData as UserProfile), avatar_url: null };
+      return { ...(fallbackData as UserProfile), phone: null, extension: null };
+    }
+    const { data: basicData, error: basicErr } = await supabase
+      .from('user_profiles')
+      .select('user_id, email, full_name, role, points, points_updated_at')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!basicErr && basicData) {
+      return { ...(basicData as UserProfile), avatar_url: null, phone: null, extension: null };
     }
   }
 

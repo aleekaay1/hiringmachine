@@ -39,9 +39,7 @@ import {
   canAccessSection,
   defaultRouteForRole,
   getCurrentUserProfile,
-  listAllUserProfiles,
   type AppRole,
-  type UserProfile as StaffUserProfile,
 } from '../services/accessControl';
 import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { hasResumeOrLinkedInMaterial } from '../services/linkedinUrl';
@@ -172,20 +170,24 @@ const AdminDashboard: React.FC = () => {
   const [showEvaluationModal, setShowEvaluationModal] = useState(false);
   const [liveNow, setLiveNow] = useState(new Date());
   const [role, setRole] = useState<AppRole | null>(null);
-  const [staffProfiles, setStaffProfiles] = useState<StaffUserProfile[]>([]);
-  const [staffProfilesLoading, setStaffProfilesLoading] = useState(false);
-  const [staffProfilesError, setStaffProfilesError] = useState<string | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
 
-  const adminView = useMemo<'overview' | 'candidates' | 'settings'>(() => {
+  useEffect(() => {
     const q = new URLSearchParams(location.search).get('view');
-    if (q === 'analytics') return 'overview';
-    if (q === 'overview' || q === 'candidates' || q === 'settings') return q;
+    if (q === 'settings') {
+      navigate('/account?section=staff-directory', { replace: true });
+    }
+  }, [location.search, navigate]);
+
+  const adminView = useMemo<'overview' | 'candidates'>(() => {
+    const q = new URLSearchParams(location.search).get('view');
+    if (q === 'analytics' || q === 'settings') return 'overview';
+    if (q === 'overview' || q === 'candidates') return q;
     return 'overview';
   }, [location.search]);
 
-  const effectiveAdminView = useMemo<'overview' | 'candidates' | 'settings'>(() => {
+  const effectiveAdminView = useMemo<'overview' | 'candidates'>(() => {
     if (canAccessSection(role, adminView)) return adminView;
     if (canAccessSection(role, 'candidates')) return 'candidates';
     return 'overview';
@@ -365,30 +367,6 @@ const AdminDashboard: React.FC = () => {
       load();
     }
   }, [isAuthenticated]);
-
-  useEffect(() => {
-    if (!isAuthenticated || effectiveAdminView !== 'settings') return;
-    if (role !== 'admin' && role !== 'leadership') return;
-    let cancelled = false;
-    const loadUsers = async () => {
-      setStaffProfilesLoading(true);
-      setStaffProfilesError(null);
-      try {
-        const rows = await listAllUserProfiles();
-        if (cancelled) return;
-        setStaffProfiles(rows);
-      } catch (err) {
-        if (cancelled) return;
-        setStaffProfilesError(err instanceof Error ? err.message : String(err));
-      } finally {
-        if (!cancelled) setStaffProfilesLoading(false);
-      }
-    };
-    void loadUsers();
-    return () => {
-      cancelled = true;
-    };
-  }, [isAuthenticated, effectiveAdminView, role]);
 
   /** List rows are lean (no assessment JSON); load full row when opening detail. Stale fetch guard avoids wrong candidate after fast clicks. */
   const selectCandidate = (c: Candidate) => {
@@ -1199,7 +1177,7 @@ const AdminDashboard: React.FC = () => {
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-5 py-3 flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-[#0b1f3a]">
-              {effectiveAdminView === 'overview' ? 'Overview' : effectiveAdminView === 'candidates' ? 'Candidates' : 'Settings'}
+              {effectiveAdminView === 'overview' ? 'Overview' : 'Candidates'}
             </h1>
             <p className="text-xs text-gray-500">
               {dashboard.total} applicants · {dashboard.activePipeline} active
@@ -1275,54 +1253,6 @@ const AdminDashboard: React.FC = () => {
                 </div>
               </div>
             </div>
-          </div>
-        )}
-
-        {effectiveAdminView === 'settings' && (
-          <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-6 space-y-4">
-            <div>
-              <p className="text-sm font-semibold text-[#0b1f3a]">Staff directory</p>
-              <p className="text-xs text-gray-600 mt-1">
-                Leadership/admin visibility across all user accounts for role and points readiness.
-              </p>
-            </div>
-            {(role === 'admin' || role === 'leadership') ? (
-              <>
-                {staffProfilesError && (
-                  <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                    {staffProfilesError}
-                  </div>
-                )}
-                <div className="rounded-xl border border-gray-200 overflow-hidden">
-                  <div className="grid grid-cols-[1.3fr_1fr_0.8fr_0.6fr] px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-gray-500 bg-[#f8fbff] border-b border-gray-200">
-                    <span>User</span>
-                    <span>Email</span>
-                    <span>Role</span>
-                    <span className="text-right">Points</span>
-                  </div>
-                  {staffProfilesLoading ? (
-                    <div className="px-4 py-4 text-xs text-gray-500">Loading users…</div>
-                  ) : staffProfiles.length === 0 ? (
-                    <div className="px-4 py-4 text-xs text-gray-500">No user profiles found.</div>
-                  ) : (
-                    staffProfiles.map((row) => (
-                      <div key={row.user_id} className="grid grid-cols-[1.3fr_1fr_0.8fr_0.6fr] px-4 py-2.5 text-sm border-b border-gray-100 items-center">
-                        <span className="font-medium text-gray-900 truncate">{row.full_name || '—'}</span>
-                        <span className="text-gray-600 truncate">{row.email || '—'}</span>
-                        <span className="text-xs inline-flex w-fit rounded-full bg-blue-50 border border-blue-200 text-blue-700 px-2 py-0.5">
-                          {row.role}
-                        </span>
-                        <span className="text-right text-gray-700 tabular-nums">{Number(row.points || 0)}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </>
-            ) : (
-              <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
-                User management is available to leadership/admin accounts.
-              </div>
-            )}
           </div>
         )}
 
