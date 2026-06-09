@@ -6,21 +6,7 @@ import {
   markTourCompleted,
   shouldAutoStartTour,
 } from '../../services/portalTourService';
-
-type Rect = { top: number; left: number; width: number; height: number };
-
-function measureTarget(selector: string): Rect | null {
-  const el = document.querySelector(selector);
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  const pad = 8;
-  return {
-    top: Math.max(0, r.top - pad),
-    left: Math.max(0, r.left - pad),
-    width: r.width + pad * 2,
-    height: r.height + pad * 2,
-  };
-}
+import { measureTourTarget, prepareTourTarget, type TourRect } from './tourTargetUtils';
 
 type PortalTourProps = {
   userId: string | null;
@@ -30,7 +16,8 @@ type PortalTourProps = {
 const PortalTour: React.FC<PortalTourProps> = ({ userId, enabled }) => {
   const [open, setOpen] = React.useState(false);
   const [stepIndex, setStepIndex] = React.useState(0);
-  const [spotlight, setSpotlight] = React.useState<Rect | null>(null);
+  const [preparing, setPreparing] = React.useState(false);
+  const [spotlight, setSpotlight] = React.useState<TourRect | null>(null);
   const [cardPos, setCardPos] = React.useState<{ top: number; left: number }>({ top: 80, left: 24 });
 
   const step = PORTAL_TOUR_STEPS[stepIndex];
@@ -40,14 +27,13 @@ const PortalTour: React.FC<PortalTourProps> = ({ userId, enabled }) => {
     (completed: boolean) => {
       setOpen(false);
       setStepIndex(0);
+      setPreparing(false);
       if (userId && completed) markTourCompleted(userId);
     },
     [userId],
   );
 
-  const layoutStep = React.useCallback(() => {
-    if (!step) return;
-    const rect = measureTarget(step.target);
+  const layoutFromRect = React.useCallback((rect: TourRect | null) => {
     setSpotlight(rect);
     if (rect) {
       const cardWidth = Math.min(360, window.innerWidth - 32);
@@ -62,7 +48,18 @@ const PortalTour: React.FC<PortalTourProps> = ({ userId, enabled }) => {
     } else {
       setCardPos({ top: window.innerHeight / 2 - 100, left: window.innerWidth / 2 - 180 });
     }
-  }, [step]);
+  }, []);
+
+  const layoutStep = React.useCallback(async () => {
+    if (!step) return;
+    setPreparing(true);
+    try {
+      const rect = step.target ? await prepareTourTarget(step.target) : null;
+      layoutFromRect(rect ?? (step.target ? measureTourTarget(step.target) : null));
+    } finally {
+      setPreparing(false);
+    }
+  }, [step, layoutFromRect]);
 
   React.useEffect(() => {
     if (!enabled || !userId) return;
@@ -85,18 +82,20 @@ const PortalTour: React.FC<PortalTourProps> = ({ userId, enabled }) => {
   }, []);
 
   React.useEffect(() => {
-    if (!open) return;
-    layoutStep();
-    const onResize = () => layoutStep();
-    window.addEventListener('resize', onResize);
-    window.addEventListener('scroll', onResize, true);
-    const timer = window.setTimeout(layoutStep, 120);
+    if (!open || !step) return;
+    void layoutStep();
+    const onReflow = () => {
+      layoutFromRect(step.target ? measureTourTarget(step.target) : null);
+    };
+    window.addEventListener('resize', onReflow);
+    window.addEventListener('scroll', onReflow, true);
+    const timer = window.setTimeout(onReflow, 150);
     return () => {
-      window.removeEventListener('resize', onResize);
-      window.removeEventListener('scroll', onResize, true);
+      window.removeEventListener('resize', onReflow);
+      window.removeEventListener('scroll', onReflow, true);
       window.clearTimeout(timer);
     };
-  }, [open, stepIndex, layoutStep]);
+  }, [open, stepIndex, step, layoutStep, layoutFromRect]);
 
   if (!open || !step || typeof document === 'undefined') return null;
 
@@ -114,6 +113,7 @@ const PortalTour: React.FC<PortalTourProps> = ({ userId, enabled }) => {
         {step.title}
       </h2>
       <p className="mt-2 text-sm leading-relaxed text-[#4b6d95]">{step.body}</p>
+      {preparing && <p className="mt-2 text-xs text-[#6b84a8]">Scrolling to this step…</p>}
       <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
         <button
           type="button"
@@ -126,19 +126,21 @@ const PortalTour: React.FC<PortalTourProps> = ({ userId, enabled }) => {
           {stepIndex > 0 && (
             <button
               type="button"
+              disabled={preparing}
               onClick={() => setStepIndex((i) => Math.max(0, i - 1))}
-              className="rounded-xl border border-[#c8ddf4] px-4 py-2 text-sm font-semibold text-[#0B1B34] hover:bg-[#f4f8ff]"
+              className="rounded-xl border border-[#c8ddf4] px-4 py-2 text-sm font-semibold text-[#0B1B34] hover:bg-[#f4f8ff] disabled:opacity-50"
             >
               Back
             </button>
           )}
           <button
             type="button"
+            disabled={preparing}
             onClick={() => {
               if (isLast) closeTour(true);
               else setStepIndex((i) => i + 1);
             }}
-            className="rounded-xl bg-[#005EB8] px-4 py-2 text-sm font-semibold text-white hover:bg-[#004a94]"
+            className="rounded-xl bg-[#005EB8] px-4 py-2 text-sm font-semibold text-white hover:bg-[#004a94] disabled:opacity-50"
           >
             {isLast ? 'Finish' : 'Next'}
           </button>

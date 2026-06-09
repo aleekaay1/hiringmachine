@@ -3,38 +3,18 @@ import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { TASK_WALKTHROUGHS, type TaskWalkthrough } from '../../content/taskWalkthroughs';
 import { START_TASK_WALKTHROUGH_EVENT } from '../../services/portalTourService';
-
-type Rect = { top: number; left: number; width: number; height: number };
-
-function measureTarget(selector: string): Rect | null {
-  const el = document.querySelector(selector);
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  const pad = 8;
-  return {
-    top: Math.max(0, r.top - pad),
-    left: Math.max(0, r.left - pad),
-    width: r.width + pad * 2,
-    height: r.height + pad * 2,
-  };
-}
+import {
+  measureTourTarget,
+  prepareTourTarget,
+  waitForTourTarget,
+  type TourRect,
+} from './tourTargetUtils';
 
 function routesMatch(currentPath: string, currentSearch: string, route: string): boolean {
   const [path, search = ''] = route.split('?');
   if (currentPath !== path) return false;
   if (!search) return true;
   return currentSearch === `?${search}` || currentSearch.includes(search);
-}
-
-async function waitForTarget(selector: string | undefined, maxMs: number): Promise<Rect | null> {
-  if (!selector) return null;
-  const start = Date.now();
-  while (Date.now() - start < maxMs) {
-    const rect = measureTarget(selector);
-    if (rect) return rect;
-    await new Promise((resolve) => window.setTimeout(resolve, 120));
-  }
-  return null;
 }
 
 async function prepareStep(
@@ -47,18 +27,16 @@ async function prepareStep(
     navigate(step.route);
     await new Promise((resolve) => window.setTimeout(resolve, 200));
   }
-  const waitMs = step.optionalTarget ? 1800 : 4500;
-  if (step.target) await waitForTarget(step.target, waitMs);
   if (step.route?.includes('#')) {
     const hash = step.route.split('#')[1];
     if (hash) {
-      window.requestAnimationFrame(() => {
-        document.getElementById(hash)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-      await new Promise((resolve) => window.setTimeout(resolve, 350));
+      document.getElementById(hash)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      await new Promise((resolve) => window.setTimeout(resolve, 450));
     }
   }
-};
+  const waitMs = step.optionalTarget ? 1800 : 4500;
+  if (step.target) await waitForTourTarget(step.target, waitMs);
+}
 
 const TaskWalkthrough: React.FC = () => {
   const navigate = useNavigate();
@@ -67,16 +45,16 @@ const TaskWalkthrough: React.FC = () => {
   const [open, setOpen] = React.useState(false);
   const [stepIndex, setStepIndex] = React.useState(0);
   const [preparing, setPreparing] = React.useState(false);
-  const [spotlight, setSpotlight] = React.useState<Rect | null>(null);
+  const [spotlight, setSpotlight] = React.useState<TourRect | null>(null);
   const [cardPos, setCardPos] = React.useState<{ top: number; left: number }>({ top: 80, left: 24 });
 
   const steps = activeTour?.steps ?? [];
   const step = steps[stepIndex];
   const isLast = stepIndex >= steps.length - 1;
 
-  const layoutStep = React.useCallback(() => {
+  const layoutStep = React.useCallback(async () => {
     if (!step) return;
-    const rect = step.target ? measureTarget(step.target) : null;
+    const rect = step.target ? await prepareTourTarget(step.target) : null;
     setSpotlight(rect);
     if (rect) {
       const cardWidth = Math.min(380, window.innerWidth - 32);
@@ -139,17 +117,19 @@ const TaskWalkthrough: React.FC = () => {
 
   React.useEffect(() => {
     if (!open || preparing) return;
-    layoutStep();
-    const onResize = () => layoutStep();
-    window.addEventListener('resize', onResize);
-    window.addEventListener('scroll', onResize, true);
-    const timer = window.setTimeout(layoutStep, 150);
+    void layoutStep();
+    const onReflow = () => {
+      setSpotlight(step?.target ? measureTourTarget(step.target) : null);
+    };
+    window.addEventListener('resize', onReflow);
+    window.addEventListener('scroll', onReflow, true);
+    const timer = window.setTimeout(onReflow, 150);
     return () => {
-      window.removeEventListener('resize', onResize);
-      window.removeEventListener('scroll', onResize, true);
+      window.removeEventListener('resize', onReflow);
+      window.removeEventListener('scroll', onReflow, true);
       window.clearTimeout(timer);
     };
-  }, [open, preparing, stepIndex, layoutStep, location.pathname, location.search]);
+  }, [open, preparing, stepIndex, step, layoutStep, location.pathname, location.search]);
 
   if (!open || !step || !activeTour || typeof document === 'undefined') return null;
 
@@ -167,7 +147,7 @@ const TaskWalkthrough: React.FC = () => {
         {step.title}
       </h2>
       <p className="mt-2 text-sm leading-relaxed text-[#4b6d95]">{step.body}</p>
-      {preparing && <p className="mt-2 text-xs text-[#6b84a8]">Opening the right page…</p>}
+      {preparing && <p className="mt-2 text-xs text-[#6b84a8]">Opening the right page and scrolling to this step…</p>}
       <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
         <button
           type="button"
