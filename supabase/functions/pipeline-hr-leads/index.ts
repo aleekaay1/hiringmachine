@@ -29,6 +29,64 @@ function normalizePhone(value: string | null | undefined): string | null {
   return v || null;
 }
 
+type CallRecordRow = {
+  candidate_id: string;
+  disposition: string | null;
+  disposed_at: string | null;
+};
+
+function emptyDispositionCounts(): Record<string, number> {
+  return {
+    booked: 0,
+    no_answer: 0,
+    voicemail_left: 0,
+    callback_requested: 0,
+    not_interested: 0,
+    busy: 0,
+    wrong_number: 0,
+    connected: 0,
+    other: 0,
+  };
+}
+
+function incrementDispositionCount(counts: Record<string, number>, disposition: string | null) {
+  const d = String(disposition || '').trim().toLowerCase();
+  if (!d) return;
+  if (d === 'booked') counts.booked += 1;
+  else if (d === 'no answer') counts.no_answer += 1;
+  else if (d === 'voicemail left') counts.voicemail_left += 1;
+  else if (d === 'callback requested') counts.callback_requested += 1;
+  else if (d === 'not interested' || d === 'do not call') counts.not_interested += 1;
+  else if (d === 'busy / line busy') counts.busy += 1;
+  else if (d === 'wrong number') counts.wrong_number += 1;
+  else if (d === 'connected' || d === 'interested – next step' || d === 'scheduled interview') counts.connected += 1;
+  else counts.other += 1;
+}
+
+async function fetchDispositionMaps(
+  admin: ReturnType<typeof createClient>,
+  candidateIds: string[],
+): Promise<{ latest: Map<string, CallRecordRow>; counts: Map<string, number> }> {
+  const latest = new Map<string, CallRecordRow>();
+  const counts = new Map<string, number>();
+  if (!candidateIds.length) return { latest, counts };
+
+  for (let offset = 0; offset < candidateIds.length; offset += 150) {
+    const chunk = candidateIds.slice(offset, offset + 150);
+    const { data, error } = await admin
+      .from('pipeline_call_records')
+      .select('candidate_id, disposition, disposed_at')
+      .in('candidate_id', chunk)
+      .order('disposed_at', { ascending: false });
+    if (error) throw error;
+    for (const row of (data || []) as CallRecordRow[]) {
+      counts.set(row.candidate_id, (counts.get(row.candidate_id) || 0) + 1);
+      if (!latest.has(row.candidate_id)) latest.set(row.candidate_id, row);
+    }
+  }
+  return { latest, counts };
+}
+
 async function assertHrDistributor(
   authClient: ReturnType<typeof createClient>,
   user: { id: string; email?: string | null },
@@ -129,15 +187,115 @@ Deno.serve(async (req) => {
       const batchId = url.searchParams.get('batch_id')?.trim() || '';
       let query = admin
         .from('pipeline_candidates')
-        .select('id, full_name, email, phone, lead_batch_id, assigned_to_user_id, assigned_to_label, assigned_at, status, journey_stage, uploader_user_id')
+        .select('id, full_name, email, phone, lead_batch_id, assigned_to_user_id, assigned_to_label, assigned_at, status, journey_stage, uploader_user_id, metadata')
         .eq('source', 'hr_csv_batch')
         .not('assigned_to_user_id', 'is', null)
         .order('assigned_at', { ascending: false })
-        .limit(500);
+        .limit(2000);
       if (batchId) query = query.eq('lead_batch_id', batchId);
       const { data, error } = await query;
       if (error) throw error;
       return new Response(JSON.stringify({ ok: true, assignments: data || [] }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (req.method === 'GET' && mode === 'recruiter-overview') {
+      const batchId = url.searchParams.get('batch_id')?.trim() || '';
+      let candidateQuery = admin
+        .from('pipeline_candidates')
+        .select('id, assigned_to_user_id, assigned_to_label')
+        .eq('source', 'hr_csv_batch')
+        .not('assigned_to_user_id', 'is', null);
+      if (batchId) candidateQuery = candidateQuery.eq('lead_batch_id', batchId);
+      const { data: candidates, error: candErr } = await candidateQuery;
+      if (candErr) throw candErr;
+
+      const rows = (candidates || []) as Array<{
+        id: string;
+        assigned_to_user_id: string | null;
+        assigned_to_label: string | null;
+      }>;
+      const candidateIds = rows.map((row) => row.id);
+      const { latest } = await fetchDispositionMaps(admin, candidateIds);
+
+      const byRecruiter = new Map<string, {
+        user_id: string;
+        label: string;
+        assigned_count: number;
+        not_contacted_count: number;
+        worked_count: number;
+        disposition_counts: Record<string, number>;
+      }>();
+
+      for (const row of rows) {
+        const userId = String(row.assigned_to_user_id || '').trim();
+        if (!userId) continue;
+        let bucket = byRecruiter.get(userId);
+        if (!bucket) {
+          bucket = {
+            user_id: userId,
+            label: String(row.assigned_to_label || userId).trim(),
+            assigned_count: 0,
+            not_contacted_count: 0,
+            worked_count: 0,
+            disposition_counts: emptyDispositionCounts(),
+          };
+          byRecruiter.set(userId, bucket);
+        }
+        bucket.assigned_count += 1;
+        const latestRecord = latest.get(row.id);
+        if (!latestRecord?.disposition) {
+          bucket.not_contacted_count += 1;
+        } else {
+          bucket.worked_count += 1;
+          incrementDispositionCount(bucket.disposition_counts, latestRecord.disposition);
+        }
+      }
+
+      const recruiters = [...byRecruiter.values()].sort((a, b) => b.assigned_count - a.assigned_count);
+      return new Response(JSON.stringify({ ok: true, recruiters }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (req.method === 'GET' && mode === 'recruiter-leads') {
+      const userId = url.searchParams.get('user_id')?.trim() || '';
+      const batchId = url.searchParams.get('batch_id')?.trim() || '';
+      if (!userId) {
+        return new Response(JSON.stringify({ error: 'user_id is required.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      let leadQuery = admin
+        .from('pipeline_candidates')
+        .select('id, full_name, email, phone, lead_batch_id, assigned_to_user_id, assigned_to_label, assigned_at, status, journey_stage, uploader_user_id, metadata, created_at')
+        .eq('source', 'hr_csv_batch')
+        .eq('assigned_to_user_id', userId)
+        .order('assigned_at', { ascending: false })
+        .limit(2000);
+      if (batchId) leadQuery = leadQuery.eq('lead_batch_id', batchId);
+      const { data: leads, error: leadErr } = await leadQuery;
+      if (leadErr) throw leadErr;
+
+      const leadRows = (leads || []) as Array<{ id: string }>;
+      const { latest, counts } = await fetchDispositionMaps(admin, leadRows.map((row) => row.id));
+
+      const enriched = leadRows.map((lead) => {
+        const latestRecord = latest.get(lead.id);
+        return {
+          ...lead,
+          latest_disposition: latestRecord?.disposition || null,
+          latest_disposed_at: latestRecord?.disposed_at || null,
+          call_count: counts.get(lead.id) || 0,
+        };
+      });
+
+      return new Response(JSON.stringify({ ok: true, leads: enriched }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });

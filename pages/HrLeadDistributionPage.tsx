@@ -13,17 +13,18 @@ import {
 import { parseHrLeadCsv } from '../services/pipelineCsvParse';
 import {
   assignHrLeads,
-  fetchHrLeadAssignments,
   fetchHrLeadPool,
   fetchHrLeadSummary,
+  fetchHrRecruiterLeads,
+  fetchHrRecruiterOverview,
   importHrLeadCsvWithProgress,
-  type HrAssignmentLead,
   type HrPoolLead,
+  type HrRecruiterOverview,
   type PipelineLeadBatch,
 } from '../services/pipelineHrLeadsService';
+import HrRecruiterTrackingPanel from '../components/pipeline/HrRecruiterTrackingPanel';
 import LeadBatchAccordion from '../components/pipeline/LeadBatchAccordion';
 import { uploadResumeForPipelineCandidate } from '../services/pipelineService';
-import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import {
   defaultExpandedGroupKeys,
   groupHrLeadsByBatchId,
@@ -39,7 +40,7 @@ const HrLeadDistributionPage: React.FC = () => {
   const [message, setMessage] = React.useState<string | null>(null);
   const [summary, setSummary] = React.useState<{ pool_count: number; assigned_count: number; recent_batches: PipelineLeadBatch[] } | null>(null);
   const [pool, setPool] = React.useState<HrPoolLead[]>([]);
-  const [assignments, setAssignments] = React.useState<HrAssignmentLead[]>([]);
+  const [recruiterOverview, setRecruiterOverview] = React.useState<HrRecruiterOverview[]>([]);
   const [recruiters, setRecruiters] = React.useState<UserProfile[]>([]);
   const [selectedBatchId, setSelectedBatchId] = React.useState('');
   const [selectedPoolIds, setSelectedPoolIds] = React.useState<Set<string>>(() => new Set());
@@ -53,7 +54,6 @@ const HrLeadDistributionPage: React.FC = () => {
   const [resumeUploading, setResumeUploading] = React.useState(false);
   const [resumeProgress, setResumeProgress] = React.useState<{ pct: number; label: string } | null>(null);
   const [expandedPoolBatchKeys, setExpandedPoolBatchKeys] = React.useState<Set<string>>(() => new Set());
-  const [expandedAssignBatchKeys, setExpandedAssignBatchKeys] = React.useState<Set<string>>(() => new Set());
 
   React.useEffect(() => {
     void getCurrentUserProfile().then((profile) => {
@@ -65,10 +65,10 @@ const HrLeadDistributionPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [summaryRes, poolRes, assignRes, profiles] = await Promise.all([
+      const [summaryRes, poolRes, overviewRes, profiles] = await Promise.all([
         fetchHrLeadSummary(),
         fetchHrLeadPool(selectedBatchId || undefined),
-        fetchHrLeadAssignments(selectedBatchId || undefined),
+        fetchHrRecruiterOverview(selectedBatchId || undefined),
         listAllUserProfiles(),
       ]);
       if (!summaryRes.ok) throw new Error(summaryRes.error);
@@ -78,9 +78,9 @@ const HrLeadDistributionPage: React.FC = () => {
         recent_batches: summaryRes.data.recent_batches || [],
       });
       if (!poolRes.ok) throw new Error(poolRes.error);
-      if (!assignRes.ok) throw new Error(assignRes.error);
+      if (!overviewRes.ok) throw new Error(overviewRes.error);
       setPool(poolRes.pool);
-      setAssignments(assignRes.assignments);
+      setRecruiterOverview(overviewRes.recruiters);
       setRecruiters(
         profiles.filter((p) => p.role === 'recruiter' || p.role === 'leadership' || p.role === 'admin'),
       );
@@ -112,31 +112,19 @@ const HrLeadDistributionPage: React.FC = () => {
     }));
   }, [pool, selectedBatchId, summary?.recent_batches]);
 
-  const assignmentBatchGroups = React.useMemo((): LeadBatchGroup<HrAssignmentLead>[] => {
-    const rows = selectedBatchId ? assignments.filter((lead) => lead.lead_batch_id === selectedBatchId) : assignments;
-    return groupHrLeadsByBatchId(rows, summary?.recent_batches || []).map((group) => ({
-      key: group.key,
-      kind: 'hr_batch' as const,
-      batchNumber: null,
-      title: group.title,
-      subtitle: `${group.items.length} assigned · ${group.subtitle}`,
-      sortTimestamp: group.sortTimestamp,
-      items: group.items,
-      newCount: 0,
-      inProgressCount: group.items.length,
-      doneCount: 0,
-    }));
-  }, [assignments, selectedBatchId, summary?.recent_batches]);
-
   React.useEffect(() => {
     if (!poolBatchGroups.length) return;
     setExpandedPoolBatchKeys((prev) => (prev.size ? prev : defaultExpandedGroupKeys(poolBatchGroups)));
   }, [poolBatchGroups]);
 
-  React.useEffect(() => {
-    if (!assignmentBatchGroups.length) return;
-    setExpandedAssignBatchKeys((prev) => (prev.size ? prev : defaultExpandedGroupKeys(assignmentBatchGroups)));
-  }, [assignmentBatchGroups]);
+  const loadRecruiterLeads = React.useCallback(
+    async (userId: string) => {
+      const result = await fetchHrRecruiterLeads(userId, selectedBatchId || undefined);
+      if (!result.ok) throw new Error(result.error);
+      return result.leads;
+    },
+    [selectedBatchId],
+  );
 
   const onCsvFile = async (file: File) => {
     setError(null);
@@ -438,7 +426,7 @@ const HrLeadDistributionPage: React.FC = () => {
           </p>
         </section>
 
-        <section className="grid gap-4 lg:grid-cols-2">
+        <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
           <div className="rounded-2xl border border-[#cde0f4] bg-white p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
               <p className="text-sm font-semibold text-[#0B1B34]">Unassigned pool ({pool.length})</p>
@@ -501,34 +489,34 @@ const HrLeadDistributionPage: React.FC = () => {
           </div>
 
           <div className="rounded-2xl border border-[#cde0f4] bg-white p-4">
-            <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#0B1B34]">
-              <Users size={15} />
-              Assigned tracking ({assignments.length})
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="flex items-center gap-2 text-sm font-semibold text-[#0B1B34]">
+                <Users size={15} />
+                Recruiter performance ({recruiterOverview.length})
+              </p>
+              <select
+                value={selectedBatchId}
+                onChange={(e) => setSelectedBatchId(e.target.value)}
+                className="rounded-lg border border-[#c8ddf4] px-2 py-1 text-xs"
+              >
+                <option value="">All batches</option>
+                {(summary?.recent_batches || []).map((batch) => (
+                  <option key={batch.id} value={batch.id}>
+                    {batch.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="mb-3 text-[11px] text-[#6b84a8]">
+              Click a recruiter to see disposition analytics and their assigned leads grouped by weekly batch.
             </p>
-            <div className="max-h-[42vh] overflow-auto">
-              <LeadBatchAccordion
-                groups={assignmentBatchGroups}
-                expandedKeys={expandedAssignBatchKeys}
-                onToggle={(key) => {
-                  setExpandedAssignBatchKeys((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(key)) next.delete(key);
-                    else next.add(key);
-                    return next;
-                  });
-                }}
-                emptyMessage="No assigned leads yet."
-                compact
-                renderItem={(lead) => (
-                  <div key={lead.id} className="rounded-lg border border-[#edf3fa] px-2 py-2 text-xs">
-                    <p className="font-semibold text-[#0B1B34]">{lead.full_name}</p>
-                    <p className="text-[#4b6d95]">{lead.email || '—'} · {lead.phone || '—'}</p>
-                    <p className="mt-1 text-[#6b84a8]">
-                      Assigned to <span className="font-semibold text-[#0B1B34]">{lead.assigned_to_label || '—'}</span>
-                      {lead.assigned_at ? ` · ${formatDateTimeCanadaEastern(lead.assigned_at)}` : ''}
-                    </p>
-                  </div>
-                )}
+            <div className="max-h-[min(72vh,720px)] overflow-auto">
+              <HrRecruiterTrackingPanel
+                recruiters={recruiterOverview}
+                batches={summary?.recent_batches || []}
+                selectedBatchId={selectedBatchId}
+                loading={loading}
+                onLoadRecruiterLeads={loadRecruiterLeads}
               />
             </div>
           </div>

@@ -38,6 +38,33 @@ export type HrAssignmentLead = HrPoolLead & {
   uploader_user_id: string | null;
 };
 
+export type HrDispositionCounts = {
+  booked: number;
+  no_answer: number;
+  voicemail_left: number;
+  callback_requested: number;
+  not_interested: number;
+  busy: number;
+  wrong_number: number;
+  connected: number;
+  other: number;
+};
+
+export type HrRecruiterOverview = {
+  user_id: string;
+  label: string;
+  assigned_count: number;
+  not_contacted_count: number;
+  worked_count: number;
+  disposition_counts: HrDispositionCounts;
+};
+
+export type HrRecruiterLeadRow = HrAssignmentLead & {
+  latest_disposition: string | null;
+  latest_disposed_at: string | null;
+  call_count: number;
+};
+
 async function getToken(): Promise<string> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
@@ -95,6 +122,36 @@ export async function fetchHrLeadPool(batchId?: string) {
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) return { ok: false as const, error: String(json.error || 'Failed to load pool') };
   return { ok: true as const, pool: (json.pool || []) as HrPoolLead[] };
+}
+
+export async function fetchHrRecruiterOverview(batchId?: string) {
+  const params = new URLSearchParams({ mode: 'recruiter-overview' });
+  if (batchId) params.set('batch_id', batchId);
+  const token = await getToken();
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return { ok: false as const, error: 'Missing Supabase configuration.' };
+  }
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/pipeline-hr-leads?${params}`, {
+    headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY },
+  });
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) return { ok: false as const, error: String(json.error || 'Failed to load recruiter overview') };
+  return { ok: true as const, recruiters: (json.recruiters || []) as HrRecruiterOverview[] };
+}
+
+export async function fetchHrRecruiterLeads(userId: string, batchId?: string) {
+  const params = new URLSearchParams({ mode: 'recruiter-leads', user_id: userId });
+  if (batchId) params.set('batch_id', batchId);
+  const token = await getToken();
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return { ok: false as const, error: 'Missing Supabase configuration.' };
+  }
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/pipeline-hr-leads?${params}`, {
+    headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY },
+  });
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) return { ok: false as const, error: String(json.error || 'Failed to load recruiter leads') };
+  return { ok: true as const, leads: (json.leads || []) as HrRecruiterLeadRow[] };
 }
 
 export async function fetchHrLeadAssignments(batchId?: string) {
