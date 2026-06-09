@@ -24,37 +24,16 @@ type AppSidebarProps = {
 
 const SIDEBAR_LOGO_SRC = '/white%20logo.png';
 
-function SidebarBrand({
-  compact = false,
-  onLogoClick,
-}: {
-  compact?: boolean;
-  onLogoClick?: () => void;
-}) {
-  const logo = (
-    <img
-      src={SIDEBAR_LOGO_SRC}
-      alt="Paz Organization"
-      className={`block w-auto object-contain object-left ${
-        compact ? 'h-9 max-w-[2.85rem]' : 'h-12 max-w-[11.5rem]'
-      }`}
-    />
+function SidebarBrand() {
+  return (
+    <div className="min-w-0 flex-1">
+      <img
+        src={SIDEBAR_LOGO_SRC}
+        alt="Paz Organization"
+        className="block h-24 w-auto max-w-[23rem] object-contain object-left"
+      />
+    </div>
   );
-
-  if (onLogoClick) {
-    return (
-      <button
-        type="button"
-        onClick={onLogoClick}
-        className="min-w-0 shrink transition opacity-95 hover:opacity-100"
-        aria-label="Expand menu"
-      >
-        {logo}
-      </button>
-    );
-  }
-
-  return <div className="min-w-0 flex-1">{logo}</div>;
 }
 
 const AppSidebar: React.FC<AppSidebarProps> = ({
@@ -155,7 +134,13 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     .join('') || 'U';
 
   const renderGroupItems = (group: NavGroup, flyout = false) => (
-    <ul className={flyout ? 'space-y-0.5' : 'space-y-0.5 px-2 pb-1'}>
+    <ul
+      className={
+        flyout
+          ? 'space-y-0.5'
+          : 'mb-1.5 ml-3 space-y-0.5 border-l border-white/15 py-1 pl-2.5'
+      }
+    >
       {group.items.map((item) => {
         const Icon = item.icon;
         const active = isItemActive(pathname, search, item.route);
@@ -164,13 +149,13 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             <button
               type="button"
               onClick={() => go(item.route)}
-              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition ${
+              className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition ${
                 active
-                  ? 'bg-white text-[#11101d] shadow-sm'
-                  : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                  ? 'bg-white font-medium text-[#11101d] shadow-sm'
+                  : 'font-normal text-slate-300 hover:bg-white/10 hover:text-white'
               }`}
             >
-              <Icon size={18} className="shrink-0" />
+              <Icon size={16} className="shrink-0" />
               {(!isRailView || flyout) && <span className="truncate">{item.name}</span>}
             </button>
           </li>
@@ -181,8 +166,12 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
   const sidebarInner = (
     <>
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-white/10 px-3 py-3.5 lg:px-4 lg:py-4">
-        <SidebarBrand compact={isRailView} onLogoClick={isRailView ? openFullSidebar : undefined} />
+      <div
+        className={`flex shrink-0 items-center border-b border-white/10 ${
+          isRailView ? 'justify-center px-2 py-3' : 'justify-between gap-2 px-3 py-4 lg:px-4 lg:py-5'
+        }`}
+      >
+        {!isRailView && <SidebarBrand />}
         <button
           type="button"
           onClick={handleMenuToggle}
@@ -224,7 +213,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                 </button>
                 {hoverGroup === group.id && !isMobile && (
                   <div className="absolute left-full top-0 z-50 ml-2 min-w-[200px] rounded-xl border border-white/10 bg-[#1d1b31] py-2 shadow-2xl">
-                    <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{group.label}</p>
+                    <p className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.2em] text-white">{group.label}</p>
                     {renderGroupItems(group, true)}
                   </div>
                 )}
@@ -253,19 +242,32 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
           }
 
           return (
-            <div key={group.id} data-tour={group.tourId} className="px-2 py-0.5">
+            <div
+              key={group.id}
+              data-tour={group.tourId}
+              className={`px-2 py-1 ${groupOpen ? 'rounded-xl bg-white/[0.03]' : ''}`}
+            >
               <button
                 type="button"
                 onClick={() => toggleGroup(group.id)}
-                className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm transition ${
-                  groupActive ? 'text-white' : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 transition ${
+                  groupOpen
+                    ? 'text-white'
+                    : groupActive
+                      ? 'text-white/95'
+                      : 'text-slate-400 hover:text-white/90'
                 }`}
               >
-                <span className="flex items-center gap-3">
-                  <GroupIcon size={18} />
-                  <span className="font-medium">{group.label}</span>
+                <span className="flex min-w-0 items-center gap-2.5">
+                  <GroupIcon size={15} className="shrink-0 text-slate-500" strokeWidth={2} />
+                  <span className="truncate text-[11px] font-bold uppercase tracking-[0.2em] text-white">
+                    {group.label}
+                  </span>
                 </span>
-                <ChevronDown size={16} className={`transition ${groupOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown
+                  size={14}
+                  className={`shrink-0 text-slate-500 transition ${groupOpen ? 'rotate-180 text-slate-300' : ''}`}
+                />
               </button>
               {groupOpen && renderGroupItems(group)}
             </div>
