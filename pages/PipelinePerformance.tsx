@@ -290,6 +290,7 @@ const PipelinePerformance: React.FC = () => {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.35 }}
           className={`relative rounded-3xl border p-4 ${tone.glassPanel}`}
+          data-tour="perf-header"
         >
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -331,7 +332,7 @@ const PipelinePerformance: React.FC = () => {
           className={`mt-4 rounded-2xl border p-4 ${tone.glassPanel}`}
         >
           <p className={`mb-2 text-[10px] uppercase tracking-[0.18em] ${tone.panelLabel}`}>Date range controls</p>
-          <div className="flex flex-wrap items-end gap-2">
+          <div className="flex flex-wrap items-end gap-2" data-tour="perf-date-presets">
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"

@@ -26,8 +26,18 @@ export function shouldAutoStartTour(userId: string | null | undefined): boolean 
 }
 
 export const START_TOUR_EVENT = 'pohiring:start-tour';
+export const START_TASK_WALKTHROUGH_EVENT = 'pohiring:start-task-walkthrough';
 
 export function requestPortalTour(): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new Event(START_TOUR_EVENT));
+}
+
+export function requestTaskWalkthrough(guideId: string): void {
+  if (typeof window === 'undefined') return;
+  if (guideId === 'portal-welcome') {
+    requestPortalTour();
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(START_TASK_WALKTHROUGH_EVENT, { detail: { id: guideId } }));
 }

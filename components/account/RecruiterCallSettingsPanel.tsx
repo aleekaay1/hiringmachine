@@ -63,7 +63,7 @@ const RecruiterCallSettingsPanel: React.FC = () => {
   };
 
   return (
-    <section id="recruiter-call-settings" className="rounded-2xl border border-[#d6deea] bg-white p-6 shadow-sm md:p-8">
+    <section id="recruiter-call-settings" data-tour="profile-call-settings" className="rounded-2xl border border-[#d6deea] bg-white p-6 shadow-sm md:p-8">
       <div className="mb-6">
         <h2 className="text-lg font-semibold text-[#0B1B34]">Recruiter call settings</h2>
         <p className="mt-1 text-sm text-[#6b84a8]">
@@ -142,7 +142,7 @@ const RecruiterCallSettingsPanel: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button onClick={() => void onSave()} disabled={saving}>
+            <Button data-tour="call-settings-save" onClick={() => void onSave()} disabled={saving}>
               {saving ? 'Saving…' : 'Save call settings'}
             </Button>
             {message && <p className="text-sm text-[#4b6d95]">{message}</p>}

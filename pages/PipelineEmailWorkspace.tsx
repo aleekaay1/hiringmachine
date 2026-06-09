@@ -446,6 +446,7 @@ const PipelineEmailWorkspace: React.FC = () => {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.35 }}
           className={`relative rounded-3xl border p-4 ${tone.glassPanel}`}
+          data-tour="email-workspace-header"
         >
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -506,12 +507,13 @@ const PipelineEmailWorkspace: React.FC = () => {
           transition={{ duration: 0.45, delay: 0.1 }}
           className="mt-4 grid gap-4 lg:grid-cols-2"
         >
-          <section className={`rounded-2xl border p-3 space-y-2 ${tone.glassPanel}`}>
+          <section className={`rounded-2xl border p-3 space-y-2 ${tone.glassPanel}`} data-tour="email-inbox">
             <div className="flex items-center justify-between gap-2">
               <p className={`text-xs font-semibold ${tone.panelTitle}`}>Inbox ({filteredInbox.length})</p>
               <div className="flex items-center gap-1.5">
                 <Button
                   variant="outline"
+                  data-tour="email-sync-inbox"
                   className={`!min-h-0 h-8 px-2 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
                   onClick={() => void loadWorkspace({ syncInbox: true })}
                   disabled={loading || syncingInbox}
@@ -690,6 +692,7 @@ const PipelineEmailWorkspace: React.FC = () => {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.45, delay: 0.15 }}
           className={`mt-4 rounded-2xl border p-4 md:p-5 space-y-4 ${tone.glassPanel}`}
+          data-tour="email-compose"
         >
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -727,7 +730,7 @@ const PipelineEmailWorkspace: React.FC = () => {
 
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="space-y-4">
-              <div>
+              <div data-tour="email-candidate-list">
                 <label htmlFor="compose-candidate" className={`mb-1 block text-xs font-semibold ${tone.panelTitle}`}>
                   Candidate
                 </label>

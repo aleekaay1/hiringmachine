@@ -119,7 +119,7 @@ const AccountSettingsPage: React.FC = () => {
               Update how you appear in the app, contact details, and recruiter call settings in one place.
             </p>
 
-            <div className="mt-6 flex flex-col gap-5 sm:flex-row sm:items-end">
+            <div className="mt-6 flex flex-col gap-5 sm:flex-row sm:items-end" data-tour="profile-avatar">
               <div className="relative shrink-0">
                 <div className="h-28 w-28 overflow-hidden rounded-2xl bg-[#2a2847] ring-4 ring-white/10 shadow-2xl md:h-32 md:w-32">
                   {avatarUrl ? (
@@ -182,7 +182,7 @@ const AccountSettingsPage: React.FC = () => {
 
         <PageGuidePanel guideId="account" />
 
-        <section className="rounded-2xl border border-[#d6deea] bg-white p-6 shadow-sm md:p-8">
+        <section className="rounded-2xl border border-[#d6deea] bg-white p-6 shadow-sm md:p-8" data-tour="profile-personal-details">
           <div className="mb-6">
             <h2 className="text-lg font-semibold text-[#0B1B34]">Personal details</h2>
             <p className="mt-1 text-sm text-[#6b84a8]">Optional fields help teammates reach you. Your sign-in email stays managed by IT.</p>

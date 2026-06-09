@@ -4,7 +4,8 @@ import PipelineAuthShell from '../components/PipelineAuthShell';
 import PageGuidePanel from '../components/tour/PageGuidePanel';
 import { Button } from '../components/UI';
 import { PORTAL_FAQS } from '../content/portalTourContent';
-import { requestPortalTour } from '../services/portalTourService';
+import { WALKTHROUGH_CATALOG } from '../content/taskWalkthroughs';
+import { requestTaskWalkthrough } from '../services/portalTourService';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { getCurrentUserProfile } from '../services/accessControl';
 import {
@@ -122,14 +123,34 @@ const SupportPage: React.FC = () => {
         {message && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">{message}</div>}
 
         <section className="rounded-2xl border border-[#d9e5f6] bg-white p-4 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold text-[#0B1B34]">Portal training</h2>
-              <p className="mt-1 text-xs text-[#5c7594]">Walk through the menu, profile, and leaderboard — skip anytime.</p>
-            </div>
-            <Button variant="outline" className="!min-h-0 h-9 text-xs" onClick={() => requestPortalTour()}>
-              Start portal tour
-            </Button>
+          <div className="mb-4">
+            <h2 className="text-sm font-semibold text-[#0B1B34]">Interactive training guides</h2>
+            <p className="mt-1 text-xs text-[#5c7594]">
+              Pick a task below. Each guide opens the right page, highlights where to click, and walks you through step by step.
+            </p>
+          </div>
+          <div className="space-y-4">
+            {WALKTHROUGH_CATALOG.map((section) => (
+              <div key={section.page} className="rounded-xl border border-[#e8eef5] bg-[#f8fbff] p-3">
+                <div className="mb-2">
+                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-[#4e79a9]">{section.page}</p>
+                  <p className="text-[11px] text-[#6a839f]">{section.description}</p>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {section.guides.map((guide) => (
+                    <button
+                      key={`${section.page}-${guide.id}`}
+                      type="button"
+                      onClick={() => requestTaskWalkthrough(guide.id)}
+                      className="rounded-xl border border-[#d6e6f8] bg-white px-3 py-2.5 text-left transition hover:border-[#9bc8f6] hover:bg-[#f0f7ff]"
+                    >
+                      <p className="text-sm font-semibold text-[#0B1B34]">{guide.title}</p>
+                      <p className="mt-0.5 text-xs text-[#5c7594]">{guide.summary}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         </section>
 
@@ -148,7 +169,7 @@ const SupportPage: React.FC = () => {
         </section>
 
         <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
-          <section className="rounded-2xl border border-[#d9e5f6] bg-white p-4 shadow-sm">
+          <section className="rounded-2xl border border-[#d9e5f6] bg-white p-4 shadow-sm" data-tour="support-ticket-form">
             <h2 className="text-sm font-semibold text-[#0B1B34]">Submit a ticket</h2>
             <div className="mt-3 space-y-3">
               <label className="block text-xs text-[#365274]">
@@ -194,7 +215,7 @@ const SupportPage: React.FC = () => {
             </div>
           </section>
 
-          <section className="rounded-2xl border border-[#d9e5f6] bg-white p-4 shadow-sm">
+          <section className="rounded-2xl border border-[#d9e5f6] bg-white p-4 shadow-sm" data-tour="support-ticket-list">
             <div className="mb-3 flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-[#0B1B34]">Your tickets</h2>
               <button type="button" onClick={() => void loadTickets()} className="text-xs font-semibold text-[#005EB8]">

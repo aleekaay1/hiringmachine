@@ -1184,7 +1184,7 @@ const AdminDashboard: React.FC = () => {
         )}
 
         {effectiveAdminView === 'candidates' && (
-        <>
+        <div data-tour="hiring-candidates">
         {!selectedCandidate && leadershipPendingQueue.length > 0 && (
           <div className="rounded-2xl border border-amber-300 bg-amber-50 shadow-sm p-4">
             <div className="flex items-center justify-between gap-3">
@@ -2435,7 +2435,7 @@ const AdminDashboard: React.FC = () => {
             )}
           </div>
         </div>
-        </>
+        </div>
         )}
 
         {showEvaluationModal && selectedCandidate && (

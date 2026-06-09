@@ -22,6 +22,7 @@ export function HomeRefreshButton({
   return (
     <button
       type="button"
+      data-tour="home-refresh"
       onClick={() => void onRefresh()}
       disabled={refreshing}
       title={title || 'Refresh dashboard'}

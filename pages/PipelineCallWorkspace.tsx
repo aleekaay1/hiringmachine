@@ -825,6 +825,7 @@ const PipelineCallWorkspace: React.FC = () => {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.35 }}
           className={`relative rounded-3xl border p-4 ${tone.glassPanel}`}
+          data-tour="call-workspace-header"
         >
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -835,6 +836,7 @@ const PipelineCallWorkspace: React.FC = () => {
             <div className="flex items-center gap-2 flex-wrap">
               <Link
                 to="/account#recruiter-call-settings"
+                data-tour="call-settings-link"
                 className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold ${tone.actionButton}`}
               >
                 <Settings size={14} />
@@ -852,6 +854,13 @@ const PipelineCallWorkspace: React.FC = () => {
             </div>
           </div>
         </motion.div>
+
+        <p
+          data-tour="call-disposition-guide"
+          className={`rounded-xl border px-3 py-2 text-xs ${isDark ? 'border-white/10 bg-white/5 text-slate-300' : 'border-[#cfe0f5] bg-[#f0f7ff] text-[#365274]'}`}
+        >
+          After each call, the post-call disposition form opens automatically — choose an outcome and save so the lead moves to Done.
+        </p>
 
         {error && <div className={`rounded-xl border px-3 py-2 text-sm ${isDark ? 'border-red-300/40 bg-red-500/12 text-red-200' : 'border-red-200 bg-red-50 text-red-700'}`}>{error}</div>}
         {actionMsg && <div className={`rounded-xl border px-3 py-2 text-xs ${isDark ? 'border-emerald-300/40 bg-emerald-500/12 text-emerald-200' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}>{actionMsg}</div>}
@@ -899,7 +908,7 @@ const PipelineCallWorkspace: React.FC = () => {
           transition={{ duration: 0.45, delay: 0.1 }}
           className="grid gap-4 lg:grid-cols-[minmax(280px,340px)_1fr]"
         >
-          <aside className={`rounded-2xl border p-4 ${tone.glassPanel}`}>
+          <aside className={`rounded-2xl border p-4 ${tone.glassPanel}`} data-tour="call-queue">
             <div className="mb-3 flex items-center justify-between gap-2">
               <div>
                 <p className={`text-sm font-semibold ${tone.panelTitle}`}>To call</p>
@@ -1018,6 +1027,7 @@ const PipelineCallWorkspace: React.FC = () => {
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                       <Button
                         className="!min-h-0 h-12 shrink-0 px-6 text-base"
+                        data-tour="call-place-button"
                         onClick={() => void placeCall(currentCandidate, phoneInput)}
                       >
                         <Phone size={18} className="mr-2" />
@@ -1042,7 +1052,7 @@ const PipelineCallWorkspace: React.FC = () => {
                     tone={tone}
                   />
 
-                  <div className={`rounded-2xl border p-4 ${tone.subtle}`}>
+                  <div className={`rounded-2xl border p-4 ${tone.subtle}`} data-tour="call-phone-field">
                     <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Phone number</p>
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                       <input
@@ -1115,7 +1125,7 @@ const PipelineCallWorkspace: React.FC = () => {
               )}
             </div>
 
-            <div className={`rounded-2xl border p-4 ${tone.glassPanel}`}>
+            <div className={`rounded-2xl border p-4 ${tone.glassPanel}`} data-tour="call-done-panel">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <div>
                   <p className={`text-sm font-semibold ${tone.panelTitle}`}>Done</p>
@@ -1193,6 +1203,7 @@ const PipelineCallWorkspace: React.FC = () => {
               exit={{ opacity: 0, y: 8, scale: 0.98 }}
               transition={{ duration: 0.2 }}
               className={`w-full max-w-xl space-y-3 rounded-2xl border p-4 shadow-2xl ${tone.glassPanel}`}
+              data-tour="call-disposition-modal"
             >
               <div className="flex items-center justify-between gap-2">
                 <div>

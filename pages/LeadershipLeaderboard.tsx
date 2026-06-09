@@ -578,6 +578,7 @@ const LeadershipLeaderboard: React.FC = () => {
     >
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@500;600;700;800&display=swap');`}</style>
       <div
+        data-tour="leaderboard-page"
         className="relative mx-auto w-full max-w-[1480px] overflow-hidden rounded-[36px] border border-[#d7e4f5] bg-[#f7fbff] p-4 text-[#102344] shadow-[0_34px_95px_-60px_rgba(0,94,184,0.4)] md:p-6"
         style={{ fontFamily: 'Inter, system-ui, sans-serif' }}
       >

@@ -472,7 +472,7 @@ function CallsAnalyticsPage(p: PageProps) {
           >
             Leadership Board
           </Link>
-          <Button type="button" onClick={p.onFetch} disabled={p.loading}>
+          <Button type="button" data-tour="analytics-fetch" onClick={p.onFetch} disabled={p.loading}>
             {p.loading ? (
               <>
                 <RefreshCw size={15} className="mr-1 animate-spin" /> Fetching...
@@ -516,7 +516,7 @@ function CallsAnalyticsPage(p: PageProps) {
         </div>
       )}
 
-      <div className={`${glassCard} p-4 min-w-0 max-w-full overflow-hidden`}>
+      <div className={`${glassCard} p-4 min-w-0 max-w-full overflow-hidden`} data-tour="analytics-calendar">
         <CalendarNav
           scopeMode={p.scopeMode}
           setScopeMode={p.setScopeMode}

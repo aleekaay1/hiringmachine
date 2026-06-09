@@ -927,14 +927,14 @@ const EmailLog: React.FC = () => {
               <RefreshCw size={16} className={loading ? 'animate-spin inline mr-1.5' : 'inline mr-1.5'} />
               Refresh
             </Button>
-            <Button type="button" variant="secondary" onClick={downloadCsv} disabled={filtered.length === 0}>
+            <Button type="button" variant="secondary" data-tour="email-log-export" onClick={downloadCsv} disabled={filtered.length === 0}>
               <Download size={16} className="inline mr-1.5" />
               Export CSV
             </Button>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4 flex flex-col sm:flex-row gap-3 sm:items-center">
+        <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4 flex flex-col sm:flex-row gap-3 sm:items-center" data-tour="email-log-search">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8a9ab0]" size={18} />
             <input

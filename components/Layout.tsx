@@ -10,6 +10,7 @@ import {
 } from '../services/accessControl';
 import AppSidebar from './navigation/AppSidebar';
 import PortalTour from './tour/PortalTour';
+import TaskWalkthrough from './tour/TaskWalkthrough';
 import {
   clearStaffSessionCache,
   getStaffSessionSnapshot,
@@ -159,6 +160,7 @@ const Layout: React.FC<LayoutProps> = ({
       style={{ backgroundColor: isAdmin ? '#eef2f7' : COLORS.background }}
     >
       {isAdmin && <PortalTour userId={userId} enabled={roleResolved} />}
+      {isAdmin && <TaskWalkthrough />}
       {isAdmin && (
         <AppSidebar
           role={role}
