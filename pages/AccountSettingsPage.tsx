@@ -2,7 +2,6 @@ import React from 'react';
 import { Camera, Hash, Mail, Phone, Save, User } from 'lucide-react';
 import { Button } from '../components/UI';
 import RecruiterCallSettingsPanel from '../components/account/RecruiterCallSettingsPanel';
-import PageGuidePanel from '../components/tour/PageGuidePanel';
 import { canAccessSection, getCurrentUserProfile, type AppRole } from '../services/accessControl';
 import { removeProfileAvatar, uploadProfileAvatar } from '../services/profileAvatarService';
 import { updateUserProfileDetails } from '../services/profileService';
@@ -179,8 +178,6 @@ const AccountSettingsPage: React.FC = () => {
         {message && (
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{message}</div>
         )}
-
-        <PageGuidePanel guideId="account" />
 
         <section className="rounded-2xl border border-[#d6deea] bg-white p-6 shadow-sm md:p-8" data-tour="profile-personal-details">
           <div className="mb-6">

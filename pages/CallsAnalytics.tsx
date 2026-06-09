@@ -12,7 +12,6 @@ import {
   subscriptionsFromDashboardData,
 } from '../services/webinarGeekDashboardCache';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
-import PageGuidePanel from '../components/tour/PageGuidePanel';
 import {
   fetchWindowBoundsWide,
   fridayWeekBoundsFromYmd,
@@ -456,7 +455,6 @@ type PageProps = {
 function CallsAnalyticsPage(p: PageProps) {
   return (
     <div className="w-full min-w-0 max-w-6xl mx-auto p-4 sm:p-5 space-y-5">
-      <PageGuidePanel guideId="calls-analytics" />
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className={`${glassCard} px-5 py-4 flex-1 min-w-[16rem]`}>
           <CallsAnalyticsPageHeader

@@ -1,7 +1,6 @@
 import React from 'react';
 import { LifeBuoy, Send, Ticket } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
-import PageGuidePanel from '../components/tour/PageGuidePanel';
 import { Button } from '../components/UI';
 import { PORTAL_FAQS } from '../content/portalTourContent';
 import { WALKTHROUGH_CATALOG } from '../content/taskWalkthroughs';
@@ -153,8 +152,6 @@ const SupportPage: React.FC = () => {
             ))}
           </div>
         </section>
-
-        <PageGuidePanel guideId="support" />
 
         <section className="rounded-2xl border border-[#d9e5f6] bg-white p-4 shadow-sm">
           <h2 className="text-sm font-semibold text-[#0B1B34]">Frequently asked questions</h2>

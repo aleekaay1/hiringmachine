@@ -136,7 +136,7 @@ export const PAGE_GUIDES: Record<string, PageGuide> = {
     steps: [
       'Submit a ticket with category and description.',
       'Track replies in the ticket list on this page.',
-      'Use Portal training to replay the welcome tour.',
+      'Use Interactive training guides above for step-by-step walkthroughs.',
     ],
   },
   'pipeline-performance': {

@@ -11,6 +11,7 @@ import {
 import AppSidebar from './navigation/AppSidebar';
 import PortalTour from './tour/PortalTour';
 import TaskWalkthrough from './tour/TaskWalkthrough';
+import PageHintBulb from './tour/PageHintBulb';
 import {
   clearStaffSessionCache,
   getStaffSessionSnapshot,
@@ -207,6 +208,7 @@ const Layout: React.FC<LayoutProps> = ({
         )}
         <main className={`flex-grow flex flex-col min-h-0 relative overflow-x-hidden px-safe-area ${isAdmin ? 'max-lg:pl-[4.75rem]' : ''}`}>
           {children}
+          {isAdmin && <PageHintBulb section={currentSection} />}
         </main>
         {!isAdmin && (
           <footer className="py-4 sm:py-6 text-center text-xs text-gray-400 safe-area-bottom px-4">
