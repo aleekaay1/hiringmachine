@@ -84,8 +84,8 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
   React.useEffect(() => {
     const active = visibleGroups.find((group) => isGroupActive(group, pathname, search));
-    if (active) {
-      setOpenGroups((prev) => new Set(prev).add(active.id));
+    if (active && active.items.length > 1) {
+      setOpenGroups(new Set([active.id]));
     }
   }, [pathname, search, visibleGroups]);
 
@@ -94,12 +94,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
   }, [pathname, search]);
 
   const toggleGroup = (groupId: string) => {
-    setOpenGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
-      return next;
-    });
+    setOpenGroups((prev) => (prev.has(groupId) ? new Set<string>() : new Set([groupId])));
   };
 
   const openFullSidebar = React.useCallback(() => {
