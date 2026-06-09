@@ -152,7 +152,7 @@ const Layout: React.FC<LayoutProps> = ({
 
   return (
     <div
-      className="min-h-screen flex font-sans text-gray-800"
+      className="min-h-screen flex items-start font-sans text-gray-800"
       style={{ backgroundColor: isAdmin ? '#eef2f7' : COLORS.background }}
     >
       {isAdmin && (

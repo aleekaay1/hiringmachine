@@ -169,7 +169,7 @@ const AdminDashboard: React.FC = () => {
   useEffect(() => {
     const q = new URLSearchParams(location.search).get('view');
     if (q === 'settings') {
-      navigate('/account?section=staff-directory', { replace: true });
+      navigate('/account', { replace: true });
     }
   }, [location.search, navigate]);
 

@@ -20,6 +20,38 @@ type AppSidebarProps = {
   onLogout: () => void;
 };
 
+function SidebarLogo({ compact = false }: { compact?: boolean }) {
+  return (
+    <div
+      className={`flex shrink-0 items-center justify-center rounded-full bg-white shadow-[0_4px_18px_-6px_rgba(0,0,0,0.45)] ${
+        compact ? 'h-[3.25rem] w-[3.25rem]' : 'h-[4.25rem] w-[4.25rem]'
+      }`}
+    >
+      <img
+        src="/logo.png"
+        alt="Paz Organization"
+        className={`object-contain ${compact ? 'h-[2.65rem] w-[2.65rem]' : 'h-[3.5rem] w-[3.5rem]'}`}
+      />
+    </div>
+  );
+}
+
+function SidebarBrand({ compact = false }: { compact?: boolean }) {
+  if (compact) {
+    return <SidebarLogo compact />;
+  }
+
+  return (
+    <div className="flex min-w-0 items-center gap-3">
+      <SidebarLogo />
+      <div className="min-w-0 leading-none" style={{ fontFamily: 'Outfit, Segoe UI, system-ui, sans-serif' }}>
+        <p className="truncate text-[1.65rem] font-extrabold tracking-tight text-white">PAZ</p>
+        <p className="truncate text-[0.72rem] font-semibold uppercase tracking-[0.34em] text-slate-400">HRMS</p>
+      </div>
+    </div>
+  );
+}
+
 const AppSidebar: React.FC<AppSidebarProps> = ({
   role,
   userEmail,
@@ -80,7 +112,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     .join('') || 'U';
 
   const renderGroupItems = (group: NavGroup, flyout = false) => (
-    <ul className={flyout ? 'space-y-0.5' : 'space-y-0.5 px-2 pb-2'}>
+    <ul className={flyout ? 'space-y-0.5' : 'space-y-0.5 px-2 pb-1'}>
       {group.items.map((item) => {
         const Icon = item.icon;
         const active = isItemActive(pathname, search, item.route);
@@ -89,7 +121,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             <button
               type="button"
               onClick={() => go(item.route)}
-              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition ${
+              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition ${
                 active
                   ? 'bg-white text-[#11101d] shadow-sm'
                   : 'text-slate-300 hover:bg-white/10 hover:text-white'
@@ -106,27 +138,25 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
   const sidebarInner = (
     <>
-      <div className={`flex items-center border-b border-white/10 ${collapsed ? 'justify-center px-2 py-4' : 'justify-between px-4 py-4'}`}>
-        {!collapsed && (
-          <div className="flex min-w-0 items-center gap-2">
-            <img src="/logo.png" alt="Paz" className="h-9 w-9 shrink-0 rounded-lg bg-white object-contain p-0.5" />
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-white">Paz Talent</p>
-              <p className="truncate text-[10px] text-slate-400">Journey</p>
-            </div>
-          </div>
-        )}
+      <div
+        className={`shrink-0 border-b border-white/10 ${
+          collapsed ? 'flex flex-col items-center gap-2 px-2 py-3' : 'flex items-center justify-between gap-2 px-4 py-4'
+        }`}
+      >
+        <SidebarBrand compact={collapsed} />
         <button
           type="button"
           onClick={() => setCollapsed((prev) => !prev)}
-          className="hidden lg:inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-300 hover:bg-white/10 hover:text-white"
+          className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-300 hover:bg-white/10 hover:text-white ${
+            collapsed ? '' : 'hidden lg:inline-flex'
+          }`}
           aria-label={collapsed ? 'Expand menu' : 'Collapse menu'}
         >
           <Menu size={20} />
         </button>
       </div>
 
-      <nav className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-3">
+      <nav className={`shrink-0 py-2 ${collapsed ? 'space-y-0' : 'space-y-0.5'}`}>
         {!roleResolved && (
           <p className="px-4 pb-2 text-[11px] text-slate-500">Loading menu…</p>
         )}
@@ -140,14 +170,14 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             return (
               <div
                 key={group.id}
-                className="relative px-2 py-1"
+                className="relative px-1.5 py-0.5"
                 onMouseEnter={() => setHoverGroup(group.id)}
                 onMouseLeave={() => setHoverGroup(null)}
               >
                 <button
                   type="button"
                   onClick={() => (singleItem ? go(group.items[0].route) : toggleGroup(group.id))}
-                  className={`flex w-full items-center justify-center rounded-xl p-3 transition ${
+                  className={`flex w-full items-center justify-center rounded-xl p-2 transition ${
                     groupActive ? 'bg-white text-[#11101d]' : 'text-slate-300 hover:bg-white/10 hover:text-white'
                   }`}
                   title={group.label}
@@ -173,7 +203,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
                 <button
                   type="button"
                   onClick={() => go(item.route)}
-                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition ${
+                  className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition ${
                     active ? 'bg-white text-[#11101d]' : 'text-slate-300 hover:bg-white/10 hover:text-white'
                   }`}
                 >
@@ -189,7 +219,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
               <button
                 type="button"
                 onClick={() => toggleGroup(group.id)}
-                className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-sm transition ${
+                className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-sm transition ${
                   groupActive ? 'text-white' : 'text-slate-300 hover:bg-white/10 hover:text-white'
                 }`}
               >
@@ -205,7 +235,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         })}
       </nav>
 
-      <div className={`mt-auto border-t border-white/10 ${collapsed ? 'p-2' : 'p-3'}`}>
+      <div className={`mt-auto shrink-0 border-t border-white/10 ${collapsed ? 'p-2' : 'p-3'}`}>
         <button
           type="button"
           onClick={() => go('/account')}
@@ -272,9 +302,9 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex h-screen w-[280px] min-h-0 flex-col bg-[#11101d] text-white shadow-2xl transition-transform duration-300 lg:sticky lg:top-0 lg:z-auto lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-[280px] flex-col bg-[#11101d] text-white shadow-2xl transition-[transform,width] duration-300 lg:sticky lg:top-0 lg:z-auto lg:h-auto lg:min-h-screen lg:self-start lg:overflow-visible lg:translate-x-0 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-        } ${collapsed ? 'lg:w-[78px]' : 'lg:w-[260px]'}`}
+        } ${collapsed ? 'lg:w-[4.75rem]' : 'lg:w-[17.5rem]'}`}
       >
         <button
           type="button"

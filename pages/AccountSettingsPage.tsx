@@ -1,16 +1,11 @@
 import React from 'react';
-import { useSearchParams } from 'react-router-dom';
 import { Camera, Hash, Mail, Phone, Save, User } from 'lucide-react';
-import StaffDirectoryPanel from '../components/account/StaffDirectoryPanel';
 import { Button } from '../components/UI';
 import { getCurrentUserProfile, type AppRole } from '../services/accessControl';
 import { removeProfileAvatar, uploadProfileAvatar } from '../services/profileAvatarService';
 import { updateUserProfileDetails } from '../services/profileService';
 
 const AccountSettingsPage: React.FC = () => {
-  const [searchParams] = useSearchParams();
-  const staffSectionRequested = searchParams.get('section') === 'staff-directory';
-
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [photoSaving, setPhotoSaving] = React.useState(false);
@@ -47,7 +42,6 @@ const AccountSettingsPage: React.FC = () => {
     .join('') || 'U';
 
   const roleLabel = role ? role.charAt(0).toUpperCase() + role.slice(1) : 'Staff';
-  const canViewStaffDirectory = role === 'admin' || role === 'leadership';
 
   const onSaveProfile = async () => {
     setSaving(true);
@@ -250,21 +244,6 @@ const AccountSettingsPage: React.FC = () => {
             </div>
           )}
         </section>
-
-        {canViewStaffDirectory && (
-          <div className="space-y-3">
-            <div>
-              <h2 className="text-lg font-semibold text-[#0B1B34]">Admin tools</h2>
-              <p className="mt-1 text-sm text-[#6b84a8]">Hidden by default — open only when you need them.</p>
-            </div>
-            <StaffDirectoryPanel defaultOpen={staffSectionRequested} canAccess={canViewStaffDirectory} />
-            {staffSectionRequested && (
-              <p className="text-xs text-[#6b84a8]">
-                Direct link: <code className="rounded bg-[#eef2f7] px-1.5 py-0.5">/account?section=staff-directory</code>
-              </p>
-            )}
-          </div>
-        )}
       </div>
   );
 };
