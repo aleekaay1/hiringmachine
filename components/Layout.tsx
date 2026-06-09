@@ -9,13 +9,12 @@ import {
   type AppRole,
   type AppSection,
 } from '../services/accessControl';
-import { Home, Users, QrCode, Video, BarChart3, Settings, LogOut, MonitorPlay, Mail, PhoneCall, SlidersHorizontal, FileUp, Trophy, LayoutDashboard, FileText, LifeBuoy, UserPlus } from 'lucide-react';
+import AppSidebar from './navigation/AppSidebar';
 
 interface LayoutProps {
   children: React.ReactNode;
   hideHeader?: boolean;
   isAdmin?: boolean;
-  /** When set (non-admin only), shows this image in the header instead of the logo — e.g. landing cover banner. */
   headerBannerSrc?: string;
 }
 
@@ -29,37 +28,13 @@ const Layout: React.FC<LayoutProps> = ({
   const location = useLocation();
   const [role, setRole] = React.useState<AppRole | null>(null);
   const [userEmail, setUserEmail] = React.useState<string | null>(null);
+  const [displayName, setDisplayName] = React.useState('Staff');
+  const [avatarUrl, setAvatarUrl] = React.useState<string | null>(null);
   const [roleResolved, setRoleResolved] = React.useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
-
-  const current = `${location.pathname}${location.search}`;
-  const isActive = (path: string) => current === path;
-
-  const adminMenu = [
-    { name: 'My dashboard', route: '/home', icon: Home, section: 'home' as const },
-    { name: 'Overview', route: '/dashboard?view=overview', icon: LayoutDashboard, section: 'overview' as const },
-    { name: 'Candidates', route: '/dashboard?view=candidates', icon: Users, section: 'candidates' as const },
-    { name: 'QR Codes', route: '/qr', icon: QrCode, section: 'qr' as const },
-    { name: 'Live Sessions', route: '/live-sessions', icon: Video, section: 'live-sessions' as const },
-    { name: 'Webinar Geek', route: '/webinar-geek', icon: MonitorPlay, section: 'webinar-geek' as const },
-    { name: 'Calls Analytics', route: '/calls-analytics', icon: BarChart3, section: 'calls-analytics' as const },
-    { name: 'Leadership Board', route: '/calls-analytics/leaderboard', icon: Trophy, section: 'leaderboard' as const },
-    { name: 'Call workspace', route: '/pipeline/call', icon: PhoneCall, section: 'pipeline-call' as const },
-    { name: 'Recruiter performance', route: '/pipeline/performance', icon: BarChart3, section: 'pipeline-performance' as const },
-    { name: 'Email workspace', route: '/pipeline/email', icon: Mail, section: 'pipeline-email' as const },
-    { name: 'Resume uploads', route: '/pipeline/uploads', icon: FileUp, section: 'pipeline-uploads' as const },
-    { name: 'Legacy pipeline', route: '/pipeline', icon: PhoneCall, section: 'pipeline' as const },
-    { name: 'Pipeline settings', route: '/pipeline-settings', icon: SlidersHorizontal, section: 'pipeline-settings' as const },
-    { name: 'Analytics', route: '/dashboard?view=analytics', icon: BarChart3, section: 'analytics' as const },
-    { name: 'Settings', route: '/dashboard?view=settings', icon: Settings, section: 'settings' as const },
-    { name: 'Lead distribution', route: '/hr/lead-distribution', icon: UserPlus, section: 'pipeline-hr-leads' as const },
-    { name: 'Email log', route: '/email-log', icon: Mail, section: 'email-log' as const },
-    { name: 'Reports', route: '/reports', icon: FileText, section: 'reports' as const },
-    { name: 'Support', route: '/support', icon: LifeBuoy, section: 'support' as const },
-  ] as const;
 
   const currentSection = React.useMemo<AppSection>(() => {
     if (location.pathname === '/home') return 'home';
+    if (location.pathname === '/account') return 'account';
     if (location.pathname === '/pipeline') return 'pipeline';
     if (location.pathname === '/pipeline/call') return 'pipeline-call';
     if (location.pathname === '/pipeline/performance') return 'pipeline-performance';
@@ -72,7 +47,7 @@ const Layout: React.FC<LayoutProps> = ({
     if (location.pathname === '/webinar-geek') return 'webinar-geek';
     if (location.pathname === '/live-sessions') return 'live-sessions';
     if (location.pathname === '/hr-dashboard') return 'hr-dashboard';
-    if (location.pathname === '/hr/lead-distribution') return 'pipeline-hr-leads';
+    if (location.pathname === '/hr/lead-distribution' || location.pathname === '/hr/leads') return 'pipeline-hr-leads';
     if (location.pathname === '/qr') return 'qr';
     if (location.pathname === '/email-log') return 'email-log';
     if (location.pathname === '/reports' || location.pathname.startsWith('/reports/')) return 'reports';
@@ -95,6 +70,8 @@ const Layout: React.FC<LayoutProps> = ({
       if (!cancelled) {
         setRole(profile?.role ?? null);
         setUserEmail(authRes.data.user?.email ?? profile?.email ?? null);
+        setDisplayName(profile?.full_name || authRes.data.user?.email || 'Staff');
+        setAvatarUrl(profile?.avatar_url ?? null);
         setRoleResolved(true);
       }
     });
@@ -112,13 +89,10 @@ const Layout: React.FC<LayoutProps> = ({
     }
   }, [isAdmin, roleResolved, role, userEmail, currentSection, location.pathname, location.search, navigate]);
 
-  const visibleAdminMenu = adminMenu.filter((item) => canAccessSection(role, item.section, userEmail));
-
   const handleLogout = React.useCallback(async () => {
     try {
       await supabase.auth.signOut({ scope: 'global' });
     } finally {
-      // Clear local page caches so a refresh does not appear to restore auth UX state.
       if (typeof window !== 'undefined') {
         try {
           const keysToRemove: string[] = [];
@@ -135,7 +109,7 @@ const Layout: React.FC<LayoutProps> = ({
           keysToRemove.forEach((k) => window.localStorage.removeItem(k));
           window.sessionStorage.clear();
         } catch {
-          // no-op: storage may be unavailable in strict contexts
+          // no-op
         }
       }
       navigate('/', { replace: true });
@@ -143,128 +117,64 @@ const Layout: React.FC<LayoutProps> = ({
     }
   }, [navigate]);
 
-  return (
-    <div className="min-h-screen flex font-sans text-gray-800" style={{ backgroundColor: isAdmin ? '#eef2f7' : COLORS.background }}>
-      {isAdmin && (
-        <aside
-          className={`hidden lg:flex shrink-0 flex-col border-r border-[#1c3760] bg-[#0b1f3a] text-white relative transition-all duration-300 ease-in-out ${
-            sidebarCollapsed ? 'w-5' : 'w-72'
-          }`}
-        >
-          <button
-            type="button"
-            onClick={() => setSidebarCollapsed((prev) => !prev)}
-            className="absolute -right-3 top-16 z-20 h-10 w-6 rounded-r-xl border border-[#2a528a] border-l-0 bg-[#123563] text-slate-200 hover:text-white hover:bg-[#1b4b88] text-xs font-bold shadow"
-            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {sidebarCollapsed ? '>' : '<'}
-          </button>
+  const roleLabel = role ? role.charAt(0).toUpperCase() + role.slice(1) : 'Staff';
 
-          {!sidebarCollapsed && (
-            <>
-              <div className="px-5 py-6 border-b border-[#1c3760] flex flex-col items-center text-center gap-4">
-                <div className="h-60 w-60 rounded-full bg-white border border-[#d6deea] shadow-[0_10px_30px_-18px_rgba(0,0,0,0.45)] flex items-center justify-center overflow-hidden">
-                  <img
-                    src="/logo.png"
-                    alt="Paz Hiring Journey"
-                    className="h-56 w-56 object-contain"
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      target.style.display = 'none';
-                    }}
-                  />
-                </div>
-                <div className="text-sm font-semibold leading-tight text-slate-100">Paz Hiring Journey Management</div>
-              </div>
-              <nav className="p-3 space-y-1.5">
-                {visibleAdminMenu.map((item) => {
-                  const Icon = item.icon;
-                  const active = isActive(item.route);
-                  return (
-                    <button
-                      key={item.name}
-                      type="button"
-                      onClick={() => navigate(item.route)}
-                      className={`w-full inline-flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm transition font-medium ${
-                        active
-                          ? 'bg-[#123563] text-white shadow-sm border border-[#2a528a]'
-                          : 'text-slate-300 hover:bg-[#123563]/60 hover:text-white'
-                      }`}
-                    >
-                      <Icon size={15} />
-                      {item.name}
-                    </button>
-                  );
-                })}
-                <button
-                  type="button"
-                  onClick={() => void handleLogout()}
-                  className="w-full mt-3 inline-flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm text-slate-300 hover:bg-[#123563]/60 hover:text-white"
-                >
-                  <LogOut size={15} />
-                  Logout
-                </button>
-              </nav>
-            </>
-          )}
-        </aside>
+  return (
+    <div
+      className="min-h-screen flex font-sans text-gray-800"
+      style={{ backgroundColor: isAdmin ? '#eef2f7' : COLORS.background }}
+    >
+      {isAdmin && (
+        <AppSidebar
+          role={role}
+          userEmail={userEmail}
+          displayName={displayName}
+          roleLabel={roleLabel}
+          avatarUrl={avatarUrl}
+          onLogout={() => void handleLogout()}
+        />
       )}
       <div className="min-h-screen flex flex-col flex-1 min-w-0">
-      {!hideHeader && !isAdmin && (
-        <header className="bg-white shadow-sm sticky top-0 z-50 safe-area-top">
-          <div
-            className={`mx-auto w-full flex items-center gap-2 ${
-              isAdmin
-                ? 'max-w-7xl px-4 py-2 sm:py-3 justify-between min-h-[52px] sm:min-h-0'
-                : headerBannerSrc
+        {!hideHeader && !isAdmin && (
+          <header className="bg-white shadow-sm sticky top-0 z-50 safe-area-top">
+            <div
+              className={`mx-auto w-full flex items-center gap-2 ${
+                headerBannerSrc
                   ? 'max-w-full justify-center px-0 py-0'
                   : 'max-w-full justify-center px-4 py-3 sm:py-4 md:py-5'
-            }`}
-          >
-            <div
-              className={`flex items-center min-w-0 ${
-                isAdmin ? 'flex-1' : headerBannerSrc ? 'justify-center w-full' : 'justify-center w-full'
               }`}
             >
-              {!isAdmin && headerBannerSrc ? (
+              {!headerBannerSrc ? (
+                <img
+                  src="/logo.png"
+                  alt="Globe Life AIL Division - Paz Organization"
+                  className="h-[min(11.25rem,32vh)] sm:h-[min(12.5rem,28vh)] md:h-[12.5rem] lg:h-[13.75rem] w-auto max-w-[min(100%,42rem)] object-contain object-center"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = 'none';
+                  }}
+                />
+              ) : (
                 <img
                   src={headerBannerSrc}
                   alt="Globe Life AIL Division - Paz Organization"
                   className="w-full h-auto max-h-[min(24vh,200px)] sm:max-h-[min(22vh,220px)] lg:max-h-[240px] object-contain object-center bg-[#f8fafc]"
                   onError={(e) => {
-                    const target = e.target as HTMLImageElement;
-                    target.style.display = 'none';
-                  }}
-                />
-              ) : (
-                <img
-                  src="/logo.png"
-                  alt="Globe Life AIL Division - Paz Organization"
-                  className={
-                    isAdmin
-                      ? 'h-9 sm:h-10 w-auto max-w-full object-contain object-left'
-                      : 'h-[min(11.25rem,32vh)] sm:h-[min(12.5rem,28vh)] md:h-[12.5rem] lg:h-[13.75rem] w-auto max-w-[min(100%,42rem)] object-contain object-center'
-                  }
-                  onError={(e) => {
-                    const target = e.target as HTMLImageElement;
-                    target.style.display = 'none';
+                    (e.target as HTMLImageElement).style.display = 'none';
                   }}
                 />
               )}
             </div>
-          </div>
-          <div className="h-1 w-full bg-gradient-to-r from-[#005EB8] to-[#37B06D]" />
-        </header>
-      )}
-      <main className="flex-grow flex flex-col min-h-0 relative overflow-x-hidden px-safe-area">
-        {children}
-      </main>
-      {!isAdmin && (
-        <footer className="py-4 sm:py-6 text-center text-xs text-gray-400 safe-area-bottom px-4">
-          <p>&copy; {new Date().getFullYear()} Paz Organization | Globe Life AIL Division</p>
-        </footer>
-      )}
+            <div className="h-1 w-full bg-gradient-to-r from-[#005EB8] to-[#37B06D]" />
+          </header>
+        )}
+        <main className={`flex-grow flex flex-col min-h-0 relative overflow-x-hidden px-safe-area ${isAdmin ? 'pt-14 lg:pt-0' : ''}`}>
+          {children}
+        </main>
+        {!isAdmin && (
+          <footer className="py-4 sm:py-6 text-center text-xs text-gray-400 safe-area-bottom px-4">
+            <p>&copy; {new Date().getFullYear()} Paz Organization | Globe Life AIL Division</p>
+          </footer>
+        )}
       </div>
     </div>
   );

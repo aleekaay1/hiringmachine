@@ -31,6 +31,8 @@ import ReportDetail from './pages/ReportDetail';
 import SupportPage from './pages/SupportPage';
 import OpsConsolePage from './pages/OpsConsolePage';
 import HrLeadDistributionPage from './pages/HrLeadDistributionPage';
+import HrAllLeadsPage from './pages/HrAllLeadsPage';
+import AccountSettingsPage from './pages/AccountSettingsPage';
 
 const App: React.FC = () => {
   return (
@@ -57,6 +59,8 @@ const App: React.FC = () => {
         <Route path="/leaderboard" element={<Navigate to="/calls-analytics/leaderboard" replace />} />
         <Route path="/hr-dashboard" element={<HRDashboard />} />
         <Route path="/hr/lead-distribution" element={<HrLeadDistributionPage />} />
+        <Route path="/hr/leads" element={<HrAllLeadsPage />} />
+        <Route path="/account" element={<AccountSettingsPage />} />
         <Route path="/pipeline" element={<Pipeline />} />
         <Route path="/pipeline/call" element={<PipelineCallWorkspace />} />
         <Route path="/pipeline/performance" element={<PipelinePerformance />} />

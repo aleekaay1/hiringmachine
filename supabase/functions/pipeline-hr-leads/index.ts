@@ -306,6 +306,94 @@ Deno.serve(async (req) => {
       });
     }
 
+    if (req.method === 'GET' && mode === 'all-leads') {
+      const batchId = url.searchParams.get('batch_id')?.trim() || '';
+      const team = url.searchParams.get('team')?.trim().toLowerCase() || '';
+      const status = url.searchParams.get('status')?.trim().toLowerCase() || 'all';
+      const assigneeId = url.searchParams.get('assignee_id')?.trim() || '';
+      const dateFrom = url.searchParams.get('date_from')?.trim() || '';
+      const dateTo = url.searchParams.get('date_to')?.trim() || '';
+      const search = url.searchParams.get('search')?.trim().toLowerCase() || '';
+      const limit = Math.min(3000, Math.max(1, Number(url.searchParams.get('limit') || 2000)));
+
+      let query = admin
+        .from('pipeline_candidates')
+        .select('id, full_name, email, phone, lead_batch_id, assigned_to_user_id, assigned_to_label, assigned_at, status, journey_stage, metadata, created_at')
+        .eq('source', 'hr_csv_batch')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (batchId) query = query.eq('lead_batch_id', batchId);
+      if (status === 'pool') query = query.is('assigned_to_user_id', null);
+      if (status === 'assigned') query = query.not('assigned_to_user_id', 'is', null);
+      if (assigneeId) query = query.eq('assigned_to_user_id', assigneeId);
+      if (dateFrom) query = query.gte('created_at', `${dateFrom}T00:00:00.000Z`);
+      if (dateTo) query = query.lte('created_at', `${dateTo}T23:59:59.999Z`);
+
+      const { data: rows, error } = await query;
+      if (error) throw error;
+
+      const batchIds = [...new Set((rows || []).map((row) => String((row as { lead_batch_id?: string }).lead_batch_id || '')).filter(Boolean))];
+      const batchMap = new Map<string, Record<string, unknown>>();
+      if (batchIds.length) {
+        const { data: batchRows } = await admin
+          .from('pipeline_lead_batches')
+          .select('id, label, source_filename, lead_team, created_at, imported_count, assigned_count')
+          .in('id', batchIds);
+        for (const batch of batchRows || []) {
+          batchMap.set(String((batch as { id: string }).id), batch as Record<string, unknown>);
+        }
+      }
+
+      const candidateIds = (rows || []).map((row) => String((row as { id: string }).id));
+      const { latest } = await fetchDispositionMaps(admin, candidateIds);
+
+      let leads = (rows || []).map((row) => {
+        const r = row as Record<string, unknown>;
+        const batchIdKey = String(r.lead_batch_id || '');
+        const batch = batchMap.get(batchIdKey) || {};
+        const meta = r.metadata && typeof r.metadata === 'object' ? (r.metadata as Record<string, unknown>) : {};
+        const leadTeam = String(
+          (batch as { lead_team?: string }).lead_team || meta.lead_age || '',
+        ).trim();
+        const latestRecord = latest.get(String(r.id));
+        return {
+          ...r,
+          batch_label: String((batch as { label?: string }).label || ''),
+          source_filename: String((batch as { source_filename?: string }).source_filename || ''),
+          batch_created_at: String((batch as { created_at?: string }).created_at || r.created_at || ''),
+          lead_team: leadTeam,
+          latest_disposition: latestRecord?.disposition || null,
+          latest_disposed_at: latestRecord?.disposed_at || null,
+        };
+      });
+
+      if (team) {
+        leads = leads.filter((lead) => String((lead as { lead_team?: string }).lead_team || '').toLowerCase().includes(team));
+      }
+      if (search) {
+        leads = leads.filter((lead) => {
+          const l = lead as Record<string, unknown>;
+          const hay = [
+            l.full_name,
+            l.email,
+            l.phone,
+            l.batch_label,
+            l.source_filename,
+            l.lead_team,
+          ].map((v) => String(v || '').toLowerCase()).join(' ');
+          return hay.includes(search);
+        });
+      }
+
+      const teams = [...new Set(leads.map((lead) => String((lead as { lead_team?: string }).lead_team || '').trim()).filter(Boolean))].sort();
+
+      return new Response(JSON.stringify({ ok: true, leads, teams, total: leads.length }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     if (req.method === 'GET' && mode === 'recruiter-overview') {
       const batchId = url.searchParams.get('batch_id')?.trim() || '';
       let candidateQuery = admin

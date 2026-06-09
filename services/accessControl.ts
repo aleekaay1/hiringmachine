@@ -27,7 +27,8 @@ export type AppSection =
   | 'support'
   | 'ops-console'
   | 'superdashboard'
-  | 'pipeline-hr-leads';
+  | 'pipeline-hr-leads'
+  | 'account';
 
 export interface UserProfile {
   user_id: string;
@@ -36,6 +37,7 @@ export interface UserProfile {
   role: AppRole;
   points?: number | null;
   points_updated_at?: string | null;
+  avatar_url?: string | null;
 }
 
 /** Training / sandbox accounts (demo-*@globelife-paz.com) — hidden from leaderboard, reports, and staff lists. */
@@ -113,7 +115,7 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
 
   const { data, error } = await supabase
     .from('user_profiles')
-    .select('user_id, email, full_name, role, points, points_updated_at')
+    .select('user_id, email, full_name, role, points, points_updated_at, avatar_url')
     .eq('user_id', userId)
     .maybeSingle();
 
@@ -219,6 +221,7 @@ export function canAccessSection(
 ): boolean {
   if (section === 'ops-console') return isOpsConsoleEmail(email);
   if (section === 'pipeline-hr-leads') return canAccessHrLeadDistribution(role, email);
+  if (section === 'account') return Boolean(role);
   if (section === 'support') return Boolean(role);
   if (!role) return section === 'overview' || section === 'home';
   if (role === 'admin') {
@@ -242,6 +245,7 @@ export function canAccessSection(
       section === 'home' ||
       section === 'overview' ||
       section === 'settings' ||
+      section === 'account' ||
       section === 'support' ||
       PIPELINE_OPERATIONAL_SECTIONS.includes(section) ||
       section === 'calls-analytics' ||
@@ -256,6 +260,7 @@ export function canAccessSection(
     return (
       section === 'home' ||
       section === 'overview' ||
+      section === 'account' ||
       section === 'support' ||
       section === 'candidates' ||
       section === 'hr-dashboard' ||
@@ -276,7 +281,7 @@ export function defaultRouteForRole(_role: AppRole | null): string {
 export async function listAllUserProfiles(): Promise<UserProfile[]> {
   const full = await supabase
     .from('user_profiles')
-    .select('user_id, email, full_name, role, points, points_updated_at')
+    .select('user_id, email, full_name, role, points, points_updated_at, avatar_url')
     .order('full_name', { ascending: true })
     .order('email', { ascending: true });
   if (!full.error) return filterProductionStaffProfiles((full.data || []) as UserProfile[]);

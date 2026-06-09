@@ -321,6 +321,10 @@ const HrLeadDistributionPage: React.FC = () => {
       <div className="mx-auto max-w-6xl space-y-6 p-4 md:p-8">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
+            <p className="text-xs text-[#4b6d95]">
+              HR & Leads /
+              <Link to="/hr/leads" className="ml-1 hover:underline">All leads</Link>
+            </p>
             <h1 className="text-2xl font-bold text-[#0B1B34]">Lead distribution</h1>
           </div>
           <Button variant="outline" className="!min-h-0 h-9 gap-1.5 text-xs" onClick={() => void loadData()} disabled={loading}>

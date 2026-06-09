@@ -66,6 +66,27 @@ export type HrRecruiterLeadRow = HrAssignmentLead & {
   call_count: number;
 };
 
+export type HrAllLeadRow = {
+  id: string;
+  full_name: string;
+  email: string | null;
+  phone: string | null;
+  lead_batch_id: string | null;
+  assigned_to_user_id: string | null;
+  assigned_to_label: string | null;
+  assigned_at: string | null;
+  status: string;
+  journey_stage: string;
+  created_at: string;
+  batch_label: string;
+  source_filename: string;
+  batch_created_at: string;
+  lead_team: string;
+  latest_disposition: string | null;
+  latest_disposed_at: string | null;
+  metadata: Record<string, unknown> | null;
+};
+
 async function getToken(): Promise<string> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
@@ -118,6 +139,40 @@ export async function fetchHrLeadBatches(limit = 30) {
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) return { ok: false as const, error: String(json.error || 'Failed to load upload history') };
   return { ok: true as const, batches: (json.batches || []) as PipelineLeadBatch[] };
+}
+
+export async function fetchHrAllLeads(filters: {
+  batchId?: string;
+  team?: string;
+  status?: 'all' | 'pool' | 'assigned';
+  assigneeId?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  search?: string;
+}) {
+  const params = new URLSearchParams({ mode: 'all-leads', limit: '3000' });
+  if (filters.batchId) params.set('batch_id', filters.batchId);
+  if (filters.team) params.set('team', filters.team);
+  if (filters.status && filters.status !== 'all') params.set('status', filters.status);
+  if (filters.assigneeId) params.set('assignee_id', filters.assigneeId);
+  if (filters.dateFrom) params.set('date_from', filters.dateFrom);
+  if (filters.dateTo) params.set('date_to', filters.dateTo);
+  if (filters.search) params.set('search', filters.search);
+  const token = await getToken();
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return { ok: false as const, error: 'Missing Supabase configuration.' };
+  }
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/pipeline-hr-leads?${params}`, {
+    headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY },
+  });
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) return { ok: false as const, error: String(json.error || 'Failed to load leads') };
+  return {
+    ok: true as const,
+    leads: (json.leads || []) as HrAllLeadRow[],
+    teams: (json.teams || []) as string[],
+    total: Number(json.total || 0),
+  };
 }
 
 export async function deleteHrPoolLeads(candidateIds: string[]) {
