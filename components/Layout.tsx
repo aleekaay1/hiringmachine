@@ -56,7 +56,6 @@ const Layout: React.FC<LayoutProps> = ({
     if (location.pathname === '/dashboard' || location.pathname === '/admin') {
       const view = new URLSearchParams(location.search).get('view');
       if (view === 'candidates') return 'candidates';
-      if (view === 'analytics') return 'analytics';
       if (view === 'settings') return 'settings';
       return 'overview';
     }

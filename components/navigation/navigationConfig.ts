@@ -92,14 +92,8 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { name: 'Calls Analytics', route: '/calls-analytics', icon: BarChart3, section: 'calls-analytics' },
       { name: 'Leadership Board', route: '/calls-analytics/leaderboard', icon: Trophy, section: 'leaderboard' },
-      { name: 'Dashboard analytics', route: '/dashboard?view=analytics', icon: BarChart3, section: 'analytics' },
+      { name: 'Email log', route: '/email-log', icon: Mail, section: 'email-log' },
     ],
-  },
-  {
-    id: 'communication',
-    label: 'Communication',
-    icon: Mail,
-    items: [{ name: 'Email log', route: '/email-log', icon: Mail, section: 'email-log' }],
   },
   {
     id: 'account',

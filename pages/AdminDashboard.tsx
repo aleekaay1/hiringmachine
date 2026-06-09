@@ -178,13 +178,14 @@ const AdminDashboard: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const adminView = useMemo<'overview' | 'candidates' | 'analytics' | 'settings'>(() => {
+  const adminView = useMemo<'overview' | 'candidates' | 'settings'>(() => {
     const q = new URLSearchParams(location.search).get('view');
-    if (q === 'overview' || q === 'candidates' || q === 'analytics' || q === 'settings') return q;
+    if (q === 'analytics') return 'overview';
+    if (q === 'overview' || q === 'candidates' || q === 'settings') return q;
     return 'overview';
   }, [location.search]);
 
-  const effectiveAdminView = useMemo<'overview' | 'candidates' | 'analytics' | 'settings'>(() => {
+  const effectiveAdminView = useMemo<'overview' | 'candidates' | 'settings'>(() => {
     if (canAccessSection(role, adminView)) return adminView;
     if (canAccessSection(role, 'candidates')) return 'candidates';
     return 'overview';
@@ -1198,7 +1199,7 @@ const AdminDashboard: React.FC = () => {
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-5 py-3 flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-[#0b1f3a]">
-              {effectiveAdminView === 'overview' ? 'Overview' : effectiveAdminView === 'candidates' ? 'Candidates' : effectiveAdminView === 'analytics' ? 'Analytics' : 'Settings'}
+              {effectiveAdminView === 'overview' ? 'Overview' : effectiveAdminView === 'candidates' ? 'Candidates' : 'Settings'}
             </h1>
             <p className="text-xs text-gray-500">
               {dashboard.total} applicants · {dashboard.activePipeline} active
@@ -1273,40 +1274,6 @@ const AdminDashboard: React.FC = () => {
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
-        )}
-
-        {effectiveAdminView === 'analytics' && (
-          <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-5 space-y-4">
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={exportCSV} variant="outline" className="text-sm">
-                <Download size={16} className="mr-2" />
-                Export all candidates CSV
-              </Button>
-            </div>
-            <div className="border border-gray-200 rounded-xl overflow-hidden">
-              <div className="grid grid-cols-[1.5fr,1fr,1fr] px-4 py-2 text-xs font-semibold uppercase tracking-wide text-gray-500 bg-[#f8fbff] border-b border-gray-200">
-                <span>Candidate</span>
-                <span>Current stage</span>
-                <span>Reports</span>
-              </div>
-              {candidates.map((c) => (
-                <div key={c.id} className="grid grid-cols-[1.5fr,1fr,1fr] px-4 py-3 text-sm border-b border-gray-100 items-center">
-                  <div className="min-w-0">
-                    <p className="font-semibold text-gray-900 truncate">{c.firstName} {c.lastName}</p>
-                    <p className="text-xs text-gray-500 truncate">{c.email}</p>
-                  </div>
-                  <span className="text-xs text-gray-700">{getAdminData(c).pipelineStage}</span>
-                  <button
-                    type="button"
-                    className="w-fit text-xs px-2.5 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-50"
-                    onClick={() => void handleDownloadCandidateReport(c)}
-                  >
-                    Download PDF
-                  </button>
-                </div>
-              ))}
             </div>
           </div>
         )}

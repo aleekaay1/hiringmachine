@@ -36,9 +36,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
   const [collapsed, setCollapsed] = React.useState(false);
   const [mobileOpen, setMobileOpen] = React.useState(false);
-  const [openGroups, setOpenGroups] = React.useState<Set<string>>(
-    () => new Set(NAV_GROUPS.map((group) => group.id)),
-  );
+  const [openGroups, setOpenGroups] = React.useState<Set<string>>(() => new Set());
   const [hoverGroup, setHoverGroup] = React.useState<string | null>(null);
 
   const visibleGroups = React.useMemo(() => {
@@ -48,15 +46,6 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
       items: group.items.filter((item) => canAccessSection(role, item.section, userEmail)),
     })).filter((group) => group.items.length > 0);
   }, [role, userEmail, roleResolved]);
-
-  React.useEffect(() => {
-    if (!visibleGroups.length) return;
-    setOpenGroups((prev) => {
-      const next = new Set(prev);
-      visibleGroups.forEach((group) => next.add(group.id));
-      return next;
-    });
-  }, [visibleGroups]);
 
   React.useEffect(() => {
     const active = visibleGroups.find((group) => isGroupActive(group, pathname, search));
