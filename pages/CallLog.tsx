@@ -12,38 +12,14 @@ import CallRecordingPlayer from '../components/callLog/CallRecordingPlayer';
 import {
   listPipelineCallRecords,
   listPipelineCandidatesByIds,
-  readCallRecordLiveSessionOutcome,
   readCallRecordMeta,
   readCallRecordRecording,
   type PipelineCallRecord,
   type PipelineCandidate,
 } from '../services/pipelineService';
-import {
-  loadLiveSessionRegistrantsForMatching,
-  matchLiveSessionForCallDisposition,
-  type LiveSessionRegistrantRow,
-} from '../services/liveSessionBookedOutcomes';
-import { refreshLiveSessionsAndMatchOutcomes } from '../services/liveSessionOutcomeService';
 import { PIPELINE_CALL_DISPOSITIONS } from '../services/pipelineCallDispositions';
-import {
-  fetchCallLogWebhookRows,
-  syncThreeCxRecordings,
-  type CallLogWebhookRow,
-} from '../services/threecxCallLogAdmin';
-import { PhoneCall, RefreshCw, Search } from 'lucide-react';
-
-type CallLogEntry = {
-  key: string;
-  kind: 'disposition' | 'inbound';
-  at: string;
-  row: PipelineCallRecord | null;
-  webhook: CallLogWebhookRow | null;
-};
-
-function phoneLast10(value: string): string {
-  const digits = value.replace(/\D/g, '');
-  return digits.length >= 10 ? digits.slice(-10) : digits;
-}
+import { fetchCallRecordingForDisposition } from '../services/threecxCallLogAdmin';
+import { Headphones, PhoneCall, RefreshCw, Search } from 'lucide-react';
 
 function formatDuration(seconds: number | null): string {
   if (!seconds || seconds <= 0) return '—';
@@ -65,23 +41,6 @@ function resolveRecruiterLabel(
   return '—';
 }
 
-function liveSessionOutcomeLabel(status: string | null): string {
-  if (!status) return '—';
-  if (status === 'attended') return 'Showed';
-  if (status === 'scheduled') return 'Scheduled';
-  if (status === 'no_show') return 'No show';
-  if (status === 'pending') return 'Pending match';
-  return status;
-}
-
-function liveSessionOutcomeTone(status: string | null): string {
-  if (status === 'attended') return 'text-emerald-800 font-medium';
-  if (status === 'scheduled') return 'text-[#005EB8] font-medium';
-  if (status === 'no_show') return 'text-red-700';
-  if (status === 'pending') return 'text-amber-800';
-  return 'text-[#8a9ab0]';
-}
-
 function dispositionTone(disposition: string): string {
   const d = disposition.toLowerCase();
   if (d.includes('booked') || d.includes('interview') || d.includes('interested')) {
@@ -101,7 +60,6 @@ const CallLog: React.FC = () => {
   const isAuthenticated = useStaffAuthenticated();
   const [accessAllowed, setAccessAllowed] = useState<boolean | null>(null);
   const [rows, setRows] = useState<PipelineCallRecord[]>([]);
-  const [webhookRows, setWebhookRows] = useState<CallLogWebhookRow[]>([]);
   const [candidates, setCandidates] = useState<PipelineCandidate[]>([]);
   const [staffProfiles, setStaffProfiles] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(false);
@@ -111,11 +69,10 @@ const CallLog: React.FC = () => {
   const [dispositionFilter, setDispositionFilter] = useState<string>('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [syncing, setSyncing] = useState(false);
-  const [syncProgress, setSyncProgress] = useState<{ pct: number; label: string } | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [statusError, setStatusError] = useState<string | null>(null);
-  const [liveRegistrants, setLiveRegistrants] = useState<LiveSessionRegistrantRow[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [fetchingRecordingId, setFetchingRecordingId] = useState<string | null>(null);
+  const [recordingErrors, setRecordingErrors] = useState<Record<string, string>>({});
+  const [expandedRecordingIds, setExpandedRecordingIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -127,25 +84,19 @@ const CallLog: React.FC = () => {
     });
   }, [isAuthenticated]);
 
-  const load = useCallback(async (options?: { includeWebhooks?: boolean }) => {
+  const load = useCallback(async () => {
     setLoadError(null);
     setLoading(true);
     try {
       const callRows = await listPipelineCallRecords({ limit: 2500 });
-      const webhooks = options?.includeWebhooks
-        ? await fetchCallLogWebhookRows(48).catch(() => [] as CallLogWebhookRow[])
-        : [];
       const candidateIds = [...new Set(callRows.map((row) => row.candidate_id).filter(Boolean))];
-      const [candidateRows, profiles, liveRegs] = await Promise.all([
+      const [candidateRows, profiles] = await Promise.all([
         listPipelineCandidatesByIds(candidateIds).catch(() => [] as PipelineCandidate[]),
         listAllUserProfiles().catch(() => [] as UserProfile[]),
-        loadLiveSessionRegistrantsForMatching().catch(() => [] as LiveSessionRegistrantRow[]),
       ]);
       setRows(callRows);
-      setWebhookRows(webhooks);
       setCandidates(candidateRows);
       setStaffProfiles(profiles);
-      setLiveRegistrants(liveRegs);
     } catch (err) {
       setRows([]);
       setLoadError(err instanceof Error ? err.message : 'Failed to load call log.');
@@ -161,41 +112,63 @@ const CallLog: React.FC = () => {
   }, [isAuthenticated, accessAllowed, load]);
 
   const handleRefresh = async () => {
-    setStatusError(null);
-    setStatusMessage(null);
-    setSyncing(true);
-    setSyncProgress({ pct: 8, label: 'Rematching recordings from webhooks…' });
+    setRefreshing(true);
+    try {
+      await load();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
-    const tick = window.setInterval(() => {
-      setSyncProgress((prev) => {
-        if (!prev || prev.pct >= 82) return prev;
-        return { ...prev, pct: Math.min(82, prev.pct + 3) };
-      });
-    }, 700);
+  const handleLoadRecording = async (row: PipelineCallRecord) => {
+    const existing = readCallRecordRecording(row);
+    if (existing.recordingUrl) {
+      setExpandedRecordingIds((prev) => new Set(prev).add(row.id));
+      return;
+    }
+
+    setFetchingRecordingId(row.id);
+    setRecordingErrors((prev) => {
+      const next = { ...prev };
+      delete next[row.id];
+      return next;
+    });
 
     try {
-      const messages: string[] = [];
-      const recordingResult = await syncThreeCxRecordings({ hoursBack: 168, incremental: true });
-      if (recordingResult.message) messages.push(recordingResult.message);
-
-      setSyncProgress({ pct: 45, label: 'Matching live sessions to Calendly/Zoom…' });
-      const liveResult = await refreshLiveSessionsAndMatchOutcomes({ syncCoins: false, daysBack: 90 });
-      if (liveResult.message) messages.push(liveResult.message);
-      if (!liveResult.ok && liveResult.error) messages.push(`Live sessions: ${liveResult.error}`);
-
-      setSyncProgress({ pct: 88, label: 'Loading call log…' });
-      await load({ includeWebhooks: true });
-      setSyncProgress({ pct: 100, label: 'Done' });
-      if (messages.length) setStatusMessage(messages.join(' · '));
-      if (recordingResult.warning && (recordingResult.updated ?? 0) === 0 && !liveResult.updated) {
-        setStatusError(recordingResult.warning);
+      const result = await fetchCallRecordingForDisposition(row.id);
+      if (!result.matched || !result.recordingUrl) {
+        setRecordingErrors((prev) => ({
+          ...prev,
+          [row.id]: result.message || 'No recording found for this call.',
+        }));
+        return;
       }
+
+      setRows((prev) => prev.map((r) => {
+        if (r.id !== row.id) return r;
+        const meta = r.threecx_metadata && typeof r.threecx_metadata === 'object'
+          ? { ...(r.threecx_metadata as Record<string, unknown>) }
+          : {};
+        return {
+          ...r,
+          recording_url: result.recordingUrl,
+          duration_seconds: result.durationSeconds ?? r.duration_seconds,
+          threecx_metadata: {
+            ...meta,
+            recording_url: result.recordingUrl,
+            duration_seconds: result.durationSeconds,
+            fetch_source: result.source,
+          },
+        };
+      }));
+      setExpandedRecordingIds((prev) => new Set(prev).add(row.id));
     } catch (err) {
-      setStatusError(err instanceof Error ? err.message : 'Sync failed.');
+      setRecordingErrors((prev) => ({
+        ...prev,
+        [row.id]: err instanceof Error ? err.message : 'Failed to load recording.',
+      }));
     } finally {
-      window.clearInterval(tick);
-      setSyncing(false);
-      window.setTimeout(() => setSyncProgress(null), 800);
+      setFetchingRecordingId(null);
     }
   };
 
@@ -210,77 +183,6 @@ const CallLog: React.FC = () => {
     for (const profile of staffProfiles) map.set(profile.user_id, profile);
     return map;
   }, [staffProfiles]);
-
-  const recruiterByExtension = useMemo(() => {
-    const map = new Map<string, UserProfile>();
-    for (const profile of staffProfiles) {
-      const ext = String(profile.extension || '').trim();
-      if (ext) map.set(ext, profile);
-    }
-    return map;
-  }, [staffProfiles]);
-
-  const candidateByPhone = useMemo(() => {
-    const map = new Map<string, PipelineCandidate>();
-    for (const c of candidates) {
-      const key = phoneLast10(c.phone || '');
-      if (key.length >= 10) map.set(key, c);
-    }
-    return map;
-  }, [candidates]);
-
-  const resolveLiveOutcomeForRow = useCallback((row: PipelineCallRecord) => {
-    const persisted = readCallRecordLiveSessionOutcome(row);
-    if (!persisted.isLiveSessionBooked) return persisted;
-    if (persisted.status && persisted.status !== 'pending') return persisted;
-
-    const candidate = candidateById.get(row.candidate_id);
-    const disposedMs = Date.parse(row.disposed_at || row.created_at);
-    const match = matchLiveSessionForCallDisposition({
-      email: candidate?.email || null,
-      candidatePhone: candidate?.phone || null,
-      dialedNumber: row.dialed_number,
-      disposedAtMs: Number.isFinite(disposedMs) ? disposedMs : Date.now(),
-      registrants: liveRegistrants,
-    });
-    return {
-      isLiveSessionBooked: true,
-      status: match.status,
-      sessionDate: match.sessionDate,
-      matchMethod: match.matchMethod,
-    };
-  }, [candidateById, liveRegistrants]);
-
-  const allEntries = useMemo((): CallLogEntry[] => {
-    const dispositionIds = new Set(rows.map((r) => r.id));
-    const dispositionUrls = new Set(
-      rows.map((r) => readCallRecordRecording(r).recordingUrl).filter(Boolean) as string[],
-    );
-    const list: CallLogEntry[] = rows.map((row) => ({
-      key: row.id,
-      kind: 'disposition',
-      at: row.disposed_at,
-      row,
-      webhook: null,
-    }));
-
-    for (const wh of webhookRows) {
-      const dir = String(wh.callDirection || '').toLowerCase();
-      if (!dir.includes('in')) continue;
-      if (!wh.recordingUrl) continue;
-      if (wh.callRecordId && dispositionIds.has(wh.callRecordId)) continue;
-      if (dispositionUrls.has(wh.recordingUrl)) continue;
-      list.push({
-        key: `inbound-${wh.id}`,
-        kind: 'inbound',
-        at: wh.receivedAt,
-        row: null,
-        webhook: wh,
-      });
-    }
-
-    return list.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
-  }, [rows, webhookRows]);
 
   const recruiterOptions = useMemo(() => {
     const byId = new Map<string, string>();
@@ -298,79 +200,50 @@ const CallLog: React.FC = () => {
     const fromMs = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null;
     const toMs = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : null;
 
-    return allEntries.filter((entry) => {
-      const row = entry.row;
-      const wh = entry.webhook;
-      const atMs = new Date(entry.at).getTime();
+    return rows.filter((row) => {
+      const atMs = new Date(row.disposed_at).getTime();
       if (fromMs !== null && atMs < fromMs) return false;
       if (toMs !== null && atMs > toMs) return false;
-
-      if (entry.kind === 'inbound') {
-        if (dispositionFilter !== 'all' && dispositionFilter !== 'Incoming call') return false;
-        if (recruiterFilter !== 'all') {
-          const ext = wh?.agentExtension || '';
-          const profile = ext ? recruiterByExtension.get(ext) : null;
-          if (profile?.user_id !== recruiterFilter) return false;
-        }
-      } else if (row) {
-        if (recruiterFilter !== 'all' && row.recruiter_user_id !== recruiterFilter) return false;
-        if (dispositionFilter !== 'all' && row.disposition !== dispositionFilter) return false;
-      }
+      if (recruiterFilter !== 'all' && row.recruiter_user_id !== recruiterFilter) return false;
+      if (dispositionFilter !== 'all' && row.disposition !== dispositionFilter) return false;
 
       if (!q) return true;
-      const candidate = row ? candidateById.get(row.candidate_id) : null;
-      const inboundPhone = wh?.phoneNumber || '';
-      const inboundCandidate = candidateByPhone.get(phoneLast10(inboundPhone));
+      const candidate = candidateById.get(row.candidate_id);
       const hay = [
-        candidate?.full_name || inboundCandidate?.full_name || '',
-        candidate?.email || inboundCandidate?.email || '',
-        candidate?.phone || inboundPhone,
-        row?.dialed_number || inboundPhone,
-        row?.disposition || 'incoming call',
-        row?.comment || '',
-        row ? resolveRecruiterLabel(row, staffById) : '',
-        wh?.agentExtension || '',
-        entry.kind,
+        candidate?.full_name || '',
+        candidate?.email || '',
+        candidate?.phone || '',
+        row.dialed_number || '',
+        row.disposition || '',
+        row.comment || '',
+        resolveRecruiterLabel(row, staffById),
       ]
         .join(' ')
         .toLowerCase();
       return hay.includes(q);
-    });
+    }).sort((a, b) => new Date(b.disposed_at).getTime() - new Date(a.disposed_at).getTime());
   }, [
-    allEntries,
+    rows,
     search,
     recruiterFilter,
     dispositionFilter,
     dateFrom,
     dateTo,
     candidateById,
-    candidateByPhone,
     staffById,
-    recruiterByExtension,
   ]);
 
   const summary = useMemo(() => {
-    const withRecording = filtered.filter((e) => {
-      if (e.row) return Boolean(readCallRecordRecording(e.row).recordingUrl);
-      return Boolean(e.webhook?.recordingUrl);
-    }).length;
-    const recruiters = new Set(
-      filtered.map((e) => {
-        if (e.row?.recruiter_user_id) return e.row.recruiter_user_id;
-        const ext = e.webhook?.agentExtension || '';
-        return ext ? recruiterByExtension.get(ext)?.user_id : null;
-      }).filter(Boolean),
-    );
-    const booked = filtered.filter((e) => e.row?.disposition === 'Booked').length;
-    const inbound = filtered.filter((e) => e.kind === 'inbound').length;
+    const withRecording = filtered.filter((r) => Boolean(readCallRecordRecording(r).recordingUrl)).length;
+    const recruiters = new Set(filtered.map((r) => r.recruiter_user_id).filter(Boolean));
+    const booked = filtered.filter((r) => r.disposition === 'Booked').length;
     return {
       total: filtered.length,
       recruiters: recruiters.size,
       booked,
-      inbound,
       withRecording,
     };
-  }, [filtered, recruiterByExtension]);
+  }, [filtered]);
 
   if (!isAuthenticated) {
     return (
@@ -402,35 +275,11 @@ const CallLog: React.FC = () => {
           <PhoneCall size={20} className="text-[#005EB8] shrink-0" />
           <h1 className="text-lg font-bold text-[#0B1B34]">Call log</h1>
         </div>
-        <Button type="button" variant="secondary" onClick={() => void handleRefresh()} disabled={loading || syncing}>
-          <RefreshCw size={16} className={loading || syncing ? 'animate-spin inline mr-1.5' : 'inline mr-1.5'} />
-          {syncing ? 'Syncing…' : 'Refresh & sync'}
+        <Button type="button" variant="secondary" onClick={() => void handleRefresh()} disabled={loading || refreshing}>
+          <RefreshCw size={16} className={loading || refreshing ? 'animate-spin inline mr-1.5' : 'inline mr-1.5'} />
+          {refreshing ? 'Refreshing…' : 'Refresh'}
         </Button>
       </div>
-
-      {syncProgress && (
-        <div className="rounded-lg border border-[#cfe3f9] bg-white px-3 py-2.5">
-          <div className="flex items-center justify-between text-xs text-[#334155] mb-1.5">
-            <span>{syncProgress.label}</span>
-            <span className="tabular-nums font-medium">{syncProgress.pct}%</span>
-          </div>
-          <div className="h-2 rounded-full bg-[#e8edf4] overflow-hidden">
-            <div
-              className="h-full rounded-full bg-[#005EB8] transition-all duration-500 ease-out"
-              style={{ width: `${syncProgress.pct}%` }}
-            />
-          </div>
-        </div>
-      )}
-
-      {statusMessage && (
-        <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-          {statusMessage}
-        </p>
-      )}
-      {statusError && (
-        <p className="text-xs text-red-800 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{statusError}</p>
-      )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="rounded-xl border border-[#d6deea] bg-white p-3">
@@ -446,7 +295,7 @@ const CallLog: React.FC = () => {
           <p className="text-xl font-bold text-emerald-900">{summary.booked}</p>
         </div>
         <div className="rounded-xl border border-[#d6deea] bg-white p-3">
-          <p className="text-[10px] uppercase tracking-wide text-[#7a8ba1]">With recording</p>
+          <p className="text-[10px] uppercase tracking-wide text-[#7a8ba1]">Recordings loaded</p>
           <p className="text-xl font-bold text-[#005EB8]">{summary.withRecording}</p>
         </div>
       </div>
@@ -458,7 +307,7 @@ const CallLog: React.FC = () => {
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search candidate name, email, phone, dialed number, disposition, comment…"
+            placeholder="Search candidate, phone, disposition, recruiter…"
             className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-[#cfe3f9] text-sm text-[#0B1B34] focus:outline-none focus:ring-2 focus:ring-[#005EB8]/30"
           />
         </div>
@@ -466,7 +315,7 @@ const CallLog: React.FC = () => {
           <select
             value={recruiterFilter}
             onChange={(e) => setRecruiterFilter(e.target.value)}
-            className="rounded-lg border border-[#cfe3f9] px-2.5 py-1.5 text-sm"
+            className="rounded-lg border border-[#cfe3f9] px-2 py-1.5 text-sm min-w-[140px]"
           >
             <option value="all">All recruiters</option>
             {recruiterOptions.map((r) => (
@@ -478,10 +327,9 @@ const CallLog: React.FC = () => {
           <select
             value={dispositionFilter}
             onChange={(e) => setDispositionFilter(e.target.value)}
-            className="rounded-lg border border-[#cfe3f9] px-2.5 py-1.5 text-sm"
+            className="rounded-lg border border-[#cfe3f9] px-2 py-1.5 text-sm min-w-[140px]"
           >
             <option value="all">All dispositions</option>
-            <option value="Incoming call">Incoming calls</option>
             {PIPELINE_CALL_DISPOSITIONS.map((d) => (
               <option key={d} value={d}>
                 {d}
@@ -518,7 +366,7 @@ const CallLog: React.FC = () => {
 
       <div className="rounded-xl border border-[#d6deea] bg-white shadow-sm overflow-hidden">
         <div className="max-h-[calc(100vh-300px)] overflow-auto">
-          <table className="w-full min-w-[960px] text-xs border-collapse">
+          <table className="w-full min-w-[1000px] text-xs border-collapse">
             <thead className="sticky top-0 z-10 bg-[#f4f7fb] border-b border-[#d6deea]">
               <tr className="text-left text-[10px] uppercase tracking-wide text-[#6b7c93]">
                 <th className="px-3 py-2 font-semibold whitespace-nowrap">Time</th>
@@ -527,38 +375,27 @@ const CallLog: React.FC = () => {
                 <th className="px-3 py-2 font-semibold whitespace-nowrap">Phone</th>
                 <th className="px-3 py-2 font-semibold whitespace-nowrap">Disposition</th>
                 <th className="px-3 py-2 font-semibold whitespace-nowrap">Booked</th>
-                <th className="px-3 py-2 font-semibold whitespace-nowrap">Live</th>
                 <th className="px-3 py-2 font-semibold whitespace-nowrap">Duration</th>
+                <th className="px-3 py-2 font-semibold whitespace-nowrap">Recording</th>
                 <th className="px-3 py-2 font-semibold whitespace-nowrap">Comment</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((entry) => {
-                const row = entry.row;
-                const wh = entry.webhook;
-                const candidate = row
-                  ? candidateById.get(row.candidate_id)
-                  : (wh ? candidateByPhone.get(phoneLast10(wh.phoneNumber)) : null);
-                const meta = row ? readCallRecordMeta(row) : { callbackAt: null, bookedSubtype: null };
-                const liveOutcome = row ? resolveLiveOutcomeForRow(row) : null;
-                const recording = row
-                  ? readCallRecordRecording(row)
-                  : { recordingUrl: wh?.recordingUrl || null, durationSeconds: wh?.durationSeconds ?? null };
-                const recruiterLabel = row
-                  ? resolveRecruiterLabel(row, staffById)
-                  : (wh?.agentExtension
-                    ? recruiterByExtension.get(wh.agentExtension)?.full_name
-                      || recruiterByExtension.get(wh.agentExtension)?.email
-                      || `Ext ${wh.agentExtension}`
-                    : '—');
-                const phone = row?.dialed_number || wh?.phoneNumber || candidate?.phone || '—';
-                const disposition = row?.disposition || (entry.kind === 'inbound' ? 'Incoming' : '—');
+              {filtered.map((row) => {
+                const candidate = candidateById.get(row.candidate_id);
+                const meta = readCallRecordMeta(row);
+                const recording = readCallRecordRecording(row);
+                const recruiterLabel = resolveRecruiterLabel(row, staffById);
+                const phone = row.dialed_number || candidate?.phone || '—';
+                const isFetching = fetchingRecordingId === row.id;
+                const fetchError = recordingErrors[row.id];
+                const showPlayer = Boolean(recording.recordingUrl) && expandedRecordingIds.has(row.id);
 
                 return (
-                  <React.Fragment key={entry.key}>
+                  <React.Fragment key={row.id}>
                     <tr className="border-b border-[#eef2f7] hover:bg-[#fafcff] align-top">
                       <td className="px-3 py-2 whitespace-nowrap text-[#5c6b82] tabular-nums">
-                        {formatDateTimeCanadaEastern(entry.at)}
+                        {formatDateTimeCanadaEastern(row.disposed_at)}
                       </td>
                       <td className="px-3 py-2 text-[#334155] max-w-[140px] truncate" title={recruiterLabel}>
                         {recruiterLabel}
@@ -574,21 +411,47 @@ const CallLog: React.FC = () => {
                         )}
                       </td>
                       <td className="px-3 py-2 font-mono text-[#334155] whitespace-nowrap">{phone}</td>
-                      <td className={`px-3 py-2 whitespace-nowrap ${row ? dispositionTone(row.disposition) : 'text-violet-800'}`}>
-                        {disposition}
+                      <td className={`px-3 py-2 whitespace-nowrap ${dispositionTone(row.disposition)}`}>
+                        {row.disposition}
                       </td>
                       <td className="px-3 py-2 text-[#334155] whitespace-nowrap">{meta.bookedSubtype || '—'}</td>
-                      <td className={`px-3 py-2 whitespace-nowrap ${liveOutcome?.isLiveSessionBooked ? liveSessionOutcomeTone(liveOutcome.status) : 'text-[#8a9ab0]'}`}>
-                        {liveOutcome?.isLiveSessionBooked ? liveSessionOutcomeLabel(liveOutcome.status) : '—'}
-                      </td>
                       <td className="px-3 py-2 text-[#5c6b82] whitespace-nowrap tabular-nums">
                         {formatDuration(recording.durationSeconds)}
                       </td>
-                      <td className="px-3 py-2 text-[#5c6b82] max-w-[200px] truncate" title={row?.comment || ''}>
-                        {row?.comment?.trim() || '—'}
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {recording.recordingUrl ? (
+                          <button
+                            type="button"
+                            onClick={() => setExpandedRecordingIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(row.id)) next.delete(row.id);
+                              else next.add(row.id);
+                              return next;
+                            })}
+                            className="text-[#005EB8] hover:underline text-xs font-medium"
+                          >
+                            {showPlayer ? 'Hide' : 'Play'}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void handleLoadRecording(row)}
+                            disabled={isFetching}
+                            className="inline-flex items-center gap-1 rounded-md border border-[#cfe3f9] bg-white px-2 py-1 text-[11px] font-medium text-[#005EB8] hover:bg-[#f4f9ff] disabled:opacity-60"
+                          >
+                            <Headphones size={12} />
+                            {isFetching ? 'Loading…' : 'Load recording'}
+                          </button>
+                        )}
+                        {fetchError && (
+                          <p className="mt-1 text-[10px] text-red-700 max-w-[160px]">{fetchError}</p>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-[#5c6b82] max-w-[200px] truncate" title={row.comment || ''}>
+                        {row.comment?.trim() || '—'}
                       </td>
                     </tr>
-                    {recording.recordingUrl && (
+                    {showPlayer && recording.recordingUrl && (
                       <tr className="border-b border-[#eef2f7] bg-[#fafcff]">
                         <td colSpan={9} className="px-3 py-2">
                           <CallRecordingPlayer url={recording.recordingUrl} durationHint={recording.durationSeconds} />

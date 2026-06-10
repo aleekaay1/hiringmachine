@@ -10,7 +10,12 @@ import {
   attachRecordingToCallRecord,
   digitsOnly,
   parseDurationSecondsFromText,
+  phonesMatch,
+  resolveRecruiterUserIds,
 } from '../_shared/threecxCallMatch.ts';
+
+const MATCH_BEFORE_MS = 30_000;
+const MATCH_AFTER_MS = 8 * 60_000;
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -564,6 +569,247 @@ async function backfillToday(admin: ReturnType<typeof createClient>) {
   };
 }
 
+async function resolveExtensionForRecruiter(
+  admin: ReturnType<typeof createClient>,
+  recruiterUserId: string | null,
+): Promise<string> {
+  if (!recruiterUserId) return '';
+  const { data: profile } = await admin
+    .from('user_profiles')
+    .select('extension, email')
+    .eq('user_id', recruiterUserId)
+    .maybeSingle();
+  const fromProfile = String(profile?.extension || '').trim();
+  if (fromProfile) return fromProfile;
+  const email = String(profile?.email || '').trim().toLowerCase();
+  const hardcoded = RECRUITER_3CX_EXTENSIONS.find((row) => row.email.trim().toLowerCase() === email);
+  return hardcoded?.extension.trim() || '';
+}
+
+async function saveRecordingOnCallRecord(
+  admin: ReturnType<typeof createClient>,
+  callRecordId: string,
+  input: {
+    recordingUrl: string;
+    durationSeconds: number | null;
+    callId: string;
+    source: string;
+    extension: string;
+    anchorIso: string;
+  },
+) {
+  const { data: record, error } = await admin
+    .from('pipeline_call_records')
+    .select('threecx_metadata')
+    .eq('id', callRecordId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!record) throw new Error('Call record not found');
+
+  const existingMeta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
+    ? record.threecx_metadata as Record<string, unknown>
+    : {};
+
+  const { error: upErr } = await admin.from('pipeline_call_records').update({
+    recording_url: input.recordingUrl,
+    duration_seconds: input.durationSeconds,
+    threecx_call_id: input.callId,
+    threecx_metadata: {
+      ...existingMeta,
+      recording_url: input.recordingUrl,
+      duration_seconds: input.durationSeconds,
+      threecx_call_id: input.callId,
+      match_extension: input.extension,
+      match_anchor: input.anchorIso,
+      fetch_source: input.source,
+      fetched_at: new Date().toISOString(),
+    },
+  }).eq('id', callRecordId);
+  if (upErr) throw upErr;
+}
+
+type RecordingCandidate = {
+  recordingUrl: string;
+  durationSeconds: number | null;
+  callId: string;
+  anchorMs: number;
+  extension: string;
+  source: string;
+};
+
+function extensionsMatch(a: string, b: string): boolean {
+  const ea = String(a || '').trim();
+  const eb = String(b || '').trim();
+  return Boolean(ea && eb && ea === eb);
+}
+
+function pickClosestRecordingCandidate(
+  candidates: RecordingCandidate[],
+  disposedMs: number,
+): RecordingCandidate | null {
+  const inWindow = candidates.filter((c) => {
+    return c.anchorMs >= disposedMs - MATCH_BEFORE_MS && c.anchorMs <= disposedMs + MATCH_AFTER_MS;
+  });
+  const pool = inWindow.length ? inWindow : candidates;
+  if (!pool.length) return null;
+  return pool.reduce((prev, curr) => {
+    const prevDelta = Math.abs(prev.anchorMs - disposedMs);
+    const currDelta = Math.abs(curr.anchorMs - disposedMs);
+    return currDelta < prevDelta ? curr : prev;
+  });
+}
+
+async function fetchRecordingForCallRecord(
+  admin: ReturnType<typeof createClient>,
+  callRecordId: string,
+) {
+  const { data: record, error } = await admin
+    .from('pipeline_call_records')
+    .select('id, dialed_number, recruiter_user_id, disposed_at, recording_url, duration_seconds, threecx_metadata')
+    .eq('id', callRecordId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!record) throw new Error('Call record not found');
+
+  const meta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
+    ? record.threecx_metadata as Record<string, unknown>
+    : {};
+  const cachedUrl = String(record.recording_url || meta.recording_url || '').trim();
+  if (cachedUrl.startsWith('http')) {
+    const duration = Number(record.duration_seconds ?? meta.duration_seconds);
+    return {
+      matched: true,
+      callRecordId,
+      recordingUrl: cachedUrl,
+      durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : null,
+      source: 'cached',
+      message: 'Recording already saved for this call.',
+    };
+  }
+
+  const phone = String(record.dialed_number || '').trim();
+  const disposedMs = Date.parse(String(record.disposed_at || ''));
+  if (digitsOnly(phone).length < 10) {
+    throw new Error('Disposition is missing a valid phone number.');
+  }
+  if (!Number.isFinite(disposedMs)) throw new Error('Invalid disposition time.');
+
+  const extension = await resolveExtensionForRecruiter(admin, record.recruiter_user_id);
+  if (!extension) {
+    throw new Error('Recruiter extension not set — sync extensions first.');
+  }
+
+  const recruiterIds = await resolveRecruiterUserIds(admin, extension, '');
+  if (!record.recruiter_user_id || !recruiterIds.includes(String(record.recruiter_user_id))) {
+    throw new Error('Recruiter on this disposition does not match their 3CX extension.');
+  }
+
+  const windowStart = new Date(disposedMs - 15 * 60 * 1000).toISOString();
+  const windowEnd = new Date(disposedMs + 15 * 60 * 1000).toISOString();
+
+  const webhookCandidates: RecordingCandidate[] = [];
+  const { data: events, error: evErr } = await admin
+    .from('threecx_webhook_events')
+    .select('id, received_at, payload, agent_extension, phone_number')
+    .eq('event_type', 'report_call')
+    .gte('received_at', windowStart)
+    .lte('received_at', windowEnd)
+    .order('received_at', { ascending: true });
+  if (evErr && !/does not exist|schema cache/i.test(evErr.message || '')) throw evErr;
+
+  for (const event of events || []) {
+    const payload = (event.payload && typeof event.payload === 'object')
+      ? event.payload as Record<string, unknown>
+      : {};
+    const recordingUrl = pickString(payload, ['recording_url', 'RecordingUrl']);
+    if (!recordingUrl.startsWith('http')) continue;
+    const eventPhone = pickString(payload, ['phone_number', 'PhoneNumber']) || String(event.phone_number || '');
+    const eventExt = pickString(payload, ['agent_extension', 'Agent']) || String(event.agent_extension || '');
+    if (!phonesMatch(phone, eventPhone) || !extensionsMatch(extension, eventExt)) continue;
+    const receivedAt = String(event.received_at || new Date().toISOString());
+    const anchorIso = parseWebhookAnchorIso(payload, receivedAt);
+    const anchorMs = new Date(anchorIso).getTime();
+    if (Number.isNaN(anchorMs)) continue;
+    webhookCandidates.push({
+      recordingUrl,
+      durationSeconds: parseDurationSecondsFromText(
+        pickString(payload, ['duration_seconds', 'duration', 'Duration']),
+      ),
+      callId: pickString(payload, ['call_id', 'callId']) || `webhook-${event.id}`,
+      anchorMs,
+      extension: eventExt,
+      source: 'webhook',
+    });
+  }
+
+  let best = pickClosestRecordingCandidate(webhookCandidates, disposedMs);
+  let apiWarning: string | null = null;
+
+  if (!best) {
+    try {
+      const { token, baseUrl } = await getThreeCxToken();
+      const { rows: history } = await fetchThreeCxCallHistory(token, baseUrl);
+      const apiCandidates: RecordingCandidate[] = [];
+      for (const row of history) {
+        const startRaw = pickString(row, ['SegmentStartTime', 'StartTime', 'CallStartTimeUTC', 'CallStartTime']);
+        if (!startRaw) continue;
+        const anchorMs = new Date(startRaw).getTime();
+        if (Number.isNaN(anchorMs) || anchorMs < disposedMs - 15 * 60 * 1000 || anchorMs > disposedMs + 15 * 60 * 1000) {
+          continue;
+        }
+        const recordingUrl = recordingUrlFromHistory(row, baseUrl, token);
+        if (!recordingUrl) continue;
+        const rowPhone = externalNumberFromHistory(row);
+        const rowExt = extensionFromHistory(row);
+        if (!phonesMatch(phone, rowPhone) || !extensionsMatch(extension, rowExt)) continue;
+        apiCandidates.push({
+          recordingUrl,
+          durationSeconds: parseDurationSecondsFromText(
+            pickString(row, ['TalkingDuration', 'Duration', 'TalkingTime']),
+          ),
+          callId: pickString(row, ['MainCallHistoryId', 'CallHistoryId', 'Id']) || `api-${startRaw}`,
+          anchorMs,
+          extension: rowExt,
+          source: 'threecx_api',
+        });
+      }
+      best = pickClosestRecordingCandidate(apiCandidates, disposedMs);
+    } catch (err) {
+      apiWarning = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  if (!best) {
+    return {
+      matched: false,
+      callRecordId,
+      message: apiWarning
+        ? `No matching recording found. 3CX API: ${apiWarning}`
+        : 'No matching recording found for this phone, recruiter extension, and call time.',
+    };
+  }
+
+  await saveRecordingOnCallRecord(admin, callRecordId, {
+    recordingUrl: best.recordingUrl,
+    durationSeconds: best.durationSeconds,
+    callId: best.callId,
+    source: best.source,
+    extension: best.extension,
+    anchorIso: new Date(best.anchorMs).toISOString(),
+  });
+
+  return {
+    matched: true,
+    callRecordId,
+    recordingUrl: best.recordingUrl,
+    durationSeconds: best.durationSeconds,
+    source: best.source,
+    message: best.source === 'webhook'
+      ? 'Recording loaded from stored 3CX webhook.'
+      : 'Recording loaded from 3CX call history.',
+  };
+}
+
 async function listWebhookCalls(admin: ReturnType<typeof createClient>, hoursBack = 72) {
   const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
   const { data: events, error } = await admin
@@ -611,6 +857,7 @@ Deno.serve(async (req) => {
       hoursBack?: number;
       incremental?: boolean;
       fullRematch?: boolean;
+      callRecordId?: string;
     };
     const action = String(body.action || 'status').trim().toLowerCase();
 
@@ -650,6 +897,12 @@ Deno.serve(async (req) => {
     if (action === 'list-webhook-calls') {
       const hoursBack = Number(body.hoursBack) > 0 ? Math.min(Number(body.hoursBack), 168) : 72;
       const result = await listWebhookCalls(admin, hoursBack);
+      return json(200, { ok: true, ...result });
+    }
+    if (action === 'fetch-recording') {
+      const callRecordId = String(body.callRecordId || '').trim();
+      if (!callRecordId) return json(400, { error: 'callRecordId is required' });
+      const result = await fetchRecordingForCallRecord(admin, callRecordId);
       return json(200, { ok: true, ...result });
     }
 

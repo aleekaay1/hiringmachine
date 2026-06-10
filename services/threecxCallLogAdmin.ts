@@ -120,6 +120,17 @@ export type CallLogWebhookRow = {
   callRecordId: string | null;
 };
 
+export async function fetchCallRecordingForDisposition(callRecordId: string): Promise<{
+  matched: boolean;
+  callRecordId?: string;
+  recordingUrl?: string | null;
+  durationSeconds?: number | null;
+  source?: string;
+  message?: string;
+}> {
+  return invokeThreeCxCallAdmin('fetch-recording', { callRecordId });
+}
+
 export async function fetchCallLogWebhookRows(hoursBack = 72): Promise<CallLogWebhookRow[]> {
   const data = await invokeThreeCxCallAdmin<{ rows?: CallLogWebhookRow[] }>('list-webhook-calls', { hoursBack });
   return data.rows || [];
