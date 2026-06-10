@@ -1,4 +1,5 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
+import { RECRUITER_3CX_EXTENSIONS } from './recruiter3cxExtensions.ts';
 
 export function digitsOnly(value: string): string {
   return value.replace(/\D/g, '');
@@ -50,6 +51,19 @@ export async function resolveRecruiterUserIds(
     }
   }
 
+  if (!ids.size && ext) {
+    const emails = RECRUITER_3CX_EXTENSIONS
+      .filter((row) => row.extension.trim() === ext)
+      .map((row) => row.email.trim().toLowerCase())
+      .filter(Boolean);
+    for (const mappedEmail of emails) {
+      const { data: byMapped } = await admin.from('user_profiles').select('user_id').ilike('email', mappedEmail);
+      for (const row of byMapped || []) {
+        if (row.user_id) ids.add(String(row.user_id));
+      }
+    }
+  }
+
   return [...ids];
 }
 
@@ -62,10 +76,10 @@ type CallRecordRow = {
   threecx_metadata: Record<string, unknown> | null;
 };
 
-/** Max gap between call end (webhook) and disposition saved time. */
-const MAX_PHONE_TIME_DELTA_MS = 35 * 60 * 1000;
-const LIVE_MATCH_WINDOW = { beforeMs: 8 * 60 * 1000, afterMs: 25 * 60 * 1000 };
-const REPLAY_MATCH_WINDOW = { beforeMs: 10 * 60 * 1000, afterMs: 40 * 60 * 1000 };
+/** Disposition is saved shortly after hangup — tight window with 30s slack. */
+const BUFFER_BEFORE_MS = 30_000;
+const BUFFER_AFTER_MS = 8 * 60_000;
+const LIVE_BUFFER_AFTER_MS = 5 * 60_000;
 
 function phoneLast10(phoneNumber: string): string {
   const digits = digitsOnly(phoneNumber);
@@ -80,46 +94,86 @@ function rowHasRecording(row: CallRecordRow): boolean {
   return Boolean(String(meta.recording_url || '').trim());
 }
 
-/** Match disposition rows by dialed_number + disposed_at near call end — no extension/recruiter guessing. */
-async function findDispositionByPhoneAndTime(
+async function recordingUrlAlreadyUsed(
+  admin: SupabaseClient,
+  recordingUrl: string,
+  excludeId?: string,
+): Promise<boolean> {
+  let query = admin
+    .from('pipeline_call_records')
+    .select('id')
+    .eq('recording_url', recordingUrl)
+    .limit(1);
+  if (excludeId) query = query.neq('id', excludeId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return Boolean(data?.length);
+}
+
+/**
+ * Match requires ALL of:
+ * - customer phone (last 10 digits) matches dialed_number
+ * - recruiter_user_id matches 3CX agent extension (or agent email)
+ * - disposition time within ~30s before to 8m after call end
+ */
+async function findStrictMatch(
   admin: SupabaseClient,
   input: {
     phoneNumber: string;
     anchorMs: number;
+    recruiterIds: string[];
     onlyWithoutRecording: boolean;
-    window: { beforeMs: number; afterMs: number };
+    bufferAfterMs: number;
+    excludeRecordIds?: Set<string>;
   },
 ): Promise<CallRecordRow[]> {
   const last10 = phoneLast10(input.phoneNumber);
   if (last10.length < 10) return [];
+  if (!input.recruiterIds.length) return [];
 
-  const windowStart = new Date(input.anchorMs - input.window.beforeMs).toISOString();
-  const windowEnd = new Date(input.anchorMs + input.window.afterMs).toISOString();
+  const windowStart = new Date(input.anchorMs - BUFFER_BEFORE_MS).toISOString();
+  const windowEnd = new Date(input.anchorMs + input.bufferAfterMs).toISOString();
 
-  const { data: rows, error } = await admin
+  let query = admin
     .from('pipeline_call_records')
     .select('id, dialed_number, recruiter_user_id, disposed_at, recording_url, threecx_metadata, threecx_call_id')
     .gte('disposed_at', windowStart)
     .lte('disposed_at', windowEnd)
     .or(`dialed_number.ilike.%${last10},dialed_number.eq.${last10},dialed_number.eq.1${last10},dialed_number.eq.+1${last10}`)
     .order('disposed_at', { ascending: false })
-    .limit(25);
+    .limit(20);
 
+  if (input.recruiterIds.length === 1) {
+    query = query.eq('recruiter_user_id', input.recruiterIds[0]);
+  } else {
+    query = query.in('recruiter_user_id', input.recruiterIds);
+  }
+
+  const { data: rows, error } = await query;
   if (error) throw error;
 
   return (rows || []).filter((row: CallRecordRow) => {
+    if (input.excludeRecordIds?.has(row.id)) return false;
     if (input.onlyWithoutRecording && rowHasRecording(row)) return false;
     if (!phonesMatch(input.phoneNumber, String(row.dialed_number || ''))) return false;
+    if (!row.recruiter_user_id || !input.recruiterIds.includes(String(row.recruiter_user_id))) {
+      return false;
+    }
     const disposedMs = new Date(row.disposed_at).getTime();
     if (Number.isNaN(disposedMs)) return false;
-    return Math.abs(disposedMs - input.anchorMs) <= MAX_PHONE_TIME_DELTA_MS;
+    if (disposedMs < input.anchorMs - BUFFER_BEFORE_MS) return false;
+    if (disposedMs > input.anchorMs + input.bufferAfterMs) return false;
+    return true;
   });
 }
 
-function pickClosestByTime(candidates: CallRecordRow[], anchorMs: number): CallRecordRow | null {
+function pickBestStrictMatch(candidates: CallRecordRow[], anchorMs: number): CallRecordRow | null {
   if (!candidates.length) return null;
-  const afterHangup = candidates.filter((row) => new Date(row.disposed_at).getTime() >= anchorMs - 60_000);
-  const pool = afterHangup.length ? afterHangup : candidates;
+  const afterCallEnd = candidates.filter((row) => {
+    const disposedMs = new Date(row.disposed_at).getTime();
+    return disposedMs >= anchorMs - BUFFER_BEFORE_MS;
+  });
+  const pool = afterCallEnd.length ? afterCallEnd : candidates;
   return pool.reduce((prev, curr) => {
     const prevDelta = Math.abs(new Date(prev.disposed_at).getTime() - anchorMs);
     const currDelta = Math.abs(new Date(curr.disposed_at).getTime() - anchorMs);
@@ -139,6 +193,7 @@ export async function attachRecordingToCallRecord(
     anchorIso: string;
     reportMeta?: Record<string, unknown>;
     replayMode?: boolean;
+    excludeRecordIds?: Set<string>;
   },
 ): Promise<{ matched: boolean; callRecordId?: string; reason?: string }> {
   const anchorMs = new Date(input.anchorIso).getTime();
@@ -151,20 +206,36 @@ export async function attachRecordingToCallRecord(
     return { matched: false, reason: 'missing_phone_number' };
   }
 
-  const window = input.replayMode ? REPLAY_MATCH_WINDOW : LIVE_MATCH_WINDOW;
-  const candidates = await findDispositionByPhoneAndTime(admin, {
+  const recruiterIds = await resolveRecruiterUserIds(
+    admin,
+    String(input.agentExtension || ''),
+    String(input.agentEmail || ''),
+  );
+  if (!recruiterIds.length) {
+    return { matched: false, reason: 'unknown_recruiter_extension' };
+  }
+
+  const bufferAfterMs = input.replayMode ? BUFFER_AFTER_MS : LIVE_BUFFER_AFTER_MS;
+  const candidates = await findStrictMatch(admin, {
     phoneNumber: phone,
     anchorMs,
+    recruiterIds,
     onlyWithoutRecording: Boolean(input.replayMode),
-    window,
+    bufferAfterMs,
+    excludeRecordIds: input.excludeRecordIds,
   });
 
   if (!candidates.length) {
-    return { matched: false, reason: 'no_phone_time_match' };
+    return { matched: false, reason: 'no_phone_recruiter_time_match' };
   }
 
-  const best = pickClosestByTime(candidates, anchorMs);
-  if (!best) return { matched: false, reason: 'no_phone_time_match' };
+  const best = pickBestStrictMatch(candidates, anchorMs);
+  if (!best) return { matched: false, reason: 'no_phone_recruiter_time_match' };
+
+  if (input.recordingUrl) {
+    const used = await recordingUrlAlreadyUsed(admin, input.recordingUrl, best.id);
+    if (used) return { matched: false, reason: 'recording_already_assigned' };
+  }
 
   const existingMeta =
     best.threecx_metadata && typeof best.threecx_metadata === 'object'
@@ -179,10 +250,12 @@ export async function attachRecordingToCallRecord(
       duration_seconds: input.durationSeconds,
       match_phone: phoneLast10(phone),
       match_anchor: input.anchorIso,
+      match_extension: String(input.agentExtension || ''),
+      match_recruiter_ids: recruiterIds,
       threecx_report: {
         ...(input.reportMeta || {}),
         received_at: new Date().toISOString(),
-        match_method: 'phone_and_time',
+        match_method: 'phone_recruiter_time',
       },
     },
   };

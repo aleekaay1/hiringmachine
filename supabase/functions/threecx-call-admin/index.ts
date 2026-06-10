@@ -416,6 +416,7 @@ async function syncRecordings(admin: ReturnType<typeof createClient>, hoursBack 
   let withRecording = 0;
   let matched = 0;
   let updated = 0;
+  const claimedRecordIds = new Set<string>();
 
   for (const event of events || []) {
     const payload = (event.payload && typeof event.payload === 'object')
@@ -443,11 +444,13 @@ async function syncRecordings(admin: ReturnType<typeof createClient>, hoursBack 
       durationSeconds: duration,
       anchorIso,
       replayMode: true,
+      excludeRecordIds: claimedRecordIds,
       reportMeta: { source: 'sync_recordings', received_at: receivedAt },
     });
     if (result.matched) {
       matched += 1;
       updated += 1;
+      if (result.callRecordId) claimedRecordIds.add(result.callRecordId);
       await admin.from('threecx_webhook_events').update({
         matched: true,
         recording_attached: true,
