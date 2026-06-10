@@ -5,6 +5,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { RECRUITER_3CX_EXTENSIONS } from '../_shared/recruiter3cxExtensions.ts';
+import { fetchThreeCxCallHistory, probeThreeCxHistoryAccess } from '../_shared/threecxApiHistory.ts';
 import {
   attachRecordingToCallRecord,
   digitsOnly,
@@ -159,17 +160,9 @@ async function loadConnectionStatus(admin: ReturnType<typeof createClient>) {
   if (apiConfigured) {
     try {
       const { token, baseUrl } = await getThreeCxToken();
-      const probe = await fetch(`${baseUrl}/xapi/v1/CallHistoryView?$top=1`, {
-        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-      });
-      if (probe.ok) {
-        apiOk = true;
-      } else if (probe.status === 403) {
-        apiError = 'Call history denied — set API integration Role to System Owner (not System Administrator), Department DEFAULT, then regenerate the API key.';
-      } else {
-        const raw = await probe.text();
-        apiError = `CallHistoryView probe failed (${probe.status}): ${raw.slice(0, 200)}`;
-      }
+      const probe = await probeThreeCxHistoryAccess(token, baseUrl);
+      apiOk = probe.ok;
+      apiError = probe.error;
     } catch (e) {
       apiError = e instanceof Error ? e.message : String(e);
     }
@@ -300,6 +293,7 @@ async function backfillFromWebhookEvents(admin: ReturnType<typeof createClient>,
       callId,
       durationSeconds: duration,
       anchorIso,
+      replayMode: true,
       reportMeta: { source: 'backfill_webhook_events', backfill_date: bounds.dateKey },
     });
     if (result.matched) {
@@ -322,21 +316,7 @@ async function backfillFromCallHistory(
   bounds: ReturnType<typeof torontoTodayBounds>,
 ) {
   const { token, baseUrl } = await getThreeCxToken();
-  const url = `${baseUrl}/xapi/v1/CallHistoryView?$top=500&$orderby=SegmentStartTime%20desc`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-  });
-  const raw = await res.text();
-  if (!res.ok) {
-    if (res.status === 403) {
-      throw new Error(
-        'CallHistoryView denied (403). In 3CX Admin → Integrations → API, set Department DEFAULT and Role System Owner (not System Administrator), then regenerate the API key and update Supabase secrets.',
-      );
-    }
-    throw new Error(`CallHistoryView failed (${res.status}): ${raw.slice(0, 300)}`);
-  }
-  const parsed = JSON.parse(raw) as { value?: Array<Record<string, unknown>> };
-  const history = parsed.value || [];
+  const { rows: history } = await fetchThreeCxCallHistory(token, baseUrl);
 
   const fromMs = new Date(bounds.fromIso).getTime();
   const toMs = new Date(bounds.toIso).getTime();
@@ -372,6 +352,7 @@ async function backfillFromCallHistory(
       callId,
       durationSeconds: duration,
       anchorIso: startRaw,
+      replayMode: true,
       reportMeta: { source: 'backfill_call_history', backfill_date: bounds.dateKey },
     });
     if (result.matched) {
@@ -381,6 +362,93 @@ async function backfillFromCallHistory(
   }
 
   return { scanned, withRecording, matched, updated };
+}
+
+/** Replay stored webhooks (last N hours) — dispositions are often saved after hangup. */
+async function syncRecordings(admin: ReturnType<typeof createClient>, hoursBack = 48) {
+  const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
+  const bounds = torontoTodayBounds();
+
+  const { data: events, error } = await admin
+    .from('threecx_webhook_events')
+    .select('id, received_at, payload, agent_extension, phone_number, matched')
+    .eq('event_type', 'report_call')
+    .gte('received_at', since)
+    .order('received_at', { ascending: true });
+  if (error) throw error;
+
+  let scanned = 0;
+  let withRecording = 0;
+  let matched = 0;
+  let updated = 0;
+
+  for (const event of events || []) {
+    const payload = (event.payload && typeof event.payload === 'object')
+      ? event.payload as Record<string, unknown>
+      : {};
+    const recordingUrl = pickString(payload, ['recording_url', 'RecordingUrl']);
+    if (!recordingUrl.startsWith('http')) continue;
+
+    scanned += 1;
+    withRecording += 1;
+
+    const phone = pickString(payload, ['phone_number', 'PhoneNumber']) || String(event.phone_number || '');
+    const extension = pickString(payload, ['agent_extension', 'Agent']) || String(event.agent_extension || '');
+    const duration = parseDurationSecondsFromText(pickString(payload, ['duration_seconds', 'duration', 'Duration']));
+    const callId = pickString(payload, ['call_id', 'callId']) || `webhook-${event.id}`;
+    const receivedAt = String(event.received_at || new Date().toISOString());
+    const anchorIso = parseWebhookAnchorIso(payload, receivedAt);
+
+    const result = await attachRecordingToCallRecord(admin, {
+      phoneNumber: phone,
+      agentExtension: extension,
+      agentEmail: pickString(payload, ['agent_email', 'AgentEmail']),
+      recordingUrl,
+      callId,
+      durationSeconds: duration,
+      anchorIso,
+      replayMode: true,
+      reportMeta: { source: 'sync_recordings', received_at: receivedAt },
+    });
+    if (result.matched) {
+      matched += 1;
+      updated += 1;
+      await admin.from('threecx_webhook_events').update({
+        matched: true,
+        recording_attached: true,
+        call_record_id: result.callRecordId || null,
+        detail: 'sync_ok',
+      }).eq('id', event.id);
+    }
+  }
+
+  let apiWarning: string | null = null;
+  let apiMatched = 0;
+  try {
+    const api = await backfillFromCallHistory(admin, bounds);
+    apiMatched = api.matched;
+    matched += api.matched;
+    updated += api.updated;
+    scanned += api.scanned;
+    withRecording += api.withRecording;
+  } catch (err) {
+    apiWarning = err instanceof Error ? err.message : String(err);
+  }
+
+  return {
+    hoursBack,
+    scanned,
+    withRecording,
+    matched,
+    updated,
+    apiMatched,
+    warning: apiWarning,
+    message: updated > 0
+      ? `Synced ${updated} recording(s) to call log rows.`
+      : withRecording > 0
+        ? 'Found recordings but no matching disposition rows yet — save dispositions in the pipeline after calls.'
+        : 'No recordings found in webhooks for this period.',
+  };
 }
 
 async function backfillToday(admin: ReturnType<typeof createClient>) {
@@ -433,8 +501,11 @@ Deno.serve(async (req) => {
       const result = await syncExtensions(admin);
       return json(200, { ok: true, ...result });
     }
-    if (action === 'backfill-today') {
-      const result = await backfillToday(admin);
+    if (action === 'backfill-today' || action === 'sync-recordings') {
+      const hoursBack = action === 'backfill-today' ? 24 : 48;
+      const result = action === 'backfill-today'
+        ? await backfillToday(admin)
+        : await syncRecordings(admin, hoursBack);
       return json(200, { ok: true, ...result });
     }
 

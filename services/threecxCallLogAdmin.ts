@@ -76,6 +76,19 @@ export async function syncRecruiter3cxExtensions(): Promise<{
   return invokeThreeCxCallAdmin('sync-extensions');
 }
 
+export async function syncThreeCxRecordings(): Promise<{
+  hoursBack?: number;
+  scanned: number;
+  withRecording: number;
+  matched: number;
+  updated: number;
+  apiMatched?: number;
+  warning?: string | null;
+  message?: string;
+}> {
+  return invokeThreeCxCallAdmin('sync-recordings');
+}
+
 export async function backfillTodayThreeCxRecordings(): Promise<{
   todayDate: string;
   scanned: number;

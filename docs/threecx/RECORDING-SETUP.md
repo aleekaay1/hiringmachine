@@ -109,7 +109,7 @@ Buttons:
 | Button | What it does |
 |--------|----------------|
 | **Sync extensions** | Copies hardcoded recruiter extensions from `recruiter3cxExtensions.ts` into each user’s profile — recruiters do not need to set extensions in Settings |
-| **Backfill today's recordings** | Pulls today’s calls from 3CX `CallHistoryView` and attaches recording URLs to matching disposition rows (for testing older calls from today) |
+| **Sync recordings** / **Refresh** | Replays stored 3CX webhooks and matches recording URLs to disposition rows (dispositions are usually saved a few seconds after hangup) |
 
 ---
 
@@ -135,9 +135,13 @@ Set in Supabase → **Project Settings → Edge Functions → Secrets**:
 | `THREECX_CLIENT_ID` | From 3CX → Integrations → API |
 | `THREECX_CLIENT_SECRET` | Same integration |
 
-**Important:** For call history / backfill API access, the integration must use **Department: DEFAULT** and **Role: System Owner** (not System Administrator). Regenerate the API key after changing role, then update Supabase secrets.
+**Important:** For optional API history pull, the integration must use **Department: DEFAULT** and **Role: System Owner** (not System Administrator). After changing role, click **Generate API Key** and update Supabase secrets:
 
-Webhook-only recording sync does **not** need these. **Backfill** replays today's webhooks first (no API needed); the 3CX API is only used as a fallback for extra history.
+- `THREECX_CLIENT_ID` = your integration Client ID (e.g. `3cxapi`)
+- `THREECX_CLIENT_SECRET` = the new API key
+- `THREECX_BASE_URL` = `https://globelifepaz.3cx.ca` (your PBX URL, no trailing slash)
+
+**Recordings do not need the API for normal use.** 3CX webhooks already deliver recording URLs; click **Refresh & sync recordings** on Call log to attach them after recruiters save dispositions.
 
 ---
 

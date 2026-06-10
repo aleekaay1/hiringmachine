@@ -59,8 +59,17 @@ type CallRecordRow = {
   dialed_number: string;
   recruiter_user_id: string | null;
   disposed_at: string;
+  recording_url?: string | null;
   threecx_metadata: Record<string, unknown> | null;
 };
+
+type MatchWindow = {
+  beforeMs: number;
+  afterMs: number;
+};
+
+const LIVE_MATCH_WINDOW: MatchWindow = { beforeMs: 90 * 60 * 1000, afterMs: 15 * 60 * 1000 };
+const REPLAY_MATCH_WINDOW: MatchWindow = { beforeMs: 30 * 60 * 1000, afterMs: 3 * 60 * 60 * 1000 };
 
 async function findCallRecordCandidates(
   admin: SupabaseClient,
@@ -69,14 +78,16 @@ async function findCallRecordCandidates(
     anchorMs: number;
     recruiterIds: string[];
     allowAnyRecruiter: boolean;
+    onlyWithoutRecording: boolean;
+    window: MatchWindow;
   },
 ): Promise<CallRecordRow[]> {
-  const windowStart = new Date(input.anchorMs - 90 * 60 * 1000).toISOString();
-  const windowEnd = new Date(input.anchorMs + 60 * 60 * 1000).toISOString();
+  const windowStart = new Date(input.anchorMs - input.window.beforeMs).toISOString();
+  const windowEnd = new Date(input.anchorMs + input.window.afterMs).toISOString();
 
   let query = admin
     .from('pipeline_call_records')
-    .select('id, dialed_number, recruiter_user_id, disposed_at, threecx_metadata, threecx_call_id')
+    .select('id, dialed_number, recruiter_user_id, disposed_at, recording_url, threecx_metadata, threecx_call_id')
     .gte('disposed_at', windowStart)
     .lte('disposed_at', windowEnd)
     .order('disposed_at', { ascending: false })
@@ -93,9 +104,60 @@ async function findCallRecordCandidates(
   const { data: rows, error } = await query;
   if (error) throw error;
 
-  return (rows || []).filter((row: CallRecordRow) =>
-    phonesMatch(input.phoneNumber, String(row.dialed_number || ''))
-  );
+  return (rows || []).filter((row: CallRecordRow) => {
+    if (input.onlyWithoutRecording) {
+      const hasRecording = Boolean(String(row.recording_url || '').trim());
+      if (hasRecording) return false;
+    }
+    if (input.phoneNumber && phonesMatch(input.phoneNumber, String(row.dialed_number || ''))) {
+      return true;
+    }
+    return false;
+  });
+}
+
+async function findByExtensionAndTime(
+  admin: SupabaseClient,
+  input: {
+    anchorMs: number;
+    recruiterIds: string[];
+    window: MatchWindow;
+  },
+): Promise<CallRecordRow[]> {
+  if (!input.recruiterIds.length) return [];
+  const windowStart = new Date(input.anchorMs - input.window.beforeMs).toISOString();
+  const windowEnd = new Date(input.anchorMs + input.window.afterMs).toISOString();
+
+  let query = admin
+    .from('pipeline_call_records')
+    .select('id, dialed_number, recruiter_user_id, disposed_at, recording_url, threecx_metadata, threecx_call_id')
+    .gte('disposed_at', windowStart)
+    .lte('disposed_at', windowEnd)
+    .is('recording_url', null)
+    .order('disposed_at', { ascending: false })
+    .limit(20);
+
+  if (input.recruiterIds.length === 1) {
+    query = query.eq('recruiter_user_id', input.recruiterIds[0]);
+  } else {
+    query = query.in('recruiter_user_id', input.recruiterIds);
+  }
+
+  const { data: rows, error } = await query;
+  if (error) throw error;
+  return rows || [];
+}
+
+async function pickBestCandidate(
+  candidates: CallRecordRow[],
+  anchorMs: number,
+): Promise<CallRecordRow | null> {
+  if (!candidates.length) return null;
+  return candidates.reduce((prev, curr) => {
+    const prevDelta = Math.abs(new Date(prev.disposed_at).getTime() - anchorMs);
+    const currDelta = Math.abs(new Date(curr.disposed_at).getTime() - anchorMs);
+    return currDelta < prevDelta ? curr : prev;
+  });
 }
 
 export async function attachRecordingToCallRecord(
@@ -109,6 +171,7 @@ export async function attachRecordingToCallRecord(
     durationSeconds: number | null;
     anchorIso: string;
     reportMeta?: Record<string, unknown>;
+    replayMode?: boolean;
   },
 ): Promise<{ matched: boolean; callRecordId?: string; reason?: string }> {
   const recruiterIds = await resolveRecruiterUserIds(admin, input.agentExtension, input.agentEmail);
@@ -117,29 +180,41 @@ export async function attachRecordingToCallRecord(
     return { matched: false, reason: 'invalid_anchor_time' };
   }
 
+  const window = input.replayMode ? REPLAY_MATCH_WINDOW : LIVE_MATCH_WINDOW;
+  const phone = String(input.phoneNumber || '').trim();
+
   let candidates = await findCallRecordCandidates(admin, {
-    phoneNumber: input.phoneNumber,
+    phoneNumber: phone,
     anchorMs,
     recruiterIds,
     allowAnyRecruiter: false,
+    onlyWithoutRecording: Boolean(input.replayMode),
+    window,
   });
   if (!candidates.length && recruiterIds.length > 0) {
     candidates = await findCallRecordCandidates(admin, {
-      phoneNumber: input.phoneNumber,
+      phoneNumber: phone,
       anchorMs,
       recruiterIds,
       allowAnyRecruiter: true,
+      onlyWithoutRecording: Boolean(input.replayMode),
+      window,
     });
   }
+
+  // Replay: extension + closest disposition without recording (disposition often saved after hangup).
+  if (!candidates.length && input.replayMode && recruiterIds.length > 0) {
+    const byTime = await findByExtensionAndTime(admin, { anchorMs, recruiterIds, window });
+    const best = await pickBestCandidate(byTime, anchorMs);
+    if (best) candidates = [best];
+  }
+
   if (!candidates.length) {
     return { matched: false, reason: 'no_call_record_match' };
   }
 
-  const best = candidates.reduce((prev: CallRecordRow, curr: CallRecordRow) => {
-    const prevDelta = Math.abs(new Date(prev.disposed_at).getTime() - anchorMs);
-    const currDelta = Math.abs(new Date(curr.disposed_at).getTime() - anchorMs);
-    return currDelta < prevDelta ? curr : prev;
-  });
+  const best = await pickBestCandidate(candidates, anchorMs);
+  if (!best) return { matched: false, reason: 'no_call_record_match' };
 
   const existingMeta =
     best.threecx_metadata && typeof best.threecx_metadata === 'object'

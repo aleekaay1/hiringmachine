@@ -19,9 +19,9 @@ import {
 } from '../services/pipelineService';
 import { PIPELINE_CALL_DISPOSITIONS } from '../services/pipelineCallDispositions';
 import {
-  backfillTodayThreeCxRecordings,
   fetchThreeCxConnectionStatus,
   syncRecruiter3cxExtensions,
+  syncThreeCxRecordings,
   type ThreeCxConnectionStatus,
 } from '../services/threecxCallLogAdmin';
 import { Download, ExternalLink, PhoneCall, RefreshCw, Search, Wifi, WifiOff } from 'lucide-react';
@@ -107,7 +107,7 @@ const CallLog: React.FC = () => {
   const [threeCxStatus, setThreeCxStatus] = useState<ThreeCxConnectionStatus | null>(null);
   const [threeCxStatusLoading, setThreeCxStatusLoading] = useState(false);
   const [syncingExtensions, setSyncingExtensions] = useState(false);
-  const [backfilling, setBackfilling] = useState(false);
+  const [syncingRecordings, setSyncingRecordings] = useState(false);
   const [adminMessage, setAdminMessage] = useState<string | null>(null);
   const [adminError, setAdminError] = useState<string | null>(null);
 
@@ -180,30 +180,28 @@ const CallLog: React.FC = () => {
     }
   };
 
-  const handleBackfillToday = async () => {
+  const handleSyncRecordings = async () => {
     setAdminError(null);
     setAdminMessage(null);
-    setBackfilling(true);
+    setSyncingRecordings(true);
     try {
-      const result = await backfillTodayThreeCxRecordings();
-      const summary = result.message
-        || `Backfill for ${result.todayDate}: scanned ${result.scanned} call(s), `
-          + `${result.withRecording} with recording, ${result.matched} matched, ${result.updated} updated.`;
-      if (result.warning && result.updated > 0) {
-        setAdminMessage(summary);
-        setAdminError(result.warning);
-      } else if (result.warning) {
-        setAdminError(result.warning);
-      } else {
-        setAdminMessage(summary);
+      const result = await syncThreeCxRecordings();
+      if (result.message) setAdminMessage(result.message);
+      if (result.warning) {
+        if (result.updated > 0) setAdminError(result.warning);
+        else setAdminError(result.warning);
       }
       await load();
       await loadThreeCxStatus();
     } catch (err) {
-      setAdminError(err instanceof Error ? err.message : 'Backfill failed.');
+      setAdminError(err instanceof Error ? err.message : 'Recording sync failed.');
     } finally {
-      setBackfilling(false);
+      setSyncingRecordings(false);
     }
+  };
+
+  const handleRefresh = async () => {
+    await handleSyncRecordings();
   };
 
   const candidateById = useMemo(() => {
@@ -358,15 +356,15 @@ const CallLog: React.FC = () => {
           <div className="min-w-0">
             <h1 className="text-lg font-bold text-[#0B1B34] truncate">Call log</h1>
             <p className="text-sm text-[#5c6b82]">
-              Pipeline dispositions from all recruiters — filter by person, recruiter, or date. Recordings appear when
-              3CX sync is configured.
+              Pipeline dispositions from all recruiters. Click Refresh to pull recordings from 3CX webhooks and match
+              them to disposition rows (dispositions are saved after hangup).
             </p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="secondary" onClick={() => void load()} disabled={loading}>
-            <RefreshCw size={16} className={loading ? 'animate-spin inline mr-1.5' : 'inline mr-1.5'} />
-            Refresh
+          <Button type="button" variant="secondary" onClick={() => void handleRefresh()} disabled={loading || syncingRecordings}>
+            <RefreshCw size={16} className={loading || syncingRecordings ? 'animate-spin inline mr-1.5' : 'inline mr-1.5'} />
+            {syncingRecordings ? 'Syncing recordings…' : 'Refresh & sync recordings'}
           </Button>
           <Button type="button" variant="secondary" onClick={downloadCsv} disabled={filtered.length === 0}>
             <Download size={16} className="inline mr-1.5" />
@@ -463,11 +461,11 @@ const CallLog: React.FC = () => {
             <Button
               type="button"
               variant="secondary"
-              onClick={() => void handleBackfillToday()}
-              disabled={backfilling}
-              title="Replay today's webhooks and match recordings to call log (API history optional)"
+              onClick={() => void handleSyncRecordings()}
+              disabled={syncingRecordings}
+              title="Pull recordings from stored 3CX webhooks and match to disposition rows"
             >
-              {backfilling ? 'Backfilling…' : "Backfill today's recordings"}
+              {syncingRecordings ? 'Syncing…' : 'Sync recordings'}
             </Button>
           </div>
         </div>
