@@ -212,7 +212,7 @@ const CallLog: React.FC = () => {
       if (recordingResult.message) messages.push(recordingResult.message);
       if (liveResult.message) messages.push(liveResult.message);
       if (messages.length) setAdminMessage(messages.join(' · '));
-      if (recordingResult.warning) {
+      if (recordingResult.warning && (recordingResult.updated ?? 0) === 0) {
         setAdminError(recordingResult.warning);
       } else if (liveResult.error) {
         setAdminError(liveResult.error);
@@ -452,12 +452,12 @@ const CallLog: React.FC = () => {
                     {threeCxStatus.extensionMapCount} recruiter(s)
                   </p>
                   <p>
-                    3CX API (call history):{' '}
+                    3CX API (optional backfill):{' '}
                     {!threeCxStatus.threecxApiConfigured
-                      ? 'Not configured — webhook replay still works; API needs THREECX secrets'
+                      ? 'Not configured — recordings sync from webhooks only'
                       : threeCxStatus.threecxApiOk
-                        ? 'OK (System Owner role)'
-                        : `Limited — ${threeCxStatus.threecxApiError || 'token or call history failed'}`}
+                        ? 'Available'
+                        : 'Not used — recordings sync from webhooks'}
                   </p>
                   {threeCxStatus.error && <p className="text-red-700">{threeCxStatus.error}</p>}
                 </div>

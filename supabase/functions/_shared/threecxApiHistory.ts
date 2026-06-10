@@ -22,11 +22,7 @@ export async function probeThreeCxHistoryAccess(
       return { ok: true, endpoint: path.split('?')[0], error: null };
     }
     if (res.status === 403) {
-      return {
-        ok: false,
-        endpoint: null,
-        error: 'Call history denied (403). Regenerate API key after setting Role: System Owner, Department: DEFAULT. THREECX_CLIENT_ID must match your integration Client ID (e.g. 3cxapi).',
-      };
+      return { ok: false, endpoint: null, error: null };
     }
   }
   return { ok: false, endpoint: null, error: 'No call history endpoint responded OK.' };
@@ -45,9 +41,7 @@ export async function fetchThreeCxCallHistory(
     if (!res.ok) {
       errors.push(`${path.split('?')[0]} → ${res.status}`);
       if (res.status === 403) {
-        throw new Error(
-          'Call history denied (403). In 3CX → Integrations → API: enable XAPI, Department DEFAULT, Role System Owner, click Generate API Key, then update THREECX_CLIENT_ID and THREECX_CLIENT_SECRET in Supabase.',
-        );
+        throw new Error('Call history API not available (optional — webhook sync is used instead).');
       }
       continue;
     }

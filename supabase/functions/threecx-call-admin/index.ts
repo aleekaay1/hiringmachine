@@ -364,10 +364,45 @@ async function backfillFromCallHistory(
   return { scanned, withRecording, matched, updated };
 }
 
-/** Replay stored webhooks (last N hours) — dispositions are often saved after hangup. */
+/** Clear auto-attached recordings in range so strict phone+time rematch can fix wrong rows. */
+async function clearAutoAttachedRecordings(admin: ReturnType<typeof createClient>, sinceIso: string) {
+  const { data: rows, error } = await admin
+    .from('pipeline_call_records')
+    .select('id, recording_url')
+    .gte('disposed_at', sinceIso)
+    .not('recording_url', 'is', null)
+    .limit(5000);
+  if (error) throw error;
+
+  const ids = (rows || []).map((r) => String((r as { id?: string }).id || '')).filter(Boolean);
+  if (!ids.length) return 0;
+
+  const chunk = 100;
+  for (let i = 0; i < ids.length; i += chunk) {
+    const slice = ids.slice(i, i + chunk);
+    const { error: upErr } = await admin
+      .from('pipeline_call_records')
+      .update({
+        recording_url: null,
+        duration_seconds: null,
+        threecx_call_id: null,
+      })
+      .in('id', slice);
+    if (upErr) throw upErr;
+  }
+  return ids.length;
+}
+
+/** Replay stored webhooks (last N hours) — match by dialed_number + call time only. */
 async function syncRecordings(admin: ReturnType<typeof createClient>, hoursBack = 48) {
   const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
-  const bounds = torontoTodayBounds();
+
+  const cleared = await clearAutoAttachedRecordings(admin, since);
+  await admin
+    .from('threecx_webhook_events')
+    .update({ matched: false, recording_attached: false, call_record_id: null, detail: 'pending_rematch' })
+    .eq('event_type', 'report_call')
+    .gte('received_at', since);
 
   const { data: events, error } = await admin
     .from('threecx_webhook_events')
@@ -422,31 +457,17 @@ async function syncRecordings(admin: ReturnType<typeof createClient>, hoursBack 
     }
   }
 
-  let apiWarning: string | null = null;
-  let apiMatched = 0;
-  try {
-    const api = await backfillFromCallHistory(admin, bounds);
-    apiMatched = api.matched;
-    matched += api.matched;
-    updated += api.updated;
-    scanned += api.scanned;
-    withRecording += api.withRecording;
-  } catch (err) {
-    apiWarning = err instanceof Error ? err.message : String(err);
-  }
-
   return {
     hoursBack,
     scanned,
     withRecording,
     matched,
     updated,
-    apiMatched,
-    warning: apiWarning,
+    cleared,
     message: updated > 0
-      ? `Synced ${updated} recording(s) to call log rows.`
+      ? `Synced ${updated} recording(s) by phone number and call time${cleared ? ` (rematched ${cleared} row(s))` : ''}.`
       : withRecording > 0
-        ? 'Found recordings but no matching disposition rows yet — save dispositions in the pipeline after calls.'
+        ? 'Found recordings in webhooks but no disposition with the same phone number and time window — save the disposition after each call.'
         : 'No recordings found in webhooks for this period.',
   };
 }
@@ -473,14 +494,12 @@ async function backfillToday(admin: ReturnType<typeof createClient>) {
     webhookMatched: webhook.matched,
     apiScanned: api.scanned,
     apiMatched: api.matched,
-    warning: apiWarning,
-    message: apiWarning && webhook.updated > 0
-      ? `Attached ${webhook.updated} from today's webhooks. 3CX API history skipped: ${apiWarning}`
+    warning: webhook.updated > 0 ? null : apiWarning,
+    message: webhook.updated > 0
+      ? `Attached ${webhook.updated} recording(s) from today's webhooks.`
       : apiWarning && webhook.updated === 0
-        ? apiWarning
-        : webhook.updated > 0
-          ? `Attached ${webhook.updated} recording(s) from today's webhooks.`
-          : undefined,
+        ? undefined
+        : undefined,
   };
 }
 
