@@ -56,6 +56,23 @@ export function emailLocalPart(email: string): string {
     .replace(/[^a-z0-9]/g, '');
 }
 
+/** Zoom often puts the login email in the display-name field when user_email is empty. */
+export function extractEmailsFromText(text: string): string[] {
+  const matches = String(text || '').toLowerCase().match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g);
+  return matches ? [...new Set(matches)] : [];
+}
+
+export function effectiveZoomEmail(participant: ZoomParticipantLike): string {
+  const direct = String(participant.user_email || '').trim().toLowerCase();
+  if (direct) return direct;
+  const fromName = extractEmailsFromText(participant.name ?? '');
+  return fromName[0] ?? '';
+}
+
+function compactAlpha(value: string): string {
+  return normName(value).replace(/\s+/g, '');
+}
+
 /** True when short is an initial or prefix of full (e.g. "n" → "natalie", "nat" → "natalie"). */
 export function isInitialOrPrefix(short: string, full: string): boolean {
   const s = normName(short).replace(/\s+/g, '');
@@ -219,8 +236,11 @@ export function dedupeZoomParticipants<T extends ZoomParticipantLike>(participan
 function buildParticipantMaps(participants: ZoomParticipantLike[]) {
   const participantByEmail = new Map<string, ZoomParticipantLike>();
   for (const participant of participants) {
-    const email = (participant.user_email ?? '').trim().toLowerCase();
-    if (email) participantByEmail.set(email, participant);
+    const emails = new Set<string>();
+    const direct = (participant.user_email ?? '').trim().toLowerCase();
+    if (direct) emails.add(direct);
+    for (const embedded of extractEmailsFromText(participant.name ?? '')) emails.add(embedded);
+    for (const email of emails) participantByEmail.set(email, participant);
   }
   const participantNames = participants
     .filter((participant) => participant.name || participant.user_email)
@@ -236,17 +256,32 @@ function matchParticipantToInvitee<T extends CalInviteeLike>(
   participant: ZoomParticipantLike,
 ): MatchMethod | null {
   const calEmail = String(invitee.email || '').trim().toLowerCase();
-  const zoomEmail = String(participant.user_email || '').trim().toLowerCase();
+  const calLocal = emailLocalPart(calEmail);
   const calName = String(invitee.name || '').trim();
   const zoomName = String(participant.name || '').trim();
+  const zoomEmails = new Set<string>();
+  const directZoomEmail = String(participant.user_email || '').trim().toLowerCase();
+  if (directZoomEmail) zoomEmails.add(directZoomEmail);
+  for (const embedded of extractEmailsFromText(zoomName)) zoomEmails.add(embedded);
 
-  if (calEmail && zoomEmail && calEmail === zoomEmail) return 'email';
+  if (calEmail) {
+    for (const zoomEmail of zoomEmails) {
+      if (zoomEmail === calEmail) return 'email';
+    }
+  }
 
+  if (calLocal.length >= 5) {
+    const zoomNameLocal = compactAlpha(zoomName);
+    if (zoomNameLocal.length >= 5 && calLocal === zoomNameLocal) return 'hybrid';
+    if (zoomName.includes('@') && emailLocalPart(zoomName) === calLocal) return 'hybrid';
+  }
+
+  const zoomEmailForHybrid = [...zoomEmails][0] ?? '';
   if (
     calEmail &&
-    zoomEmail &&
-    calEmail !== zoomEmail &&
-    samePersonByCrossField(calEmail, calName, zoomEmail, zoomName)
+    zoomEmailForHybrid &&
+    calEmail !== zoomEmailForHybrid &&
+    samePersonByCrossField(calEmail, calName, zoomEmailForHybrid, zoomName)
   ) {
     return 'hybrid';
   }

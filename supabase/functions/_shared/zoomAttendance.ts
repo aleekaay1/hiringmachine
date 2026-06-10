@@ -39,6 +39,9 @@ function participantEmail(row: Record<string, unknown>): string {
     const v = String(row[key] ?? '').trim().toLowerCase();
     if (v && v.includes('@')) return v;
   }
+  const name = participantName(row);
+  const embedded = name.toLowerCase().match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/);
+  if (embedded?.[0]) return embedded[0];
   return '';
 }
 
