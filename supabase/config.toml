@@ -411,6 +411,9 @@ verify_jwt = false
 [functions.email-inbox-sync]
 verify_jwt = false
 
+[functions.threecx-call-webhook]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

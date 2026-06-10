@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<!--
+  PAZ Hiring Portal — 3CX CRM template (call recording webhook only)
+  Upload: 3CX Management Console → Settings → CRM Integration → Server side → + Add
+
+  Does NOT change how recruiters dial (web client in new tab stays as-is).
+  On every completed call, 3CX POSTs call metadata + [RecordingUrl] to Supabase.
+-->
+<Crm xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" Country="CA" Name="PAZ Hiring Call Log" Version="1" SupportsEmojis="false">
+  <Number Prefix="AsIs" />
+  <Connection MaxConcurrentRequests="8" />
+  <Parameters>
+    <Parameter Name="WebhookUrl" Type="String" Parent="PAZ Hiring" Editor="String" Title="Webhook URL:" Default="https://hlfufjrjztuknioydlut.supabase.co/functions/v1/threecx-call-webhook" />
+    <Parameter Name="WebhookAnonKey" Type="Password" Parent="PAZ Hiring" Editor="String" Title="Supabase anon key (apikey):" Default="" />
+    <Parameter Name="WebhookSecret" Type="Password" Parent="PAZ Hiring" Editor="String" Title="Webhook secret (must match Supabase THREECX_WEBHOOK_SECRET):" Default="" />
+    <Parameter Name="ReportCallEnabled" Type="Boolean" Parent="Call journaling" Editor="String" Title="Send completed calls to PAZ Hiring call log?" Default="True" />
+  </Parameters>
+  <Authentication Type="No" />
+  <Scenarios>
+    <Scenario Id="ReportCall" Type="REST">
+      <Request
+        SkipIf="[ReportCallEnabled]!=True"
+        Url="[WebhookUrl]"
+        RequestContentType="application/json"
+        RequestEncoding="Json"
+        RequestType="Post"
+        ResponseType="Json"
+        MessagePasses="0"
+        Message="">
+        <Headers>
+          <Value Key="apikey" Passes="0" Type="String">[WebhookAnonKey]</Value>
+          <Value Key="Authorization" Passes="0" Type="String">Bearer [WebhookAnonKey]</Value>
+          <Value Key="X-Paz-Webhook-Secret" Passes="0" Type="String">[WebhookSecret]</Value>
+        </Headers>
+        <PostValues>
+          <Value Key="source" Passes="0" Type="String">3cx-report-call</Value>
+          <Value Key="call_type" Passes="0" Type="String">[CallType]</Value>
+          <Value Key="call_direction" Passes="0" Type="String">[CallDirection]</Value>
+          <Value Key="phone_number" Passes="0" Type="String">[Number]</Value>
+          <Value Key="agent_extension" Passes="0" Type="String">[Agent]</Value>
+          <Value Key="agent_email" Passes="0" Type="String">[AgentEmail]</Value>
+          <Value Key="agent_first_name" Passes="0" Type="String">[AgentFirstName]</Value>
+          <Value Key="agent_last_name" Passes="0" Type="String">[AgentLastName]</Value>
+          <Value Key="duration" Passes="0" Type="String">[Duration]</Value>
+          <Value Key="duration_seconds" Passes="2" Type="String">[[[DurationTimespan].get_TotalSeconds()].ToString("F0")]</Value>
+          <Value Key="call_start_utc" Passes="2" Type="String">[[CallStartTimeUTC].ToString("yyyy-MM-ddTHH:mm:ss.fffZ")]</Value>
+          <Value Key="call_end_utc" Passes="2" Type="String">[[CallEndTimeUTC].ToString("yyyy-MM-ddTHH:mm:ss.fffZ")]</Value>
+          <Value Key="call_start_utc_millis" Passes="0" Type="String">[CallStartTimeUTCMillis]</Value>
+          <Value Key="call_end_utc_millis" Passes="0" Type="String">[CallEndTimeUTCMillis]</Value>
+          <Value Key="recording_url" Passes="0" Type="String">[RecordingUrl]</Value>
+          <Value Key="call_id" Passes="2" Type="String">[Agent]-[Number]-[[CallStartTimeUTC].ToString("yyyyMMddHHmmss")]</Value>
+          <Value Key="queue_extension" Passes="0" Type="String">[QueueExtension]</Value>
+          <Value Key="contact_name" Passes="0" Type="String">[Name]</Value>
+        </PostValues>
+      </Request>
+      <Variables />
+      <Outputs AllowEmpty="true" />
+    </Scenario>
+  </Scenarios>
+</Crm>

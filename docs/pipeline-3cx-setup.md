@@ -79,50 +79,22 @@ Provide these to finalize production behavior:
 4. Allowed call-control surface (dial, transfer, hold/resume, mute, DTMF, active calls, agent state)
 5. Any IP allowlist / network restrictions for Supabase egress to 3CX
 
-## 6) Call recordings for `/call-log`
+## 6) Call recordings for `/call-log` (no Call Control changes)
 
-The Call Log page (`/call-log`, admins + ali + hr.licensing) shows disposition rows from
-`pipeline_call_records`. Recording playback needs a URL per call — the Call Control API alone does
-not reliably expose finished recording links.
+Dialing stays as-is (3CX web client in a new tab). Recordings use **CRM ReportCall** only.
 
-### Recommended: 3CX CRM integration (ReportCall webhook)
+**Full checklist:** [`docs/threecx/RECORDING-SETUP.md`](threecx/RECORDING-SETUP.md)
 
-1. In 3CX Management Console → **Integrations** → **CRM**, create a template with scenario
-   **ReportCall** (fires when a call ends).
-2. POST to your Supabase edge function URL, e.g.
-   `https://<project>.supabase.co/functions/v1/threecx-call-webhook`
-3. Include placeholders in the JSON body (names vary slightly by 3CX version; confirm in CRM editor):
+**CRM template to upload in 3CX:** [`docs/threecx/paz-hiring-call-recording-crm.xml`](threecx/paz-hiring-call-recording-crm.xml)
 
-   - `[RecordingUrl]` — direct HTTPS link to the WAV/MP3 (may be tokenized / time-limited)
-   - `[CallHistoryId]` or equivalent unique call id
-   - `[Duration]` — talk time in seconds
-   - `[CallerNumber]` / `[CalledNumber]` — match to `dialed_number`
-   - `[AgentExtension]` or `[Extension]` — match to recruiter via `pipeline_user_call_settings.extension`
-   - `[Direction]` — inbound vs outbound
-   - `[StartTime]` / `[EndTime]` — ISO timestamps for matching
+Quick summary:
 
-4. Edge function matches the webhook to the nearest `pipeline_call_records` row (extension + number +
-   time window) and sets `recording_url`, `threecx_call_id`, `duration_seconds`.
-
-5. Run SQL: `supabase/sql/paste_pipeline_call_recordings.sql`
-
-### What to request from your 3CX / IT team
-
-| Item | Why |
-|------|-----|
-| Call recording **enabled** on recruiter extensions / outbound routes | No recording → no `[RecordingUrl]` |
-| CRM **ReportCall** webhook URL allowlisted (3CX → Supabase) | Inbound POST from PBX |
-| Sample `[RecordingUrl]` from a test call | Confirm format, auth (cookie/token/query), and browser playback |
-| Whether URLs are **public HTTPS** or need **OAuth proxy** through your edge function | Affects `<audio>` in-browser vs download-only |
-| Extension ↔ recruiter mapping | Each recruiter’s 3CX extension in Account → Call settings |
-| Recording **retention** policy | Links may expire; note compliance requirements |
-| Optional: xAPI **Call History** docs if CRM path unavailable | Fallback to poll history + recording API |
-
-### Browser playback vs download
-
-Prefer in-browser listen: store a URL that returns `audio/wav` or `audio/mpeg` with CORS allowing
-your app origin (or serve via a signed proxy edge function). If 3CX only returns auth-gated links,
-add `threecx-recording-proxy` that exchanges OAuth and streams audio to the browser.
+1. Run `supabase/sql/paste_pipeline_call_recordings.sql` (once).
+2. Deploy `threecx-call-webhook` and set `THREECX_WEBHOOK_SECRET`.
+3. In 3CX: **Settings → CRM Integration → Server side → + Add** → upload the XML template.
+4. Enter Supabase anon key + webhook secret in the template settings.
+5. Enable **Record calls** on each recruiter extension.
+6. Each recruiter sets their **3CX extension** in Account → Call settings.
 
 ## 7) Notes on current implementation
 
