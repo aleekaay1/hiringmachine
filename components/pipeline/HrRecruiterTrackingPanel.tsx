@@ -1,5 +1,5 @@
 import React from 'react';
-import { BarChart3, ChevronDown, Loader2 } from 'lucide-react';
+import { BarChart3, ChevronDown, Loader2, Undo2 } from 'lucide-react';
 import LeadBatchAccordion from './LeadBatchAccordion';
 import { formatDateTimeCanadaEastern } from '../../services/dateDisplay';
 import { groupHrLeadsByBatchId, type LeadBatchGroup } from '../../services/pipelineLeadGrouping';
@@ -15,6 +15,8 @@ type HrRecruiterTrackingPanelProps = {
   selectedBatchId: string;
   loading: boolean;
   onLoadRecruiterLeads: (userId: string) => Promise<HrRecruiterLeadRow[]>;
+  onRetractBatch?: (batchId: string, assigneeUserId: string, batchTitle: string, leadCount: number) => Promise<void>;
+  retracting?: boolean;
 };
 
 function dispositionBadgeClass(disposition: string | null): string {
@@ -74,6 +76,8 @@ const HrRecruiterTrackingPanel: React.FC<HrRecruiterTrackingPanelProps> = ({
   selectedBatchId,
   loading,
   onLoadRecruiterLeads,
+  onRetractBatch,
+  retracting = false,
 }) => {
   const [expandedUserId, setExpandedUserId] = React.useState<string | null>(null);
   const [leadsByUser, setLeadsByUser] = React.useState<Map<string, HrRecruiterLeadRow[]>>(() => new Map());
@@ -229,6 +233,24 @@ const HrRecruiterTrackingPanel: React.FC<HrRecruiterTrackingPanelProps> = ({
                 {leadGroups.length > 0 && (
                   <div className="max-h-[36vh] overflow-auto">
                     <p className="mb-2 text-xs font-semibold text-[#0B1B34]">Leads by batch</p>
+                    {onRetractBatch && leadGroups.some((group) => group.key !== 'unbatched') && (
+                      <div className="mb-3 flex flex-wrap gap-1.5">
+                        {leadGroups
+                          .filter((group) => group.key !== 'unbatched')
+                          .map((group) => (
+                            <button
+                              key={group.key}
+                              type="button"
+                              disabled={retracting}
+                              onClick={() => void onRetractBatch(group.key, recruiter.user_id, group.title, group.items.length)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-white px-2 py-1 text-[10px] font-semibold text-amber-800 hover:bg-amber-50 disabled:opacity-50"
+                            >
+                              <Undo2 size={11} />
+                              Retract {group.title}
+                            </button>
+                          ))}
+                      </div>
+                    )}
                     <LeadBatchAccordion
                       groups={leadGroups}
                       expandedKeys={expandedBatchKeys}

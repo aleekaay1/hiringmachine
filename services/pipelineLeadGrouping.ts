@@ -38,7 +38,7 @@ export function readCandidateBatchDate(candidate: PipelineCandidate): string {
   return assignedAt || batchCreated || candidate.created_at;
 }
 
-function groupKey(candidate: PipelineCandidate): string {
+export function getCandidateBatchGroupKey(candidate: PipelineCandidate): string {
   if (candidate.source === 'self_lead') return 'self_lead';
   if (candidate.source === 'hr_csv_batch') {
     if (candidate.lead_batch_id) return `hr_batch:${candidate.lead_batch_id}`;
@@ -77,7 +77,7 @@ export function groupPipelineCandidatesByBatch(
   const map = new Map<string, LeadBatchGroup>();
 
   for (const candidate of candidates) {
-    const key = groupKey(candidate);
+    const key = getCandidateBatchGroupKey(candidate);
     let group = map.get(key);
     if (!group) {
       const kind: LeadBatchGroupKind =

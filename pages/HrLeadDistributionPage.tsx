@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { FileSpreadsheet, History, RefreshCw, Trash2, Upload, UserPlus, Users } from 'lucide-react';
+import { FileSpreadsheet, History, RefreshCw, Trash2, Undo2, Upload, UserPlus, Users } from 'lucide-react';
 import HomeLoadingScreen from '../components/dashboard/HomeLoadingScreen';
 import { Button } from '../components/UI';
 import {
@@ -14,6 +14,7 @@ import {
   assignHrLeads,
   deleteHrBatchPool,
   deleteHrPoolLeads,
+  retractHrBatchAssignments,
   fetchHrLeadBatches,
   fetchHrLeadPool,
   fetchHrLeadSummary,
@@ -53,6 +54,7 @@ const HrLeadDistributionPage: React.FC = () => {
   const [importSourceFilename, setImportSourceFilename] = React.useState('');
   const [uploadHistory, setUploadHistory] = React.useState<PipelineLeadBatch[]>([]);
   const [deleting, setDeleting] = React.useState(false);
+  const [retracting, setRetracting] = React.useState(false);
   const [parsedPreview, setParsedPreview] = React.useState<ReturnType<typeof parseHrLeadCsv> | null>(null);
   const [importing, setImporting] = React.useState(false);
   const [importProgress, setImportProgress] = React.useState<{ pct: number; label: string } | null>(null);
@@ -234,6 +236,46 @@ const HrLeadDistributionPage: React.FC = () => {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const retractBatchAssignments = async (
+    batch: PipelineLeadBatch,
+    assigneeUserId?: string,
+    leadCount?: number,
+  ) => {
+    const assignedCount = leadCount ?? batch.assigned_count ?? 0;
+    if (!assignedCount) {
+      setError('No assigned leads to retract in this batch.');
+      return;
+    }
+    const label = batch.source_filename || batch.label;
+    const recruiter = assigneeUserId
+      ? recruiters.find((row) => row.id === assigneeUserId)
+      : null;
+    const scopeLabel = recruiter ? ` from ${recruiter.full_name || recruiter.email}` : '';
+    if (
+      !window.confirm(
+        `Retract ${assignedCount} assigned lead(s) from "${label}"${scopeLabel}? They return to the HR pool and leave recruiter dial queues.`,
+      )
+    ) {
+      return;
+    }
+    setRetracting(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await retractHrBatchAssignments(batch.id, assigneeUserId);
+      if (!result.ok) throw new Error(result.error);
+      const errCount = (result.data.errors || []).length;
+      setMessage(
+        `Retracted ${result.data.retracted_count} lead(s) from recruiters.${errCount ? ` ${errCount} could not be retracted.` : ''}`,
+      );
+      await loadData();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRetracting(false);
     }
   };
 
@@ -446,19 +488,32 @@ const HrLeadDistributionPage: React.FC = () => {
                     <td className="px-3 py-2">{batch.assigned_count}</td>
                     <td className="px-3 py-2">{batch.pool_count ?? 0}</td>
                     <td className="px-3 py-2 text-right">
-                      {(batch.pool_count ?? 0) > 0 ? (
-                        <button
-                          type="button"
-                          onClick={() => void deleteBatchPool(batch)}
-                          disabled={deleting}
-                          className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2 py-1 text-[11px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
-                        >
-                          <Trash2 size={12} />
-                          Delete pool
-                        </button>
-                      ) : (
-                        <span className="text-[#6b84a8]">—</span>
-                      )}
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        {(batch.assigned_count ?? 0) > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => void retractBatchAssignments(batch)}
+                            disabled={retracting || deleting}
+                            className="inline-flex items-center gap-1 rounded-lg border border-amber-200 px-2 py-1 text-[11px] font-medium text-amber-800 hover:bg-amber-50 disabled:opacity-50"
+                          >
+                            <Undo2 size={12} />
+                            Retract assigned
+                          </button>
+                        )}
+                        {(batch.pool_count ?? 0) > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => void deleteBatchPool(batch)}
+                            disabled={deleting || retracting}
+                            className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2 py-1 text-[11px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                          >
+                            <Trash2 size={12} />
+                            Delete pool
+                          </button>
+                        ) : (batch.assigned_count ?? 0) === 0 ? (
+                          <span className="text-[#6b84a8]">—</span>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -641,6 +696,17 @@ const HrLeadDistributionPage: React.FC = () => {
                 selectedBatchId={selectedBatchId}
                 loading={loading}
                 onLoadRecruiterLeads={loadRecruiterLeads}
+                onRetractBatch={(batchId, assigneeUserId, _batchTitle, leadCount) => {
+                  const batch = (uploadHistory.length ? uploadHistory : summary?.recent_batches || []).find(
+                    (row) => row.id === batchId,
+                  );
+                  if (!batch) {
+                    setError('Batch not found.');
+                    return Promise.resolve();
+                  }
+                  return retractBatchAssignments(batch, assigneeUserId, leadCount);
+                }}
+                retracting={retracting}
               />
             </div>
           </div>

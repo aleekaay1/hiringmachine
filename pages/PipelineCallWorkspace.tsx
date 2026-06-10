@@ -50,6 +50,12 @@ import {
   defaultExpandedGroupKeys,
   groupPipelineCandidatesByBatch,
 } from '../services/pipelineLeadGrouping';
+import {
+  candidateInBatchGroup,
+  type DialQueueStartMode,
+  type LoadedDialQueue,
+  applyDialQueueStartMode,
+} from '../services/pipelineDialQueue';
 
 type QueueFilter = 'all' | 'callbacks' | 'not_interested' | 'booked' | 'booked_no_show' | 'booked_didnt_watch';
 
@@ -130,6 +136,9 @@ const PipelineCallWorkspace: React.FC = () => {
   const [savingSelfLead, setSavingSelfLead] = React.useState(false);
   const [selfLeadMsg, setSelfLeadMsg] = React.useState<string | null>(null);
   const [activeBatchKey, setActiveBatchKey] = React.useState<string | 'all'>('all');
+  const [selectedLoadBatchKey, setSelectedLoadBatchKey] = React.useState('');
+  const [dialStartMode, setDialStartMode] = React.useState<DialQueueStartMode>('first');
+  const [loadedDialQueue, setLoadedDialQueue] = React.useState<LoadedDialQueue | null>(null);
   const [expandedQueueBatchKeys, setExpandedQueueBatchKeys] = React.useState<Set<string>>(() => new Set());
   const [expandedDoneBatchKeys, setExpandedDoneBatchKeys] = React.useState<Set<string>>(() => new Set());
   const selectedCandidateIdRef = React.useRef<string | null>(null);
@@ -245,8 +254,13 @@ const PipelineCallWorkspace: React.FC = () => {
     return map;
   }, [candidates, latestByCandidate]);
 
+  const dialScopeCandidates = React.useMemo(() => {
+    if (!loadedDialQueue) return candidates;
+    return candidates.filter((candidate) => candidateInBatchGroup(candidate, loadedDialQueue.batchKey));
+  }, [candidates, loadedDialQueue]);
+
   const filteredCandidates = React.useMemo(() => {
-    return candidates.filter((candidate) => {
+    return dialScopeCandidates.filter((candidate) => {
       const latest = latestByCandidate.get(candidate.id);
       const d = normalizeDispositionLabel(latest?.disposition);
       if (queueFilter === 'callbacks') {
@@ -266,7 +280,7 @@ const PipelineCallWorkspace: React.FC = () => {
       }
       return true;
     });
-  }, [candidates, queueFilter, latestByCandidate, callbackAtByCandidate, bookedOutcomeByCandidate]);
+  }, [dialScopeCandidates, queueFilter, latestByCandidate, callbackAtByCandidate, bookedOutcomeByCandidate]);
 
   const undisposedQueue = React.useMemo(
     () =>
@@ -298,20 +312,38 @@ const PipelineCallWorkspace: React.FC = () => {
   }, [filteredCandidates, latestByCandidate, callbackAtByCandidate]);
 
   const activeQueueRaw = React.useMemo(() => {
+    let queue: PipelineCandidate[];
     if (queueFilter === 'all') {
-      return undisposedQueue.length > 0 ? undisposedQueue : retryQueue;
-    }
-    if (queueFilter === 'callbacks') {
-      return [...filteredCandidates]
+      queue = undisposedQueue.length > 0 ? undisposedQueue : retryQueue;
+    } else if (queueFilter === 'callbacks') {
+      queue = [...filteredCandidates]
         .filter((candidate) => normalizeDispositionLabel(candidate.status) !== 'closed')
         .sort((a, b) => {
-        const aAt = new Date(callbackAtByCandidate.get(a.id) || '9999-12-31').getTime();
-        const bAt = new Date(callbackAtByCandidate.get(b.id) || '9999-12-31').getTime();
-        return aAt - bAt;
-      });
+          const aAt = new Date(callbackAtByCandidate.get(a.id) || '9999-12-31').getTime();
+          const bAt = new Date(callbackAtByCandidate.get(b.id) || '9999-12-31').getTime();
+          return aAt - bAt;
+        });
+    } else {
+      queue = [];
     }
-    return [];
-  }, [queueFilter, undisposedQueue, retryQueue, filteredCandidates, callbackAtByCandidate]);
+
+    if (loadedDialQueue && queue.length) {
+      const orderedBatch = [...dialScopeCandidates].sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      );
+      queue = applyDialQueueStartMode(queue, orderedBatch, loadedDialQueue.startMode, latestByCandidate);
+    }
+    return queue;
+  }, [
+    queueFilter,
+    undisposedQueue,
+    retryQueue,
+    filteredCandidates,
+    callbackAtByCandidate,
+    loadedDialQueue,
+    dialScopeCandidates,
+    latestByCandidate,
+  ]);
 
   const queueCap = React.useMemo(() => {
     if (dailyUploadTarget === '' || Number(dailyUploadTarget) <= 0) return null;
@@ -341,6 +373,15 @@ const PipelineCallWorkspace: React.FC = () => {
     [latestByCandidate],
   );
 
+  const loadableBatchGroups = React.useMemo(
+    () =>
+      groupPipelineCandidatesByBatch(candidates, {
+        isNew: isCandidateNew,
+        isInProgress: (candidate) => !isCandidateNew(candidate),
+      }),
+    [candidates, isCandidateNew],
+  );
+
   const queueBatchGroups = React.useMemo(
     () =>
       groupPipelineCandidatesByBatch(queueList, {
@@ -366,7 +407,15 @@ const PipelineCallWorkspace: React.FC = () => {
   React.useEffect(() => {
     if (!queueBatchGroups.length) return;
     setExpandedQueueBatchKeys((prev) => (prev.size ? prev : defaultExpandedGroupKeys(queueBatchGroups)));
-  }, [queueBatchGroups]);
+    if (!selectedLoadBatchKey && loadableBatchGroups[0]) {
+      setSelectedLoadBatchKey(loadableBatchGroups[0].key);
+    }
+  }, [loadableBatchGroups, selectedLoadBatchKey]);
+
+  React.useEffect(() => {
+    if (!loadedDialQueue || !queueList.length) return;
+    setSelectedCandidateId(queueList[0].id);
+  }, [loadedDialQueue?.batchKey, loadedDialQueue?.startMode, queueList]);
 
   React.useEffect(() => {
     if (!doneBatchGroups.length) return;
@@ -385,6 +434,28 @@ const PipelineCallWorkspace: React.FC = () => {
       else next.add(key);
       return next;
     });
+  };
+
+  const loadDialQueue = () => {
+    const group = loadableBatchGroups.find((row) => row.key === selectedLoadBatchKey);
+    if (!group) {
+      setError('Select a batch to load into the dialer.');
+      return;
+    }
+    setError(null);
+    setLoadedDialQueue({
+      batchKey: group.key,
+      batchTitle: group.title,
+      startMode: dialStartMode,
+    });
+    setActiveBatchKey(group.key);
+    setActionMsg(`Loaded ${group.title} into the dial queue.`);
+  };
+
+  const resetDialQueue = () => {
+    setLoadedDialQueue(null);
+    setActiveBatchKey('all');
+    setActionMsg('Dial queue reset — showing all batches again.');
   };
 
   const toggleDoneBatch = (key: string) => {
@@ -915,6 +986,63 @@ const PipelineCallWorkspace: React.FC = () => {
                 </p>
               </div>
             </div>
+            {loadableBatchGroups.length > 0 && (
+              <div className={`mb-3 rounded-xl border p-3 ${tone.subtle}`} data-tour="call-dial-queue-loader">
+                <p className={`text-xs font-semibold ${tone.panelTitle}`}>Auto-dial queue</p>
+                {loadedDialQueue ? (
+                  <div className="mt-2 space-y-2">
+                    <p className={`text-[11px] ${tone.panelMuted}`}>
+                      Loaded <span className="font-semibold text-[#285082]">{loadedDialQueue.batchTitle}</span>
+                      {' · '}
+                      {queueList.length} lead{queueList.length === 1 ? '' : 's'}
+                      {' · '}
+                      {loadedDialQueue.startMode === 'resume' ? 'Resuming after last disposed' : 'Starting from first'}
+                    </p>
+                    <Button variant="outline" className="!min-h-0 h-8 w-full text-xs" onClick={resetDialQueue}>
+                      Reset queue
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="mt-2 space-y-2">
+                    <select
+                      value={selectedLoadBatchKey}
+                      onChange={(e) => setSelectedLoadBatchKey(e.target.value)}
+                      className={`w-full rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}
+                    >
+                      <option value="">Select batch…</option>
+                      {loadableBatchGroups.map((group) => (
+                        <option key={group.key} value={group.key}>
+                          {group.title} ({group.items.length})
+                        </option>
+                      ))}
+                    </select>
+                    <div className="grid grid-cols-1 gap-1.5">
+                      <label className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 text-[11px] ${dialStartMode === 'first' ? 'border-[#7eb3e7] bg-[#e8f3ff]' : tone.input}`}>
+                        <input
+                          type="radio"
+                          name="dial-start-mode"
+                          checked={dialStartMode === 'first'}
+                          onChange={() => setDialStartMode('first')}
+                        />
+                        Start from first lead
+                      </label>
+                      <label className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 text-[11px] ${dialStartMode === 'resume' ? 'border-[#7eb3e7] bg-[#e8f3ff]' : tone.input}`}>
+                        <input
+                          type="radio"
+                          name="dial-start-mode"
+                          checked={dialStartMode === 'resume'}
+                          onChange={() => setDialStartMode('resume')}
+                        />
+                        Resume after last disposed
+                      </label>
+                    </div>
+                    <Button className="!min-h-0 h-8 w-full text-xs" onClick={loadDialQueue} disabled={!selectedLoadBatchKey}>
+                      Load queue
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
             {queueBatchGroups.length > 1 && (
               <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1">
                 <button

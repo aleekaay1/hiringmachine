@@ -289,6 +289,31 @@ export async function importHrLeadRowsChunk(input: {
   });
 }
 
+export async function retractHrAssignments(candidateIds: string[]) {
+  return callHrLeads<{
+    retracted_count: number;
+    retracted_ids: string[];
+    errors: Array<{ id: string; error: string }>;
+  }>('retract-assignment', {
+    method: 'POST',
+    body: JSON.stringify({ candidate_ids: candidateIds }),
+  });
+}
+
+export async function retractHrBatchAssignments(batchId: string, assigneeUserId?: string) {
+  return callHrLeads<{
+    retracted_count: number;
+    retracted_ids: string[];
+    errors: Array<{ id: string; error: string }>;
+  }>('retract-batch', {
+    method: 'POST',
+    body: JSON.stringify({
+      batch_id: batchId,
+      assignee_user_id: assigneeUserId || undefined,
+    }),
+  });
+}
+
 export async function assignHrLeads(input: {
   assignToUserId: string;
   assignToLabel: string;

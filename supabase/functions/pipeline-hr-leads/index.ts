@@ -101,6 +101,79 @@ async function listBatchesWithPoolCounts(
   }));
 }
 
+async function retractHrAssignments(
+  admin: ReturnType<typeof createClient>,
+  candidateIds: string[],
+): Promise<{ retracted_ids: string[]; errors: Array<{ id: string; error: string }> }> {
+  const retractedIds: string[] = [];
+  const errors: Array<{ id: string; error: string }> = [];
+  const batchDecrements = new Map<string, number>();
+
+  for (const candidateId of [...new Set(candidateIds.map((id) => String(id).trim()).filter(Boolean))]) {
+    const { data: row, error: getErr } = await admin
+      .from('pipeline_candidates')
+      .select('id, source, assigned_to_user_id, lead_batch_id, metadata')
+      .eq('id', candidateId)
+      .maybeSingle();
+    if (getErr || !row) {
+      errors.push({ id: candidateId, error: 'Lead not found.' });
+      continue;
+    }
+    const candidate = row as Record<string, unknown>;
+    if (String(candidate.source || '') !== 'hr_csv_batch') {
+      errors.push({ id: candidateId, error: 'Not an HR import lead.' });
+      continue;
+    }
+    if (!candidate.assigned_to_user_id) {
+      errors.push({ id: candidateId, error: 'Lead is not assigned to a recruiter.' });
+      continue;
+    }
+
+    const existingMeta =
+      candidate.metadata && typeof candidate.metadata === 'object'
+        ? (candidate.metadata as Record<string, unknown>)
+        : {};
+    const { error: upErr } = await admin
+      .from('pipeline_candidates')
+      .update({
+        uploader_user_id: null,
+        uploader_label: null,
+        assigned_to_user_id: null,
+        assigned_to_label: null,
+        assigned_at: null,
+        assigned_by_user_id: null,
+        status: 'open',
+        journey_stage: 'new',
+        metadata: {
+          ...existingMeta,
+          retracted_at: new Date().toISOString(),
+        },
+      })
+      .eq('id', candidateId);
+
+    if (upErr) {
+      errors.push({ id: candidateId, error: upErr.message });
+      continue;
+    }
+
+    retractedIds.push(candidateId);
+    const batchId = String(candidate.lead_batch_id || '');
+    if (batchId) batchDecrements.set(batchId, (batchDecrements.get(batchId) || 0) + 1);
+  }
+
+  for (const [batchId, count] of batchDecrements.entries()) {
+    const { data: batch } = await admin
+      .from('pipeline_lead_batches')
+      .select('assigned_count')
+      .eq('id', batchId)
+      .maybeSingle();
+    const nextAssigned = Math.max(0, Number((batch as { assigned_count?: number } | null)?.assigned_count || 0) - count);
+    await admin.from('pipeline_lead_batches').update({ assigned_count: nextAssigned }).eq('id', batchId);
+  }
+
+  return { retracted_ids: retractedIds, errors };
+}
+
 async function deleteHrPoolCandidates(
   admin: ReturnType<typeof createClient>,
   candidateIds: string[],
@@ -793,6 +866,66 @@ Deno.serve(async (req) => {
         assigned_ids: assigned,
         assigned_count: assigned.length,
         errors,
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (req.method === 'POST' && mode === 'retract-assignment') {
+      const body = (await req.json().catch(() => ({}))) as { candidate_ids?: string[] };
+      const candidateIds = Array.isArray(body.candidate_ids)
+        ? body.candidate_ids.map((id) => String(id).trim()).filter(Boolean)
+        : [];
+      if (!candidateIds.length) {
+        return new Response(JSON.stringify({ error: 'No leads selected to retract.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const result = await retractHrAssignments(admin, candidateIds);
+      return new Response(JSON.stringify({
+        ok: true,
+        retracted_count: result.retracted_ids.length,
+        retracted_ids: result.retracted_ids,
+        errors: result.errors,
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (req.method === 'POST' && mode === 'retract-batch') {
+      const body = (await req.json().catch(() => ({}))) as {
+        batch_id?: string;
+        assignee_user_id?: string;
+      };
+      const batchId = String(body.batch_id || '').trim();
+      const assigneeUserId = String(body.assignee_user_id || '').trim();
+      if (!batchId) {
+        return new Response(JSON.stringify({ error: 'batch_id is required.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      let query = admin
+        .from('pipeline_candidates')
+        .select('id')
+        .eq('source', 'hr_csv_batch')
+        .eq('lead_batch_id', batchId)
+        .not('assigned_to_user_id', 'is', null);
+      if (assigneeUserId) query = query.eq('assigned_to_user_id', assigneeUserId);
+
+      const { data: rows, error: listErr } = await query;
+      if (listErr) throw listErr;
+      const candidateIds = (rows || []).map((row) => String((row as { id: string }).id));
+      const result = await retractHrAssignments(admin, candidateIds);
+      return new Response(JSON.stringify({
+        ok: true,
+        retracted_count: result.retracted_ids.length,
+        retracted_ids: result.retracted_ids,
+        errors: result.errors,
       }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
