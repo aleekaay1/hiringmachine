@@ -22,6 +22,14 @@ import {
   type LikertOptionKey,
 } from '../services/assessmentConfig';
 
+function candidateWelcomeName(candidate: Candidate): string {
+  const full = `${candidate.firstName || ''} ${candidate.lastName || ''}`.trim();
+  if (full) return full;
+  const emailLocal = candidate.email?.split('@')[0]?.trim();
+  if (emailLocal) return emailLocal;
+  return 'there';
+}
+
 const AssessmentRoomForm: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -343,11 +351,14 @@ const AssessmentRoomForm: React.FC = () => {
   return (
     <Layout>
       <div ref={topRef} className="p-6 max-w-lg mx-auto w-full pb-32 space-y-10">
-        <div className="text-center border-b pb-4">
-          <h1 className="text-2xl font-bold text-[#005EB8]">Leadership & Career Assessment</h1>
-          <p className="text-gray-600 text-sm mt-1">
-            Please answer honestly. Answers from your initial application are already on file where
-            needed.
+        <div className="text-center border-b pb-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#005EB8]/80">Leadership & Career Assessment</p>
+          <h1 className="text-2xl font-bold text-[#0B1B34] mt-2">
+            Welcome, {candidateWelcomeName(candidate)}
+          </h1>
+          <p className="text-gray-600 text-sm mt-2 max-w-md mx-auto">
+            This questionnaire is for you personally — please fill it out honestly. Your responses help
+            our Leadership Team review your fit for the next step.
           </p>
         </div>
 
