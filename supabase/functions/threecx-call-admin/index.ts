@@ -7,12 +7,14 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { RECRUITER_3CX_EXTENSIONS } from '../_shared/recruiter3cxExtensions.ts';
 import {
   fetchCallHistoryForExtensionDay,
+  fetchCallHistoryPaginatedForDay,
   fetchThreeCxCallHistory,
   fetchThreeCxCallHistoryForWindow,
   fetchThreeCxCallLogData,
   fetchThreeCxRecordingsForWindow,
-  getCallLogQueriesForDisposition,
+  filterRowsForExtension,
   probeThreeCxHistoryAccess,
+  sampleExternalNumbers,
   torontoDayBoundsFromMs,
   torontoDayUtcPeriod,
   torontoDateKey,
@@ -753,12 +755,26 @@ async function fetchRecordingForCallRecord(
     const targeted = await fetchThreeCxCallLogData(
       token,
       baseUrl,
-      getCallLogQueriesForDisposition(utcPeriod.periodFrom, utcPeriod.periodTo, extension, phone),
+      utcPeriod.periodFrom,
+      utcPeriod.periodTo,
+      extension,
+      phone,
     );
 
     diag.getCallLogAttempts = targeted.attempts;
     let history = targeted.rows;
     apiEndpoint = targeted.endpoint;
+
+    const paginated = await fetchCallHistoryPaginatedForDay(token, baseUrl, utcPeriod.dateKey);
+    if (paginated.rows.length) {
+      const extRows = filterRowsForExtension(paginated.rows, extension);
+      diag.extensionDayRows = extRows.length;
+      diag.sampleExtPhones = sampleExternalNumbers(extRows.length ? extRows : paginated.rows.slice(0, 50));
+      apiEndpoint = `${apiEndpoint}+${paginated.endpoint}(pages=${paginated.pages})`;
+      if (!history.length) {
+        history = extRows.length ? extRows : paginated.rows;
+      }
+    }
 
     if (!history.length) {
       const extDay = await fetchCallHistoryForExtensionDay(token, baseUrl, utcPeriod.dateKey, extension);
@@ -766,11 +782,7 @@ async function fetchRecordingForCallRecord(
         history = extDay.rows;
         apiEndpoint = extDay.endpoint || apiEndpoint;
         diag.extensionDayRows = extDay.rows.length;
-        diag.sampleExtPhones = extDay.rows
-          .slice(0, 20)
-          .flatMap((row) => externalNumbersFromHistory(row))
-          .filter((n, i, arr) => n && arr.indexOf(n) === i)
-          .slice(0, 6);
+        diag.sampleExtPhones = sampleExternalNumbers(extDay.rows);
       }
     }
 
@@ -898,7 +910,12 @@ async function fetchRecordingForCallRecord(
     } else if (apiRowsScanned === 0) {
       message += ` 3CX returned no call history for ${dayKey} — confirm Record Calls is enabled on extension ${extension}.`;
     } else {
-      message += ` Scanned ${apiRowsScanned} call(s) via ${apiEndpoint || 'API'}.`;
+      message += ` Scanned ${apiRowsScanned} segment(s) via ${apiEndpoint || 'API'}.`;
+      if (diag.extensionDayRows > 0) {
+        message += ` Extension ${extension} on ${dayKey}: ${diag.extensionDayRows} segment(s)`;
+        if (diag.sampleExtPhones.length) message += ` (numbers: ${diag.sampleExtPhones.join(', ')})`;
+        message += '.';
+      }
       message += ` Phone matches: ${diag.phoneHits}, phone+extension: ${diag.extHits}, with recording URL: ${diag.withRecording}.`;
       if (diag.extHits > 0 && diag.withRecording === 0) {
         message += ' Call found but 3CX returned no RecId — check Admin → Recordings for this extension/date.';

@@ -3,7 +3,7 @@
  * Requires API integration: Department DEFAULT, Role System Owner (not System Admin).
  */
 
-import { parseRowStartMs } from './threecxHistoryParse.ts';
+import { historyExtensionMatches, parseRowStartMs } from './threecxHistoryParse.ts';
 
 export type ThreeCxHistoryRow = Record<string, unknown>;
 
@@ -85,7 +85,7 @@ function buildGetCallLogDataPath(query: GetCallLogDataQuery, top = HISTORY_TOP):
     `sourceFilter=${query.sourceFilter ? odataQuote(query.sourceFilter) : "''"}`,
     `destinationType=${query.destinationType}`,
     `destinationFilter=${query.destinationFilter ? odataQuote(query.destinationFilter) : "''"}`,
-    `callsType=${query.callsType ?? 0}`,
+    `callsType=${query.callsType ?? 1}`,
     'callTimeFilterType=0',
     "callTimeFilterFrom='0:00:0'",
     "callTimeFilterTo='0:00:0'",
@@ -94,62 +94,68 @@ function buildGetCallLogDataPath(query: GetCallLogDataQuery, top = HISTORY_TOP):
   return `/xapi/v1/ReportCallLogData/Pbx.GetCallLogData(${params})?$top=${top}&$orderby=SegmentStartTime%20desc`;
 }
 
-/** 3CX V20 — filter by extension (sourceType 0) and external number (destinationType 1). */
+/** Try several URL shapes — 3CX builds vary on period format and callsType. */
+function getCallLogProbePaths(periodFrom: string, periodTo: string): string[] {
+  const pfMs = encodePeriodParam(periodFrom);
+  const ptMs = encodePeriodParam(periodTo);
+  const pf = encodePeriodParam(periodFrom.replace(/\.\d{3}Z$/, 'Z'));
+  const pt = encodePeriodParam(periodTo.replace(/\.\d{3}Z$/, 'Z'));
+  const fromEnc = encodeODataDate(periodFrom);
+  const toEnc = encodeODataDate(periodTo);
+  const mk = (
+    pFrom: string,
+    pTo: string,
+    callsType: number,
+    timeFrom: string,
+    timeTo: string,
+  ) => `/xapi/v1/ReportCallLogData/Pbx.GetCallLogData(periodFrom=${pFrom},periodTo=${pTo},sourceType=0,sourceFilter='',destinationType=0,destinationFilter='',callsType=${callsType},callTimeFilterType=0,callTimeFilterFrom=${timeFrom},callTimeFilterTo=${timeTo},hidePcalls=true)?$top=${HISTORY_TOP}&$orderby=SegmentStartTime%20desc`;
+
+  return [
+    mk(pfMs, ptMs, 1, "'0:00:0'", "'0:00:0'"),
+    mk(pf, pt, 1, "'0:00:0'", "'0:00:0'"),
+    mk(pfMs, ptMs, 1, "''", "''"),
+    mk(pfMs, ptMs, 0, "'0:00:0'", "'0:00:0'"),
+    `/xapi/v1/ReportCallLogData/Pbx.GetCallLogData(from=${fromEnc},to=${toEnc})?$top=${HISTORY_TOP}&$orderby=SegmentStartTime%20desc`,
+  ];
+}
+
+function formatAttempt(result: ODataFetchResult, label: string): string {
+  const err = result.error ? ` ${result.error.replace(/\s+/g, ' ').slice(0, 80)}` : '';
+  return `${label} → ${result.status} (${result.rows.length} rows)${err}`;
+}
+
+/** Load report call log for the day, then filter client-side by extension/phone. */
 export async function fetchThreeCxCallLogData(
   token: string,
   baseUrl: string,
-  queries: GetCallLogDataQuery[],
-): Promise<{ rows: ThreeCxHistoryRow[]; endpoint: string; attempts: string[] }> {
-  const attempts: string[] = [];
-  let extensionOnlyRows: ThreeCxHistoryRow[] = [];
-
-  for (const query of queries) {
-    const path = buildGetCallLogDataPath(query);
-    const result = await fetchODataPathDetailed(token, baseUrl, path);
-    const label = `ext=${query.sourceFilter || '*'} dest=${query.destinationFilter || '*'} callsType=${query.callsType ?? 0}`;
-    attempts.push(`${label} → ${result.status} (${result.rows.length} rows)`);
-    if (!result.rows.length) continue;
-
-    const isExtensionOnly = query.sourceType === 0 && Boolean(query.sourceFilter) && !query.destinationFilter;
-    if (isExtensionOnly) {
-      extensionOnlyRows = result.rows;
-      continue;
-    }
-
-    return { rows: result.rows, endpoint: '/xapi/v1/ReportCallLogData/Pbx.GetCallLogData', attempts };
-  }
-
-  if (extensionOnlyRows.length) {
-    return {
-      rows: extensionOnlyRows,
-      endpoint: '/xapi/v1/ReportCallLogData/Pbx.GetCallLogData',
-      attempts,
-    };
-  }
-
-  return { rows: [], endpoint: '/xapi/v1/ReportCallLogData/Pbx.GetCallLogData', attempts };
-}
-
-export function getCallLogQueriesForDisposition(
   periodFrom: string,
   periodTo: string,
   extension: string,
-  phone: string,
-): GetCallLogDataQuery[] {
-  const last10 = phone.replace(/\D/g, '').slice(-10);
-  const e164 = last10.length === 10 ? `1${last10}` : last10;
-  const base = { periodFrom, periodTo };
-  const queries: GetCallLogDataQuery[] = [
-    { ...base, sourceType: 0, sourceFilter: extension, destinationType: 1, destinationFilter: last10 },
-    { ...base, sourceType: 0, sourceFilter: extension, destinationType: 1, destinationFilter: e164 },
-    { ...base, sourceType: 0, sourceFilter: extension, destinationType: 1, destinationFilter: `+${e164}` },
-    { ...base, sourceType: 0, sourceFilter: extension, destinationType: 1, destinationFilter: last10, callsType: 1 },
-    { ...base, sourceType: 0, sourceFilter: extension, destinationType: 0, destinationFilter: '' },
-    { ...base, sourceType: 0, sourceFilter: extension, destinationType: 0, destinationFilter: '', callsType: 1 },
-    { ...base, sourceType: 0, sourceFilter: '', destinationType: 1, destinationFilter: last10 },
-    { ...base, sourceType: 0, sourceFilter: '', destinationType: 1, destinationFilter: e164 },
-  ];
-  return queries;
+  _phone: string,
+): Promise<{ rows: ThreeCxHistoryRow[]; endpoint: string; attempts: string[] }> {
+  const attempts: string[] = [];
+  let allRows: ThreeCxHistoryRow[] = [];
+
+  for (const path of getCallLogProbePaths(periodFrom, periodTo)) {
+    const result = await fetchODataPathDetailed(token, baseUrl, path);
+    attempts.push(formatAttempt(result, 'probe'));
+    if (result.status === 200 && result.rows.length) {
+      allRows = result.rows;
+      break;
+    }
+  }
+
+  if (!allRows.length) {
+    return { rows: [], endpoint: '/xapi/v1/ReportCallLogData/Pbx.GetCallLogData', attempts };
+  }
+
+  const extRows = allRows.filter((row) => historyExtensionMatches(row, extension));
+  attempts.push(`client ext ${extension} filter → ${extRows.length} of ${allRows.length} rows`);
+  return {
+    rows: extRows.length ? extRows : allRows,
+    endpoint: '/xapi/v1/ReportCallLogData/Pbx.GetCallLogData',
+    attempts,
+  };
 }
 
 export function callHistoryPathsForExtensionDay(day: string, extension: string): string[] {
@@ -176,6 +182,53 @@ export async function fetchCallHistoryForExtensionDay(
     }
   }
   return { rows: [], endpoint: null };
+}
+
+const MAX_HISTORY_PAGES = 8;
+
+/** Paginate CallHistoryView for a full Toronto day (up to 8000 segments). */
+export async function fetchCallHistoryPaginatedForDay(
+  token: string,
+  baseUrl: string,
+  day: string,
+): Promise<{ rows: ThreeCxHistoryRow[]; pages: number; endpoint: string }> {
+  const dayEnc = encodeURIComponent(day);
+  const merged: ThreeCxHistoryRow[] = [];
+  let pages = 0;
+
+  for (let page = 0; page < MAX_HISTORY_PAGES; page += 1) {
+    const skip = page * HISTORY_TOP;
+    const path = `/xapi/v1/CallHistoryView?$filter=date(SegmentStartTime)%20eq%20${dayEnc}&$top=${HISTORY_TOP}&$skip=${skip}&$orderby=SegmentStartTime%20desc`;
+    const result = await fetchODataPathDetailed(token, baseUrl, path);
+    if (result.status !== 200 || !result.rows.length) break;
+    pages += 1;
+    merged.push(...result.rows);
+    if (result.rows.length < HISTORY_TOP) break;
+  }
+
+  return { rows: merged, pages, endpoint: '/xapi/v1/CallHistoryView' };
+}
+
+export function filterRowsForExtension(
+  rows: ThreeCxHistoryRow[],
+  extension: string,
+): ThreeCxHistoryRow[] {
+  return rows.filter((row) => historyExtensionMatches(row, extension));
+}
+
+export function sampleExternalNumbers(rows: ThreeCxHistoryRow[], limit = 8): string[] {
+  const out: string[] = [];
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      const v = row[key];
+      if (typeof v !== 'string' && typeof v !== 'number') continue;
+      const s = String(v).trim();
+      const d = s.replace(/\D/g, '');
+      if (d.length >= 10 && !out.includes(s)) out.push(s);
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
 }
 
 function historyPathsForWindow(fromIso: string, toIso: string): string[] {
