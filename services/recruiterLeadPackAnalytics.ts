@@ -17,6 +17,8 @@ export type DialQueueIntent = {
   batchKey: string;
   batchTitle: string;
   startMode: 'first' | 'resume';
+  /** When set, call workspace selects this lead after loading the pack. */
+  candidateId?: string;
 };
 
 const PICKUP_DISPOSITIONS = new Set([
@@ -342,10 +344,12 @@ export function consumeDialQueueIntent(): DialQueueIntent | null {
   try {
     const parsed = JSON.parse(raw) as DialQueueIntent;
     if (!parsed?.batchKey || !parsed?.batchTitle) return null;
+    const candidateId = String(parsed.candidateId || '').trim();
     return {
       batchKey: String(parsed.batchKey),
       batchTitle: String(parsed.batchTitle),
       startMode: parsed.startMode === 'resume' ? 'resume' : 'first',
+      ...(candidateId ? { candidateId } : {}),
     };
   } catch {
     return null;

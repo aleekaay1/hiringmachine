@@ -14,6 +14,7 @@ import {
   pipelineStageAfterLiveSessionInvited,
 } from '../_shared/pipelineStageLiveSession.ts';
 import {
+  AUTOMATED_STAGE3_AFTER_LIVE_SESSION,
   sendStage3AssessmentLinkEmail,
   stage3AssessmentEmailAlreadySent,
 } from '../_shared/sendStage3AssessmentLinkEmail.ts';
@@ -104,6 +105,98 @@ function assessmentSkipReason(row: CandidateRow | undefined, admin: Record<strin
 
 function canSendAssessment(row: CandidateRow | undefined, admin: Record<string, unknown>): boolean {
   return assessmentSkipReason(row, admin) === null;
+}
+
+const STAGE3_EMAIL_TRIGGERS = new Set([
+  AUTOMATED_STAGE3_AFTER_LIVE_SESSION,
+  'crm_template:stage3_assessment_link',
+  'stage3_assessment_link',
+]);
+
+function latestIso(...dates: Array<string | null | undefined>): string | null {
+  const valid = dates.filter((d): d is string => typeof d === 'string' && d.length > 0);
+  if (valid.length === 0) return null;
+  return valid.sort((a, b) => b.localeCompare(a))[0] ?? null;
+}
+
+function portalStage3SentAt(admin: Record<string, unknown>): string | null {
+  const emails = Array.isArray(admin.emailsSent)
+    ? admin.emailsSent as Array<{ sentAt?: string; type?: string }>
+    : [];
+  let latest: string | null = null;
+  for (const entry of emails) {
+    if (!STAGE3_EMAIL_TRIGGERS.has(String(entry?.type || '').trim())) continue;
+    latest = latestIso(latest, entry.sentAt);
+  }
+  return latest;
+}
+
+type RegistrantAssessmentRow = {
+  assessment_email_sent_at: string | null;
+  assessment_email_status: string | null;
+  assessment_email_mode: string | null;
+};
+
+async function fetchRegistrantAssessmentMap(
+  admin: ReturnType<typeof createClient>,
+  sessionDate: string,
+  emails: string[],
+): Promise<Map<string, RegistrantAssessmentRow>> {
+  const map = new Map<string, RegistrantAssessmentRow>();
+  if (!sessionDate || emails.length === 0) return map;
+  const chunk = 200;
+  for (let i = 0; i < emails.length; i += chunk) {
+    const slice = emails.slice(i, i + chunk);
+    const { data, error } = await admin
+      .from('live_session_registrants')
+      .select('email, assessment_email_sent_at, assessment_email_status, assessment_email_mode')
+      .eq('session_date', sessionDate)
+      .in('email', slice);
+    if (error) throw new Error(`live_session_registrants query: ${error.message}`);
+    for (const row of data ?? []) {
+      const em = normEmail((row as { email?: string }).email);
+      if (!em) continue;
+      map.set(em, {
+        assessment_email_sent_at: (row as RegistrantAssessmentRow).assessment_email_sent_at ?? null,
+        assessment_email_status: (row as RegistrantAssessmentRow).assessment_email_status ?? null,
+        assessment_email_mode: (row as RegistrantAssessmentRow).assessment_email_mode ?? null,
+      });
+    }
+  }
+  return map;
+}
+
+async function fetchStage3EmailLogMap(
+  admin: ReturnType<typeof createClient>,
+  emails: string[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  if (emails.length === 0) return map;
+  const chunk = 200;
+  for (let i = 0; i < emails.length; i += chunk) {
+    const slice = emails.slice(i, i + chunk);
+    const { data, error } = await admin
+      .from('email_send_logs')
+      .select('to_email, sent_at, trigger_label')
+      .in('to_email', slice)
+      .eq('status', 'sent')
+      .order('sent_at', { ascending: false });
+    if (error) throw new Error(`email_send_logs query: ${error.message}`);
+    for (const row of data ?? []) {
+      const em = normEmail((row as { to_email?: string }).to_email);
+      if (!em || map.has(em)) continue;
+      const trigger = String((row as { trigger_label?: string }).trigger_label || '').trim();
+      if (!STAGE3_EMAIL_TRIGGERS.has(trigger)) continue;
+      const sentAt = String((row as { sent_at?: string }).sent_at || '').trim();
+      if (sentAt) map.set(em, sentAt);
+    }
+  }
+  return map;
+}
+
+function registrantAlreadySent(reg: RegistrantAssessmentRow | undefined): boolean {
+  if (!reg) return false;
+  return reg.assessment_email_status === 'sent' || !!reg.assessment_email_sent_at;
 }
 
 function parseAttendeeProfiles(raw: unknown): Map<string, AttendeeProfile> {
@@ -284,11 +377,96 @@ Deno.serve(async (req) => {
 
     const admin = createClient(supabaseUrl, serviceRole);
 
+    const previewAssessment = body.previewAssessment === true;
+    const previewEmails = [
+      ...new Set(asStringArray(body.previewAssessmentEmails).map(normEmail).filter((e) => e.length > 0)),
+    ];
+    const sessionDate = String(body.sessionDate || '').trim();
+
+    if (previewAssessment && previewEmails.length > 0) {
+      const byEmail = await fetchCandidatesByEmails(admin, previewEmails);
+      const registrantMap = await fetchRegistrantAssessmentMap(admin, sessionDate, previewEmails);
+      const emailLogMap = await fetchStage3EmailLogMap(admin, previewEmails);
+
+      const preview = previewEmails.map((email) => {
+        const row = byEmail.get(email);
+        const profile = attendeeProfiles.get(email);
+        const mergedAdmin = row ? mergeAdminBase(parseAdmin(row.admin_data)) : {};
+        const skipReason = assessmentSkipReason(row, mergedAdmin);
+        const reg = registrantMap.get(email);
+        const portalSentAt = row ? portalStage3SentAt(mergedAdmin) : null;
+        const logSentAt = emailLogMap.get(email) ?? null;
+        const sessionSentAt = reg?.assessment_email_sent_at ?? null;
+
+        const duplicateSources: Array<{ source: string; sentAt: string | null; label: string }> = [];
+        if (registrantAlreadySent(reg)) {
+          duplicateSources.push({
+            source: 'this_session',
+            sentAt: sessionSentAt,
+            label: 'This live session',
+          });
+        }
+        if (portalSentAt) {
+          duplicateSources.push({
+            source: 'portal',
+            sentAt: portalSentAt,
+            label: 'Candidate portal history',
+          });
+        }
+        if (logSentAt) {
+          duplicateSources.push({
+            source: 'email_log',
+            sentAt: logSentAt,
+            label: 'Email send log',
+          });
+        }
+
+        const alreadySent = duplicateSources.length > 0;
+        const sentAt = latestIso(sessionSentAt, portalSentAt, logSentAt);
+        const canSend = canSendAssessment(row, mergedAdmin) && !alreadySent;
+
+        return {
+          email,
+          displayName:
+            profile?.displayName ||
+            String(row?.first_name || '').trim() ||
+            email,
+          inPortal: !!row,
+          pipelineStage: row ? String(mergedAdmin.pipelineStage || '') || null : null,
+          canSendAssessment: canSend,
+          skipReason: alreadySent ? 'Assessment email already sent' : skipReason,
+          alreadySent,
+          sentAt,
+          duplicateSources,
+          sessionAssessmentMode: reg?.assessment_email_mode ?? null,
+        };
+      });
+
+      return new Response(
+        JSON.stringify({ ok: true, preview }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+
     const sendOnly =
       sendAssessmentEmails.length > 0 && invitedEmails.length === 0 && attendedEmails.length === 0;
 
     if (sendOnly) {
       const byEmail = await fetchCandidatesByEmails(admin, sendAssessmentEmails);
+      const sessionDates = [
+        ...new Set(
+          sendAssessmentEmails.map((e) => attendeeProfiles.get(e)?.sessionDateKey).filter(Boolean),
+        ),
+      ] as string[];
+      const registrantMaps = new Map<string, Map<string, RegistrantAssessmentRow>>();
+      for (const sd of sessionDates) {
+        const emailsForDate = sendAssessmentEmails.filter(
+          (e) => attendeeProfiles.get(e)?.sessionDateKey === sd,
+        );
+        registrantMaps.set(sd, await fetchRegistrantAssessmentMap(admin, sd, emailsForDate));
+      }
+      const emailLogMap = await fetchStage3EmailLogMap(admin, sendAssessmentEmails);
+
       let assessmentEmailsSent = 0;
       let assessmentEmailSendFailed = 0;
       let assessmentStageUpdated = 0;
@@ -296,12 +474,12 @@ Deno.serve(async (req) => {
 
       for (const email of sendAssessmentEmails) {
         const row = byEmail.get(email);
-        const sessionDate = attendeeProfiles.get(email)?.sessionDateKey ?? '';
+        const sessionDateKey = attendeeProfiles.get(email)?.sessionDateKey ?? '';
         if (!row) {
           assessmentEmailSendFailed++;
           assessment_send_failures.push({ email, error: 'Not in portal' });
-          if (sessionDate) {
-            await recordRegistrantAssessment(admin, sessionDate, email, {
+          if (sessionDateKey) {
+            await recordRegistrantAssessment(admin, sessionDateKey, email, {
               status: 'skipped_not_in_portal',
               mode: 'manual',
               error: 'Not in portal',
@@ -309,12 +487,31 @@ Deno.serve(async (req) => {
           }
           continue;
         }
+
+        const reg = sessionDateKey ? registrantMaps.get(sessionDateKey)?.get(email) : undefined;
+        const mergedAdmin = mergeAdminBase(parseAdmin(row.admin_data));
+        if (registrantAlreadySent(reg) || emailLogMap.has(email) || stage3AssessmentEmailAlreadySent(mergedAdmin)) {
+          const sentAt = latestIso(
+            reg?.assessment_email_sent_at,
+            portalStage3SentAt(mergedAdmin),
+            emailLogMap.get(email),
+          );
+          assessmentEmailSendFailed++;
+          assessment_send_failures.push({
+            email,
+            error: sentAt
+              ? `Assessment email already sent (${sentAt})`
+              : 'Assessment email already sent',
+          });
+          continue;
+        }
+
         try {
-          const { stageUpdated } = await sendAssessmentToCandidate(admin, row, sessionDate);
+          const { stageUpdated } = await sendAssessmentToCandidate(admin, row, sessionDateKey);
           assessmentEmailsSent++;
           if (stageUpdated) assessmentStageUpdated++;
-          if (sessionDate) {
-            await recordRegistrantAssessment(admin, sessionDate, email, {
+          if (sessionDateKey) {
+            await recordRegistrantAssessment(admin, sessionDateKey, email, {
               status: 'sent',
               mode: 'manual',
               sentAt: new Date().toISOString(),
@@ -324,8 +521,8 @@ Deno.serve(async (req) => {
           assessmentEmailSendFailed++;
           const msg = sendErr instanceof Error ? sendErr.message : 'Send failed';
           assessment_send_failures.push({ email, error: msg });
-          if (sessionDate) {
-            await recordRegistrantAssessment(admin, sessionDate, email, {
+          if (sessionDateKey) {
+            await recordRegistrantAssessment(admin, sessionDateKey, email, {
               status: msg.startsWith('skipped_') ? msg : 'failed',
               mode: 'manual',
               error: msg,
@@ -335,9 +532,6 @@ Deno.serve(async (req) => {
         }
       }
 
-      const sessionDates = [...new Set(
-        sendAssessmentEmails.map((e) => attendeeProfiles.get(e)?.sessionDateKey).filter(Boolean),
-      )] as string[];
       for (const sessionDate of sessionDates) {
         const { count } = await admin
           .from('live_session_registrants')

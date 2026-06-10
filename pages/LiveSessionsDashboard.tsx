@@ -14,13 +14,15 @@ import {
 import {
   collectLiveSessionAttendeeProfiles,
   collectLiveSessionInviteAndAttendEmails,
+  previewLiveSessionAssessmentEmails,
   sendLiveSessionAssessmentEmails,
   syncLiveSessionPipeline,
+  type LiveSessionAssessmentPreviewRow,
   type LiveSessionAttendeeMatch,
 } from '../services/liveSessionPipelineSync';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { listUnmatchedZoomParticipants } from '../services/liveSessionAttendanceMatch';
-import { ChevronDown, ChevronRight, Mail, RefreshCw, Users, Video, X } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, Loader2, Mail, RefreshCw, Users, Video, X } from 'lucide-react';
 import { signInWithGoogle } from '../services/googleAuth';
 
 const EM_DASH = '\u2014';
@@ -41,6 +43,7 @@ type InviteeRow = {
   matchMethod?: 'email' | 'hybrid' | 'name' | null;
   assessmentStatus?: string | null;
   assessmentMode?: 'auto' | 'manual' | null;
+  assessmentSentAt?: string | null;
 };
 
 function mapPastInvitee(i: PastMeetingInvitee): InviteeRow {
@@ -55,7 +58,19 @@ function mapPastInvitee(i: PastMeetingInvitee): InviteeRow {
     matchMethod: i.match_method ?? null,
     assessmentStatus: i.assessment_email_status ?? null,
     assessmentMode: i.assessment_email_mode ?? null,
+    assessmentSentAt: i.assessment_email_sent_at ?? null,
   };
+}
+
+function showedInviteesForSession(row: LiveSessionScheduleRow): InviteeRow[] {
+  return calendlyInviteesForSession(row).filter(
+    (inv) => inv.attended === true && inv.email && inv.email !== EM_DASH,
+  );
+}
+
+function formatAssessmentSentAt(iso: string | null | undefined): string {
+  if (!iso) return '';
+  return formatDateTimeCanadaEastern(iso);
 }
 
 function assessmentStatusLabel(status: string | null | undefined): string {
@@ -283,7 +298,8 @@ const LiveSessionsDashboard: React.FC = () => {
       return;
     }
     setSendAssessmentsLoading(true);
-    const result = await sendLiveSessionAssessmentEmails(token, toSend);
+    const attendeeProfiles = collectLiveSessionAttendeeProfiles(data);
+    const result = await sendLiveSessionAssessmentEmails(token, toSend, attendeeProfiles);
     setSendAssessmentsLoading(false);
     if (!result.ok) {
       setSyncError(result.error);
@@ -390,12 +406,14 @@ const LiveSessionsDashboard: React.FC = () => {
 
         <SessionsBlock
           title="Past sessions"
-          subtitle="Calendly registrations (blue) + unique Zoom attendees who showed (green)."
+          subtitle="Calendly registrations (blue) + unique Zoom attendees who showed (green). Select who showed to send leadership assessments."
           sessions={pastSessions}
           loading={loading}
           emptyText="No past sessions in the database. Click Refresh from Zoom + Calendly to fetch and save."
           expandedKey={expandedKey}
           onToggle={(key) => setExpandedKey((k) => (k === key ? null : key))}
+          getFreshAccessToken={getFreshAccessToken}
+          onSessionAssessmentsSent={() => void load(false)}
         />
 
         {pipelineModalOpen && (
@@ -560,6 +578,8 @@ function SessionsBlock({
   emptyText,
   expandedKey,
   onToggle,
+  getFreshAccessToken,
+  onSessionAssessmentsSent,
 }: {
   title: string;
   subtitle: string;
@@ -568,6 +588,8 @@ function SessionsBlock({
   emptyText: string;
   expandedKey: string | null;
   onToggle: (key: string) => void;
+  getFreshAccessToken?: () => Promise<string | null>;
+  onSessionAssessmentsSent?: () => void;
 }) {
   return (
     <section className="rounded-2xl border border-[#d6e6f9] bg-white shadow-sm overflow-hidden">
@@ -599,6 +621,8 @@ function SessionsBlock({
                   session={session}
                   expanded={expandedKey === session.key}
                   onToggle={() => onToggle(session.key)}
+                  getFreshAccessToken={getFreshAccessToken}
+                  onSessionAssessmentsSent={onSessionAssessmentsSent}
                 />
               ))}
             </tbody>
@@ -609,16 +633,213 @@ function SessionsBlock({
   );
 }
 
+type SessionAssessmentModalPhase = 'checking' | 'review' | 'sending';
+
+function SessionAssessmentSendModal({
+  sessionLabel,
+  phase,
+  preview,
+  selected,
+  sendError,
+  onToggle,
+  onSelectEligible,
+  onClose,
+  onSend,
+}: {
+  sessionLabel: string;
+  phase: SessionAssessmentModalPhase;
+  preview: LiveSessionAssessmentPreviewRow[];
+  selected: string[];
+  sendError: string | null;
+  onToggle: (email: string, checked: boolean) => void;
+  onSelectEligible: () => void;
+  onClose: () => void;
+  onSend: () => void;
+}) {
+  const selectedSet = new Set(selected);
+  const duplicateCount = preview.filter((r) => r.alreadySent).length;
+  const eligibleCount = preview.filter((r) => r.canSendAssessment).length;
+  const sendCount = selected.filter((email) => preview.find((r) => r.email === email)?.canSendAssessment).length;
+  const busy = phase === 'checking' || phase === 'sending';
+
+  return (
+    <div
+      className="fixed inset-0 z-[130] bg-[#0B1B34]/45 backdrop-blur-sm flex items-center justify-center p-4"
+      role="presentation"
+    >
+      <div
+        className="bg-white rounded-2xl border border-[#d6e6f9] shadow-2xl w-full max-w-3xl max-h-[88vh] flex flex-col relative overflow-hidden"
+        role="dialog"
+        aria-labelledby="session-assessment-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {(phase === 'checking' || phase === 'sending') && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-white/92 backdrop-blur-[2px] px-8 text-center">
+            <div className="h-14 w-14 rounded-2xl bg-violet-100 flex items-center justify-center mb-4">
+              <Loader2 size={28} className="text-violet-700 animate-spin" />
+            </div>
+            <p className="text-base font-bold text-[#0B1B34]">
+              {phase === 'checking' ? 'Checking for duplicate sends…' : `Sending ${sendCount} assessment email${sendCount === 1 ? '' : 's'}…`}
+            </p>
+            <p className="text-sm text-[#6f7b8d] mt-2 max-w-md">
+              {phase === 'checking'
+                ? 'Comparing against this session, candidate portal history, and email send logs so no one receives the link twice.'
+                : 'Please wait while leadership assessment links are delivered.'}
+            </p>
+            <div className="flex gap-1.5 mt-5">
+              {[0, 1, 2].map((i) => (
+                <span
+                  key={i}
+                  className="h-2 w-2 rounded-full bg-violet-400 animate-pulse"
+                  style={{ animationDelay: `${i * 180}ms` }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="px-5 py-4 border-b border-[#e5edf9] flex items-start justify-between gap-3">
+          <div>
+            <h2 id="session-assessment-title" className="text-base font-bold text-[#0B1B34]">
+              Send leadership assessments
+            </h2>
+            <p className="text-xs text-[#7a8fa8] mt-1">{sessionLabel}</p>
+          </div>
+          <button
+            type="button"
+            className="p-1.5 rounded-lg text-[#7a8fa8] hover:bg-[#f0f6ff] disabled:opacity-50"
+            onClick={onClose}
+            disabled={busy}
+            aria-label="Close"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {duplicateCount > 0 && phase === 'review' && (
+          <div className="mx-5 mt-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-900">
+            <AlertTriangle size={16} className="shrink-0 mt-0.5 text-red-600" />
+            <p>
+              <strong>{duplicateCount}</strong> attendee{duplicateCount === 1 ? '' : 's'} already received the assessment link
+              (highlighted in red). They are unchecked by default — remove any you do not want to email again, then send to the rest.
+            </p>
+          </div>
+        )}
+
+        {sendError && (
+          <div className="mx-5 mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+            {sendError}
+          </div>
+        )}
+
+        <div className="flex-1 overflow-auto px-5 py-3">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-[10px] uppercase tracking-wide text-[#7a8fa8] border-b border-[#e5edf9]">
+                <th className="py-2 pr-2 w-8" />
+                <th className="py-2 pr-2">Name</th>
+                <th className="py-2 pr-2">Email</th>
+                <th className="py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {preview.map((row) => {
+                const checked = selectedSet.has(row.email);
+                const isDuplicate = row.alreadySent;
+                return (
+                  <tr
+                    key={row.email}
+                    className={`border-b last:border-0 ${
+                      isDuplicate ? 'bg-red-50 border-red-100' : 'border-[#f0f4fa]'
+                    }`}
+                  >
+                    <td className="py-2.5 pr-2 align-top">
+                      <input
+                        type="checkbox"
+                        className="rounded border-[#cfe3f9]"
+                        checked={checked}
+                        disabled={busy}
+                        onChange={(e) => onToggle(row.email, e.target.checked)}
+                        aria-label={`Select ${row.displayName}`}
+                      />
+                    </td>
+                    <td className={`py-2.5 pr-2 align-top font-medium ${isDuplicate ? 'text-red-950' : 'text-[#0B1B34]'}`}>
+                      {row.displayName}
+                    </td>
+                    <td className={`py-2.5 pr-2 align-top text-xs break-all ${isDuplicate ? 'text-red-800' : 'text-[#4a5d78]'}`}>
+                      {row.email}
+                    </td>
+                    <td className="py-2.5 align-top text-xs">
+                      {isDuplicate ? (
+                        <div className="text-red-800">
+                          <span className="font-semibold">Already sent</span>
+                          {row.sentAt && (
+                            <div className="text-[11px] mt-0.5 text-red-700">
+                              {formatAssessmentSentAt(row.sentAt)}
+                            </div>
+                          )}
+                          {row.duplicateSources.length > 0 && (
+                            <ul className="mt-1 text-[10px] text-red-600/90 space-y-0.5">
+                              {row.duplicateSources.map((src) => (
+                                <li key={`${row.email}-${src.source}`}>
+                                  {src.label}
+                                  {src.sentAt ? ` · ${formatAssessmentSentAt(src.sentAt)}` : ''}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      ) : row.canSendAssessment ? (
+                        <span className="text-green-700 font-medium">Ready to send</span>
+                      ) : (
+                        <span className="text-[#6f7b8d]">{row.skipReason || 'Cannot send'}</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="px-5 py-4 border-t border-[#e5edf9] flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-[#7a8fa8]">
+            {eligibleCount} eligible {MIDDLE_DOT} {sendCount} selected to send
+            {duplicateCount > 0 && ` ${MIDDLE_DOT} ${duplicateCount} duplicate${duplicateCount === 1 ? '' : 's'}`}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" className="text-sm" onClick={onSelectEligible} disabled={busy || eligibleCount === 0}>
+              Select eligible only
+            </Button>
+            <Button type="button" variant="outline" className="text-sm" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button type="button" className="text-sm" onClick={onSend} disabled={busy || sendCount === 0}>
+              <Mail size={15} className={`mr-1.5 inline ${busy ? 'animate-pulse' : ''}`} />
+              {phase === 'sending' ? 'Sending…' : `Send (${sendCount})`}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SessionTableRow({
   session,
   expanded,
   onToggle,
+  getFreshAccessToken,
+  onSessionAssessmentsSent,
 }: {
   session: LiveSessionScheduleRow;
   expanded: boolean;
   onToggle: () => void;
+  getFreshAccessToken?: () => Promise<string | null>;
+  onSessionAssessmentsSent?: () => void;
 }) {
   const invitees = calendlyInviteesForSession(session);
+  const showedInvitees = showedInviteesForSession(session);
   const unmatchedZoom = unmatchedZoomRowsForSession(session);
   const pastStats = session.past?.stats;
   const showedCount = pastSessionShowedCount(pastStats, session.past);
@@ -626,6 +847,125 @@ function SessionTableRow({
   const unmatchedCount = unmatchedZoom.length > 0
     ? unmatchedZoom.length
     : pastStats?.walkin_count ?? session.past?.walkin_emails?.length ?? 0;
+
+  const [rowSelected, setRowSelected] = useState<Set<string>>(new Set());
+  const [assessmentModalOpen, setAssessmentModalOpen] = useState(false);
+  const [assessmentPhase, setAssessmentPhase] = useState<SessionAssessmentModalPhase>('checking');
+  const [assessmentPreview, setAssessmentPreview] = useState<LiveSessionAssessmentPreviewRow[]>([]);
+  const [assessmentSelected, setAssessmentSelected] = useState<string[]>([]);
+  const [assessmentSendError, setAssessmentSendError] = useState<string | null>(null);
+
+  const toggleRowEmail = (email: string, checked: boolean) => {
+    setRowSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(email);
+      else next.delete(email);
+      return next;
+    });
+  };
+
+  const selectAllShowed = () => {
+    setRowSelected(new Set(showedInvitees.map((i) => i.email)));
+  };
+
+  const openAssessmentSend = async () => {
+    if (!getFreshAccessToken || rowSelected.size === 0) return;
+    const emails = [...rowSelected];
+    setAssessmentSendError(null);
+    setAssessmentModalOpen(true);
+    setAssessmentPhase('checking');
+    const token = await getFreshAccessToken();
+    if (!token) {
+      setAssessmentSendError('Not signed in.');
+      setAssessmentPhase('review');
+      setAssessmentPreview([]);
+      return;
+    }
+    const attendeeProfiles = emails.map((email) => {
+      const inv = showedInvitees.find((i) => i.email === email);
+      return {
+        email,
+        displayName: inv?.name && inv.name !== EM_DASH ? inv.name : email,
+        sessionDateKey: session.dateKey,
+      };
+    });
+    const result = await previewLiveSessionAssessmentEmails(token, {
+      sessionDate: session.dateKey,
+      emails,
+      attendeeProfiles,
+    });
+    if (!result.ok) {
+      setAssessmentSendError(result.error);
+      setAssessmentPreview([]);
+      setAssessmentSelected([]);
+      setAssessmentPhase('review');
+      return;
+    }
+    setAssessmentPreview(result.preview);
+    setAssessmentSelected(result.preview.filter((r) => r.canSendAssessment).map((r) => r.email));
+    setAssessmentPhase('review');
+  };
+
+  const handleAssessmentToggle = (email: string, checked: boolean) => {
+    setAssessmentSelected((prev) => {
+      if (checked) return prev.includes(email) ? prev : [...prev, email];
+      return prev.filter((e) => e !== email);
+    });
+  };
+
+  const handleSelectEligibleOnly = () => {
+    setAssessmentSelected(assessmentPreview.filter((r) => r.canSendAssessment).map((r) => r.email));
+  };
+
+  const handleSendAssessments = async () => {
+    if (!getFreshAccessToken) return;
+    const toSend = assessmentSelected.filter((email) => {
+      const row = assessmentPreview.find((r) => r.email === email);
+      return row?.canSendAssessment;
+    });
+    if (toSend.length === 0) {
+      setAssessmentSendError('Select at least one eligible attendee who has not already received the email.');
+      return;
+    }
+    setAssessmentSendError(null);
+    setAssessmentPhase('sending');
+    const token = await getFreshAccessToken();
+    if (!token) {
+      setAssessmentSendError('Not signed in.');
+      setAssessmentPhase('review');
+      return;
+    }
+    const attendeeProfiles = toSend.map((email) => {
+      const row = assessmentPreview.find((r) => r.email === email);
+      return {
+        email,
+        displayName: row?.displayName || email,
+        sessionDateKey: session.dateKey,
+      };
+    });
+    const result = await sendLiveSessionAssessmentEmails(token, toSend, attendeeProfiles);
+    if (!result.ok) {
+      setAssessmentSendError(result.error);
+      setAssessmentPhase('review');
+      return;
+    }
+    if (result.failed.length > 0) {
+      setAssessmentSendError(
+        result.failed.map((f) => `${f.email}: ${f.error}`).join(' · '),
+      );
+      setAssessmentPhase('review');
+      if (result.assessment_emails_sent > 0) {
+        onSessionAssessmentsSent?.();
+      }
+      return;
+    }
+    setAssessmentModalOpen(false);
+    setRowSelected(new Set());
+    onSessionAssessmentsSent?.();
+  };
+
+  const rowSelectedCount = rowSelected.size;
+  const canSendAssessments = session.isPast && showedInvitees.length > 0 && !!getFreshAccessToken;
 
   return (
     <>
@@ -675,6 +1015,39 @@ function SessionTableRow({
                 </p>
               )}
 
+              {canSendAssessments && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-violet-200 bg-violet-50/60 px-3 py-2.5">
+                  <p className="text-xs text-violet-950">
+                    <strong>{showedInvitees.length}</strong> Zoom attendee{showedInvitees.length === 1 ? '' : 's'} matched on Calendly
+                    {rowSelectedCount > 0 && (
+                      <>
+                        {MIDDLE_DOT} <strong>{rowSelectedCount}</strong> selected
+                      </>
+                    )}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="text-xs h-8"
+                      onClick={selectAllShowed}
+                      disabled={showedInvitees.length === 0}
+                    >
+                      Select all who showed
+                    </Button>
+                    <Button
+                      type="button"
+                      className="text-xs h-8"
+                      onClick={() => void openAssessmentSend()}
+                      disabled={rowSelectedCount === 0}
+                    >
+                      <Mail size={14} className="mr-1 inline" />
+                      Send assessments ({rowSelectedCount})
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               {invitees.length === 0 ? (
                 <p className="text-sm text-[#9bafc9]">No Calendly registrations for this session.</p>
               ) : (
@@ -685,6 +1058,7 @@ function SessionTableRow({
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="text-left text-[10px] uppercase tracking-wide border-b border-[#e0eaf8]">
+                        {canSendAssessments && <th className={`px-3 py-2 w-8 ${CAL_HEAD}`} />}
                         <th className={`px-3 py-2 ${CAL_HEAD}`}>Name</th>
                         <th className={`px-3 py-2 ${CAL_HEAD}`}>Email</th>
                         <th className={`px-3 py-2 ${CAL_HEAD}`}>Phone</th>
@@ -694,52 +1068,97 @@ function SessionTableRow({
                       </tr>
                     </thead>
                     <tbody>
-                      {invitees.map((inv) => (
-                        <tr key={inv.email} className="border-b border-[#eef3fa] last:border-0">
-                          <td className={`px-3 py-2 font-medium ${CAL_CELL}`}>{inv.name}</td>
-                          <td className={`px-3 py-2 ${CAL_CELL}`}>{inv.email}</td>
-                          <td className={`px-3 py-2 whitespace-nowrap ${CAL_CELL}`}>{inv.phone}</td>
-                          {session.isPast && (
-                            <td className={`px-3 py-2 ${ZOOM_CELL}`}>
-                              {inv.attended === true ? (
-                                <span className="font-semibold text-green-900">Yes</span>
-                              ) : inv.attended === false ? (
-                                <span className="font-semibold text-slate-600">No-show</span>
-                              ) : (
-                                EM_DASH
-                              )}
-                            </td>
-                          )}
-                          {session.isPast && (
-                            <td className={`px-3 py-2 whitespace-nowrap ${ZOOM_CELL}`}>
-                              {inv.joinTime
-                                ? `${new Date(inv.joinTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${
-                                    inv.leaveTime
-                                      ? ` ${EM_DASH} ${new Date(inv.leaveTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-                                      : ''
-                                  }`
-                                : EM_DASH}
-                            </td>
-                          )}
-                          {session.isPast && (
-                            <td className="px-3 py-2 bg-violet-50 text-violet-950">
-                              {inv.attended === true ? (
-                                <span className={inv.assessmentStatus === 'sent' ? 'font-semibold text-violet-900' : ''}>
-                                  {assessmentStatusLabel(inv.assessmentStatus)}
-                                  {inv.assessmentMode && inv.assessmentStatus === 'sent' && (
-                                    <span className="ml-1 text-[10px] font-normal opacity-80">({inv.assessmentMode})</span>
-                                  )}
-                                </span>
-                              ) : (
-                                EM_DASH
-                              )}
-                            </td>
-                          )}
-                        </tr>
-                      ))}
+                      {invitees.map((inv) => {
+                        const showCheckbox = canSendAssessments && inv.attended === true;
+                        const alreadySent = inv.assessmentStatus === 'sent';
+                        return (
+                          <tr
+                            key={inv.email}
+                            className={`border-b border-[#eef3fa] last:border-0 ${
+                              alreadySent && inv.attended === true ? 'bg-red-50/40' : ''
+                            }`}
+                          >
+                            {canSendAssessments && (
+                              <td className={`px-3 py-2 ${CAL_CELL}`}>
+                                {showCheckbox ? (
+                                  <input
+                                    type="checkbox"
+                                    className="rounded border-[#cfe3f9]"
+                                    checked={rowSelected.has(inv.email)}
+                                    onChange={(e) => toggleRowEmail(inv.email, e.target.checked)}
+                                    aria-label={`Select ${inv.name}`}
+                                  />
+                                ) : null}
+                              </td>
+                            )}
+                            <td className={`px-3 py-2 font-medium ${CAL_CELL}`}>{inv.name}</td>
+                            <td className={`px-3 py-2 ${CAL_CELL}`}>{inv.email}</td>
+                            <td className={`px-3 py-2 whitespace-nowrap ${CAL_CELL}`}>{inv.phone}</td>
+                            {session.isPast && (
+                              <td className={`px-3 py-2 ${ZOOM_CELL}`}>
+                                {inv.attended === true ? (
+                                  <span className="font-semibold text-green-900">Yes</span>
+                                ) : inv.attended === false ? (
+                                  <span className="font-semibold text-slate-600">No-show</span>
+                                ) : (
+                                  EM_DASH
+                                )}
+                              </td>
+                            )}
+                            {session.isPast && (
+                              <td className={`px-3 py-2 whitespace-nowrap ${ZOOM_CELL}`}>
+                                {inv.joinTime
+                                  ? `${new Date(inv.joinTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${
+                                      inv.leaveTime
+                                        ? ` ${EM_DASH} ${new Date(inv.leaveTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                                        : ''
+                                    }`
+                                  : EM_DASH}
+                              </td>
+                            )}
+                            {session.isPast && (
+                              <td className="px-3 py-2 bg-violet-50 text-violet-950">
+                                {inv.attended === true ? (
+                                  <span className={alreadySent ? 'font-semibold text-red-800' : ''}>
+                                    {assessmentStatusLabel(inv.assessmentStatus)}
+                                    {inv.assessmentMode && alreadySent && (
+                                      <span className="ml-1 text-[10px] font-normal opacity-80">({inv.assessmentMode})</span>
+                                    )}
+                                    {inv.assessmentSentAt && alreadySent && (
+                                      <div className="text-[10px] font-normal text-red-700 mt-0.5">
+                                        Sent {formatAssessmentSentAt(inv.assessmentSentAt)}
+                                      </div>
+                                    )}
+                                  </span>
+                                ) : (
+                                  EM_DASH
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
+              )}
+
+              {assessmentModalOpen && (
+                <SessionAssessmentSendModal
+                  sessionLabel={`${session.dateLabel} · ${session.sessionTimeLabel}`}
+                  phase={assessmentPhase}
+                  preview={assessmentPreview}
+                  selected={assessmentSelected}
+                  sendError={assessmentSendError}
+                  onToggle={handleAssessmentToggle}
+                  onSelectEligible={handleSelectEligibleOnly}
+                  onClose={() => {
+                    if (assessmentPhase !== 'sending' && assessmentPhase !== 'checking') {
+                      setAssessmentModalOpen(false);
+                    }
+                  }}
+                  onSend={() => void handleSendAssessments()}
+                />
               )}
 
               {session.isPast && unmatchedZoom.length > 0 && (

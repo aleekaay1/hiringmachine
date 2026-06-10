@@ -7,6 +7,7 @@ export type LoadedDialQueue = {
   batchKey: string;
   batchTitle: string;
   startMode: DialQueueStartMode;
+  candidateId?: string;
 };
 
 export function candidateInBatchGroup(candidate: PipelineCandidate, batchKey: string): boolean {

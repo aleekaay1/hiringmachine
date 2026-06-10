@@ -151,6 +151,18 @@ const LeadManagerAllLeadsTable: React.FC<Props> = ({
     navigate(`/pipeline/call?batch=${encodeURIComponent(packKey)}&mode=resume`);
   };
 
+  const openLeadInCallWorkspace = (candidateId: string, packKey: string, packTitle: string) => {
+    saveDialQueueIntent({
+      batchKey: packKey,
+      batchTitle: packTitle,
+      startMode: 'resume',
+      candidateId,
+    });
+    navigate(
+      `/pipeline/call?batch=${encodeURIComponent(packKey)}&mode=resume&candidateId=${encodeURIComponent(candidateId)}`,
+    );
+  };
+
   const sortIndicator = (key: SortKey) => {
     if (sortKey !== key) return '';
     return sortDir === 'asc' ? ' ↑' : ' ↓';
@@ -261,15 +273,14 @@ const LeadManagerAllLeadsTable: React.FC<Props> = ({
                   </td>
                   <td className="whitespace-nowrap px-3 py-2 text-right">
                     <div className="inline-flex items-center gap-1">
-                      {row.effectivePhone !== '—' && (
-                        <a
-                          href={`tel:${row.effectivePhone.replace(/[^\d+]/g, '')}`}
-                          className="inline-flex rounded-lg border border-[#c8ddf4] bg-white p-1.5 text-[#285082] hover:bg-[#eef6ff]"
-                          title="Call number"
-                        >
-                          <Phone size={13} />
-                        </a>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => openLeadInCallWorkspace(row.lead.id, row.packKey, row.packTitle)}
+                        className="inline-flex rounded-lg border border-[#c8ddf4] bg-white p-1.5 text-[#285082] hover:bg-[#eef6ff]"
+                        title="Open in call workspace"
+                      >
+                        <Phone size={13} />
+                      </button>
                       <button
                         type="button"
                         onClick={() => openPackDialer(row.packKey, row.packTitle)}

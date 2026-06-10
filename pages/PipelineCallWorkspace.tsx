@@ -491,9 +491,18 @@ const PipelineCallWorkspace: React.FC = () => {
   }, [loadableBatchGroups, selectedLoadBatchKey]);
 
   React.useEffect(() => {
-    if (!loadedDialQueue || !queueList.length) return;
+    if (!loadedDialQueue) return;
+    const targetId = loadedDialQueue.candidateId?.trim();
+    if (targetId) {
+      const found = candidates.find((c) => c.id === targetId);
+      if (found) {
+        setSelectedCandidateId(found.id);
+        return;
+      }
+    }
+    if (!queueList.length) return;
     setSelectedCandidateId(queueList[0].id);
-  }, [loadedDialQueue?.batchKey, loadedDialQueue?.startMode, queueList]);
+  }, [loadedDialQueue?.batchKey, loadedDialQueue?.startMode, loadedDialQueue?.candidateId, queueList, candidates]);
 
   React.useEffect(() => {
     if (appliedDialIntentRef.current || initialLoading || !loadableBatchGroups.length) return;
@@ -501,6 +510,8 @@ const PipelineCallWorkspace: React.FC = () => {
     const intent = consumeDialQueueIntent();
     const batchKey = searchParams.get('batch') || intent?.batchKey || '';
     const modeParam = searchParams.get('mode');
+    const candidateId =
+      searchParams.get('candidateId') || searchParams.get('candidate') || intent?.candidateId || '';
     const startMode: DialQueueStartMode =
       modeParam === 'resume' || intent?.startMode === 'resume' ? 'resume' : 'first';
 
@@ -517,11 +528,16 @@ const PipelineCallWorkspace: React.FC = () => {
       batchKey: group.key,
       batchTitle: group.title,
       startMode,
+      ...(candidateId.trim() ? { candidateId: candidateId.trim() } : {}),
     });
     setSelectedLoadBatchKey(group.key);
     setActiveBatchKey(group.key);
     setDialStartMode(startMode);
-    setActionMsg(`Loaded ${group.title} from Lead Manager.`);
+    setActionMsg(
+      candidateId.trim()
+        ? `Loaded ${group.title} from Lead Manager — selected lead ready to call.`
+        : `Loaded ${group.title} from Lead Manager.`,
+    );
   }, [initialLoading, loadableBatchGroups, searchParams]);
 
   React.useEffect(() => {

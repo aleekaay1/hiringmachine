@@ -73,6 +73,25 @@ export type LiveSessionAttendeeMatch = {
   skipReason: string | null;
 };
 
+export type LiveSessionAssessmentDuplicateSource = {
+  source: string;
+  sentAt: string | null;
+  label: string;
+};
+
+export type LiveSessionAssessmentPreviewRow = {
+  email: string;
+  displayName: string;
+  inPortal: boolean;
+  pipelineStage: string | null;
+  canSendAssessment: boolean;
+  skipReason: string | null;
+  alreadySent: boolean;
+  sentAt: string | null;
+  duplicateSources: LiveSessionAssessmentDuplicateSource[];
+  sessionAssessmentMode?: 'auto' | 'manual' | null;
+};
+
 export interface SyncLiveSessionPipelineResult {
   ok: true;
   invited_stage_updated: number;
@@ -128,10 +147,33 @@ export async function syncLiveSessionPipeline(
   return { ok: true, data: result.data as unknown as SyncLiveSessionPipelineResult };
 }
 
+/** Check selected attendees against portal, session registrants, and email logs before sending. */
+export async function previewLiveSessionAssessmentEmails(
+  accessToken: string,
+  params: {
+    sessionDate: string;
+    emails: string[];
+    attendeeProfiles: Array<{ email: string; displayName: string; sessionDateKey: string }>;
+  },
+): Promise<{ ok: true; preview: LiveSessionAssessmentPreviewRow[] } | { ok: false; error: string }> {
+  const result = await postLiveSessionPipeline(accessToken, {
+    previewAssessment: true,
+    sessionDate: params.sessionDate,
+    previewAssessmentEmails: params.emails,
+    attendeeProfiles: params.attendeeProfiles,
+  });
+  if (!result.ok) return result;
+  const preview = Array.isArray(result.data.preview)
+    ? (result.data.preview as LiveSessionAssessmentPreviewRow[])
+    : [];
+  return { ok: true, preview };
+}
+
 /** Send leadership assessment link to selected portal candidates (after sync review). */
 export async function sendLiveSessionAssessmentEmails(
   accessToken: string,
   emails: string[],
+  attendeeProfiles?: Array<{ email: string; displayName: string; sessionDateKey?: string }>,
 ): Promise<
   | {
       ok: true;
@@ -144,6 +186,7 @@ export async function sendLiveSessionAssessmentEmails(
 > {
   const result = await postLiveSessionPipeline(accessToken, {
     sendAssessmentEmails: emails,
+    attendeeProfiles: attendeeProfiles ?? [],
   });
   if (!result.ok) return result;
   const d = result.data;
