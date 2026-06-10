@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Layout from '../components/Layout';
 import { Button, Input } from '../components/UI';
+import AssessmentLoadingScreen from '../components/assessment/AssessmentLoadingScreen';
 import { resolveAssessmentLookup } from '../services/assessmentLookupService';
 import { useNavigate } from 'react-router-dom';
 
@@ -9,7 +10,6 @@ const AssessmentLookup: React.FC = () => {
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const [alreadyCompleted, setAlreadyCompleted] = useState(false);
-  const [lookupHint, setLookupHint] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -23,36 +23,34 @@ const AssessmentLookup: React.FC = () => {
 
     try {
       setLoading(true);
-      setLookupHint(null);
       const result = await resolveAssessmentLookup({
         email: normalizedEmail || undefined,
         phone: normalizedPhone || undefined,
       });
 
       if (!result.ok) {
-        alert(result.message || result.error);
         setLoading(false);
+        alert(result.message || result.error);
         return;
       }
 
-      if (result.source.startsWith('live_session')) {
-        setLookupHint('Found on the live session list — your assessment profile is ready.');
-      }
-
       if (result.alreadyCompleted) {
-        setAlreadyCompleted(true);
         setLoading(false);
+        setAlreadyCompleted(true);
         return;
       }
 
       navigate(`/assessment-room/${result.candidateId}`);
     } catch (err) {
       console.error(err);
-      alert('There was an issue looking up your record. Please try again or speak with the management team.');
-    } finally {
       setLoading(false);
+      alert('There was an issue looking up your record. Please try again or speak with the management team.');
     }
   };
+
+  if (loading) {
+    return <AssessmentLoadingScreen />;
+  }
 
   return (
     <Layout>
@@ -78,11 +76,6 @@ const AssessmentLookup: React.FC = () => {
             </div>
           ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
-            {lookupHint && (
-              <p className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-900">
-                {lookupHint}
-              </p>
-            )}
             <Input
               label="Email Address (preferred)"
               type="email"
@@ -102,8 +95,8 @@ const AssessmentLookup: React.FC = () => {
               matches our live session records.
             </p>
 
-            <Button type="submit" fullWidth disabled={loading}>
-              {loading ? 'Finding your profile...' : 'Continue to Assessment'}
+            <Button type="submit" fullWidth>
+              Continue to Assessment
             </Button>
           </form>
           )}

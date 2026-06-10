@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
+import AssessmentLoadingScreen from '../components/assessment/AssessmentLoadingScreen';
 import { Button } from '../components/UI';
 import { getCandidateById, saveCandidate, calculateScore } from '../services/storageService';
 import { triggerPostAssessmentSubmitEmail } from '../services/candidateEmailTrigger';
@@ -320,13 +321,7 @@ const AssessmentRoomForm: React.FC = () => {
   const canSubmit = isQuestionsComplete && isMergedComplete;
 
   if (loading) {
-    return (
-      <Layout>
-        <div className="flex-grow flex items-center justify-center">
-          <p className="text-gray-500">Loading...</p>
-        </div>
-      </Layout>
-    );
+    return <AssessmentLoadingScreen />;
   }
 
   if (alreadyCompleted && candidate) {
