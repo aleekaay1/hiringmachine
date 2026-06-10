@@ -18,6 +18,7 @@ import {
   type ZoomParticipant,
   zoomPastInstancesForMeetingId,
 } from './zoomAttendance.ts';
+import { ZOOM_MEETING_URL } from './hiringUrls.ts';
 import { getZoomServerToken, zoomApiGet } from './zoomServerAuth.ts';
 
 const TZ = 'America/Toronto';
@@ -52,10 +53,21 @@ const DEFAULT_ADMIN = {
   questionnaireDisqualified: null as unknown,
 };
 
+function meetingIdFromJoinUrl(url: string): string | null {
+  const m = url.match(/\/j\/(\d{9,12})/i) ?? url.match(/[?&]meetingId=(\d+)/i);
+  return m?.[1] ?? null;
+}
+
+/** PMI — env override, else digits from ZOOM_MEETING_URL join link (6478311787). */
 function resolveMeetingIds(): string[] {
   const raw = Deno.env.get('ZOOM_LIVE_SESSION_MEETING_ID')?.trim();
-  if (!raw) return [];
-  return raw.split(/[\s,;]+/).map((s) => s.replace(/\D/g, '')).filter(Boolean);
+  if (raw && !['*', 'any'].includes(raw.toLowerCase())) {
+    const ids = raw.split(/[,|]/).map((s) => s.replace(/\D/g, '')).filter(Boolean);
+    if (ids.length > 0) return [...new Set(ids)];
+  }
+  const fromUrl = meetingIdFromJoinUrl(ZOOM_MEETING_URL);
+  if (fromUrl) return [fromUrl];
+  return ['6478311787'];
 }
 
 function parseZoomStartMs(m: Record<string, unknown>): number {

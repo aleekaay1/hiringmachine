@@ -1,14 +1,19 @@
 # live-session-auto-assessment
 
-Runs **~60 minutes after** the Wednesday 11:30 AM ET live session (target **12:30 PM ET**):
+**Disabled by default.** Leadership assessments are sent **manually** from Live Sessions (`sync-live-session-pipeline`).
+
+To turn automation back on: set `LIVE_SESSION_AUTO_ASSESSMENT_ENABLED=true` and schedule the cron (see `paste_live_session_auto_assessment_cron.sql`).
+
+When enabled, runs **~60 minutes after** the Wednesday 11:30 AM ET session:
 
 1. Re-fetches Zoom participants and re-matches Calendly registrations
 2. Updates pipeline stages (invited / attended)
-3. Sends the **existing** leadership assessment email (`stage3_assessment_link` template) to eligible portal candidates who showed
+3. Sends the leadership assessment email (`stage3_assessment_link` template)
 
 ## Secrets
 
-- `LIVE_SESSION_AUTO_CRON_SECRET` — required; pass as header `x-cron-secret`
+- `LIVE_SESSION_AUTO_ASSESSMENT_ENABLED` — must be `true` to send (default: off)
+- `LIVE_SESSION_AUTO_CRON_SECRET` — required for cron invoke; pass as header `x-cron-secret`
 - `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_URL`
 - `ZOOM_*` (same as `integrations-zoom-calendly`)
 - `ZOOM_LIVE_SESSION_MEETING_ID` — PMI digits

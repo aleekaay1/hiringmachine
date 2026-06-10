@@ -1,10 +1,10 @@
 /**
- * Cron: ~60 min after Wednesday live session (11:30 AM ET → run ~12:30 ET).
- * Re-fetches Zoom attendance, updates matches, sends leadership assessment emails (existing template).
+ * Optional cron: ~60 min after Wednesday live session (11:30 AM ET → run ~12:30 ET).
+ * Disabled by default — set LIVE_SESSION_AUTO_ASSESSMENT_ENABLED=true to allow sends.
+ * Manual sends: Live Sessions → Sync pipeline → send assessments (sync-live-session-pipeline).
  *
  * Invoke: POST with header x-cron-secret: <LIVE_SESSION_AUTO_CRON_SECRET>
  * Optional: ?dry_run=true | ?session_date=2026-06-10
- * Deploy: supabase functions deploy live-session-auto-assessment
  */
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
@@ -18,6 +18,11 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, apikey, x-client-info, x-cron-secret',
 };
+
+function isAutoAssessmentEnabled(): boolean {
+  const flag = Deno.env.get('LIVE_SESSION_AUTO_ASSESSMENT_ENABLED')?.trim().toLowerCase();
+  return flag === 'true' || flag === '1' || flag === 'yes';
+}
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -49,6 +54,17 @@ Deno.serve(async (req) => {
     const url = new URL(req.url);
     const dryRun = url.searchParams.get('dry_run') === 'true';
     const forcedDate = url.searchParams.get('session_date')?.trim() || '';
+
+    if (!isAutoAssessmentEnabled()) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          disabled: true,
+          message: 'Auto leadership assessment is off. Send manually from Live Sessions.',
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;

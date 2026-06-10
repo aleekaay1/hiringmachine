@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckCircle2, ExternalLink, Phone, RefreshCw, Settings, Video } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Phone, RefreshCw, Search, Settings, Video } from 'lucide-react';
 import CandidateResumeDetailsCard from '../components/pipeline/CandidateResumeDetailsCard';
 import LeadBatchAccordion from '../components/pipeline/LeadBatchAccordion';
 import PipelineAuthShell from '../components/PipelineAuthShell';
@@ -120,6 +120,28 @@ function normalizeDispositionLabel(value: string | null | undefined): string {
   return String(value || '').trim().toLowerCase();
 }
 
+function matchesDoneLaneSearch(
+  candidate: PipelineCandidate,
+  disposition: string,
+  query: string,
+): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const qDigits = q.replace(/\D/g, '');
+  const { effectivePhone } = readPipelineCandidatePhone(candidate);
+  const phoneDigits = effectivePhone.replace(/\D/g, '');
+  const name = String(candidate.full_name || '').toLowerCase();
+  const disp = disposition.toLowerCase();
+  const email = String(candidate.email || '').toLowerCase();
+  return (
+    name.includes(q) ||
+    disp.includes(q) ||
+    email.includes(q) ||
+    effectivePhone.toLowerCase().includes(q) ||
+    (qDigits.length >= 3 && phoneDigits.includes(qDigits))
+  );
+}
+
 function dispositionIsRetry(label: string): boolean {
   return Object.prototype.hasOwnProperty.call(RETRY_PRIORITY_ORDER, label);
 }
@@ -186,6 +208,7 @@ const PipelineCallWorkspace: React.FC = () => {
   const [loadedDialQueue, setLoadedDialQueue] = React.useState<LoadedDialQueue | null>(null);
   const [expandedQueueBatchKeys, setExpandedQueueBatchKeys] = React.useState<Set<string>>(() => new Set());
   const [expandedDoneBatchKeys, setExpandedDoneBatchKeys] = React.useState<Set<string>>(() => new Set());
+  const [doneSearch, setDoneSearch] = React.useState('');
   const selectedCandidateIdRef = React.useRef<string | null>(null);
   const appliedDialIntentRef = React.useRef(false);
 
@@ -437,12 +460,21 @@ const PipelineCallWorkspace: React.FC = () => {
     [queueList, isCandidateNew],
   );
 
+  const filteredDoneList = React.useMemo(() => {
+    if (!doneSearch.trim()) return doneList;
+    return doneList.filter((candidate) => {
+      const latest = latestByCandidate.get(candidate.id);
+      const disposition = latest?.disposition || 'Disposed';
+      return matchesDoneLaneSearch(candidate, disposition, doneSearch);
+    });
+  }, [doneList, doneSearch, latestByCandidate]);
+
   const doneBatchGroups = React.useMemo(
     () =>
-      groupPipelineCandidatesByBatch(doneList, {
+      groupPipelineCandidatesByBatch(filteredDoneList, {
         isDone: () => true,
       }),
-    [doneList],
+    [filteredDoneList],
   );
 
   const visibleQueueBatchGroups = React.useMemo(() => {
@@ -1354,10 +1386,25 @@ const PipelineCallWorkspace: React.FC = () => {
             </div>
 
             <div className={`rounded-2xl border p-4 ${tone.glassPanel}`} data-tour="call-done-panel">
-              <div className="mb-3 flex items-center justify-between gap-2">
-                <div>
-                  <p className={`text-sm font-semibold ${tone.panelTitle}`}>Done</p>
-                  <p className={`text-xs ${tone.panelMuted}`}>{doneList.length} completed</p>
+              <div className="mb-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className={`text-sm font-semibold ${tone.panelTitle}`}>Done</p>
+                    <p className={`text-xs ${tone.panelMuted}`}>
+                      {doneSearch.trim()
+                        ? `${filteredDoneList.length} of ${doneList.length} completed`
+                        : `${doneList.length} completed`}
+                    </p>
+                  </div>
+                </div>
+                <div className="relative">
+                  <Search size={13} className={`absolute left-2.5 top-1/2 -translate-y-1/2 ${tone.panelLabel}`} />
+                  <input
+                    value={doneSearch}
+                    onChange={(e) => setDoneSearch(e.target.value)}
+                    placeholder="Search name, phone, or disposition"
+                    className={`w-full rounded-lg border py-2 pl-8 pr-2 text-xs ${tone.input}`}
+                  />
                 </div>
               </div>
               <LeadBatchAccordion
@@ -1365,10 +1412,16 @@ const PipelineCallWorkspace: React.FC = () => {
                 expandedKeys={expandedDoneBatchKeys}
                 onToggle={toggleDoneBatch}
                 compact
-                emptyMessage="Disposed candidates will appear here grouped by batch."
+                emptyMessage={
+                  doneSearch.trim()
+                    ? 'No done leads match your search.'
+                    : 'Disposed candidates will appear here grouped by batch.'
+                }
                 tone={batchAccordionTone}
                 renderItem={(candidate) => {
                   const latest = latestByCandidate.get(candidate.id);
+                  const disposition = latest?.disposition || 'Disposed';
+                  const phone = readPipelineCandidatePhone(candidate).effectivePhone || '—';
                   const isSelected = candidate.id === currentCandidate?.id;
                   return (
                     <div
@@ -1384,8 +1437,9 @@ const PipelineCallWorkspace: React.FC = () => {
                       >
                         <p className={`truncate text-xs font-semibold ${tone.panelTitle}`}>
                           {candidate.full_name || 'Unknown Candidate'}
+                          <span className={`ml-1.5 font-normal ${tone.panelMuted}`}>{phone}</span>
                         </p>
-                        <p className={`truncate text-[10px] ${tone.panelMuted}`}>{latest?.disposition || 'Disposed'}</p>
+                        <p className={`truncate text-[10px] ${tone.panelMuted}`}>{disposition}</p>
                       </button>
                       <button
                         type="button"

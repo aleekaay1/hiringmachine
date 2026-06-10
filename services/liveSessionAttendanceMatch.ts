@@ -1,5 +1,6 @@
 /**
  * Calendly invitee ↔ Zoom participant matching for live sessions.
+ * Keep in sync with supabase/functions/_shared/liveSessionAttendanceMatch.ts
  */
 
 export type ZoomParticipantLike = {

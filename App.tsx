@@ -24,7 +24,9 @@ import PipelineCallWorkspace from './pages/PipelineCallWorkspace';
 import PipelinePerformance from './pages/PipelinePerformance';
 import PipelineEmailWorkspace from './pages/PipelineEmailWorkspace';
 import PipelineUploadsWorkspace from './pages/PipelineUploadsWorkspace';
-import LeadManagerPage from './pages/LeadManagerPage';
+import LeadManagerLayout from './pages/LeadManagerLayout';
+import LeadManagerLeadsPage from './pages/LeadManagerLeadsPage';
+import LeadManagerPacksPage from './pages/LeadManagerPacksPage';
 import WebinarVerifyPage from './pages/WebinarVerifyPage';
 import RoleHome from './pages/RoleHome';
 import Reports from './pages/Reports';
@@ -65,7 +67,10 @@ const App: React.FC = () => {
           <Route path="/hr/leads" element={<HrAllLeadsPage />} />
           <Route path="/account" element={<AccountSettingsPage />} />
           <Route path="/pipeline" element={<Pipeline />} />
-          <Route path="/pipeline/lead-manager" element={<LeadManagerPage />} />
+          <Route path="/pipeline/lead-manager" element={<LeadManagerLayout />}>
+            <Route index element={<LeadManagerPacksPage />} />
+            <Route path="leads" element={<LeadManagerLeadsPage />} />
+          </Route>
           <Route path="/pipeline/call" element={<PipelineCallWorkspace />} />
           <Route path="/pipeline/performance" element={<PipelinePerformance />} />
           <Route path="/pipeline/email" element={<PipelineEmailWorkspace />} />

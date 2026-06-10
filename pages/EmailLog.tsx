@@ -1333,51 +1333,53 @@ const EmailLog: React.FC = () => {
 
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm overflow-hidden">
           <div className="overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto">
-            <table className="min-w-full text-left text-xs border-collapse">
-              <thead className="sticky top-0 z-10 bg-[#eef2f7] text-[#0B1B34] font-semibold border-b border-[#d6deea]">
+            <table className="min-w-[1500px] w-full text-left text-sm border-collapse">
+              <thead className="sticky top-0 z-10 bg-[#eef2f7] text-[#0B1B34] text-xs font-semibold border-b border-[#d6deea]">
                 <tr>
-                  <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">When</th>
-                  <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">From</th>
-                  <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">To</th>
-                  <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">CC</th>
-                  <th className="px-2 py-2 border-r border-[#d6deea] min-w-[140px]">Subject</th>
-                  <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">Category</th>
-                  <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">Mode</th>
-                  <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">Source</th>
-                  <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">Trigger</th>
-                  <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">Candidate</th>
-                  <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">Sent by</th>
-                  <th className="px-2 py-2 whitespace-nowrap">Status</th>
+                  <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[160px]">When</th>
+                  <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[300px]">From</th>
+                  <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[260px]">To</th>
+                  <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[120px]">CC</th>
+                  <th className="px-3 py-2.5 border-r border-[#d6deea] min-w-[220px]">Subject</th>
+                  <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[150px]">Category</th>
+                  <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[90px]">Mode</th>
+                  <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[180px]">Source</th>
+                  <th className="px-3 py-2.5 border-r border-[#d6deea] min-w-[200px]">Trigger</th>
+                  <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[100px]">Candidate</th>
+                  <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[100px]">Sent by</th>
+                  <th className="px-3 py-2.5 whitespace-nowrap min-w-[80px]">Status</th>
                 </tr>
               </thead>
-              <tbody className="font-mono text-[11px] text-[#1A2942]">
+              <tbody className="text-[13px] text-[#1A2942]">
                 {filtered.map(({ row: r, categoryLabel, modeLabel }) => (
-                  <tr key={r.id} className="border-b border-[#e8edf4] hover:bg-[#f8fafc] align-top">
-                    <td className="px-2 py-1.5 border-r border-[#eef2f7] whitespace-nowrap text-[#334155]">
+                  <tr key={r.id} className="border-b border-[#e8edf4] hover:bg-[#f8fafc] even:bg-[#fafcff]">
+                    <td className="px-3 py-2 border-r border-[#eef2f7] whitespace-nowrap text-[#334155] text-xs">
                       {formatDateTimeCanadaEastern(r.created_at)}
                     </td>
-                    <td className="px-2 py-1.5 border-r border-[#eef2f7] max-w-[200px] break-all">{r.from_email}</td>
-                    <td className="px-2 py-1.5 border-r border-[#eef2f7] max-w-[220px] break-all">{r.to_email}</td>
-                    <td className="px-2 py-1.5 border-r border-[#eef2f7] max-w-[160px] break-all">{r.cc_email || '—'}</td>
-                    <td className="px-2 py-1.5 border-r border-[#eef2f7] max-w-[280px] break-words">{r.subject}</td>
-                    <td className="px-2 py-1.5 border-r border-[#eef2f7] whitespace-nowrap font-sans text-[10px]">{categoryLabel}</td>
-                    <td className="px-2 py-1.5 border-r border-[#eef2f7] whitespace-nowrap font-sans text-[10px]">{modeLabel}</td>
-                    <td className="px-2 py-1.5 border-r border-[#eef2f7] whitespace-nowrap">{r.source}</td>
-                    <td className="px-2 py-1.5 border-r border-[#eef2f7] max-w-[200px] break-words">
-                      {r.trigger_label || '—'}
+                    <td className="px-3 py-2 border-r border-[#eef2f7] whitespace-nowrap" title={r.from_email}>
+                      {r.from_email}
                     </td>
-                    <td className="px-2 py-1.5 border-r border-[#eef2f7] break-all max-w-[120px]">{r.candidate_id || '—'}</td>
-                    <td className="px-2 py-1.5 border-r border-[#eef2f7] break-all max-w-[120px]">{r.sent_by_user_id || '—'}</td>
-                    <td className="px-2 py-1.5">
+                    <td className="px-3 py-2 border-r border-[#eef2f7] whitespace-nowrap" title={r.to_email}>
+                      {r.to_email}
+                    </td>
+                    <td className="px-3 py-2 border-r border-[#eef2f7] whitespace-nowrap">{r.cc_email || '—'}</td>
+                    <td className="px-3 py-2 border-r border-[#eef2f7]">{r.subject}</td>
+                    <td className="px-3 py-2 border-r border-[#eef2f7] whitespace-nowrap text-xs">{categoryLabel}</td>
+                    <td className="px-3 py-2 border-r border-[#eef2f7] whitespace-nowrap text-xs">{modeLabel}</td>
+                    <td className="px-3 py-2 border-r border-[#eef2f7] whitespace-nowrap text-xs">{r.source}</td>
+                    <td className="px-3 py-2 border-r border-[#eef2f7] text-xs">{r.trigger_label || '—'}</td>
+                    <td className="px-3 py-2 border-r border-[#eef2f7] whitespace-nowrap text-xs font-mono">{r.candidate_id || '—'}</td>
+                    <td className="px-3 py-2 border-r border-[#eef2f7] whitespace-nowrap text-xs font-mono">{r.sent_by_user_id || '—'}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
                       <span
                         className={
-                          r.status === 'failed' ? 'text-red-700 font-semibold' : 'text-emerald-800'
+                          r.status === 'failed' ? 'text-red-700 font-semibold' : 'text-emerald-800 font-medium'
                         }
                       >
                         {r.status}
                       </span>
                       {r.error_message ? (
-                        <div className="text-red-600 font-sans normal-case mt-0.5 max-w-[240px]">{r.error_message}</div>
+                        <div className="text-red-600 text-xs mt-0.5 max-w-[280px] whitespace-normal">{r.error_message}</div>
                       ) : null}
                     </td>
                   </tr>

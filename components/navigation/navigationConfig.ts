@@ -11,6 +11,7 @@ import {
   MonitorPlay,
   PhoneCall,
   QrCode,
+  Search,
   Target,
   User,
   UserPlus,
@@ -63,6 +64,7 @@ export const NAV_GROUPS: NavGroup[] = [
     tourId: 'nav-workstation',
     items: [
       { name: 'Lead manager', route: '/pipeline/lead-manager', icon: Target, section: 'pipeline-lead-manager' },
+      { name: 'Search leads', route: '/pipeline/lead-manager/leads', icon: Search, section: 'pipeline-lead-manager' },
       { name: 'Phone workspace', route: '/pipeline/call', icon: PhoneCall, section: 'pipeline-call' },
       { name: 'Email workspace', route: '/pipeline/email', icon: Mail, section: 'pipeline-email' },
     ],

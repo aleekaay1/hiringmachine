@@ -776,13 +776,18 @@ async function resolvePipelineViewerScope(): Promise<PipelineViewerScope> {
   return { userId, hasFullVisibility: false };
 }
 
-function applyPipelineUploaderScope<TQuery extends { eq: (column: string, value: unknown) => TQuery }>(
+function applyPipelineUploaderScope<
+  TQuery extends {
+    eq: (column: string, value: unknown) => TQuery;
+    or: (filters: string) => TQuery;
+  },
+>(
   query: TQuery,
   scope: PipelineViewerScope,
 ): TQuery {
   if (scope.hasFullVisibility) return query;
   if (!scope.userId) return query.eq('id', '__no_pipeline_access__');
-  return query.eq('uploader_user_id', scope.userId);
+  return query.or(`uploader_user_id.eq.${scope.userId},assigned_to_user_id.eq.${scope.userId}`);
 }
 
 async function canAccessPipelineCandidate(candidateId: string): Promise<boolean> {

@@ -47,7 +47,9 @@ const Layout: React.FC<LayoutProps> = ({
     if (location.pathname === '/home') return 'home';
     if (location.pathname === '/account') return 'account';
     if (location.pathname === '/pipeline') return 'pipeline';
-    if (location.pathname === '/pipeline/lead-manager') return 'pipeline-lead-manager';
+    if (location.pathname === '/pipeline/lead-manager' || location.pathname.startsWith('/pipeline/lead-manager/')) {
+      return 'pipeline-lead-manager';
+    }
     if (location.pathname === '/pipeline/call') return 'pipeline-call';
     if (location.pathname === '/pipeline/performance') return 'pipeline-performance';
     if (location.pathname === '/pipeline/email') return 'pipeline-email';

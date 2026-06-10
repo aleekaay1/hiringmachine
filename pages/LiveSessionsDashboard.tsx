@@ -19,6 +19,7 @@ import {
   type LiveSessionAttendeeMatch,
 } from '../services/liveSessionPipelineSync';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
+import { listUnmatchedZoomParticipants } from '../services/liveSessionAttendanceMatch';
 import { ChevronDown, ChevronRight, Mail, RefreshCw, Users, Video, X } from 'lucide-react';
 import { signInWithGoogle } from '../services/googleAuth';
 
@@ -38,7 +39,6 @@ type InviteeRow = {
   joinTime: string | null;
   leaveTime: string | null;
   matchMethod?: 'email' | 'hybrid' | 'name' | null;
-  isWalkin?: boolean;
   assessmentStatus?: string | null;
   assessmentMode?: 'auto' | 'manual' | null;
 };
@@ -79,47 +79,47 @@ function mapUpcomingInvitee(i: UpcomingMeetingInvitee): InviteeRow {
   };
 }
 
-function inviteesForSession(row: LiveSessionScheduleRow): InviteeRow[] {
+/** Calendly registrations only — no Zoom-only duplicate rows. */
+function calendlyInviteesForSession(row: LiveSessionScheduleRow): InviteeRow[] {
   const seen = new Set<string>();
   const out: InviteeRow[] = [];
-  const add = (inv: InviteeRow) => {
-    const key = inv.email !== EM_DASH ? inv.email.toLowerCase() : inv.name.toLowerCase();
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    out.push(inv);
-  };
-  for (const i of row.past?.invitees ?? []) add(mapPastInvitee(i));
-  for (const i of row.upcoming?.invitees ?? []) add(mapUpcomingInvitee(i));
-
-  const past = row.past;
-  if (past) {
-    const matchedKeys = new Set(
-      past.invitees
-        .filter((i) => i.attended_zoom)
-        .map((i) => {
-          const email = String(i.email ?? '').trim().toLowerCase();
-          return email ? `e:${email}` : `n:${(i.name ?? '').toLowerCase()}`;
-        }),
-    );
-    for (const participant of past.participants ?? []) {
-      const email = String(participant.email ?? '').trim().toLowerCase();
-      const name = String(participant.name ?? '').trim();
-      const key = email ? `e:${email}` : name ? `n:${name.toLowerCase()}` : '';
-      if (!key || matchedKeys.has(key)) continue;
-      add({
-        name: name || EM_DASH,
-        email: email || EM_DASH,
-        phone: EM_DASH,
-        status: 'walk-in',
-        attended: true,
-        joinTime: participant.join_time ?? null,
-        leaveTime: participant.leave_time ?? null,
-        isWalkin: true,
-      });
-    }
+  for (const i of row.past?.invitees ?? []) {
+    const email = String(i.email ?? '').trim().toLowerCase();
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    out.push(mapPastInvitee(i));
   }
-
+  for (const i of row.upcoming?.invitees ?? []) {
+    const email = String(i.email ?? '').trim().toLowerCase();
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    out.push(mapUpcomingInvitee(i));
+  }
   return out;
+}
+
+function unmatchedZoomRowsForSession(row: LiveSessionScheduleRow): InviteeRow[] {
+  const past = row.past;
+  if (!past?.participants?.length) return [];
+  const rawInvitees = past.invitees.map((i) => ({
+    email: String(i.email ?? '').trim(),
+    name: String(i.name ?? '').trim(),
+  }));
+  const zoomParticipants = past.participants.map((p) => ({
+    name: p.name,
+    user_email: p.email,
+    join_time: p.join_time,
+    leave_time: p.leave_time,
+  }));
+  return listUnmatchedZoomParticipants(rawInvitees, zoomParticipants).map((p) => ({
+    name: String(p.name || '').trim() || EM_DASH,
+    email: String(p.user_email || '').trim() || EM_DASH,
+    phone: EM_DASH,
+    status: 'zoom only',
+    attended: true,
+    joinTime: p.join_time ?? null,
+    leaveTime: p.leave_time ?? null,
+  }));
 }
 
 const LiveSessionsDashboard: React.FC = () => {
@@ -618,14 +618,14 @@ function SessionTableRow({
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const invitees = inviteesForSession(session);
+  const invitees = calendlyInviteesForSession(session);
+  const unmatchedZoom = unmatchedZoomRowsForSession(session);
   const pastStats = session.past?.stats;
   const showedCount = pastSessionShowedCount(pastStats, session.past);
   const matchedCount = pastStats?.attended_matched_count ?? session.past?.invitees.filter((i) => i.attended_zoom).length ?? 0;
-  const walkinCount = pastStats?.walkin_count ?? session.past?.walkin_emails?.length ?? 0;
-  const matchedByEmail = pastStats?.matched_by_email ?? 0;
-  const matchedByHybrid = pastStats?.matched_by_hybrid ?? 0;
-  const matchedByName = pastStats?.matched_by_name ?? 0;
+  const unmatchedCount = unmatchedZoom.length > 0
+    ? unmatchedZoom.length
+    : pastStats?.walkin_count ?? session.past?.walkin_emails?.length ?? 0;
 
   return (
     <>
@@ -660,97 +660,54 @@ function SessionTableRow({
                   </span>
                 )}
               </p>
-              {session.isPast && walkinCount > 0 && (
-                <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
-                  <strong>{walkinCount}</strong> Zoom joiner{walkinCount === 1 ? '' : 's'} not matched to a Calendly registration
-                  {session.past?.participants?.length
-                    ? ` — ${session.past.participants
-                        .filter((p) => {
-                          const email = String(p.email ?? '').trim().toLowerCase();
-                          const name = String(p.name ?? '').trim().toLowerCase();
-                          const matched = session.past?.invitees?.some((i) => {
-                            if (!i.attended_zoom) return false;
-                            const ie = String(i.email ?? '').trim().toLowerCase();
-                            return (email && ie === email) || (name && String(i.name ?? '').trim().toLowerCase() === name);
-                          });
-                          return !matched;
-                        })
-                        .map((p) => p.name || p.email || 'Unknown')
-                        .join(', ')}`
-                    : ''}
-                </p>
-              )}
               {session.isPast && (
                 <p className="text-xs text-[#5a6f8a]">
-                  <strong className="text-[#0B1B34]">{matchedCount}</strong> registration{matchedCount === 1 ? '' : 's'} matched to Zoom
-                  {matchedByEmail + matchedByHybrid + matchedByName > 0 && (
+                  <strong className="text-[#0B1B34]">{matchedCount}</strong> of {session.scheduledCount} Calendly registration
+                  {session.scheduledCount === 1 ? '' : 's'} matched on Zoom
+                  {unmatchedCount > 0 && (
                     <>
-                      {' '}({matchedByEmail} email
-                      {matchedByHybrid > 0 ? `, ${matchedByHybrid} email+name` : ''}
-                      {matchedByName > 0 ? `, ${matchedByName} name` : ''})
+                      {MIDDLE_DOT} <strong className="text-amber-900">{unmatchedCount}</strong> Zoom joiner
+                      {unmatchedCount === 1 ? '' : 's'} not on Calendly
                     </>
                   )}
-                  {walkinCount > 0 && (
-                    <>
-                      {MIDDLE_DOT} <strong className="text-[#0B1B34]">{walkinCount}</strong> walk-in{walkinCount === 1 ? '' : 's'}
-                    </>
-                  )}
-                  {session.attendanceRatePct != null && (
-                    <>
-                      {MIDDLE_DOT} match rate: <strong className="text-[#0B1B34]">{session.attendanceRatePct}%</strong>
-                      {' '}({matchedCount} of {session.scheduledCount} scheduled)
-                    </>
-                  )}
-                  {MIDDLE_DOT} leadership assessment sent:{' '}
+                  {MIDDLE_DOT} assessments sent:{' '}
                   <strong className="text-violet-900">{session.assessmentSentCount ?? 0}</strong>
-                  {session.past?.stats?.assessment_auto_run_at && (
-                    <span className="text-[#9ba8ba]">
-                      {' '}(auto-run {formatDateTimeCanadaEastern(session.past.stats.assessment_auto_run_at)})
-                    </span>
-                  )}
                 </p>
               )}
 
               {invitees.length === 0 ? (
-                <p className="text-sm text-[#9bafc9]">No registrations for this session.</p>
+                <p className="text-sm text-[#9bafc9]">No Calendly registrations for this session.</p>
               ) : (
                 <div className="overflow-x-auto rounded-xl border border-[#e0eaf8] bg-white">
+                  <p className={`border-b border-[#e0eaf8] px-3 py-2 text-[10px] font-semibold uppercase tracking-wide ${CAL_HEAD}`}>
+                    Calendly registrations
+                  </p>
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="text-left text-[10px] uppercase tracking-wide border-b border-[#e0eaf8]">
                         <th className={`px-3 py-2 ${CAL_HEAD}`}>Name</th>
                         <th className={`px-3 py-2 ${CAL_HEAD}`}>Email</th>
                         <th className={`px-3 py-2 ${CAL_HEAD}`}>Phone</th>
-                        <th className={`px-3 py-2 ${CAL_HEAD}`}>Status</th>
-                        {session.isPast && <th className={`px-3 py-2 ${ZOOM_HEAD}`}>Attended</th>}
+                        {session.isPast && <th className={`px-3 py-2 ${ZOOM_HEAD}`}>Showed</th>}
                         {session.isPast && <th className={`px-3 py-2 ${ZOOM_HEAD}`}>Join / leave</th>}
                         {session.isPast && <th className="px-3 py-2 bg-violet-100/90 text-violet-900">Assessment</th>}
                       </tr>
                     </thead>
                     <tbody>
                       {invitees.map((inv) => (
-                        <tr key={`${inv.email}-${inv.name}`} className="border-b border-[#eef3fa] last:border-0">
+                        <tr key={inv.email} className="border-b border-[#eef3fa] last:border-0">
                           <td className={`px-3 py-2 font-medium ${CAL_CELL}`}>{inv.name}</td>
                           <td className={`px-3 py-2 ${CAL_CELL}`}>{inv.email}</td>
                           <td className={`px-3 py-2 whitespace-nowrap ${CAL_CELL}`}>{inv.phone}</td>
-                          <td className={`px-3 py-2 capitalize ${CAL_CELL}`}>{inv.status}</td>
                           {session.isPast && (
                             <td className={`px-3 py-2 ${ZOOM_CELL}`}>
-                              {inv.attended === true && (
-                                <span className="font-semibold">
-                                  {inv.isWalkin ? 'Walk-in' : 'Attended'}
-                                  {inv.matchMethod === 'name' && !inv.isWalkin && (
-                                    <span className="ml-1 font-normal text-[10px] text-green-800/80">(name)</span>
-                                  )}
-                                  {inv.matchMethod === 'hybrid' && !inv.isWalkin && (
-                                    <span className="ml-1 font-normal text-[10px] text-green-800/80">(email+name)</span>
-                                  )}
-                                </span>
+                              {inv.attended === true ? (
+                                <span className="font-semibold text-green-900">Yes</span>
+                              ) : inv.attended === false ? (
+                                <span className="font-semibold text-slate-600">No-show</span>
+                              ) : (
+                                EM_DASH
                               )}
-                              {inv.attended === false && (
-                                <span className="font-semibold">No-show</span>
-                              )}
-                              {inv.attended == null && <span>{EM_DASH}</span>}
                             </td>
                           )}
                           {session.isPast && (
@@ -778,6 +735,40 @@ function SessionTableRow({
                               )}
                             </td>
                           )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {session.isPast && unmatchedZoom.length > 0 && (
+                <div className="overflow-x-auto rounded-xl border border-amber-200 bg-amber-50/40">
+                  <p className="border-b border-amber-200 bg-amber-100/80 px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-amber-950">
+                    Zoom joiners not on Calendly ({unmatchedZoom.length})
+                  </p>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-[10px] uppercase tracking-wide border-b border-amber-200 text-amber-900">
+                        <th className="px-3 py-2">Zoom name</th>
+                        <th className="px-3 py-2">Email (if any)</th>
+                        <th className="px-3 py-2">Join / leave</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {unmatchedZoom.map((inv, idx) => (
+                        <tr key={`${inv.name}-${inv.email}-${idx}`} className="border-b border-amber-100 last:border-0">
+                          <td className="px-3 py-2 font-medium text-amber-950">{inv.name}</td>
+                          <td className="px-3 py-2 text-amber-900">{inv.email}</td>
+                          <td className="px-3 py-2 whitespace-nowrap text-amber-900">
+                            {inv.joinTime
+                              ? `${new Date(inv.joinTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${
+                                  inv.leaveTime
+                                    ? ` ${EM_DASH} ${new Date(inv.leaveTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                                    : ''
+                                }`
+                              : EM_DASH}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
