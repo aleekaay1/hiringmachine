@@ -59,8 +59,32 @@ export function externalNumbersFromHistory(row: Record<string, unknown>): string
   return out;
 }
 
+export function phoneLast10(phone: string): string {
+  const d = digitsOnly(phone);
+  return d.length >= 10 ? d.slice(-10) : d;
+}
+
 export function historyPhoneMatches(row: Record<string, unknown>, phone: string): boolean {
-  return externalNumbersFromHistory(row).some((n) => phonesMatch(phone, n));
+  return rowContainsPhone(row, phone);
+}
+
+/** Match known caller fields, then any string/number value containing last-10 digits. */
+export function rowContainsPhone(row: Record<string, unknown>, phone: string): boolean {
+  const target = phoneLast10(phone);
+  if (target.length < 10) return false;
+  if (externalNumbersFromHistory(row).some((n) => phonesMatch(phone, n))) return true;
+  for (const v of Object.values(row)) {
+    if (typeof v === 'string') {
+      const d = digitsOnly(v);
+      if (d.length >= 10 && d.slice(-10) === target) return true;
+      if (d.includes(target)) return true;
+    }
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      const d = digitsOnly(String(v));
+      if (d.length >= 10 && d.slice(-10) === target) return true;
+    }
+  }
+  return false;
 }
 
 export function extensionsFromHistory(row: Record<string, unknown>): string[] {

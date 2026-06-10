@@ -8,9 +8,12 @@ import { RECRUITER_3CX_EXTENSIONS } from '../_shared/recruiter3cxExtensions.ts';
 import {
   fetchThreeCxCallHistory,
   fetchThreeCxCallHistoryForWindow,
+  fetchThreeCxCallLogData,
   fetchThreeCxRecordingsForWindow,
+  getCallLogQueriesForDisposition,
   probeThreeCxHistoryAccess,
   torontoDayBoundsFromMs,
+  torontoDayUtcPeriod,
   torontoDateKey,
 } from '../_shared/threecxApiHistory.ts';
 import {
@@ -18,9 +21,9 @@ import {
   extensionsFromHistory,
   externalNumbersFromHistory,
   historyExtensionMatches,
-  historyPhoneMatches,
   parseRowStartMs,
   recordingUrlFromRow,
+  rowContainsPhone,
 } from '../_shared/threecxHistoryParse.ts';
 import {
   attachRecordingToCallRecord,
@@ -742,13 +745,20 @@ async function fetchRecordingForCallRecord(
       throw new Error(probe.error || '3CX call history API not available.');
     }
 
-    const { rows: history, endpoint } = await fetchThreeCxCallHistoryForWindow(
+    const utcPeriod = torontoDayUtcPeriod(disposedMs);
+    const targeted = await fetchThreeCxCallLogData(
       token,
       baseUrl,
-      windowStart,
-      windowEnd,
+      getCallLogQueriesForDisposition(utcPeriod.periodFrom, utcPeriod.periodTo, extension, phone),
     );
-    apiEndpoint = endpoint;
+
+    let history = targeted.rows;
+    apiEndpoint = targeted.endpoint;
+    if (!history.length) {
+      const bulk = await fetchThreeCxCallHistoryForWindow(token, baseUrl, windowStart, windowEnd);
+      history = bulk.rows;
+      apiEndpoint = bulk.endpoint;
+    }
     const apiCandidates: RecordingCandidate[] = [];
     const phoneExtMatches: Array<{ row: Record<string, unknown>; anchorMs: number; rowExt: string }> = [];
 
@@ -758,8 +768,8 @@ async function fetchRecordingForCallRecord(
       if (anchorMs == null) continue;
       if (anchorMs < matchWindowStart || anchorMs > matchWindowEnd) continue;
 
-      if (historyPhoneMatches(row, phone)) diag.phoneHits += 1;
-      if (!historyPhoneMatches(row, phone)) continue;
+      if (rowContainsPhone(row, phone)) diag.phoneHits += 1;
+      if (!rowContainsPhone(row, phone)) continue;
       if (!historyExtensionMatches(row, extension)) continue;
       if (!await recruiterOwnsExtension(admin, record.recruiter_user_id, extensionsFromHistory(row)[0] || extension)) {
         continue;
@@ -797,7 +807,7 @@ async function fetchRecordingForCallRecord(
 
       for (const match of phoneExtMatches) {
         for (const recRow of recordingRows) {
-          if (!historyPhoneMatches(recRow, phone)) continue;
+          if (!rowContainsPhone(recRow, phone)) continue;
           if (!historyExtensionMatches(recRow, match.rowExt)) continue;
           const recMs = parseRowStartMs(recRow);
           if (recMs == null) continue;
@@ -832,7 +842,7 @@ async function fetchRecordingForCallRecord(
         const anchorMs = parseRowStartMs(recRow);
         if (anchorMs == null) continue;
         if (anchorMs < matchWindowStart || anchorMs > matchWindowEnd) continue;
-        if (!historyPhoneMatches(recRow, phone)) continue;
+        if (!rowContainsPhone(recRow, phone)) continue;
         if (!historyExtensionMatches(recRow, extension)) continue;
         if (!await recruiterOwnsExtension(admin, record.recruiter_user_id, extensionsFromHistory(recRow)[0] || extension)) {
           continue;
@@ -873,7 +883,7 @@ async function fetchRecordingForCallRecord(
       if (diag.extHits > 0 && diag.withRecording === 0) {
         message += ' Call found but 3CX returned no RecId — check Admin → Recordings for this extension/date.';
       } else if (diag.phoneHits === 0) {
-        message += ' No call history row had this phone number in the queried window.';
+        message += ` No 3CX row contained this phone — verify the call appears in Admin → Reports → Call log for ${dayKey} ext ${extension}.`;
       }
     }
     return {

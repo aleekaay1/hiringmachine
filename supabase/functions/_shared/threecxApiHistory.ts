@@ -43,6 +43,81 @@ export function torontoDayBoundsFromMs(ms: number): { fromIso: string; toIso: st
   };
 }
 
+export function torontoDayUtcPeriod(ms: number): { periodFrom: string; periodTo: string; dateKey: string } {
+  const { dateKey, fromIso, toIso } = torontoDayBoundsFromMs(ms);
+  return {
+    dateKey,
+    periodFrom: new Date(fromIso).toISOString(),
+    periodTo: new Date(toIso).toISOString(),
+  };
+}
+
+function odataQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+export type GetCallLogDataQuery = {
+  periodFrom: string;
+  periodTo: string;
+  sourceType: number;
+  sourceFilter: string;
+  destinationType: number;
+  destinationFilter: string;
+};
+
+function buildGetCallLogDataPath(query: GetCallLogDataQuery, top = HISTORY_TOP): string {
+  const params = [
+    `periodFrom=${query.periodFrom}`,
+    `periodTo=${query.periodTo}`,
+    `sourceType=${query.sourceType}`,
+    `sourceFilter=${query.sourceFilter ? odataQuote(query.sourceFilter) : "''"}`,
+    `destinationType=${query.destinationType}`,
+    `destinationFilter=${query.destinationFilter ? odataQuote(query.destinationFilter) : "''"}`,
+    'callsType=0',
+    'callTimeFilterType=0',
+    "callTimeFilterFrom='0:00:0'",
+    "callTimeFilterTo='0:00:0'",
+    'hidePcalls=true',
+  ].join(',');
+  return `/xapi/v1/ReportCallLogData/Pbx.GetCallLogData(${params})?$top=${top}&$orderby=SegmentStartTime%20desc`;
+}
+
+/** 3CX V20 — filter by extension (sourceType 0) and external number (destinationType 1). */
+export async function fetchThreeCxCallLogData(
+  token: string,
+  baseUrl: string,
+  queries: GetCallLogDataQuery[],
+): Promise<{ rows: ThreeCxHistoryRow[]; endpoint: string }> {
+  for (const query of queries) {
+    const path = buildGetCallLogDataPath(query);
+    const rows = await fetchODataPath(token, baseUrl, path);
+    if (rows?.length) {
+      return { rows, endpoint: '/xapi/v1/ReportCallLogData/Pbx.GetCallLogData' };
+    }
+  }
+  return { rows: [], endpoint: '/xapi/v1/ReportCallLogData/Pbx.GetCallLogData' };
+}
+
+export function getCallLogQueriesForDisposition(
+  periodFrom: string,
+  periodTo: string,
+  extension: string,
+  phone: string,
+): GetCallLogDataQuery[] {
+  const last10 = phone.replace(/\D/g, '').slice(-10);
+  const e164 = last10.length === 10 ? `1${last10}` : last10;
+  const base = { periodFrom, periodTo };
+  const queries: GetCallLogDataQuery[] = [
+    { ...base, sourceType: 0, sourceFilter: extension, destinationType: 1, destinationFilter: last10 },
+    { ...base, sourceType: 0, sourceFilter: extension, destinationType: 1, destinationFilter: e164 },
+    { ...base, sourceType: 0, sourceFilter: extension, destinationType: 1, destinationFilter: `+${e164}` },
+    { ...base, sourceType: 0, sourceFilter: extension, destinationType: 0, destinationFilter: '' },
+    { ...base, sourceType: 0, sourceFilter: '', destinationType: 1, destinationFilter: last10 },
+    { ...base, sourceType: 0, sourceFilter: '', destinationType: 1, destinationFilter: e164 },
+  ];
+  return queries;
+}
+
 function historyPathsForWindow(fromIso: string, toIso: string): string[] {
   const from = encodeODataDate(fromIso);
   const to = encodeODataDate(toIso);
