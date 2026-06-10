@@ -68,6 +68,11 @@ function showedInviteesForSession(row: LiveSessionScheduleRow): InviteeRow[] {
   );
 }
 
+/** All Calendly registrations with an email — selectable for leadership assessment send. */
+function selectableInviteesForSession(row: LiveSessionScheduleRow): InviteeRow[] {
+  return calendlyInviteesForSession(row).filter((inv) => inv.email && inv.email !== EM_DASH);
+}
+
 function formatAssessmentSentAt(iso: string | null | undefined): string {
   if (!iso) return '';
   return formatDateTimeCanadaEastern(iso);
@@ -406,7 +411,7 @@ const LiveSessionsDashboard: React.FC = () => {
 
         <SessionsBlock
           title="Past sessions"
-          subtitle="Calendly registrations (blue) + unique Zoom attendees who showed (green). Select who showed to send leadership assessments."
+          subtitle="Calendly registrations (blue) + Zoom attendance (green). Select registrations to send leadership assessment emails — including no-shows if needed."
           sessions={pastSessions}
           loading={loading}
           emptyText="No past sessions in the database. Click Refresh from Zoom + Calendly to fetch and save."
@@ -840,6 +845,7 @@ function SessionTableRow({
 }) {
   const invitees = calendlyInviteesForSession(session);
   const showedInvitees = showedInviteesForSession(session);
+  const selectableInvitees = selectableInviteesForSession(session);
   const unmatchedZoom = unmatchedZoomRowsForSession(session);
   const pastStats = session.past?.stats;
   const showedCount = pastSessionShowedCount(pastStats, session.past);
@@ -868,6 +874,10 @@ function SessionTableRow({
     setRowSelected(new Set(showedInvitees.map((i) => i.email)));
   };
 
+  const selectAllInvitees = () => {
+    setRowSelected(new Set(selectableInvitees.map((i) => i.email)));
+  };
+
   const openAssessmentSend = async () => {
     if (!getFreshAccessToken || rowSelected.size === 0) return;
     const emails = [...rowSelected];
@@ -882,7 +892,7 @@ function SessionTableRow({
       return;
     }
     const attendeeProfiles = emails.map((email) => {
-      const inv = showedInvitees.find((i) => i.email === email);
+      const inv = selectableInvitees.find((i) => i.email === email);
       return {
         email,
         displayName: inv?.name && inv.name !== EM_DASH ? inv.name : email,
@@ -965,7 +975,7 @@ function SessionTableRow({
   };
 
   const rowSelectedCount = rowSelected.size;
-  const canSendAssessments = session.isPast && showedInvitees.length > 0 && !!getFreshAccessToken;
+  const canSendAssessments = session.isPast && selectableInvitees.length > 0 && !!getFreshAccessToken;
 
   return (
     <>
@@ -1018,14 +1028,15 @@ function SessionTableRow({
               {canSendAssessments && (
                 <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-violet-200 bg-violet-50/60 px-3 py-2.5">
                   <p className="text-xs text-violet-950">
-                    <strong>{showedInvitees.length}</strong> Zoom attendee{showedInvitees.length === 1 ? '' : 's'} matched on Calendly
+                    <strong>{selectableInvitees.length}</strong> registration{selectableInvitees.length === 1 ? '' : 's'}
+                    {MIDDLE_DOT} <strong>{showedInvitees.length}</strong> showed on Zoom
                     {rowSelectedCount > 0 && (
                       <>
                         {MIDDLE_DOT} <strong>{rowSelectedCount}</strong> selected
                       </>
                     )}
                   </p>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button
                       type="button"
                       variant="outline"
@@ -1034,6 +1045,15 @@ function SessionTableRow({
                       disabled={showedInvitees.length === 0}
                     >
                       Select all who showed
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="text-xs h-8"
+                      onClick={selectAllInvitees}
+                      disabled={selectableInvitees.length === 0}
+                    >
+                      Select all
                     </Button>
                     <Button
                       type="button"
@@ -1069,18 +1089,18 @@ function SessionTableRow({
                     </thead>
                     <tbody>
                       {invitees.map((inv) => {
-                        const showCheckbox = canSendAssessments && inv.attended === true;
+                        const canSelect = canSendAssessments && inv.email && inv.email !== EM_DASH;
                         const alreadySent = inv.assessmentStatus === 'sent';
                         return (
                           <tr
                             key={inv.email}
                             className={`border-b border-[#eef3fa] last:border-0 ${
-                              alreadySent && inv.attended === true ? 'bg-red-50/40' : ''
+                              alreadySent ? 'bg-red-50/40' : ''
                             }`}
                           >
                             {canSendAssessments && (
                               <td className={`px-3 py-2 ${CAL_CELL}`}>
-                                {showCheckbox ? (
+                                {canSelect ? (
                                   <input
                                     type="checkbox"
                                     className="rounded border-[#cfe3f9]"
@@ -1118,7 +1138,7 @@ function SessionTableRow({
                             )}
                             {session.isPast && (
                               <td className="px-3 py-2 bg-violet-50 text-violet-950">
-                                {inv.attended === true ? (
+                                {inv.assessmentStatus ? (
                                   <span className={alreadySent ? 'font-semibold text-red-800' : ''}>
                                     {assessmentStatusLabel(inv.assessmentStatus)}
                                     {inv.assessmentMode && alreadySent && (
@@ -1130,6 +1150,8 @@ function SessionTableRow({
                                       </div>
                                     )}
                                   </span>
+                                ) : inv.attended === false ? (
+                                  <span className="text-slate-500">Not sent</span>
                                 ) : (
                                   EM_DASH
                                 )}
