@@ -19,6 +19,7 @@ import CallsAnalytics from './pages/CallsAnalytics';
 import LeadershipLeaderboard from './pages/LeadershipLeaderboard';
 import HRDashboard from './pages/HRDashboard';
 import EmailLog from './pages/EmailLog';
+import CallLog from './pages/CallLog';
 import Pipeline from './pages/Pipeline';
 import PipelineCallWorkspace from './pages/PipelineCallWorkspace';
 import PipelinePerformance from './pages/PipelinePerformance';
@@ -80,6 +81,7 @@ const App: React.FC = () => {
           <Route path="/superdashboard" element={<Navigate to="/home" replace />} />
           <Route path="/qr" element={<QrCodes />} />
           <Route path="/email-log" element={<EmailLog />} />
+          <Route path="/call-log" element={<CallLog />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/reports/:userId" element={<ReportDetail />} />
           <Route path="/support" element={<SupportPage />} />

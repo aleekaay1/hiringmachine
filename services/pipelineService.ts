@@ -150,6 +150,9 @@ export interface PipelineCallRecord {
   created_at: string;
   callback_at?: string | null;
   booked_subtype?: string | null;
+  recording_url?: string | null;
+  threecx_call_id?: string | null;
+  duration_seconds?: number | null;
 }
 
 export interface PipelineIncomingEmailLog {
@@ -548,6 +551,31 @@ export function readCallRecordMeta(record: Pick<PipelineCallRecord, 'threecx_met
   return {
     callbackAt: typeof meta.callback_at === 'string' ? meta.callback_at : null,
     bookedSubtype: typeof meta.booked_subtype === 'string' ? meta.booked_subtype : null,
+  };
+}
+
+export function readCallRecordRecording(
+  record: Pick<PipelineCallRecord, 'recording_url' | 'duration_seconds' | 'threecx_metadata'>,
+): {
+  recordingUrl: string | null;
+  durationSeconds: number | null;
+} {
+  const directUrl = typeof record.recording_url === 'string' ? record.recording_url.trim() : '';
+  if (directUrl) {
+    const duration = Number(record.duration_seconds);
+    return {
+      recordingUrl: directUrl,
+      durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : null,
+    };
+  }
+  const meta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
+    ? (record.threecx_metadata as Record<string, unknown>)
+    : {};
+  const metaUrl = typeof meta.recording_url === 'string' ? meta.recording_url.trim() : '';
+  const metaDuration = Number(meta.duration_seconds);
+  return {
+    recordingUrl: metaUrl || null,
+    durationSeconds: Number.isFinite(metaDuration) && metaDuration > 0 ? metaDuration : null,
   };
 }
 

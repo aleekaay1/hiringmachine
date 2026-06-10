@@ -79,7 +79,52 @@ Provide these to finalize production behavior:
 4. Allowed call-control surface (dial, transfer, hold/resume, mute, DTMF, active calls, agent state)
 5. Any IP allowlist / network restrictions for Supabase egress to 3CX
 
-## 6) Notes on current implementation
+## 6) Call recordings for `/call-log`
+
+The Call Log page (`/call-log`, admins + ali + hr.licensing) shows disposition rows from
+`pipeline_call_records`. Recording playback needs a URL per call — the Call Control API alone does
+not reliably expose finished recording links.
+
+### Recommended: 3CX CRM integration (ReportCall webhook)
+
+1. In 3CX Management Console → **Integrations** → **CRM**, create a template with scenario
+   **ReportCall** (fires when a call ends).
+2. POST to your Supabase edge function URL, e.g.
+   `https://<project>.supabase.co/functions/v1/threecx-call-webhook`
+3. Include placeholders in the JSON body (names vary slightly by 3CX version; confirm in CRM editor):
+
+   - `[RecordingUrl]` — direct HTTPS link to the WAV/MP3 (may be tokenized / time-limited)
+   - `[CallHistoryId]` or equivalent unique call id
+   - `[Duration]` — talk time in seconds
+   - `[CallerNumber]` / `[CalledNumber]` — match to `dialed_number`
+   - `[AgentExtension]` or `[Extension]` — match to recruiter via `pipeline_user_call_settings.extension`
+   - `[Direction]` — inbound vs outbound
+   - `[StartTime]` / `[EndTime]` — ISO timestamps for matching
+
+4. Edge function matches the webhook to the nearest `pipeline_call_records` row (extension + number +
+   time window) and sets `recording_url`, `threecx_call_id`, `duration_seconds`.
+
+5. Run SQL: `supabase/sql/paste_pipeline_call_recordings.sql`
+
+### What to request from your 3CX / IT team
+
+| Item | Why |
+|------|-----|
+| Call recording **enabled** on recruiter extensions / outbound routes | No recording → no `[RecordingUrl]` |
+| CRM **ReportCall** webhook URL allowlisted (3CX → Supabase) | Inbound POST from PBX |
+| Sample `[RecordingUrl]` from a test call | Confirm format, auth (cookie/token/query), and browser playback |
+| Whether URLs are **public HTTPS** or need **OAuth proxy** through your edge function | Affects `<audio>` in-browser vs download-only |
+| Extension ↔ recruiter mapping | Each recruiter’s 3CX extension in Account → Call settings |
+| Recording **retention** policy | Links may expire; note compliance requirements |
+| Optional: xAPI **Call History** docs if CRM path unavailable | Fallback to poll history + recording API |
+
+### Browser playback vs download
+
+Prefer in-browser listen: store a URL that returns `audio/wav` or `audio/mpeg` with CORS allowing
+your app origin (or serve via a signed proxy edge function). If 3CX only returns auth-gated links,
+add `threecx-recording-proxy` that exchanges OAuth and streams audio to the browser.
+
+## 7) Notes on current implementation
 
 - `/pipeline` is routed in app but intentionally **not** added to sidebar menu.
 - Bulk upload creates candidate shells and resume rows automatically.
@@ -87,3 +132,4 @@ Provide these to finalize production behavior:
 - DOC/DOCX/RTF/TXT conversion is handled through `pipeline-convert-resume`; it requires converter secrets.
 - 3CX controls call the edge function and every action is logged to `pipeline_call_logs`.
 - Fallback button opens web client URL in a new tab if configured.
+- `/call-log` reads dispositions now; recordings populate after CRM webhook + SQL migration above.

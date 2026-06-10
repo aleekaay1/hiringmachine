@@ -64,6 +64,7 @@ const Layout: React.FC<LayoutProps> = ({
     if (location.pathname === '/hr/lead-distribution' || location.pathname === '/hr/leads') return 'pipeline-hr-leads';
     if (location.pathname === '/qr') return 'qr';
     if (location.pathname === '/email-log') return 'email-log';
+    if (location.pathname === '/call-log') return 'call-log';
     if (location.pathname === '/reports' || location.pathname.startsWith('/reports/')) return 'reports';
     if (location.pathname === '/support') return 'support';
     if (location.pathname === '/ops-console') return 'ops-console';

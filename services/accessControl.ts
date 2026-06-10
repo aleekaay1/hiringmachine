@@ -24,6 +24,7 @@ export type AppSection =
   | 'home'
   | 'hr-dashboard'
   | 'email-log'
+  | 'call-log'
   | 'reports'
   | 'support'
   | 'ops-console'
@@ -221,6 +222,17 @@ export function isOpsConsoleEmail(email: string | null | undefined): boolean {
   return normalized === OPS_CONSOLE_EMAIL;
 }
 
+/** Call disposition log — admins, ali@globelife-paz.com, hr.licensing@globelife-paz.com only. */
+export function canAccessCallLog(
+  role: AppRole | null,
+  email: string | null | undefined,
+): boolean {
+  if (isOpsConsoleEmail(email)) return true;
+  const normalized = String(email || '').trim().toLowerCase();
+  if (normalized === 'hr.licensing@globelife-paz.com') return true;
+  return role === 'admin';
+}
+
 export async function resolveOpsConsoleAccessEmail(): Promise<string | null> {
   const { data } = await supabase.auth.getUser();
   return data.user?.email ?? null;
@@ -249,6 +261,7 @@ export function canAccessSection(
   email?: string | null,
 ): boolean {
   if (section === 'ops-console') return isOpsConsoleEmail(email);
+  if (section === 'call-log') return canAccessCallLog(role, email);
   if (section === 'pipeline-hr-leads') return canAccessHrLeadDistribution(role, email);
   if (section === 'pipeline-uploads') return canAccessResumeUploads(role, email);
   if (section === 'account') return Boolean(role);

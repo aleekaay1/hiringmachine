@@ -78,6 +78,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { name: 'Performance', route: '/pipeline/performance', icon: BarChart3, section: 'pipeline-performance' },
       { name: 'Calls analytics', route: '/calls-analytics', icon: BarChart3, section: 'calls-analytics' },
       { name: 'Email log', route: '/email-log', icon: Mail, section: 'email-log' },
+      { name: 'Call log', route: '/call-log', icon: PhoneCall, section: 'call-log' },
     ],
   },
   {
