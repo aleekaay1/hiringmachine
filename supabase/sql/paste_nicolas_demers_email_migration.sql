@@ -6,6 +6,60 @@
 -- (that creates the new auth.users row — usually as "viewer").
 --
 -- After running: have Nicolas log out and log back in with nicolas_demers@globelife-paz.com
+-- Safe to re-run: skips tables/columns that do not exist in your project.
+
+create or replace function pg_temp.migrate_user_column_if_exists(
+  p_table text,
+  p_column text,
+  p_old_id uuid,
+  p_new_id uuid
+) returns void
+language plpgsql
+as $$
+begin
+  if not exists (
+    select 1
+    from information_schema.columns c
+    where c.table_schema = 'public'
+      and c.table_name = p_table
+      and c.column_name = p_column
+  ) then
+    return;
+  end if;
+
+  execute format(
+    'update public.%I set %I = $1 where %I = $2',
+    p_table,
+    p_column,
+    p_column
+  )
+  using p_new_id, p_old_id;
+end;
+$$;
+
+create or replace function pg_temp.migrate_user_pk_table_if_exists(
+  p_table text,
+  p_old_id uuid,
+  p_new_id uuid
+) returns void
+language plpgsql
+as $$
+begin
+  if not exists (
+    select 1
+    from information_schema.columns c
+    where c.table_schema = 'public'
+      and c.table_name = p_table
+      and c.column_name = 'user_id'
+  ) then
+    return;
+  end if;
+
+  execute format('delete from public.%I where user_id = $1', p_table) using p_new_id;
+  execute format('update public.%I set user_id = $1 where user_id = $2', p_table)
+    using p_new_id, p_old_id;
+end;
+$$;
 
 do $$
 declare
@@ -44,7 +98,6 @@ begin
     old_role := 'leadership'::public.app_role;
   end if;
 
-  -- Ensure new profile row exists, then copy role/points/name from old account
   insert into public.user_profiles (user_id, email, full_name, role, points, points_updated_at)
   values (
     new_id,
@@ -63,42 +116,36 @@ begin
     points_updated_at = coalesce(public.user_profiles.points_updated_at, now()),
     updated_at = now();
 
-  -- Re-point user-owned rows (delete empty new rows first when PK = user_id)
-  delete from public.user_home_dashboard_snapshots where user_id = new_id;
-  update public.user_home_dashboard_snapshots set user_id = new_id where user_id = old_id;
+  -- PK = user_id tables (delete empty new row first)
+  perform pg_temp.migrate_user_pk_table_if_exists('user_home_dashboard_snapshots', old_id, new_id);
+  perform pg_temp.migrate_user_pk_table_if_exists('pipeline_user_call_settings', old_id, new_id);
+  perform pg_temp.migrate_user_pk_table_if_exists('webinar_geek_user_booking_identities', old_id, new_id);
 
-  delete from public.pipeline_user_call_settings where user_id = new_id;
-  update public.pipeline_user_call_settings set user_id = new_id where user_id = old_id;
+  -- FK columns (skipped automatically when table/column missing)
+  perform pg_temp.migrate_user_column_if_exists('recruiter_coin_ledger', 'user_id', old_id, new_id);
+  perform pg_temp.migrate_user_column_if_exists('user_dashboard_day_notes', 'user_id', old_id, new_id);
+  perform pg_temp.migrate_user_column_if_exists('user_dashboard_sticky_notes', 'user_id', old_id, new_id);
 
-  delete from public.webinar_geek_user_booking_identities where user_id = new_id;
-  update public.webinar_geek_user_booking_identities set user_id = new_id where user_id = old_id;
+  perform pg_temp.migrate_user_column_if_exists('pipeline_candidates', 'uploader_user_id', old_id, new_id);
+  perform pg_temp.migrate_user_column_if_exists('pipeline_candidates', 'assigned_to_user_id', old_id, new_id);
+  perform pg_temp.migrate_user_column_if_exists('pipeline_candidates', 'assigned_by_user_id', old_id, new_id);
 
-  update public.recruiter_coin_ledger set user_id = new_id where user_id = old_id;
-  update public.user_dashboard_day_notes set user_id = new_id where user_id = old_id;
-  update public.user_dashboard_sticky_notes set user_id = new_id where user_id = old_id;
+  perform pg_temp.migrate_user_column_if_exists('pipeline_notes', 'author_user_id', old_id, new_id);
+  perform pg_temp.migrate_user_column_if_exists('pipeline_evaluations', 'created_by_user_id', old_id, new_id);
+  perform pg_temp.migrate_user_column_if_exists('pipeline_call_logs', 'created_by_user_id', old_id, new_id);
+  perform pg_temp.migrate_user_column_if_exists('pipeline_call_records', 'recruiter_user_id', old_id, new_id);
+  perform pg_temp.migrate_user_column_if_exists('email_send_logs', 'sent_by_user_id', old_id, new_id);
+  perform pg_temp.migrate_user_column_if_exists('pipeline_wednesday_campaign_runs', 'initiated_by_user_id', old_id, new_id);
+  perform pg_temp.migrate_user_column_if_exists('pipeline_lead_batches', 'created_by_user_id', old_id, new_id);
 
-  update public.pipeline_candidates set uploader_user_id = new_id where uploader_user_id = old_id;
-  update public.pipeline_candidates set assigned_to_user_id = new_id where assigned_to_user_id = old_id;
-  update public.pipeline_candidates set assigned_by_user_id = new_id where assigned_by_user_id = old_id;
+  perform pg_temp.migrate_user_column_if_exists('user_profile_hierarchy', 'leader_user_id', old_id, new_id);
+  perform pg_temp.migrate_user_column_if_exists('user_profile_hierarchy', 'member_user_id', old_id, new_id);
 
-  update public.pipeline_notes set author_user_id = new_id where author_user_id = old_id;
-  update public.pipeline_evaluations set created_by_user_id = new_id where created_by_user_id = old_id;
-  update public.pipeline_call_logs set created_by_user_id = new_id where created_by_user_id = old_id;
-  update public.pipeline_call_records set recruiter_user_id = new_id where recruiter_user_id = old_id;
-  update public.email_send_logs set sent_by_user_id = new_id where sent_by_user_id = old_id;
-  update public.pipeline_wednesday_campaign_runs set initiated_by_user_id = new_id where initiated_by_user_id = old_id;
+  perform pg_temp.migrate_user_column_if_exists('support_tickets', 'user_id', old_id, new_id);
+  perform pg_temp.migrate_user_column_if_exists('support_ticket_events', 'actor_user_id', old_id, new_id);
+  perform pg_temp.migrate_user_column_if_exists('ops_health_snapshots', 'captured_by_user_id', old_id, new_id);
+  perform pg_temp.migrate_user_column_if_exists('webinar_geek_portal_bookings', 'booked_by_user_id', old_id, new_id);
 
-  update public.pipeline_lead_batches set created_by_user_id = new_id where created_by_user_id = old_id;
-
-  update public.user_profile_hierarchy set leader_user_id = new_id where leader_user_id = old_id;
-  update public.user_profile_hierarchy set member_user_id = new_id where member_user_id = old_id;
-
-  update public.support_tickets set user_id = new_id where user_id = old_id;
-  update public.support_ticket_events set actor_user_id = new_id where actor_user_id = old_id;
-  update public.ops_health_snapshots set captured_by_user_id = new_id where captured_by_user_id = old_id;
-  update public.webinar_geek_portal_bookings set booked_by_user_id = new_id where booked_by_user_id = old_id;
-
-  -- JWT metadata fallback on new auth user
   update auth.users
   set
     raw_user_meta_data =
@@ -112,7 +159,6 @@ begin
       || jsonb_build_object('role', old_role::text)
   where id = new_id;
 
-  -- Remove old profile + auth account (history already moved to new_id)
   delete from public.user_profiles where user_id = old_id;
   delete from auth.users where id = old_id;
 
