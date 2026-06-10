@@ -414,6 +414,9 @@ verify_jwt = false
 [functions.threecx-call-webhook]
 verify_jwt = false
 
+[functions.threecx-call-admin]
+verify_jwt = true
+
 [analytics]
 enabled = true
 port = 54327

@@ -36,6 +36,7 @@ jobs:
             email-inbox-sync
             threecx-call-control
             threecx-call-webhook
+            threecx-call-admin
             pipeline-convert-resume
           )
           for fn in "${FUNCTIONS[@]}"; do

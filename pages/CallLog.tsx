@@ -18,7 +18,13 @@ import {
   type PipelineCandidate,
 } from '../services/pipelineService';
 import { PIPELINE_CALL_DISPOSITIONS } from '../services/pipelineCallDispositions';
-import { Download, ExternalLink, PhoneCall, RefreshCw, Search } from 'lucide-react';
+import {
+  backfillTodayThreeCxRecordings,
+  fetchThreeCxConnectionStatus,
+  syncRecruiter3cxExtensions,
+  type ThreeCxConnectionStatus,
+} from '../services/threecxCallLogAdmin';
+import { Download, ExternalLink, PhoneCall, RefreshCw, Search, Wifi, WifiOff } from 'lucide-react';
 
 function csvEscape(s: string): string {
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
@@ -98,6 +104,12 @@ const CallLog: React.FC = () => {
   const [dispositionFilter, setDispositionFilter] = useState<string>('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [threeCxStatus, setThreeCxStatus] = useState<ThreeCxConnectionStatus | null>(null);
+  const [threeCxStatusLoading, setThreeCxStatusLoading] = useState(false);
+  const [syncingExtensions, setSyncingExtensions] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const [adminMessage, setAdminMessage] = useState<string | null>(null);
+  const [adminError, setAdminError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -130,9 +142,62 @@ const CallLog: React.FC = () => {
     }
   }, []);
 
+  const loadThreeCxStatus = useCallback(async () => {
+    setThreeCxStatusLoading(true);
+    try {
+      const status = await fetchThreeCxConnectionStatus();
+      setThreeCxStatus(status);
+    } catch {
+      setThreeCxStatus(null);
+    } finally {
+      setThreeCxStatusLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (isAuthenticated && accessAllowed) void load();
-  }, [isAuthenticated, accessAllowed, load]);
+    if (isAuthenticated && accessAllowed) {
+      void load();
+      void loadThreeCxStatus();
+    }
+  }, [isAuthenticated, accessAllowed, load, loadThreeCxStatus]);
+
+  const handleSyncExtensions = async () => {
+    setAdminError(null);
+    setAdminMessage(null);
+    setSyncingExtensions(true);
+    try {
+      const result = await syncRecruiter3cxExtensions();
+      const ok = result.details?.filter((d) => d.status === 'ok').length ?? result.updated;
+      setAdminMessage(
+        result.message
+          || `Synced ${ok} extension(s)${result.skipped ? `, ${result.skipped} skipped` : ''}.`,
+      );
+      await loadThreeCxStatus();
+    } catch (err) {
+      setAdminError(err instanceof Error ? err.message : 'Extension sync failed.');
+    } finally {
+      setSyncingExtensions(false);
+    }
+  };
+
+  const handleBackfillToday = async () => {
+    setAdminError(null);
+    setAdminMessage(null);
+    setBackfilling(true);
+    try {
+      const result = await backfillTodayThreeCxRecordings();
+      setAdminMessage(
+        `Backfill for ${result.todayDate}: scanned ${result.scanned} call(s), `
+          + `${result.withRecording} with recording, ${result.matched} matched, ${result.updated} updated.`,
+      );
+      await load();
+      await loadThreeCxStatus();
+    } catch (err) {
+      setAdminError(err instanceof Error ? err.message : 'Backfill failed.');
+    } finally {
+      setBackfilling(false);
+    }
+  };
 
   const candidateById = useMemo(() => {
     const map = new Map<string, PipelineCandidate>();
@@ -301,6 +366,120 @@ const CallLog: React.FC = () => {
             Export CSV
           </Button>
         </div>
+      </div>
+
+      <div
+        className={`rounded-2xl border px-4 py-3 flex flex-col gap-3 ${
+          threeCxStatus?.webhookLive
+            ? 'border-emerald-200 bg-emerald-50/60'
+            : threeCxStatus?.ok === false
+              ? 'border-red-200 bg-red-50/60'
+              : 'border-amber-200 bg-amber-50/50'
+        }`}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-3 min-w-0">
+            {threeCxStatus?.webhookLive ? (
+              <Wifi size={20} className="text-emerald-700 shrink-0 mt-0.5" />
+            ) : (
+              <WifiOff size={20} className="text-amber-700 shrink-0 mt-0.5" />
+            )}
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-[#0B1B34]">
+                3CX connection
+                {threeCxStatusLoading && <span className="font-normal text-[#5c6b82]"> — checking…</span>}
+              </p>
+              {threeCxStatus ? (
+                <div className="text-xs text-[#334155] mt-1 space-y-0.5">
+                  <p>
+                    Webhook:{' '}
+                    <strong>
+                      {threeCxStatus.webhookLive
+                        ? 'Receiving events'
+                        : threeCxStatus.lastWebhookAt
+                          ? 'No recent events (24h+)'
+                          : 'No events yet'}
+                    </strong>
+                    {threeCxStatus.lastWebhookAt && (
+                      <>
+                        {' '}
+                        · last {threeCxStatus.lastEventType || 'event'}{' '}
+                        {threeCxStatus.lastWebhookMinutesAgo != null
+                          ? `${threeCxStatus.lastWebhookMinutesAgo}m ago`
+                          : ''}
+                      </>
+                    )}
+                  </p>
+                  <p>
+                    Today ({threeCxStatus.todayDate}): {threeCxStatus.webhooksToday} webhook call(s),{' '}
+                    {threeCxStatus.recordingsAttachedToday} recording(s) attached · extension map:{' '}
+                    {threeCxStatus.extensionMapCount} recruiter(s)
+                  </p>
+                  <p>
+                    3CX API (backfill):{' '}
+                    {!threeCxStatus.threecxApiConfigured
+                      ? 'Not configured — add THREECX_BASE_URL, CLIENT_ID, CLIENT_SECRET in Supabase'
+                      : threeCxStatus.threecxApiOk
+                        ? 'OK'
+                        : `Error — ${threeCxStatus.threecxApiError || 'token failed'}`}
+                  </p>
+                  {threeCxStatus.error && <p className="text-red-700">{threeCxStatus.error}</p>}
+                </div>
+              ) : (
+                <p className="text-xs text-[#5c6b82] mt-1">Status unavailable — sign in and refresh.</p>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => void loadThreeCxStatus()}
+              disabled={threeCxStatusLoading}
+            >
+              <RefreshCw size={14} className={threeCxStatusLoading ? 'animate-spin inline mr-1' : 'inline mr-1'} />
+              Check
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => void handleSyncExtensions()}
+              disabled={syncingExtensions || (threeCxStatus?.extensionMapCount ?? 0) === 0}
+              title={
+                (threeCxStatus?.extensionMapCount ?? 0) === 0
+                  ? 'Add recruiters to recruiter3cxExtensions.ts first'
+                  : 'Push hardcoded extensions into user profiles'
+              }
+            >
+              {syncingExtensions ? 'Syncing…' : 'Sync extensions'}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => void handleBackfillToday()}
+              disabled={backfilling || !threeCxStatus?.threecxApiOk}
+              title={
+                !threeCxStatus?.threecxApiOk
+                  ? 'Requires 3CX API secrets in Supabase'
+                  : "Pull today's recordings from 3CX and match to call log"
+              }
+            >
+              {backfilling ? 'Backfilling…' : "Backfill today's recordings"}
+            </Button>
+          </div>
+        </div>
+        {adminMessage && (
+          <p className="text-xs text-emerald-800 bg-emerald-100/80 rounded-lg px-3 py-2">{adminMessage}</p>
+        )}
+        {adminError && (
+          <p className="text-xs text-red-800 bg-red-100/80 rounded-lg px-3 py-2">{adminError}</p>
+        )}
+        {(threeCxStatus?.extensionMapCount ?? 0) === 0 && (
+          <p className="text-xs text-[#5c6b82]">
+            Send your recruiter list (name, email, extension) and we will hardcode it — then use Sync extensions so
+            nobody has to set extensions in Settings.
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

@@ -96,6 +96,47 @@ The webhook matches calls using: **extension + dialed phone number + time**.
 
 Optional: Supabase → **Edge Functions** → `threecx-call-webhook` → **Logs** — you should see POSTs after each completed call.
 
+### Call log connection panel
+
+On **Insights → Call log**, the green/amber banner shows:
+
+- **Webhook** — whether 3CX has sent events recently (ping or ReportCall)
+- **Today** — webhook calls and recordings attached today
+- **3CX API** — whether backfill can talk to 3CX (needs API secrets below)
+
+Buttons:
+
+| Button | What it does |
+|--------|----------------|
+| **Sync extensions** | Copies hardcoded recruiter extensions from `recruiter3cxExtensions.ts` into each user’s profile — recruiters do not need to set extensions in Settings |
+| **Backfill today's recordings** | Pulls today’s calls from 3CX `CallHistoryView` and attaches recording URLs to matching disposition rows (for testing older calls from today) |
+
+---
+
+## Hardcoded recruiter extensions
+
+Edit `supabase/functions/_shared/recruiter3cxExtensions.ts` — one row per recruiter:
+
+```ts
+{ name: 'Hassaan Ali', email: 'hassaan@globelife-paz.com', extension: '104' },
+```
+
+Deploy `threecx-call-admin`, then click **Sync extensions** on Call log (or redeploy after editing the file).
+
+---
+
+## Backfill API secrets (optional, for today's recordings)
+
+Set in Supabase → **Project Settings → Edge Functions → Secrets**:
+
+| Secret | Example |
+|--------|---------|
+| `THREECX_BASE_URL` | `https://yourcompany.3cx.cloud` |
+| `THREECX_CLIENT_ID` | From 3CX → Integrations → API |
+| `THREECX_CLIENT_SECRET` | Same integration |
+
+Webhook-only recording sync does **not** need these; backfill does.
+
 ---
 
 ## What you do NOT need from 3CX
@@ -103,7 +144,7 @@ Optional: Supabase → **Edge Functions** → `threecx-call-webhook` → **Logs*
 | Item | Needed? |
 |------|---------|
 | PostgreSQL connection string | ❌ No |
-| 3CX OAuth / API Client ID | ❌ No (Call Control not used) |
+| 3CX OAuth / API Client ID | ❌ No for webhook only · ✅ Yes for **Backfill today's recordings** |
 | CRM contact lookup working | ❌ No |
 | Call Control API | ❌ No |
 | Premade Bitrix/Zoho/etc. template | ❌ No |
