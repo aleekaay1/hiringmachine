@@ -13,6 +13,31 @@ const DEFAULT_DATE_ONLY: Intl.DateTimeFormatOptions = {
   dateStyle: 'medium',
 };
 
+const COMPONENT_DATE_KEYS: Array<keyof Intl.DateTimeFormatOptions> = [
+  'weekday',
+  'era',
+  'year',
+  'month',
+  'day',
+  'hour',
+  'minute',
+  'second',
+  'hourCycle',
+  'timeZoneName',
+];
+
+/** dateStyle/timeStyle cannot be combined with individual component keys (throws in browsers). */
+function mergeDateTimeFormatOptions(
+  base: Intl.DateTimeFormatOptions,
+  options?: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormatOptions {
+  if (!options) return base;
+  const usesComponents = COMPONENT_DATE_KEYS.some((key) => options[key] != null);
+  if (!usesComponents) return { ...base, ...options };
+  const { dateStyle: _dateStyle, timeStyle: _timeStyle, ...baseRest } = base;
+  return { ...baseRest, ...options };
+}
+
 function toValidDate(input: string | number | Date): Date | null {
   const d = input instanceof Date ? input : new Date(input);
   return Number.isNaN(d.getTime()) ? null : d;
@@ -25,7 +50,7 @@ export function formatDateTimeCanadaEastern(
   if (input == null || input === '') return '—';
   const d = toValidDate(input instanceof Date ? input : new Date(input));
   if (!d) return '—';
-  return d.toLocaleString(DISPLAY_LOCALE, { ...DEFAULT_DATE_TIME, ...options });
+  return d.toLocaleString(DISPLAY_LOCALE, mergeDateTimeFormatOptions(DEFAULT_DATE_TIME, options));
 }
 
 export function formatDateCanadaEastern(
@@ -35,5 +60,5 @@ export function formatDateCanadaEastern(
   if (input == null || input === '') return '—';
   const d = toValidDate(input instanceof Date ? input : new Date(input));
   if (!d) return '—';
-  return d.toLocaleDateString(DISPLAY_LOCALE, { ...DEFAULT_DATE_ONLY, ...options });
+  return d.toLocaleDateString(DISPLAY_LOCALE, mergeDateTimeFormatOptions(DEFAULT_DATE_ONLY, options));
 }
