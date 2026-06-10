@@ -56,6 +56,11 @@ function odataQuote(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+/** 3CX expects %3A in periodFrom/periodTo inside the function URL path. */
+function encodePeriodParam(iso: string): string {
+  return iso.replace(/:/g, '%3A');
+}
+
 export type GetCallLogDataQuery = {
   periodFrom: string;
   periodTo: string;
@@ -63,17 +68,24 @@ export type GetCallLogDataQuery = {
   sourceFilter: string;
   destinationType: number;
   destinationFilter: string;
+  callsType?: number;
+};
+
+export type ODataFetchResult = {
+  rows: ThreeCxHistoryRow[];
+  status: number;
+  error: string | null;
 };
 
 function buildGetCallLogDataPath(query: GetCallLogDataQuery, top = HISTORY_TOP): string {
   const params = [
-    `periodFrom=${query.periodFrom}`,
-    `periodTo=${query.periodTo}`,
+    `periodFrom=${encodePeriodParam(query.periodFrom)}`,
+    `periodTo=${encodePeriodParam(query.periodTo)}`,
     `sourceType=${query.sourceType}`,
     `sourceFilter=${query.sourceFilter ? odataQuote(query.sourceFilter) : "''"}`,
     `destinationType=${query.destinationType}`,
     `destinationFilter=${query.destinationFilter ? odataQuote(query.destinationFilter) : "''"}`,
-    'callsType=0',
+    `callsType=${query.callsType ?? 0}`,
     'callTimeFilterType=0',
     "callTimeFilterFrom='0:00:0'",
     "callTimeFilterTo='0:00:0'",
@@ -87,15 +99,35 @@ export async function fetchThreeCxCallLogData(
   token: string,
   baseUrl: string,
   queries: GetCallLogDataQuery[],
-): Promise<{ rows: ThreeCxHistoryRow[]; endpoint: string }> {
+): Promise<{ rows: ThreeCxHistoryRow[]; endpoint: string; attempts: string[] }> {
+  const attempts: string[] = [];
+  let extensionOnlyRows: ThreeCxHistoryRow[] = [];
+
   for (const query of queries) {
     const path = buildGetCallLogDataPath(query);
-    const rows = await fetchODataPath(token, baseUrl, path);
-    if (rows?.length) {
-      return { rows, endpoint: '/xapi/v1/ReportCallLogData/Pbx.GetCallLogData' };
+    const result = await fetchODataPathDetailed(token, baseUrl, path);
+    const label = `ext=${query.sourceFilter || '*'} dest=${query.destinationFilter || '*'} callsType=${query.callsType ?? 0}`;
+    attempts.push(`${label} → ${result.status} (${result.rows.length} rows)`);
+    if (!result.rows.length) continue;
+
+    const isExtensionOnly = query.sourceType === 0 && Boolean(query.sourceFilter) && !query.destinationFilter;
+    if (isExtensionOnly) {
+      extensionOnlyRows = result.rows;
+      continue;
     }
+
+    return { rows: result.rows, endpoint: '/xapi/v1/ReportCallLogData/Pbx.GetCallLogData', attempts };
   }
-  return { rows: [], endpoint: '/xapi/v1/ReportCallLogData/Pbx.GetCallLogData' };
+
+  if (extensionOnlyRows.length) {
+    return {
+      rows: extensionOnlyRows,
+      endpoint: '/xapi/v1/ReportCallLogData/Pbx.GetCallLogData',
+      attempts,
+    };
+  }
+
+  return { rows: [], endpoint: '/xapi/v1/ReportCallLogData/Pbx.GetCallLogData', attempts };
 }
 
 export function getCallLogQueriesForDisposition(
@@ -111,11 +143,39 @@ export function getCallLogQueriesForDisposition(
     { ...base, sourceType: 0, sourceFilter: extension, destinationType: 1, destinationFilter: last10 },
     { ...base, sourceType: 0, sourceFilter: extension, destinationType: 1, destinationFilter: e164 },
     { ...base, sourceType: 0, sourceFilter: extension, destinationType: 1, destinationFilter: `+${e164}` },
+    { ...base, sourceType: 0, sourceFilter: extension, destinationType: 1, destinationFilter: last10, callsType: 1 },
     { ...base, sourceType: 0, sourceFilter: extension, destinationType: 0, destinationFilter: '' },
+    { ...base, sourceType: 0, sourceFilter: extension, destinationType: 0, destinationFilter: '', callsType: 1 },
     { ...base, sourceType: 0, sourceFilter: '', destinationType: 1, destinationFilter: last10 },
     { ...base, sourceType: 0, sourceFilter: '', destinationType: 1, destinationFilter: e164 },
   ];
   return queries;
+}
+
+export function callHistoryPathsForExtensionDay(day: string, extension: string): string[] {
+  const top = `$top=${HISTORY_TOP}`;
+  const ext = encodeURIComponent(odataQuote(extension));
+  const dayEnc = encodeURIComponent(day);
+  return [
+    `/xapi/v1/CallHistoryView?$filter=date(SegmentStartTime)%20eq%20${dayEnc}%20and%20SrcDn%20eq%20${ext}&${top}&$orderby=SegmentStartTime%20desc`,
+    `/xapi/v1/CallHistoryView?$filter=date(SegmentStartTime)%20eq%20${dayEnc}%20and%20DstDn%20eq%20${ext}&${top}&$orderby=SegmentStartTime%20desc`,
+    `/xapi/v1/CallHistoryView?$filter=date(SegmentStartTime)%20eq%20${dayEnc}%20and%20(SrcDn%20eq%20${ext}%20or%20DstDn%20eq%20${ext})&${top}&$orderby=SegmentStartTime%20desc`,
+  ];
+}
+
+export async function fetchCallHistoryForExtensionDay(
+  token: string,
+  baseUrl: string,
+  day: string,
+  extension: string,
+): Promise<{ rows: ThreeCxHistoryRow[]; endpoint: string | null }> {
+  for (const path of callHistoryPathsForExtensionDay(day, extension)) {
+    const result = await fetchODataPathDetailed(token, baseUrl, path);
+    if (result.rows.length) {
+      return { rows: result.rows, endpoint: path.split('?')[0] };
+    }
+  }
+  return { rows: [], endpoint: null };
 }
 
 function historyPathsForWindow(fromIso: string, toIso: string): string[] {
@@ -158,11 +218,11 @@ function filterRowsToWindow(
   });
 }
 
-async function fetchODataPath(
+async function fetchODataPathDetailed(
   token: string,
   baseUrl: string,
   path: string,
-): Promise<ThreeCxHistoryRow[] | null> {
+): Promise<ODataFetchResult> {
   const res = await fetch(`${baseUrl}${path}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
   });
@@ -171,10 +231,27 @@ async function fetchODataPath(
     if (res.status === 403) {
       throw new Error(`3CX call history forbidden (403). ${SETUP_HINT}`);
     }
-    return null;
+    return { rows: [], status: res.status, error: raw.slice(0, 200) || res.statusText };
   }
-  const parsed = JSON.parse(raw) as { value?: ThreeCxHistoryRow[] };
-  return parsed.value || [];
+  try {
+    const parsed = JSON.parse(raw) as { value?: ThreeCxHistoryRow[] };
+    return { rows: parsed.value || [], status: res.status, error: null };
+  } catch {
+    return { rows: [], status: res.status, error: 'Invalid JSON from 3CX' };
+  }
+}
+
+async function fetchODataPath(
+  token: string,
+  baseUrl: string,
+  path: string,
+): Promise<ThreeCxHistoryRow[] | null> {
+  const result = await fetchODataPathDetailed(token, baseUrl, path);
+  if (result.status === 403) {
+    throw new Error(`3CX call history forbidden (403). ${SETUP_HINT}`);
+  }
+  if (!result.rows.length && result.status !== 200) return null;
+  return result.rows;
 }
 
 export async function probeThreeCxHistoryAccess(

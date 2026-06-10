@@ -6,6 +6,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { RECRUITER_3CX_EXTENSIONS } from '../_shared/recruiter3cxExtensions.ts';
 import {
+  fetchCallHistoryForExtensionDay,
   fetchThreeCxCallHistory,
   fetchThreeCxCallHistoryForWindow,
   fetchThreeCxCallLogData,
@@ -724,8 +725,8 @@ async function fetchRecordingForCallRecord(
   const dayBounds = torontoDayBoundsFromMs(disposedMs);
   const windowStart = dayBounds.fromIso;
   const windowEnd = dayBounds.toIso;
-  const matchWindowStart = disposedMs - 2 * 60 * 60 * 1000;
-  const matchWindowEnd = disposedMs + 2 * 60 * 60 * 1000;
+  const matchWindowStart = disposedMs - 4 * 60 * 60 * 1000;
+  const matchWindowEnd = disposedMs + 4 * 60 * 60 * 1000;
 
   let best: RecordingCandidate | null = null;
   let apiWarning: string | null = null;
@@ -736,6 +737,9 @@ async function fetchRecordingForCallRecord(
     extHits: 0,
     withRecording: 0,
     recordingRowsScanned: 0,
+    getCallLogAttempts: [] as string[],
+    extensionDayRows: 0,
+    sampleExtPhones: [] as string[],
   };
 
   try {
@@ -752,8 +756,24 @@ async function fetchRecordingForCallRecord(
       getCallLogQueriesForDisposition(utcPeriod.periodFrom, utcPeriod.periodTo, extension, phone),
     );
 
+    diag.getCallLogAttempts = targeted.attempts;
     let history = targeted.rows;
     apiEndpoint = targeted.endpoint;
+
+    if (!history.length) {
+      const extDay = await fetchCallHistoryForExtensionDay(token, baseUrl, utcPeriod.dateKey, extension);
+      if (extDay.rows.length) {
+        history = extDay.rows;
+        apiEndpoint = extDay.endpoint || apiEndpoint;
+        diag.extensionDayRows = extDay.rows.length;
+        diag.sampleExtPhones = extDay.rows
+          .slice(0, 20)
+          .flatMap((row) => externalNumbersFromHistory(row))
+          .filter((n, i, arr) => n && arr.indexOf(n) === i)
+          .slice(0, 6);
+      }
+    }
+
     if (!history.length) {
       const bulk = await fetchThreeCxCallHistoryForWindow(token, baseUrl, windowStart, windowEnd);
       history = bulk.rows;
@@ -883,7 +903,18 @@ async function fetchRecordingForCallRecord(
       if (diag.extHits > 0 && diag.withRecording === 0) {
         message += ' Call found but 3CX returned no RecId — check Admin → Recordings for this extension/date.';
       } else if (diag.phoneHits === 0) {
-        message += ` No 3CX row contained this phone — verify the call appears in Admin → Reports → Call log for ${dayKey} ext ${extension}.`;
+        message += ` No 3CX row contained phone ${digitsOnly(phone).slice(-10)}.`;
+        if (diag.extensionDayRows > 0) {
+          message += ` Found ${diag.extensionDayRows} call(s) on ext ${extension} for ${dayKey}`;
+          if (diag.sampleExtPhones.length) {
+            message += ` (sample numbers: ${diag.sampleExtPhones.join(', ')})`;
+          }
+          message += ' — disposition phone may differ from 3CX CDR.';
+        } else if (diag.getCallLogAttempts.length) {
+          message += ` GetCallLogData: ${diag.getCallLogAttempts.join('; ')}.`;
+        } else {
+          message += ` Verify Admin → Reports → Call log for ${dayKey} ext ${extension}.`;
+        }
       }
     }
     return {
