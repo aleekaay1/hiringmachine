@@ -164,7 +164,7 @@ const CallLog: React.FC = () => {
     setStatusError(null);
     setStatusMessage(null);
     setSyncing(true);
-    setSyncProgress({ pct: 8, label: 'Matching recordings to dispositions…' });
+    setSyncProgress({ pct: 8, label: 'Rematching recordings from webhooks…' });
 
     const tick = window.setInterval(() => {
       setSyncProgress((prev) => {
@@ -175,7 +175,7 @@ const CallLog: React.FC = () => {
 
     try {
       const messages: string[] = [];
-      const recordingResult = await syncThreeCxRecordings({ hoursBack: 24, incremental: true });
+      const recordingResult = await syncThreeCxRecordings({ hoursBack: 168, incremental: true });
       if (recordingResult.message) messages.push(recordingResult.message);
 
       setSyncProgress({ pct: 45, label: 'Matching live sessions to Calendly/Zoom…' });

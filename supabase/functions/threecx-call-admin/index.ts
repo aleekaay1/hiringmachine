@@ -364,33 +364,79 @@ async function backfillFromCallHistory(
   return { scanned, withRecording, matched, updated };
 }
 
-/** Clear auto-attached recordings in range so strict phone+time rematch can fix wrong rows. */
-async function clearAutoAttachedRecordings(admin: ReturnType<typeof createClient>, sinceIso: string) {
-  const { data: rows, error } = await admin
+function stripRecordingFromMetadata(meta: unknown): Record<string, unknown> {
+  if (!meta || typeof meta !== 'object') return {};
+  const next = { ...(meta as Record<string, unknown>) };
+  delete next.recording_url;
+  delete next.duration_seconds;
+  delete next.threecx_call_id;
+  delete next.match_phone;
+  delete next.match_anchor;
+  delete next.match_extension;
+  delete next.match_recruiter_ids;
+  delete next.threecx_report;
+  return next;
+}
+
+function rowHasStoredRecording(row: { recording_url?: string | null; threecx_metadata?: unknown }): boolean {
+  if (String(row.recording_url || '').trim()) return true;
+  const meta = row.threecx_metadata && typeof row.threecx_metadata === 'object'
+    ? row.threecx_metadata as Record<string, unknown>
+    : {};
+  return Boolean(String(meta.recording_url || '').trim());
+}
+
+/** Clear recording columns AND threecx_metadata cache so rematch can re-attach correctly. */
+async function clearAutoAttachedRecordings(
+  admin: ReturnType<typeof createClient>,
+  sinceIso: string | null,
+) {
+  let query = admin
     .from('pipeline_call_records')
-    .select('id, recording_url')
-    .gte('disposed_at', sinceIso)
-    .not('recording_url', 'is', null)
+    .select('id, recording_url, threecx_metadata')
+    .order('disposed_at', { ascending: false })
     .limit(5000);
+  if (sinceIso) query = query.gte('disposed_at', sinceIso);
+
+  const { data: rows, error } = await query;
   if (error) throw error;
 
-  const ids = (rows || []).map((r) => String((r as { id?: string }).id || '')).filter(Boolean);
-  if (!ids.length) return 0;
+  const toClear = (rows || []).filter((r) => rowHasStoredRecording(r as {
+    recording_url?: string | null;
+    threecx_metadata?: unknown;
+  }));
+  if (!toClear.length) return 0;
 
-  const chunk = 100;
-  for (let i = 0; i < ids.length; i += chunk) {
-    const slice = ids.slice(i, i + chunk);
-    const { error: upErr } = await admin
-      .from('pipeline_call_records')
-      .update({
-        recording_url: null,
-        duration_seconds: null,
-        threecx_call_id: null,
-      })
-      .in('id', slice);
-    if (upErr) throw upErr;
+  const chunk = 50;
+  for (let i = 0; i < toClear.length; i += chunk) {
+    const slice = toClear.slice(i, i + chunk);
+    await Promise.all(slice.map(async (row) => {
+      const { error: upErr } = await admin
+        .from('pipeline_call_records')
+        .update({
+          recording_url: null,
+          duration_seconds: null,
+          threecx_call_id: null,
+          threecx_metadata: stripRecordingFromMetadata(row.threecx_metadata),
+        })
+        .eq('id', row.id);
+      if (upErr) throw upErr;
+    }));
   }
-  return ids.length;
+  return toClear.length;
+}
+
+async function resetWebhookMatchState(
+  admin: ReturnType<typeof createClient>,
+  sinceIso: string | null,
+) {
+  let query = admin
+    .from('threecx_webhook_events')
+    .update({ matched: false, recording_attached: false, call_record_id: null, detail: 'pending_rematch' })
+    .eq('event_type', 'report_call');
+  if (sinceIso) query = query.gte('received_at', sinceIso);
+  const { error } = await query;
+  if (error) throw error;
 }
 
 /** Replay webhooks — incremental by default (unmatched only, no mass clear). */
@@ -404,11 +450,7 @@ async function syncRecordings(
   let cleared = 0;
   if (!incremental) {
     cleared = await clearAutoAttachedRecordings(admin, since);
-    await admin
-      .from('threecx_webhook_events')
-      .update({ matched: false, recording_attached: false, call_record_id: null, detail: 'pending_rematch' })
-      .eq('event_type', 'report_call')
-      .gte('received_at', since);
+    await resetWebhookMatchState(admin, since);
   }
 
   let eventsQuery = admin
@@ -580,9 +622,24 @@ Deno.serve(async (req) => {
       const result = await syncExtensions(admin);
       return json(200, { ok: true, ...result });
     }
+    if (action === 'clear-recordings') {
+      const hoursBack = Number(body.hoursBack);
+      const since = hoursBack > 0
+        ? new Date(Date.now() - Math.min(hoursBack, 336) * 60 * 60 * 1000).toISOString()
+        : null;
+      const cleared = await clearAutoAttachedRecordings(admin, since);
+      await resetWebhookMatchState(admin, since);
+      return json(200, {
+        ok: true,
+        cleared,
+        hoursBack: hoursBack > 0 ? Math.min(hoursBack, 336) : null,
+        message: `Cleared ${cleared} recording(s). Click Refresh & sync to rematch from webhooks.`,
+      });
+    }
     if (action === 'backfill-today' || action === 'sync-recordings') {
+      const maxHours = body.fullRematch === true ? 336 : 72;
       const hoursBack = Number(body.hoursBack) > 0
-        ? Math.min(Number(body.hoursBack), 72)
+        ? Math.min(Number(body.hoursBack), maxHours)
         : (action === 'backfill-today' ? 24 : 24);
       const incremental = body.fullRematch === true ? false : body.incremental !== false;
       const result = action === 'backfill-today'

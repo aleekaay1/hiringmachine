@@ -89,6 +89,7 @@ export async function syncThreeCxRecordings(options?: {
   withRecording: number;
   matched: number;
   updated: number;
+  cleared?: number;
   incremental?: boolean;
   warning?: string | null;
   message?: string;
@@ -98,6 +99,13 @@ export async function syncThreeCxRecordings(options?: {
     incremental: options?.incremental !== false,
     fullRematch: options?.fullRematch === true,
   });
+}
+
+export async function clearThreeCxRecordings(hoursBack = 0): Promise<{
+  cleared: number;
+  message?: string;
+}> {
+  return invokeThreeCxCallAdmin('clear-recordings', { hoursBack });
 }
 
 export type CallLogWebhookRow = {
