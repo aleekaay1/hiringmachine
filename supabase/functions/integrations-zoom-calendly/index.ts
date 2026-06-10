@@ -40,6 +40,7 @@ import {
   type ZoomParticipant,
 } from '../_shared/zoomAttendance.ts';
 import { ZOOM_MEETING_URL } from '../_shared/hiringUrls.ts';
+import { matchInviteesToParticipants } from '../_shared/liveSessionAttendanceMatch.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -191,44 +192,6 @@ function activeCalendlyInvitees(cache: Map<string, CalInvitee[]>, evUri: string 
   });
 }
 
-// ─── Name-based attendance matching ────────────────────────────────────────
-/** Normalise a display name for fuzzy matching: lowercase, collapse whitespace, strip punctuation. */
-function normName(s: string): string {
-  return (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
-}
-
-/**
- * True if two names are "the same person":
- *   - Exact match after normalisation, OR
- *   - Both non-empty first tokens match AND last token (if present) also matches.
- * Very conservative — avoids false-positives across common first names.
- */
-function samePersonByName(calName: string, zoomName: string): boolean {
-  const a = normName(calName);
-  const b = normName(zoomName);
-  if (!a || !b) return false;
-  if (a === b) return true;
-  // Split into parts and require ≥ 2 tokens to match (first + last)
-  const ap = a.split(' ').filter(Boolean);
-  const bp = b.split(' ').filter(Boolean);
-  if (ap.length < 2 || bp.length < 2) return false;
-  // Check both orderings in case name parts are swapped
-  const allB = new Set(bp);
-  const shared = ap.filter((p) => p.length > 1 && allB.has(p));
-  if (shared.length >= 2) return true;
-
-  // Fallback for abbreviated last names: "john d" vs "john doe"
-  const aFirst = ap[0];
-  const bFirst = bp[0];
-  if (!aFirst || !bFirst || aFirst !== bFirst) return false;
-  const aLast = ap[ap.length - 1];
-  const bLast = bp[bp.length - 1];
-  if (!aLast || !bLast) return false;
-  if (aLast.length >= 2 && bLast.startsWith(aLast)) return true;
-  if (bLast.length >= 2 && aLast.startsWith(bLast)) return true;
-  return false;
-}
-
 /** ISO date string YYYY-MM-DD in America/Toronto. */
 function isoDate(dt: DateTime): string {
   return dt.toISODate() ?? '';
@@ -343,58 +306,24 @@ async function discoverLiveSessionMeetingIds(
   return [...ids];
 }
 
-function buildParticipantMaps(participants: ZoomParticipant[]) {
-  const participantByEmail = new Map<string, ZoomParticipant>();
-  for (const p of participants) {
-    const e = (p.user_email ?? '').trim().toLowerCase();
-    if (e) participantByEmail.set(e, p);
-  }
-  const participantNames = participants
-    .filter((p) => p.name)
-    .map((p) => ({ norm: normName(p.name ?? ''), raw: p }));
-  return { participantByEmail, participantNames };
-}
-
-function findParticipantForInvitee(
-  invitee: CalInvitee,
-  participantByEmail: Map<string, ZoomParticipant>,
-  participantNames: Array<{ norm: string; raw: ZoomParticipant }>,
-): ZoomParticipant | null {
-  if (invitee.email && participantByEmail.has(invitee.email)) {
-    return participantByEmail.get(invitee.email)!;
-  }
-  if (invitee.name) {
-    for (const { norm, raw } of participantNames) {
-      if (samePersonByName(invitee.name, raw.name ?? '') || normName(invitee.name) === norm) {
-        return raw;
-      }
-    }
-  }
-  return null;
-}
-
-function mapInviteesWithAttendance(
+function formatMatchedInvitees(
   rawInvitees: CalInvitee[],
-  participants: ZoomParticipant[],
+  matched: ReturnType<typeof matchInviteesToParticipants>,
 ) {
-  const { participantByEmail, participantNames } = buildParticipantMaps(participants);
-  return rawInvitees.map((i) => {
-    const match = findParticipantForInvitee(i, participantByEmail, participantNames);
-    return {
-      email: i.email,
-      name: i.name,
-      status: i.status,
-      no_show: i.no_show,
-      attended_zoom: match !== null,
-      match_method: match ? (participantByEmail.has(i.email) ? 'email' as const : 'name' as const) : null,
-      join_time: match?.join_time ?? null,
-      leave_time: match?.leave_time ?? null,
-      phone_number: i.phone_number ?? null,
-      timezone: i.timezone ?? null,
-      invitee_uri: i.uri,
-      event_uri: i.event_uri,
-    };
-  });
+  return matched.invitees.map((invitee, index) => ({
+    email: invitee.email,
+    name: invitee.name,
+    status: rawInvitees[index]?.status ?? invitee.status,
+    no_show: rawInvitees[index]?.no_show,
+    attended_zoom: invitee.attended_zoom,
+    match_method: invitee.match_method,
+    join_time: invitee.join_time,
+    leave_time: invitee.leave_time,
+    phone_number: rawInvitees[index]?.phone_number ?? null,
+    timezone: rawInvitees[index]?.timezone ?? null,
+    invitee_uri: rawInvitees[index]?.uri,
+    event_uri: rawInvitees[index]?.event_uri,
+  }));
 }
 
 // ─── Zoom time parsing ─────────────────────────────────────────────────────
@@ -1276,14 +1205,12 @@ Deno.serve(async (req) => {
       }
       zoomAttendanceDebug.push(participantFetch.debug as unknown as Record<string, unknown>);
 
-      const inviteesWithAttendance = mapInviteesWithAttendance(rawInvitees, participants);
-
+      const matched = matchInviteesToParticipants(rawInvitees, participants);
+      const inviteesWithAttendance = formatMatchedInvitees(rawInvitees, matched);
       const attended = inviteesWithAttendance.filter((i) => i.attended_zoom);
-      const noShow   = inviteesWithAttendance.filter((i) => !i.attended_zoom);
-      const attendedByEmail = attended.filter((i) => i.match_method === 'email').length;
-      const attendedByName = attended.filter((i) => i.match_method === 'name').length;
+      const noShow = inviteesWithAttendance.filter((i) => !i.attended_zoom);
       const participantsWithEmail = participants.filter((p) => (p.user_email ?? '').trim().length > 0).length;
-      const participantSamples = participants.slice(0, 20).map((p) => ({
+      const participantSamples = matched.dedupedParticipants.slice(0, 20).map((p) => ({
         name: p.name ?? '',
         email: (p.user_email ?? '').trim().toLowerCase(),
         join_time: p.join_time ?? null,
@@ -1293,40 +1220,27 @@ Deno.serve(async (req) => {
         email: i.email,
       }));
 
-      // Walk-ins: participants not matched to any Calendly invitee (by email or name)
-      const matchedParticipantEmails = new Set(attended.map((i) => i.email).filter(Boolean));
-      const walkinParticipants = participants.filter((p) => {
-        const pe = (p.user_email ?? '').trim().toLowerCase();
-        if (pe && matchedParticipantEmails.has(pe)) return false;
-        // Also check by name to avoid duplicating matched-by-name participants
-        return !attended.some((i) => samePersonByName(i.name, p.name ?? ''));
-      });
-
       return {
         source: 'past' as const,
         session_type: slot?.label ?? null,
         zoom: { uuid, topic, start_time: start, start_at_ms: startMs, duration_minutes: duration, host_email: host, meeting_id: m.id },
         calendly: calEv ? { name: calEv.name, start_time: calEv.start_time, end_time: calEv.end_time, status: calEv.status, uri: calEv.uri } : null,
-        participants: participants.map((p) => ({
-          name:       p.name,
-          email:      (p.user_email ?? '').trim().toLowerCase(),
-          join_time:  p.join_time,
+        participants: matched.dedupedParticipants.map((p) => ({
+          name: p.name,
+          email: (p.user_email ?? '').trim().toLowerCase(),
+          join_time: p.join_time,
           leave_time: p.leave_time,
         })),
         invitees: inviteesWithAttendance,
-        walkin_emails: walkinParticipants.map((p) => (p.user_email ?? '').trim().toLowerCase() || (p.name ?? '')),
-        stats: {
-          invited_count:           rawInvitees.length,
-          attended_matched_count:  attended.length,
-          no_show_or_absent_count: noShow.length,
-          zoom_participant_count:  participants.length,
-          attendance_rate_pct:     rawInvitees.length > 0 ? Math.round((attended.length / rawInvitees.length) * 100) : null,
-        },
+        walkin_emails: matched.walkinParticipants.map(
+          (p) => (p.user_email ?? '').trim().toLowerCase() || (p.name ?? ''),
+        ),
+        stats: matched.stats,
         debug_matching: {
           participants_with_email: participantsWithEmail,
           participants_without_email: Math.max(0, participants.length - participantsWithEmail),
-          matched_by_email: attendedByEmail,
-          matched_by_name: attendedByName,
+          matched_by_email: matched.stats.matched_by_email,
+          matched_by_name: matched.stats.matched_by_name,
           calendly_invitees_considered: rawInvitees.length,
           participant_samples: participantSamples,
           unmatched_invitee_samples: unmatchedInviteeSamples,
@@ -1441,25 +1355,20 @@ Deno.serve(async (req) => {
               });
               const participants = participantFetch.participants;
               zoomAttendanceDebug.push(participantFetch.debug as unknown as Record<string, unknown>);
-              const inviteesWithAttendance = mapInviteesWithAttendance(rawInvitees, participants);
-              const attended = inviteesWithAttendance.filter((i) => i.attended_zoom);
+              const matched = matchInviteesToParticipants(rawInvitees, participants);
+              const inviteesWithAttendance = formatMatchedInvitees(rawInvitees, matched);
               existing.invitees = inviteesWithAttendance;
               existing.calendly = calMeta;
-              existing.participants = participants.map((p) => ({
+              existing.participants = matched.dedupedParticipants.map((p) => ({
                 name: p.name,
                 email: (p.user_email ?? '').trim().toLowerCase(),
                 join_time: p.join_time,
                 leave_time: p.leave_time,
               }));
-              existing.stats = {
-                invited_count: rawInvitees.length,
-                attended_matched_count: attended.length,
-                no_show_or_absent_count: inviteesWithAttendance.length - attended.length,
-                zoom_participant_count: participants.length,
-                attendance_rate_pct: rawInvitees.length > 0
-                  ? Math.round((attended.length / rawInvitees.length) * 100)
-                  : null,
-              };
+              existing.stats = matched.stats;
+              existing.walkin_emails = matched.walkinParticipants.map(
+                (p) => (p.user_email ?? '').trim().toLowerCase() || (p.name ?? ''),
+              );
               if (zoomMeeting || participantFetch.instanceUuid) {
                 const resolvedUuid = participantFetch.instanceUuid ?? String(zoomMeeting?.uuid ?? '');
                 existing.zoom.uuid = resolvedUuid || existing.zoom.uuid;
@@ -1490,8 +1399,8 @@ Deno.serve(async (req) => {
           });
           const participants = participantFetch.participants;
           zoomAttendanceDebug.push(participantFetch.debug as unknown as Record<string, unknown>);
-          const inviteesWithAttendance = mapInviteesWithAttendance(rawInvitees, participants);
-          const attended = inviteesWithAttendance.filter((i) => i.attended_zoom);
+          const matched = matchInviteesToParticipants(rawInvitees, participants);
+          const inviteesWithAttendance = formatMatchedInvitees(rawInvitees, matched);
           combinedPast.push({
             source: 'past' as const,
             session_type: WEDNESDAY_LIVE_SLOT.label,
@@ -1505,23 +1414,17 @@ Deno.serve(async (req) => {
               meeting_id: targetMeetingIds[0],
             },
             calendly: calMeta,
-            participants: participants.map((p) => ({
+            participants: matched.dedupedParticipants.map((p) => ({
               name: p.name,
               email: (p.user_email ?? '').trim().toLowerCase(),
               join_time: p.join_time,
               leave_time: p.leave_time,
             })),
             invitees: inviteesWithAttendance,
-            walkin_emails: [],
-            stats: {
-              invited_count: rawInvitees.length,
-              attended_matched_count: attended.length,
-              no_show_or_absent_count: inviteesWithAttendance.length - attended.length,
-              zoom_participant_count: participants.length,
-              attendance_rate_pct: rawInvitees.length > 0
-                ? Math.round((attended.length / rawInvitees.length) * 100)
-                : null,
-            },
+            walkin_emails: matched.walkinParticipants.map(
+              (p) => (p.user_email ?? '').trim().toLowerCase() || (p.name ?? ''),
+            ),
+            stats: matched.stats,
           });
           zoomPastDates.add(dateKey);
         } else {
@@ -1589,24 +1492,18 @@ Deno.serve(async (req) => {
         timeZone: TZ,
       });
       if (participantFetch.participants.length === 0) continue;
-      const inviteesWithAttendance = mapInviteesWithAttendance(rawInvitees, participantFetch.participants);
-      const attended = inviteesWithAttendance.filter((i) => i.attended_zoom);
-      row.invitees = inviteesWithAttendance;
-      row.participants = participantFetch.participants.map((p) => ({
+      const matched = matchInviteesToParticipants(rawInvitees, participantFetch.participants);
+      row.invitees = formatMatchedInvitees(rawInvitees, matched);
+      row.participants = matched.dedupedParticipants.map((p) => ({
         name: p.name,
         email: (p.user_email ?? '').trim().toLowerCase(),
         join_time: p.join_time,
         leave_time: p.leave_time,
       }));
-      row.stats = {
-        invited_count: rawInvitees.length,
-        attended_matched_count: attended.length,
-        no_show_or_absent_count: inviteesWithAttendance.length - attended.length,
-        zoom_participant_count: participantFetch.participants.length,
-        attendance_rate_pct: rawInvitees.length > 0
-          ? Math.round((attended.length / rawInvitees.length) * 100)
-          : null,
-      };
+      row.stats = matched.stats;
+      row.walkin_emails = matched.walkinParticipants.map(
+        (p) => (p.user_email ?? '').trim().toLowerCase() || (p.name ?? ''),
+      );
       if (participantFetch.instanceUuid) row.zoom.uuid = participantFetch.instanceUuid;
       zoomAttendanceDebug.push({ ...participantFetch.debug, backfill: true } as unknown as Record<string, unknown>);
     }

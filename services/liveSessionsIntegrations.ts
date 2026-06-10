@@ -43,12 +43,37 @@ export interface PastMeetingInvitee {
 
 export interface PastMeetingStats {
   invited_count: number;
+  /** Calendly invitees matched to a unique Zoom participant (email or name). */
   attended_matched_count: number;
   no_show_or_absent_count: number;
+  /** Raw participant rows from Zoom (may include reconnect duplicates). */
   zoom_participant_count: number;
-  /** Computed by edge function: attended / invited × 100 (null when invited_count = 0) */
+  /** Deduped unique people on Zoom for this session. */
+  unique_zoom_attendee_count?: number;
+  /** Zoom joiners not matched to any Calendly registration. */
+  walkin_count?: number;
+  /** Same as unique_zoom_attendee_count — total unique people who showed. */
+  total_showed_count?: number;
+  matched_by_email?: number;
+  matched_by_name?: number;
+  /** Computed by edge function: matched registrations / invited × 100 (null when invited_count = 0) */
   attendance_rate_pct?: number | null;
-  zoom_only_emails: string[];
+  zoom_only_emails?: string[];
+}
+
+/** Unique Zoom attendees who showed (deduped). Falls back for older cached payloads. */
+export function pastSessionShowedCount(
+  stats: PastMeetingStats | undefined | null,
+  past?: PastMeetingRow | null,
+): number {
+  if (stats?.total_showed_count != null) return stats.total_showed_count;
+  if (stats?.unique_zoom_attendee_count != null) return stats.unique_zoom_attendee_count;
+  if (past) {
+    const matched = past.invitees.filter((i) => i.attended_zoom).length;
+    const walkins = past.walkin_emails?.length ?? stats?.walkin_count ?? 0;
+    if (matched + walkins > 0) return matched + walkins;
+  }
+  return stats?.attended_matched_count ?? 0;
 }
 
 export interface PastMeetingRow {
@@ -534,7 +559,7 @@ export function buildLiveSessionScheduleRows(
       sessionTimeLabel,
       calendlyName: row.calendly?.name ?? existing?.calendlyName ?? 'Live Online Career Session',
       scheduledCount: countUniqueInvitees(row, existing?.upcoming ?? null),
-      attendedCount: row.stats?.attended_matched_count ?? row.invitees.filter((i) => i.attended_zoom).length,
+      attendedCount: pastSessionShowedCount(row.stats, row),
       attendanceRatePct: row.stats?.attendance_rate_pct ?? null,
       zoomTopic: row.zoom.topic || 'Live Online Career Session',
       zoomJoinUrl: null,

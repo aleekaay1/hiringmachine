@@ -43,6 +43,11 @@ export type RegistryPastRow = {
     attended_matched_count: number;
     no_show_or_absent_count: number;
     zoom_participant_count: number;
+    unique_zoom_attendee_count?: number;
+    walkin_count?: number;
+    total_showed_count?: number;
+    matched_by_email?: number;
+    matched_by_name?: number;
     attendance_rate_pct?: number | null;
   };
 };
@@ -124,7 +129,8 @@ export async function persistLiveSessionsRegistry(
       scheduled_count: stats?.invited_count ?? invitees.length,
       attended_count: stats?.attended_matched_count ?? 0,
       attendance_rate_pct: stats?.attendance_rate_pct ?? null,
-      zoom_participant_count: stats?.zoom_participant_count ?? 0,
+      zoom_participant_count:
+        stats?.unique_zoom_attendee_count ?? stats?.total_showed_count ?? stats?.zoom_participant_count ?? 0,
       last_synced_at: syncedIso,
       updated_at: syncedIso,
     }, { onConflict: 'session_date' });
@@ -318,6 +324,15 @@ export async function loadLiveSessionsRegistryPayload(
           attended_matched_count: occ.attended_count ?? inviteesPast.filter((i) => i.attended_zoom).length,
           no_show_or_absent_count: inviteesPast.filter((i) => !i.attended_zoom).length,
           zoom_participant_count: occ.zoom_participant_count ?? 0,
+          unique_zoom_attendee_count: occ.zoom_participant_count ?? 0,
+          total_showed_count: occ.zoom_participant_count ?? 0,
+          matched_by_email: inviteesPast.filter((i) => i.attended_zoom && i.match_method === 'email').length,
+          matched_by_name: inviteesPast.filter((i) => i.attended_zoom && i.match_method === 'name').length,
+          walkin_count: Math.max(
+            0,
+            (occ.zoom_participant_count ?? 0) -
+              (occ.attended_count ?? inviteesPast.filter((i) => i.attended_zoom).length),
+          ),
           attendance_rate_pct: occ.attendance_rate_pct,
         },
       });

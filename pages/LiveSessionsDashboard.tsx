@@ -5,6 +5,7 @@ import { supabase } from '../services/supabaseClient';
 import {
   buildLiveSessionScheduleRows,
   fetchLiveSessionsDashboard,
+  pastSessionShowedCount,
   type LiveSessionScheduleRow,
   type LiveSessionsDashboardPayload,
   type PastMeetingInvitee,
@@ -36,6 +37,8 @@ type InviteeRow = {
   attended: boolean | null;
   joinTime: string | null;
   leaveTime: string | null;
+  matchMethod?: 'email' | 'name' | null;
+  isWalkin?: boolean;
 };
 
 function mapPastInvitee(i: PastMeetingInvitee): InviteeRow {
@@ -47,6 +50,7 @@ function mapPastInvitee(i: PastMeetingInvitee): InviteeRow {
     attended: i.attended_zoom,
     joinTime: i.join_time ?? null,
     leaveTime: i.leave_time ?? null,
+    matchMethod: i.match_method ?? null,
   };
 }
 
@@ -73,6 +77,35 @@ function inviteesForSession(row: LiveSessionScheduleRow): InviteeRow[] {
   };
   for (const i of row.past?.invitees ?? []) add(mapPastInvitee(i));
   for (const i of row.upcoming?.invitees ?? []) add(mapUpcomingInvitee(i));
+
+  const past = row.past;
+  if (past) {
+    const matchedKeys = new Set(
+      past.invitees
+        .filter((i) => i.attended_zoom)
+        .map((i) => {
+          const email = String(i.email ?? '').trim().toLowerCase();
+          return email ? `e:${email}` : `n:${(i.name ?? '').toLowerCase()}`;
+        }),
+    );
+    for (const participant of past.participants ?? []) {
+      const email = String(participant.email ?? '').trim().toLowerCase();
+      const name = String(participant.name ?? '').trim();
+      const key = email ? `e:${email}` : name ? `n:${name.toLowerCase()}` : '';
+      if (!key || matchedKeys.has(key)) continue;
+      add({
+        name: name || EM_DASH,
+        email: email || EM_DASH,
+        phone: EM_DASH,
+        status: 'walk-in',
+        attended: true,
+        joinTime: participant.join_time ?? null,
+        leaveTime: participant.leave_time ?? null,
+        isWalkin: true,
+      });
+    }
+  }
+
   return out;
 }
 
@@ -130,16 +163,16 @@ const LiveSessionsDashboard: React.FC = () => {
     setData(result.data);
     if (sync && result.data && !result.data.from_cache) {
       const past = result.data.past_meetings;
-      const attended = past.reduce((n, r) => n + (r.stats?.attended_matched_count ?? 0), 0);
-      const zoomJoiners = past.reduce((n, r) => n + (r.stats?.zoom_participant_count ?? 0), 0);
+      const matched = past.reduce((n, r) => n + (r.stats?.attended_matched_count ?? 0), 0);
+      const showed = past.reduce((n, r) => n + pastSessionShowedCount(r.stats, r), 0);
       const withInvitees = past.filter((r) => (r.stats?.invited_count ?? r.invitees.length) > 0).length;
-      if (withInvitees > 0 && zoomJoiners === 0) {
+      if (withInvitees > 0 && showed === 0) {
         setFetchError(
           'Calendly registrations loaded but Zoom returned no attendees. Confirm Zoom scopes are saved on the Server-to-Server app, then sync again.',
         );
-      } else if (attended > 0 || zoomJoiners > 0) {
+      } else if (showed > 0 || matched > 0) {
         setSyncSummary(
-          `Zoom attendance loaded: ${zoomJoiners} joiner${zoomJoiners === 1 ? '' : 's'} across ${past.length} past session${past.length === 1 ? '' : 's'} (${attended} matched to Calendly).`,
+          `Zoom attendance loaded: ${showed} unique attendee${showed === 1 ? '' : 's'} across ${past.length} past session${past.length === 1 ? '' : 's'} (${matched} matched to Calendly registrations).`,
         );
       }
     }
@@ -312,7 +345,7 @@ const LiveSessionsDashboard: React.FC = () => {
           <StatCard label="Wednesday sessions" value={totals.sessionDates} />
           <StatCard label="Upcoming" value={upcomingSessions.length} />
           <StatCard label="Total scheduled" value={totals.scheduled} />
-          <StatCard label="Confirmed attended (past)" value={totals.attended} highlight />
+          <StatCard label="Total showed (past)" value={totals.attended} highlight />
         </div>
 
         <div className="flex flex-wrap items-center gap-3 text-[11px]">
@@ -344,7 +377,7 @@ const LiveSessionsDashboard: React.FC = () => {
 
         <SessionsBlock
           title="Past sessions"
-          subtitle="Calendly registrations (blue) + Zoom attendance (green)."
+          subtitle="Calendly registrations (blue) + unique Zoom attendees who showed (green)."
           sessions={pastSessions}
           loading={loading}
           emptyText="No past sessions in the database. Click Refresh from Zoom + Calendly to fetch and save."
@@ -542,7 +575,7 @@ function SessionsBlock({
                 <th className="px-2 py-2.5">Date</th>
                 <th className="px-2 py-2.5">Session time (ET)</th>
                 <th className={`px-2 py-2.5 text-right ${CAL_HEAD}`}>Scheduled</th>
-                <th className={`px-2 py-2.5 text-right ${ZOOM_HEAD}`}>Attended</th>
+                <th className={`px-2 py-2.5 text-right ${ZOOM_HEAD}`}>Showed</th>
               </tr>
             </thead>
             <tbody>
@@ -572,6 +605,12 @@ function SessionTableRow({
   onToggle: () => void;
 }) {
   const invitees = inviteesForSession(session);
+  const pastStats = session.past?.stats;
+  const showedCount = pastSessionShowedCount(pastStats, session.past);
+  const matchedCount = pastStats?.attended_matched_count ?? session.past?.invitees.filter((i) => i.attended_zoom).length ?? 0;
+  const walkinCount = pastStats?.walkin_count ?? session.past?.walkin_emails?.length ?? 0;
+  const matchedByEmail = pastStats?.matched_by_email ?? 0;
+  const matchedByName = pastStats?.matched_by_name ?? 0;
 
   return (
     <>
@@ -598,15 +637,30 @@ function SessionTableRow({
                 </span>
                 {session.isPast && (
                   <span className={`inline-block rounded px-1.5 py-0.5 ${ZOOM_HEAD}`}>
-                    {session.past?.stats?.zoom_participant_count ?? 0} Zoom joiners
+                    {showedCount} showed on Zoom
                     {session.past?.zoom?.uuid ? '' : ' (Zoom occurrence not linked)'}
                   </span>
                 )}
               </p>
-              {session.isPast && session.attendanceRatePct != null && (
+              {session.isPast && (
                 <p className="text-xs text-[#5a6f8a]">
-                  Attendance: <strong className="text-[#0B1B34]">{session.attendanceRatePct}%</strong>
-                  {' '}({session.attendedCount ?? 0} of {session.scheduledCount} matched)
+                  <strong className="text-[#0B1B34]">{matchedCount}</strong> registration{matchedCount === 1 ? '' : 's'} matched to Zoom
+                  {matchedByEmail + matchedByName > 0 && (
+                    <>
+                      {' '}({matchedByEmail} by email{matchedByName > 0 ? `, ${matchedByName} by name` : ''})
+                    </>
+                  )}
+                  {walkinCount > 0 && (
+                    <>
+                      {MIDDLE_DOT} <strong className="text-[#0B1B34]">{walkinCount}</strong> walk-in{walkinCount === 1 ? '' : 's'}
+                    </>
+                  )}
+                  {session.attendanceRatePct != null && (
+                    <>
+                      {MIDDLE_DOT} match rate: <strong className="text-[#0B1B34]">{session.attendanceRatePct}%</strong>
+                      {' '}({matchedCount} of {session.scheduledCount} scheduled)
+                    </>
+                  )}
                 </p>
               )}
 
@@ -635,7 +689,12 @@ function SessionTableRow({
                           {session.isPast && (
                             <td className={`px-3 py-2 ${ZOOM_CELL}`}>
                               {inv.attended === true && (
-                                <span className="font-semibold">Attended</span>
+                                <span className="font-semibold">
+                                  {inv.isWalkin ? 'Walk-in' : 'Attended'}
+                                  {inv.matchMethod === 'name' && !inv.isWalkin && (
+                                    <span className="ml-1 font-normal text-[10px] text-green-800/80">(name)</span>
+                                  )}
+                                </span>
                               )}
                               {inv.attended === false && (
                                 <span className="font-semibold">No-show</span>
