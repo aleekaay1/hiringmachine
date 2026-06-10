@@ -34,6 +34,7 @@ import {
   type PipelineCallRecord,
 } from './pipelineService';
 import { loadRecruiterCoinBalanceMap } from './recruiterCoinService';
+import { refreshLiveSessionsAndMatchOutcomes } from './liveSessionOutcomeService';
 import { supabase } from './supabaseClient';
 
 type AnyRow = Record<string, unknown>;
@@ -367,6 +368,7 @@ export async function refreshReportSourcesFromRemote(): Promise<{
   ok: boolean;
   webinarCount: number;
   fetchedAt?: string;
+  liveSessionMessage?: string;
   error?: string;
 }> {
   const { data: sessionData } = await supabase.auth.getSession();
@@ -407,7 +409,23 @@ export async function refreshReportSourcesFromRemote(): Promise<{
     fetchLabel: label,
   });
 
-  return { ok: true, webinarCount: rows.length, fetchedAt: new Date().toISOString() };
+  let liveSessionMessage: string | undefined;
+  try {
+    const liveResult = await refreshLiveSessionsAndMatchOutcomes({ syncCoins: false, daysBack: 90 });
+    if (liveResult.message) liveSessionMessage = liveResult.message;
+    if (!liveResult.ok && liveResult.error) {
+      liveSessionMessage = `Live sessions: ${liveResult.error}`;
+    }
+  } catch (err) {
+    liveSessionMessage = err instanceof Error ? err.message : 'Live session sync failed';
+  }
+
+  return {
+    ok: true,
+    webinarCount: rows.length,
+    fetchedAt: new Date().toISOString(),
+    liveSessionMessage,
+  };
 }
 
 async function loadWebinarRows(): Promise<{ rows: AnyRow[]; fetchedAt: string | null }> {
@@ -523,13 +541,13 @@ export async function loadRecruiterReport(
     range,
     summary: {
       totalCalls: callStats.totalCalls,
-      bookedCalls: 0,
+      bookedCalls: callStats.bookedCalls,
       emailsSent: emailSentLogs.length,
       emailReplies: inbound.length,
       webinarBooked: webinarsBooked.length,
       webinarShowed: webinarShows.length,
-      liveBooked: 0,
-      liveShowed: 0,
+      liveBooked: live.booked,
+      liveShowed: live.showed,
       pazCoins: coinMap.get(userId) ?? Number(profile.points || 0),
     },
     calls,
@@ -548,10 +566,24 @@ export async function loadTeamReportCards(
   profiles: UserProfile[],
   range: ReportDateRange,
 ): Promise<StaffReportCard[]> {
-  const [{ rows: webinarAll }, coinMap] = await Promise.all([
+  const [{ rows: webinarAll }, coinMap, callRecords, liveRegs] = await Promise.all([
     loadWebinarRows(),
     loadRecruiterCoinBalanceMap(),
+    listPipelineCallRecords({
+      fromIso: range.fromIso,
+      toIso: range.toIso,
+      limit: 8000,
+    }),
+    loadLiveSessionRegistrantsForMatching(),
   ]);
+
+  const candidateIds = [...new Set(callRecords.map((r) => r.candidate_id).filter(Boolean))];
+  const [candidateEmailById, candidatePhoneById] = await Promise.all([
+    loadCandidateEmailsById(candidateIds),
+    loadCandidatePhonesById(candidateIds),
+  ]);
+  const liveByEmail = buildLiveSessionRowsByEmail(liveRegs);
+  const liveByPhone = buildLiveSessionRowsByPhone(liveRegs);
 
   return profiles.map((profile) => {
     const scopedWebinar = filterRowsForRecruiterOwnership(
@@ -570,17 +602,28 @@ export async function loadTeamReportCards(
         ymdInRange(fmtWebinarSessionDateKey(row), range.sinceYmd, range.untilYmd),
     );
 
+    const recruiterCalls = callRecords.filter((r) => r.recruiter_user_id === profile.user_id);
+    const callStats = summarizeCalls(recruiterCalls);
+    const live = buildLiveSessionsForRecruiter(
+      recruiterCalls,
+      candidateEmailById,
+      candidatePhoneById,
+      liveByEmail,
+      liveByPhone,
+      range,
+    );
+
     return {
       profile,
       summary: {
-        totalCalls: 0,
-        bookedCalls: 0,
+        totalCalls: callStats.totalCalls,
+        bookedCalls: callStats.bookedCalls,
         emailsSent: 0,
         emailReplies: 0,
         webinarBooked: webinarsBookedCount,
         webinarShowed: webinarShows.length,
-        liveBooked: 0,
-        liveShowed: 0,
+        liveBooked: live.booked,
+        liveShowed: live.showed,
         pazCoins: coinMap.get(profile.user_id) ?? Number(profile.points || 0),
       },
     };

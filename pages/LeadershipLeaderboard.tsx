@@ -390,7 +390,13 @@ const LeadershipLeaderboard: React.FC = () => {
       ];
 
       setRefreshProgress({ pct: 30, label: 'Syncing Calendly & Zoom live sessions…' });
-      await refreshLiveSessionsAndMatchOutcomes({ syncCoins: true }).catch(() => null);
+      const liveSyncResult = await refreshLiveSessionsAndMatchOutcomes({ syncCoins: true }).catch((err) => ({
+        ok: false as const,
+        error: err instanceof Error ? err.message : 'Live session sync failed',
+      }));
+      if (!liveSyncResult.ok && liveSyncResult.error) {
+        console.warn('[leaderboard] Live session sync:', liveSyncResult.error);
+      }
 
       setRefreshProgress({ pct: 38, label: 'Loading webinar & live session data…' });
       const [scopedWebinarRows, profiles, liveRegistrants, candidateEmailById, candidatePhoneById] =

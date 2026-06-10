@@ -21,7 +21,6 @@ type CallRecordRow = {
   candidate_id: string;
   recruiter_user_id: string | null;
   disposition: string;
-  booked_subtype: string | null;
   dialed_number: string;
   disposed_at: string;
   created_at: string;
@@ -39,7 +38,7 @@ function readBookedSubtype(record: CallRecordRow): string {
   const meta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
     ? record.threecx_metadata
     : {};
-  return String(record.booked_subtype || meta.booked_subtype || meta.bookedSubtype || '').trim().toLowerCase();
+  return String(meta.booked_subtype || meta.bookedSubtype || '').trim().toLowerCase();
 }
 
 Deno.serve(async (req) => {
@@ -83,7 +82,7 @@ Deno.serve(async (req) => {
     const [{ data: registrants, error: regErr }, { data: records, error: recErr }] = await Promise.all([
       admin.from('live_session_registrants').select('session_date, email, phone, attended_zoom, calendly_no_show, zoom_join_at'),
       admin.from('pipeline_call_records')
-        .select('id, candidate_id, recruiter_user_id, disposition, booked_subtype, dialed_number, disposed_at, created_at, threecx_metadata')
+        .select('id, candidate_id, recruiter_user_id, disposition, dialed_number, disposed_at, created_at, threecx_metadata')
         .gte('disposed_at', sinceIso)
         .ilike('disposition', 'booked')
         .order('disposed_at', { ascending: false })

@@ -9,6 +9,7 @@ import {
   RefreshCw,
   UserCheck,
   Video,
+  CalendarCheck,
 } from 'lucide-react';
 import { Button } from '../components/UI';
 import { useAdminSessionOnce } from '../components/reports/useAdminSessionOnce';
@@ -235,6 +236,8 @@ const ReportDetail: React.FC = () => {
                   {[
                     { label: 'Webinar booked', value: report.summary.webinarBooked, icon: Video },
                     { label: 'Webinar shows', value: report.summary.webinarShowed, icon: UserCheck },
+                    { label: 'Live booked', value: report.summary.liveBooked, icon: CalendarCheck },
+                    { label: 'Live shows', value: report.summary.liveShowed, icon: UserCheck },
                     { label: 'Emails sent', value: report.summary.emailsSent, icon: Mail },
                     { label: 'Paz coins', value: report.summary.pazCoins, icon: FileText },
                     { label: 'Dial activity', value: report.summary.totalCalls, icon: PhoneCall },

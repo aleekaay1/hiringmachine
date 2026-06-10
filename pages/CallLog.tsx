@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
 import { Button } from '../components/UI';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
@@ -13,20 +12,25 @@ import CallRecordingPlayer from '../components/callLog/CallRecordingPlayer';
 import {
   listPipelineCallRecords,
   listPipelineCandidatesByIds,
-  readCallRecordDirection,
   readCallRecordLiveSessionOutcome,
   readCallRecordMeta,
   readCallRecordRecording,
   type PipelineCallRecord,
   type PipelineCandidate,
 } from '../services/pipelineService';
+import {
+  loadLiveSessionRegistrantsForMatching,
+  matchLiveSessionForCallDisposition,
+  type LiveSessionRegistrantRow,
+} from '../services/liveSessionBookedOutcomes';
+import { refreshLiveSessionsAndMatchOutcomes } from '../services/liveSessionOutcomeService';
 import { PIPELINE_CALL_DISPOSITIONS } from '../services/pipelineCallDispositions';
 import {
   fetchCallLogWebhookRows,
   syncThreeCxRecordings,
   type CallLogWebhookRow,
 } from '../services/threecxCallLogAdmin';
-import { PhoneCall, PhoneIncoming, PhoneOutgoing, RefreshCw, Search } from 'lucide-react';
+import { PhoneCall, RefreshCw, Search } from 'lucide-react';
 
 type CallLogEntry = {
   key: string;
@@ -111,6 +115,7 @@ const CallLog: React.FC = () => {
   const [syncProgress, setSyncProgress] = useState<{ pct: number; label: string } | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
+  const [liveRegistrants, setLiveRegistrants] = useState<LiveSessionRegistrantRow[]>([]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -131,14 +136,16 @@ const CallLog: React.FC = () => {
         ? await fetchCallLogWebhookRows(48).catch(() => [] as CallLogWebhookRow[])
         : [];
       const candidateIds = [...new Set(callRows.map((row) => row.candidate_id).filter(Boolean))];
-      const [candidateRows, profiles] = await Promise.all([
+      const [candidateRows, profiles, liveRegs] = await Promise.all([
         listPipelineCandidatesByIds(candidateIds).catch(() => [] as PipelineCandidate[]),
         listAllUserProfiles().catch(() => [] as UserProfile[]),
+        loadLiveSessionRegistrantsForMatching().catch(() => [] as LiveSessionRegistrantRow[]),
       ]);
       setRows(callRows);
       setWebhookRows(webhooks);
       setCandidates(candidateRows);
       setStaffProfiles(profiles);
+      setLiveRegistrants(liveRegs);
     } catch (err) {
       setRows([]);
       setLoadError(err instanceof Error ? err.message : 'Failed to load call log.');
@@ -167,12 +174,20 @@ const CallLog: React.FC = () => {
     }, 700);
 
     try {
+      const messages: string[] = [];
       const recordingResult = await syncThreeCxRecordings({ hoursBack: 24, incremental: true });
+      if (recordingResult.message) messages.push(recordingResult.message);
+
+      setSyncProgress({ pct: 45, label: 'Matching live sessions to Calendly/Zoom…' });
+      const liveResult = await refreshLiveSessionsAndMatchOutcomes({ syncCoins: false, daysBack: 90 });
+      if (liveResult.message) messages.push(liveResult.message);
+      if (!liveResult.ok && liveResult.error) messages.push(`Live sessions: ${liveResult.error}`);
+
       setSyncProgress({ pct: 88, label: 'Loading call log…' });
       await load({ includeWebhooks: true });
       setSyncProgress({ pct: 100, label: 'Done' });
-      if (recordingResult.message) setStatusMessage(recordingResult.message);
-      if (recordingResult.warning && (recordingResult.updated ?? 0) === 0) {
+      if (messages.length) setStatusMessage(messages.join(' · '));
+      if (recordingResult.warning && (recordingResult.updated ?? 0) === 0 && !liveResult.updated) {
         setStatusError(recordingResult.warning);
       }
     } catch (err) {
@@ -213,6 +228,28 @@ const CallLog: React.FC = () => {
     }
     return map;
   }, [candidates]);
+
+  const resolveLiveOutcomeForRow = useCallback((row: PipelineCallRecord) => {
+    const persisted = readCallRecordLiveSessionOutcome(row);
+    if (!persisted.isLiveSessionBooked) return persisted;
+    if (persisted.status && persisted.status !== 'pending') return persisted;
+
+    const candidate = candidateById.get(row.candidate_id);
+    const disposedMs = Date.parse(row.disposed_at || row.created_at);
+    const match = matchLiveSessionForCallDisposition({
+      email: candidate?.email || null,
+      candidatePhone: candidate?.phone || null,
+      dialedNumber: row.dialed_number,
+      disposedAtMs: Number.isFinite(disposedMs) ? disposedMs : Date.now(),
+      registrants: liveRegistrants,
+    });
+    return {
+      isLiveSessionBooked: true,
+      status: match.status,
+      sessionDate: match.sessionDate,
+      matchMethod: match.matchMethod,
+    };
+  }, [candidateById, liveRegistrants]);
 
   const allEntries = useMemo((): CallLogEntry[] => {
     const dispositionIds = new Set(rows.map((r) => r.id));
@@ -479,100 +516,90 @@ const CallLog: React.FC = () => {
         <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-sm px-4 py-3">{loadError}</div>
       )}
 
-      <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-3">
-        <div className="max-h-[calc(100vh-320px)] overflow-y-auto space-y-2 pr-1">
-          {filtered.map((entry) => {
-            const row = entry.row;
-            const wh = entry.webhook;
-            const isInbound = entry.kind === 'inbound';
-            const candidate = row
-              ? candidateById.get(row.candidate_id)
-              : (wh ? candidateByPhone.get(phoneLast10(wh.phoneNumber)) : null);
-            const meta = row ? readCallRecordMeta(row) : { callbackAt: null, bookedSubtype: null };
-            const liveOutcome = row ? readCallRecordLiveSessionOutcome(row) : null;
-            const recording = row
-              ? readCallRecordRecording(row)
-              : { recordingUrl: wh?.recordingUrl || null, durationSeconds: wh?.durationSeconds ?? null };
-            const direction = row ? readCallRecordDirection(row) : 'inbound';
-            const recruiterLabel = row
-              ? resolveRecruiterLabel(row, staffById)
-              : (wh?.agentExtension
-                ? recruiterByExtension.get(wh.agentExtension)?.full_name
-                  || recruiterByExtension.get(wh.agentExtension)?.email
-                  || `Ext ${wh.agentExtension}`
-                : '—');
-            const phone = row?.dialed_number || wh?.phoneNumber || candidate?.phone || '—';
-            const details: string[] = [];
-            if (row?.comment?.trim()) details.push(row.comment.trim());
-            if (meta.callbackAt) details.push(`Callback: ${formatDateTimeCanadaEastern(meta.callbackAt)}`);
-            if (meta.bookedSubtype) details.push(`Booked: ${meta.bookedSubtype}`);
-            if (isInbound && candidate) details.push('Matched candidate by phone number');
+      <div className="rounded-xl border border-[#d6deea] bg-white shadow-sm overflow-hidden">
+        <div className="max-h-[calc(100vh-300px)] overflow-auto">
+          <table className="w-full min-w-[960px] text-xs border-collapse">
+            <thead className="sticky top-0 z-10 bg-[#f4f7fb] border-b border-[#d6deea]">
+              <tr className="text-left text-[10px] uppercase tracking-wide text-[#6b7c93]">
+                <th className="px-3 py-2 font-semibold whitespace-nowrap">Time</th>
+                <th className="px-3 py-2 font-semibold whitespace-nowrap">Recruiter</th>
+                <th className="px-3 py-2 font-semibold whitespace-nowrap">Candidate</th>
+                <th className="px-3 py-2 font-semibold whitespace-nowrap">Phone</th>
+                <th className="px-3 py-2 font-semibold whitespace-nowrap">Disposition</th>
+                <th className="px-3 py-2 font-semibold whitespace-nowrap">Booked</th>
+                <th className="px-3 py-2 font-semibold whitespace-nowrap">Live</th>
+                <th className="px-3 py-2 font-semibold whitespace-nowrap">Duration</th>
+                <th className="px-3 py-2 font-semibold whitespace-nowrap">Comment</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((entry) => {
+                const row = entry.row;
+                const wh = entry.webhook;
+                const candidate = row
+                  ? candidateById.get(row.candidate_id)
+                  : (wh ? candidateByPhone.get(phoneLast10(wh.phoneNumber)) : null);
+                const meta = row ? readCallRecordMeta(row) : { callbackAt: null, bookedSubtype: null };
+                const liveOutcome = row ? resolveLiveOutcomeForRow(row) : null;
+                const recording = row
+                  ? readCallRecordRecording(row)
+                  : { recordingUrl: wh?.recordingUrl || null, durationSeconds: wh?.durationSeconds ?? null };
+                const recruiterLabel = row
+                  ? resolveRecruiterLabel(row, staffById)
+                  : (wh?.agentExtension
+                    ? recruiterByExtension.get(wh.agentExtension)?.full_name
+                      || recruiterByExtension.get(wh.agentExtension)?.email
+                      || `Ext ${wh.agentExtension}`
+                    : '—');
+                const phone = row?.dialed_number || wh?.phoneNumber || candidate?.phone || '—';
+                const disposition = row?.disposition || (entry.kind === 'inbound' ? 'Incoming' : '—');
 
-            return (
-              <article
-                key={entry.key}
-                className="rounded-lg border border-[#e8edf4] bg-white px-3 py-2.5 space-y-2"
-              >
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                  <span className="text-[#5c6b82] shrink-0">{formatDateTimeCanadaEastern(entry.at)}</span>
-                  {direction === 'inbound' ? (
-                    <span className="inline-flex items-center gap-0.5 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-800">
-                      <PhoneIncoming size={10} /> In
-                    </span>
-                  ) : direction === 'outbound' ? (
-                    <span className="inline-flex items-center gap-0.5 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800">
-                      <PhoneOutgoing size={10} /> Out
-                    </span>
-                  ) : null}
-                  <span className="font-semibold text-[#0B1B34] truncate">{candidate?.full_name || 'Unknown'}</span>
-                  <span className="font-mono text-[#334155]">{phone}</span>
-                  <span className="text-[#5c6b82] truncate">{recruiterLabel}</span>
-                  <span className={`ml-auto shrink-0 ${row ? dispositionTone(row.disposition) : 'text-violet-800 font-medium'}`}>
-                    {row?.disposition || 'Incoming'}
-                  </span>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-[#5c6b82]">
-                  {candidate?.email?.trim() && (
-                    <a href={`mailto:${candidate.email.trim()}`} className="text-[#005EB8] hover:underline truncate max-w-[220px]">
-                      {candidate.email.trim()}
-                    </a>
-                  )}
-                  <span>{formatDuration(recording.durationSeconds)}</span>
-                  {liveOutcome?.isLiveSessionBooked && (
-                    <span className={liveSessionOutcomeTone(liveOutcome.status)}>
-                      Live {liveSessionOutcomeLabel(liveOutcome.status)}
-                    </span>
-                  )}
-                  {row && candidate ? (
-                    <Link
-                      to={`/pipeline/call?candidateId=${encodeURIComponent(row.candidate_id)}`}
-                      className="text-[#005EB8] hover:underline"
-                    >
-                      Open workspace
-                    </Link>
-                  ) : candidate ? (
-                    <Link
-                      to={`/pipeline?search=${encodeURIComponent(candidate.phone || phone)}`}
-                      className="text-[#005EB8] hover:underline"
-                    >
-                      Find in pipeline
-                    </Link>
-                  ) : null}
-                </div>
-
-                {details.length > 0 && (
-                  <p className="text-[11px] text-[#334155] line-clamp-2">{details.join(' · ')}</p>
-                )}
-
-                {recording.recordingUrl ? (
-                  <CallRecordingPlayer url={recording.recordingUrl} durationHint={recording.durationSeconds} />
-                ) : (
-                  <p className="text-[11px] text-[#8a9ab0]">No recording — refresh after disposition is saved.</p>
-                )}
-              </article>
-            );
-          })}
+                return (
+                  <React.Fragment key={entry.key}>
+                    <tr className="border-b border-[#eef2f7] hover:bg-[#fafcff] align-top">
+                      <td className="px-3 py-2 whitespace-nowrap text-[#5c6b82] tabular-nums">
+                        {formatDateTimeCanadaEastern(entry.at)}
+                      </td>
+                      <td className="px-3 py-2 text-[#334155] max-w-[140px] truncate" title={recruiterLabel}>
+                        {recruiterLabel}
+                      </td>
+                      <td className="px-3 py-2 text-[#0B1B34] font-medium max-w-[160px]">
+                        <div className="truncate" title={candidate?.full_name || ''}>
+                          {candidate?.full_name || '—'}
+                        </div>
+                        {candidate?.email?.trim() && (
+                          <div className="truncate text-[10px] text-[#5c6b82] font-normal" title={candidate.email}>
+                            {candidate.email.trim()}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 font-mono text-[#334155] whitespace-nowrap">{phone}</td>
+                      <td className={`px-3 py-2 whitespace-nowrap ${row ? dispositionTone(row.disposition) : 'text-violet-800'}`}>
+                        {disposition}
+                      </td>
+                      <td className="px-3 py-2 text-[#334155] whitespace-nowrap">{meta.bookedSubtype || '—'}</td>
+                      <td className={`px-3 py-2 whitespace-nowrap ${liveOutcome?.isLiveSessionBooked ? liveSessionOutcomeTone(liveOutcome.status) : 'text-[#8a9ab0]'}`}>
+                        {liveOutcome?.isLiveSessionBooked ? liveSessionOutcomeLabel(liveOutcome.status) : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-[#5c6b82] whitespace-nowrap tabular-nums">
+                        {formatDuration(recording.durationSeconds)}
+                      </td>
+                      <td className="px-3 py-2 text-[#5c6b82] max-w-[200px] truncate" title={row?.comment || ''}>
+                        {row?.comment?.trim() || '—'}
+                      </td>
+                    </tr>
+                    {recording.recordingUrl && (
+                      <tr className="border-b border-[#eef2f7] bg-[#fafcff]">
+                        <td colSpan={9} className="px-3 py-2">
+                          <CallRecordingPlayer url={recording.recordingUrl} durationHint={recording.durationSeconds} />
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
           {!loading && filtered.length === 0 && !loadError && (
             <div className="p-8 text-center text-sm text-[#6f7b8d]">No calls match your filters, or the log is empty.</div>
           )}

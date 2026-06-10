@@ -30,7 +30,10 @@ export async function refreshLiveSessionsAndMatchOutcomes(options?: {
   if (!token) return { ok: false, error: 'Not signed in' };
 
   try {
-    await fetchLiveSessionsDashboard(token, true);
+    const dash = await fetchLiveSessionsDashboard(token, { sync: true });
+    if (!dash.ok) {
+      console.warn('[liveSessionOutcome] Calendly/Zoom sync failed, matching cached registrants', dash.error);
+    }
   } catch (err) {
     console.warn('[liveSessionOutcome] Calendly/Zoom sync failed, matching cached registrants', err);
   }

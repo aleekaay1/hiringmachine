@@ -648,7 +648,7 @@ export async function syncRecruiterCoinsForUser(
   const { data: primaryCalls, error: primaryErr } = await admin
     .from('pipeline_call_records')
     .select(
-      'id, candidate_id, recruiter_user_id, disposition, booked_subtype, dialed_number, disposed_at, created_at, meta, threecx_metadata',
+      'id, candidate_id, recruiter_user_id, disposition, dialed_number, disposed_at, created_at, threecx_metadata',
     )
     .eq('recruiter_user_id', userId)
     .gte('disposed_at', bookingFromIso)

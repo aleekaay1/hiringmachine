@@ -1,69 +1,16 @@
 .call-recording-player-wrap {
   width: 100%;
-}
-
-.call-recording-player-wrap .rhap_container {
-  background: #f8fafc;
-  border: 1px solid #d6deea;
-  border-radius: 10px;
-  box-shadow: none;
-  padding: 6px 10px;
-}
-
-.call-recording-player-wrap .rhap_progress-section {
-  flex: 1 1 auto;
   min-width: 0;
 }
 
-.call-recording-player-wrap .rhap_progress-container {
-  margin: 0 8px;
-  height: 8px;
-  cursor: pointer;
+.call-recording-native {
+  display: block;
+  width: 100%;
+  min-width: 280px;
+  height: 40px;
+  border-radius: 6px;
 }
 
-.call-recording-player-wrap .rhap_progress-bar {
-  height: 8px;
-  border-radius: 4px;
-}
-
-.call-recording-player-wrap .rhap_progress-filled {
-  background: #005eb8;
-}
-
-.call-recording-player-wrap .rhap_progress-indicator {
-  width: 14px;
-  height: 14px;
-  top: -3px;
-  margin-left: -7px;
-  background: #005eb8;
-  box-shadow: 0 1px 4px rgba(0, 94, 184, 0.35);
-}
-
-.call-recording-player-wrap .rhap_main-controls-button,
-.call-recording-player-wrap .rhap_button-clear {
-  color: #005eb8;
-}
-
-.call-recording-player-wrap .rhap_main-controls-button svg,
-.call-recording-player-wrap .rhap_button-clear svg {
-  width: 28px;
-  height: 28px;
-}
-
-.call-recording-player-wrap .rhap_time {
-  color: #5c6b82;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
-.call-recording-open-link {
-  display: inline-block;
-  margin-top: 4px;
-  font-size: 11px;
-  color: #005eb8;
-  text-decoration: none;
-}
-
-.call-recording-open-link:hover {
-  text-decoration: underline;
+.call-recording-native::-webkit-media-controls-panel {
+  background: #f8fafc;
 }
