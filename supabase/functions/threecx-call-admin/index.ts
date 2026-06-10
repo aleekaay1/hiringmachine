@@ -579,11 +579,18 @@ async function resolveExtensionForRecruiter(
     .select('extension, email')
     .eq('user_id', recruiterUserId)
     .maybeSingle();
-  const fromProfile = String(profile?.extension || '').trim();
+  const fromProfile = normalizeExtensionDigits(String(profile?.extension || ''));
   if (fromProfile) return fromProfile;
+  const { data: settings } = await admin
+    .from('pipeline_user_call_settings')
+    .select('extension')
+    .eq('user_id', recruiterUserId)
+    .maybeSingle();
+  const fromSettings = normalizeExtensionDigits(String(settings?.extension || ''));
+  if (fromSettings) return fromSettings;
   const email = String(profile?.email || '').trim().toLowerCase();
   const hardcoded = RECRUITER_3CX_EXTENSIONS.find((row) => row.email.trim().toLowerCase() === email);
-  return hardcoded?.extension.trim() || '';
+  return normalizeExtensionDigits(hardcoded?.extension || '');
 }
 
 async function saveRecordingOnCallRecord(
@@ -637,10 +644,26 @@ type RecordingCandidate = {
   source: string;
 };
 
+function normalizeExtensionDigits(ext: string): string {
+  const digits = digitsOnly(String(ext || '').trim());
+  if (!digits) return '';
+  return digits.length > 4 ? digits.slice(-4) : digits;
+}
+
 function extensionsMatch(a: string, b: string): boolean {
-  const ea = String(a || '').trim();
-  const eb = String(b || '').trim();
+  const ea = normalizeExtensionDigits(a);
+  const eb = normalizeExtensionDigits(b);
   return Boolean(ea && eb && ea === eb);
+}
+
+async function recruiterOwnsExtension(
+  admin: ReturnType<typeof createClient>,
+  recruiterUserId: string | null,
+  eventExtension: string,
+): Promise<boolean> {
+  if (!recruiterUserId || !normalizeExtensionDigits(eventExtension)) return false;
+  const ids = await resolveRecruiterUserIds(admin, normalizeExtensionDigits(eventExtension), '');
+  return ids.includes(String(recruiterUserId));
 }
 
 function pickClosestRecordingCandidate(
@@ -674,19 +697,6 @@ async function fetchRecordingForCallRecord(
   const meta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
     ? record.threecx_metadata as Record<string, unknown>
     : {};
-  const cachedUrl = String(record.recording_url || meta.recording_url || '').trim();
-  if (cachedUrl.startsWith('http')) {
-    const duration = Number(record.duration_seconds ?? meta.duration_seconds);
-    return {
-      matched: true,
-      callRecordId,
-      recordingUrl: cachedUrl,
-      durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : null,
-      source: 'cached',
-      message: 'Recording already saved for this call.',
-    };
-  }
-
   const phone = String(record.dialed_number || '').trim();
   const disposedMs = Date.parse(String(record.disposed_at || ''));
   if (digitsOnly(phone).length < 10) {
@@ -696,18 +706,34 @@ async function fetchRecordingForCallRecord(
 
   const extension = await resolveExtensionForRecruiter(admin, record.recruiter_user_id);
   if (!extension) {
-    throw new Error('Recruiter extension not set — sync extensions first.');
+    throw new Error('Recruiter extension not set — run sync-extensions or set extension in Account → Call settings.');
   }
 
-  const recruiterIds = await resolveRecruiterUserIds(admin, extension, '');
-  if (!record.recruiter_user_id || !recruiterIds.includes(String(record.recruiter_user_id))) {
-    throw new Error('Recruiter on this disposition does not match their 3CX extension.');
+  const cachedUrl = String(record.recording_url || meta.recording_url || '').trim();
+  const cachedExt = normalizeExtensionDigits(String(meta.match_extension || ''));
+  if (cachedUrl.startsWith('http')) {
+    const cacheOk = !cachedExt
+      || extensionsMatch(cachedExt, extension)
+      || await recruiterOwnsExtension(admin, record.recruiter_user_id, cachedExt);
+    if (cacheOk) {
+      const duration = Number(record.duration_seconds ?? meta.duration_seconds);
+      return {
+        matched: true,
+        callRecordId,
+        recordingUrl: cachedUrl,
+        durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : null,
+        source: 'cached',
+        message: 'Recording already saved for this call.',
+      };
+    }
   }
 
   const windowStart = new Date(disposedMs - 15 * 60 * 1000).toISOString();
   const windowEnd = new Date(disposedMs + 15 * 60 * 1000).toISOString();
 
   const webhookCandidates: RecordingCandidate[] = [];
+  let webhooksWithRecording = 0;
+  let webhooksForRecruiter = 0;
   const { data: events, error: evErr } = await admin
     .from('threecx_webhook_events')
     .select('id, received_at, payload, agent_extension, phone_number')
@@ -723,9 +749,12 @@ async function fetchRecordingForCallRecord(
       : {};
     const recordingUrl = pickString(payload, ['recording_url', 'RecordingUrl']);
     if (!recordingUrl.startsWith('http')) continue;
+    webhooksWithRecording += 1;
     const eventPhone = pickString(payload, ['phone_number', 'PhoneNumber']) || String(event.phone_number || '');
     const eventExt = pickString(payload, ['agent_extension', 'Agent']) || String(event.agent_extension || '');
-    if (!phonesMatch(phone, eventPhone) || !extensionsMatch(extension, eventExt)) continue;
+    if (!phonesMatch(phone, eventPhone)) continue;
+    if (!await recruiterOwnsExtension(admin, record.recruiter_user_id, eventExt)) continue;
+    webhooksForRecruiter += 1;
     const receivedAt = String(event.received_at || new Date().toISOString());
     const anchorIso = parseWebhookAnchorIso(payload, receivedAt);
     const anchorMs = new Date(anchorIso).getTime();
@@ -761,7 +790,8 @@ async function fetchRecordingForCallRecord(
         if (!recordingUrl) continue;
         const rowPhone = externalNumberFromHistory(row);
         const rowExt = extensionFromHistory(row);
-        if (!phonesMatch(phone, rowPhone) || !extensionsMatch(extension, rowExt)) continue;
+        if (!phonesMatch(phone, rowPhone)) continue;
+        if (!await recruiterOwnsExtension(admin, record.recruiter_user_id, rowExt)) continue;
         apiCandidates.push({
           recordingUrl,
           durationSeconds: parseDurationSecondsFromText(
@@ -780,12 +810,23 @@ async function fetchRecordingForCallRecord(
   }
 
   if (!best) {
+    const extHint = extension ? `extension ${extension}` : 'recruiter extension';
+    let message = `No matching recording for this call (${extHint}, phone, time).`;
+    if (webhooksForRecruiter === 0 && webhooksWithRecording === 0) {
+      message += ` No 3CX webhooks with recordings near this time — enable Record Calls on this recruiter's 3CX user and complete a test call.`;
+    } else if (webhooksForRecruiter === 0) {
+      message += ` Found ${webhooksWithRecording} webhook recording(s) nearby but none for this recruiter's extension.`;
+    } else {
+      message += ` Found ${webhooksForRecruiter} webhook(s) for this recruiter but none matched phone/time.`;
+    }
+    if (apiWarning) message += ` 3CX API: ${apiWarning}`;
     return {
       matched: false,
       callRecordId,
-      message: apiWarning
-        ? `No matching recording found. 3CX API: ${apiWarning}`
-        : 'No matching recording found for this phone, recruiter extension, and call time.',
+      recruiterExtension: extension,
+      webhooksNearby: webhooksWithRecording,
+      webhooksForRecruiter,
+      message,
     };
   }
 
