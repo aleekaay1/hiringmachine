@@ -15,6 +15,7 @@ import {
 } from '../_shared/pipelineStageLiveSession.ts';
 import {
   AUTOMATED_STAGE3_AFTER_LIVE_SESSION,
+  LIVE_SESSION_ASSESSMENT_BCC_EMAIL,
   sendStage3AssessmentLinkEmail,
   stage3AssessmentEmailAlreadySent,
 } from '../_shared/sendStage3AssessmentLinkEmail.ts';
@@ -177,17 +178,17 @@ async function fetchStage3EmailLogMap(
     const slice = emails.slice(i, i + chunk);
     const { data, error } = await admin
       .from('email_send_logs')
-      .select('to_email, sent_at, trigger_label')
+      .select('to_email, created_at, trigger_label')
       .in('to_email', slice)
       .eq('status', 'sent')
-      .order('sent_at', { ascending: false });
+      .order('created_at', { ascending: false });
     if (error) throw new Error(`email_send_logs query: ${error.message}`);
     for (const row of data ?? []) {
       const em = normEmail((row as { to_email?: string }).to_email);
       if (!em || map.has(em)) continue;
       const trigger = String((row as { trigger_label?: string }).trigger_label || '').trim();
       if (!STAGE3_EMAIL_TRIGGERS.has(trigger)) continue;
-      const sentAt = String((row as { sent_at?: string }).sent_at || '').trim();
+      const sentAt = String((row as { created_at?: string }).created_at || '').trim();
       if (sentAt) map.set(em, sentAt);
     }
   }
@@ -288,6 +289,7 @@ async function sendAssessmentToCandidate(
   admin: ReturnType<typeof createClient>,
   row: CandidateRow,
   sessionDate: string,
+  bccMonitor = false,
 ): Promise<{ stageUpdated: boolean }> {
   const prev = parseAdmin(row.admin_data);
   const merged = mergeAdminBase(prev);
@@ -301,6 +303,7 @@ async function sendAssessmentToCandidate(
     firstName: String(row.first_name || '').trim(),
     sessionDate,
     sendMode: 'manual',
+    ...(bccMonitor ? { bcc: LIVE_SESSION_ASSESSMENT_BCC_EMAIL } : {}),
   });
   const prevEmails = Array.isArray(merged.emailsSent) ? merged.emailsSent : [];
   merged.emailsSent = [...prevEmails, logEntry];
@@ -452,6 +455,7 @@ Deno.serve(async (req) => {
       sendAssessmentEmails.length > 0 && invitedEmails.length === 0 && attendedEmails.length === 0;
 
     if (sendOnly) {
+      const bccMonitor = body.assessmentBccMonitor !== false;
       const byEmail = await fetchCandidatesByEmails(admin, sendAssessmentEmails);
       const sessionDates = [
         ...new Set(
@@ -507,7 +511,7 @@ Deno.serve(async (req) => {
         }
 
         try {
-          const { stageUpdated } = await sendAssessmentToCandidate(admin, row, sessionDateKey);
+          const { stageUpdated } = await sendAssessmentToCandidate(admin, row, sessionDateKey, bccMonitor);
           assessmentEmailsSent++;
           if (stageUpdated) assessmentStageUpdated++;
           if (sessionDateKey) {

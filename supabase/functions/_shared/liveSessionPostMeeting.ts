@@ -10,6 +10,7 @@ import {
   pipelineStageAfterLiveSessionInvited,
 } from './pipelineStageLiveSession.ts';
 import {
+  LIVE_SESSION_ASSESSMENT_BCC_EMAIL,
   sendStage3AssessmentLinkEmail,
   stage3AssessmentEmailAlreadySent,
 } from './sendStage3AssessmentLinkEmail.ts';
@@ -148,6 +149,7 @@ async function sendAssessmentToCandidate(
     firstName: String(row.first_name || '').trim(),
     sessionDate,
     sendMode: mode,
+    bcc: LIVE_SESSION_ASSESSMENT_BCC_EMAIL,
   });
 
   const prevEmails = Array.isArray(merged.emailsSent) ? merged.emailsSent : [];

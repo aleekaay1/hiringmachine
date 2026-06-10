@@ -14,6 +14,7 @@ import {
 import {
   collectLiveSessionAttendeeProfiles,
   collectLiveSessionInviteAndAttendEmails,
+  LIVE_SESSION_ASSESSMENT_BCC_EMAIL,
   previewLiveSessionAssessmentEmails,
   sendLiveSessionAssessmentEmails,
   syncLiveSessionPipeline,
@@ -304,7 +305,9 @@ const LiveSessionsDashboard: React.FC = () => {
     }
     setSendAssessmentsLoading(true);
     const attendeeProfiles = collectLiveSessionAttendeeProfiles(data);
-    const result = await sendLiveSessionAssessmentEmails(token, toSend, attendeeProfiles);
+    const result = await sendLiveSessionAssessmentEmails(token, toSend, attendeeProfiles, {
+      bccMonitor: true,
+    });
     setSendAssessmentsLoading(false);
     if (!result.ok) {
       setSyncError(result.error);
@@ -646,6 +649,8 @@ function SessionAssessmentSendModal({
   preview,
   selected,
   sendError,
+  bccMonitor,
+  onToggleBccMonitor,
   onToggle,
   onSelectEligible,
   onClose,
@@ -656,6 +661,8 @@ function SessionAssessmentSendModal({
   preview: LiveSessionAssessmentPreviewRow[];
   selected: string[];
   sendError: string | null;
+  bccMonitor: boolean;
+  onToggleBccMonitor: (checked: boolean) => void;
   onToggle: (email: string, checked: boolean) => void;
   onSelectEligible: () => void;
   onClose: () => void;
@@ -803,6 +810,25 @@ function SessionAssessmentSendModal({
                   </tr>
                 );
               })}
+              <tr className="bg-violet-50/80 border-t-2 border-violet-200">
+                <td className="py-2.5 pr-2 align-top">
+                  <input
+                    type="checkbox"
+                    className="rounded border-violet-300"
+                    checked={bccMonitor}
+                    disabled={busy}
+                    onChange={(e) => onToggleBccMonitor(e.target.checked)}
+                    aria-label="BCC monitor copy"
+                  />
+                </td>
+                <td className="py-2.5 pr-2 align-top font-medium text-violet-950">Ali (monitor)</td>
+                <td className="py-2.5 pr-2 align-top text-xs text-violet-900 break-all">
+                  {LIVE_SESSION_ASSESSMENT_BCC_EMAIL}
+                </td>
+                <td className="py-2.5 align-top text-xs text-violet-800">
+                  BCC on each send in this batch — see exactly what recipients receive
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -811,6 +837,11 @@ function SessionAssessmentSendModal({
           <p className="text-xs text-[#7a8fa8]">
             {eligibleCount} eligible {MIDDLE_DOT} {sendCount} selected to send
             {duplicateCount > 0 && ` ${MIDDLE_DOT} ${duplicateCount} duplicate${duplicateCount === 1 ? '' : 's'}`}
+            {bccMonitor && sendCount > 0 && (
+              <>
+                {MIDDLE_DOT} BCC {LIVE_SESSION_ASSESSMENT_BCC_EMAIL} on each
+              </>
+            )}
           </p>
           <div className="flex items-center gap-2">
             <Button type="button" variant="outline" className="text-sm" onClick={onSelectEligible} disabled={busy || eligibleCount === 0}>
@@ -860,6 +891,7 @@ function SessionTableRow({
   const [assessmentPreview, setAssessmentPreview] = useState<LiveSessionAssessmentPreviewRow[]>([]);
   const [assessmentSelected, setAssessmentSelected] = useState<string[]>([]);
   const [assessmentSendError, setAssessmentSendError] = useState<string | null>(null);
+  const [bccMonitor, setBccMonitor] = useState(true);
 
   const toggleRowEmail = (email: string, checked: boolean) => {
     setRowSelected((prev) => {
@@ -953,7 +985,9 @@ function SessionTableRow({
         sessionDateKey: session.dateKey,
       };
     });
-    const result = await sendLiveSessionAssessmentEmails(token, toSend, attendeeProfiles);
+    const result = await sendLiveSessionAssessmentEmails(token, toSend, attendeeProfiles, {
+      bccMonitor,
+    });
     if (!result.ok) {
       setAssessmentSendError(result.error);
       setAssessmentPhase('review');
@@ -1065,6 +1099,15 @@ function SessionTableRow({
                       Send assessments ({rowSelectedCount})
                     </Button>
                   </div>
+                  <label className="flex w-full items-center gap-2 text-xs text-violet-900 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="rounded border-violet-300"
+                      checked={bccMonitor}
+                      onChange={(e) => setBccMonitor(e.target.checked)}
+                    />
+                    BCC <span className="font-medium">{LIVE_SESSION_ASSESSMENT_BCC_EMAIL}</span> on each send (monitor copy)
+                  </label>
                 </div>
               )}
 
@@ -1172,6 +1215,8 @@ function SessionTableRow({
                   preview={assessmentPreview}
                   selected={assessmentSelected}
                   sendError={assessmentSendError}
+                  bccMonitor={bccMonitor}
+                  onToggleBccMonitor={setBccMonitor}
                   onToggle={handleAssessmentToggle}
                   onSelectEligible={handleSelectEligibleOnly}
                   onClose={() => {

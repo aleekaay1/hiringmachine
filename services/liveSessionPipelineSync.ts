@@ -3,6 +3,9 @@ import type { LiveSessionsDashboardPayload } from './liveSessionsIntegrations';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
+/** Hidden BCC on live-session leadership assessment sends (matches edge function). */
+export const LIVE_SESSION_ASSESSMENT_BCC_EMAIL = 'ali@globelife-paz.com';
+
 function norm(raw: string): string {
   return raw.trim().toLowerCase();
 }
@@ -174,6 +177,7 @@ export async function sendLiveSessionAssessmentEmails(
   accessToken: string,
   emails: string[],
   attendeeProfiles?: Array<{ email: string; displayName: string; sessionDateKey?: string }>,
+  options?: { bccMonitor?: boolean },
 ): Promise<
   | {
       ok: true;
@@ -187,6 +191,7 @@ export async function sendLiveSessionAssessmentEmails(
   const result = await postLiveSessionPipeline(accessToken, {
     sendAssessmentEmails: emails,
     attendeeProfiles: attendeeProfiles ?? [],
+    assessmentBccMonitor: options?.bccMonitor !== false,
   });
   if (!result.ok) return result;
   const d = result.data;

@@ -14,6 +14,9 @@ import {
 
 export const AUTOMATED_STAGE3_AFTER_LIVE_SESSION = 'automated_stage3_after_live_session';
 
+/** BCC on live-session leadership assessment sends so ops can see recipient copy. */
+export const LIVE_SESSION_ASSESSMENT_BCC_EMAIL = 'ali@globelife-paz.com';
+
 function getTransport() {
   const host = Deno.env.get('SMTP_HOSTNAME')?.trim();
   const port = Number(Deno.env.get('SMTP_PORT') ?? 587);
@@ -49,6 +52,8 @@ export async function sendStage3AssessmentLinkEmail(input: {
   firstName: string;
   sessionDate?: string;
   sendMode?: 'auto' | 'manual';
+  /** Hidden copy for monitoring (e.g. ali@globelife-paz.com). */
+  bcc?: string | string[];
 }): Promise<{ sentAt: string; subject: string; type: string }> {
   const to = input.candidateEmail.trim().toLowerCase();
   if (!to) throw new Error('missing_candidate_email');
@@ -63,12 +68,17 @@ export async function sendStage3AssessmentLinkEmail(input: {
     Deno.env.get('SMTP_USERNAME')?.trim() ||
     'noreply@example.com';
 
+  const bccList = (Array.isArray(input.bcc) ? input.bcc : input.bcc ? [input.bcc] : [])
+    .map((e) => String(e || '').trim().toLowerCase())
+    .filter((e) => e.length > 0 && e !== to);
+
   const transport = getTransport();
   await new Promise<void>((resolve, reject) => {
     transport.sendMail(
       {
         from,
         to,
+        ...(bccList.length ? { bcc: bccList } : {}),
         subject,
         html,
         text: html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
@@ -83,6 +93,7 @@ export async function sendStage3AssessmentLinkEmail(input: {
     trigger_label: AUTOMATED_STAGE3_AFTER_LIVE_SESSION,
     from_email: from,
     to_email: to,
+    cc_email: bccList.length ? bccList.join(', ') : null,
     subject,
     candidate_id: input.candidateId,
     status: 'sent',
@@ -91,6 +102,7 @@ export async function sendStage3AssessmentLinkEmail(input: {
       send_mode: input.sendMode ?? 'manual',
       session_date: input.sessionDate ?? null,
       template: 'stage3_assessment_link',
+      ...(bccList.length ? { bcc_emails: bccList } : {}),
     },
   });
 
