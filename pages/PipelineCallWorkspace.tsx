@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { CheckCircle2, ExternalLink, Phone, RefreshCw, Settings, Video } from 'lucide-react';
 import CandidateResumeDetailsCard from '../components/pipeline/CandidateResumeDetailsCard';
@@ -56,6 +56,7 @@ import {
   type LoadedDialQueue,
   applyDialQueueStartMode,
 } from '../services/pipelineDialQueue';
+import { consumeDialQueueIntent } from '../services/recruiterLeadPackAnalytics';
 
 type QueueFilter = 'all' | 'callbacks' | 'not_interested' | 'booked' | 'booked_no_show' | 'booked_didnt_watch';
 
@@ -142,6 +143,7 @@ function latestRecordByCandidate(records: PipelineCallRecord[]): Map<string, Pip
 }
 
 const PipelineCallWorkspace: React.FC = () => {
+  const [searchParams] = useSearchParams();
   const [initialLoading, setInitialLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [savingDisposition, setSavingDisposition] = React.useState(false);
@@ -185,6 +187,7 @@ const PipelineCallWorkspace: React.FC = () => {
   const [expandedQueueBatchKeys, setExpandedQueueBatchKeys] = React.useState<Set<string>>(() => new Set());
   const [expandedDoneBatchKeys, setExpandedDoneBatchKeys] = React.useState<Set<string>>(() => new Set());
   const selectedCandidateIdRef = React.useRef<string | null>(null);
+  const appliedDialIntentRef = React.useRef(false);
 
   React.useEffect(() => {
     selectedCandidateIdRef.current = selectedCandidateId;
@@ -459,6 +462,35 @@ const PipelineCallWorkspace: React.FC = () => {
     if (!loadedDialQueue || !queueList.length) return;
     setSelectedCandidateId(queueList[0].id);
   }, [loadedDialQueue?.batchKey, loadedDialQueue?.startMode, queueList]);
+
+  React.useEffect(() => {
+    if (appliedDialIntentRef.current || initialLoading || !loadableBatchGroups.length) return;
+
+    const intent = consumeDialQueueIntent();
+    const batchKey = searchParams.get('batch') || intent?.batchKey || '';
+    const modeParam = searchParams.get('mode');
+    const startMode: DialQueueStartMode =
+      modeParam === 'resume' || intent?.startMode === 'resume' ? 'resume' : 'first';
+
+    if (!batchKey) return;
+    const group =
+      loadableBatchGroups.find((row) => row.key === batchKey) ||
+      (intent?.batchTitle
+        ? loadableBatchGroups.find((row) => row.title === intent.batchTitle)
+        : undefined);
+    if (!group) return;
+
+    appliedDialIntentRef.current = true;
+    setLoadedDialQueue({
+      batchKey: group.key,
+      batchTitle: group.title,
+      startMode,
+    });
+    setSelectedLoadBatchKey(group.key);
+    setActiveBatchKey(group.key);
+    setDialStartMode(startMode);
+    setActionMsg(`Loaded ${group.title} from Lead Manager.`);
+  }, [initialLoading, loadableBatchGroups, searchParams]);
 
   React.useEffect(() => {
     if (!doneBatchGroups.length) return;

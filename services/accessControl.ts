@@ -18,6 +18,7 @@ export type AppSection =
   | 'pipeline-email'
   | 'pipeline-webinar-verify'
   | 'pipeline-uploads'
+  | 'pipeline-lead-manager'
   | 'pipeline-settings'
   | 'leaderboard'
   | 'home'
@@ -182,6 +183,7 @@ const PIPELINE_OPERATIONAL_SECTIONS: AppSection[] = [
   'pipeline-email',
   'pipeline-webinar-verify',
   'pipeline-performance',
+  'pipeline-lead-manager',
   'pipeline-settings',
 ];
 

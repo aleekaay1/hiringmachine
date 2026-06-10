@@ -53,7 +53,8 @@ const RecruiterDashboardView: React.FC<Props> = ({ profile, payload }) => {
         <div className="space-y-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-[#4e79a9]">Quick links</p>
           <div className="grid gap-3 sm:grid-cols-2">
-            <QuickLinkCard title="Call workspace" description="Dial candidates and log outcomes." to="/pipeline/call" accent="border-[#9bc8f6] bg-[#eef6ff] hover:bg-[#e7f4ff]" />
+            <QuickLinkCard title="Lead manager" description="Compare packs, analytics, and pick what to dial today." to="/pipeline/lead-manager" accent="border-[#9bc8f6] bg-[#eef6ff] hover:bg-[#e7f4ff]" />
+            <QuickLinkCard title="Call workspace" description="Dial candidates and log outcomes." to="/pipeline/call" />
             <QuickLinkCard title="Performance" description="Review your activity over time." to="/pipeline/performance" />
             <QuickLinkCard title="Email" description="Send and track candidate email." to="/pipeline/email" />
             <QuickLinkCard title="Webinar activity" description="See bookings and attendance." to="/webinar-geek" />
