@@ -1,8 +1,8 @@
-# 3CX recordings → Call Log — simple setup
+# 3CX recordings → Call Log — API on-demand (no webhook flood)
 
-**You do NOT need PostgreSQL CRM, Bitrix, or any premade CRM template.**
+**Recordings are NOT pushed for every 3CX call.** HR clicks **Load recording** on a disposition row; the portal queries **3CX XAPI** for that phone + recruiter extension + time only.
 
-Our file `paz-hiring-call-recording-crm.xml` only sends **finished call data + recording link** to the portal when a call ends. It does **not** look up contacts inside 3CX — that is intentional. Recruiters keep using the portal + 3CX web client in a new tab exactly as today.
+CRM template `paz-hiring-call-recording-crm.xml` (Version 4) is **ping-only** — it does not send pizza-delivery or other irrelevant calls to Supabase.
 
 ---
 
@@ -19,7 +19,7 @@ So you may see:
 
 **That is OK.** Ignore the TEST for phone lookup.
 
-The real test: make a real call, hang up, save disposition in the portal, then check **Call log** for a recording link.
+The real test: make a real call, hang up, save disposition in the portal, then **Call log → Load recording** on that row.
 
 Also make sure the dropdown says **“PAZ Hiring Call Log”** — **not** “Database PostgreSQL”.
 
@@ -88,28 +88,11 @@ The webhook matches calls using: **extension + dialed phone number + time**.
 
 ## Step 5 — Real test (ignore CRM phone TEST)
 
-1. Hassaan dials a lead from the portal (web client tab — same as now)
-2. Talk briefly, hang up
-3. Save disposition in Call workspace
-4. Wait ~30 seconds
-5. Open **Insights → Call log** → find the row → **Recording** column
+1. Recruiter dials from 3CX web client, talks, hangs up
+2. Save disposition in Call workspace
+3. Open **Call log** → find the row → click **Load recording**
 
-Optional: Supabase → **Edge Functions** → `threecx-call-webhook` → **Logs** — you should see POSTs after each completed call.
-
-### Call log connection panel
-
-On **Insights → Call log**, the green/amber banner shows:
-
-- **Webhook** — whether 3CX has sent events recently (ping or ReportCall)
-- **Today** — webhook calls and recordings attached today
-- **3CX API** — whether backfill can talk to 3CX (needs API secrets below)
-
-Buttons:
-
-| Button | What it does |
-|--------|----------------|
-| **Sync extensions** | Copies hardcoded recruiter extensions from `recruiter3cxExtensions.ts` into each user’s profile — recruiters do not need to set extensions in Settings |
-| **Sync recordings** / **Refresh** | Replays stored 3CX webhooks and matches recording URLs to disposition rows (dispositions are usually saved a few seconds after hangup) |
+Recordings are fetched once per row and saved in the database.
 
 ---
 
@@ -125,23 +108,27 @@ Deploy `threecx-call-admin`, then click **Sync extensions** on Call log (or rede
 
 ---
 
-## Backfill API secrets (optional, for today's recordings)
+## 3CX API secrets (required for Load recording)
 
 Set in Supabase → **Project Settings → Edge Functions → Secrets**:
 
 | Secret | Example |
 |--------|---------|
-| `THREECX_BASE_URL` | `https://yourcompany.3cx.cloud` |
+| `THREECX_BASE_URL` | `https://globelifepaz.3cx.ca` (no trailing slash) |
 | `THREECX_CLIENT_ID` | From 3CX → Integrations → API |
-| `THREECX_CLIENT_SECRET` | Same integration |
+| `THREECX_CLIENT_SECRET` | API key from same integration |
 
-**Important:** For optional API history pull, the integration must use **Department: DEFAULT** and **Role: System Owner** (not System Administrator). After changing role, click **Generate API Key** and update Supabase secrets:
+**Required 3CX API setup** (Call History + recordings):
 
-- `THREECX_CLIENT_ID` = your integration Client ID (e.g. `3cxapi`)
-- `THREECX_CLIENT_SECRET` = the new API key
-- `THREECX_BASE_URL` = `https://globelifepaz.3cx.ca` (your PBX URL, no trailing slash)
+1. 3CX Admin → **Integrations → API → + Add**
+2. **Department: DEFAULT**
+3. **Role: System Owner** (System Administrator often returns **403** on CallHistoryView)
+4. Save → **Generate API Key** → copy to `THREECX_CLIENT_SECRET`
+5. Update all three Supabase secrets and redeploy is not needed (secrets are live)
 
-**Recordings do not need the API for normal use.** 3CX webhooks already deliver recording URLs; click **Refresh & sync recordings** on Call log to attach them after recruiters save dispositions.
+**If you still get 403:** Admin → **Security** → check **Console Access / IP restrictions**. Requests from Supabase edge IPs blocked there can downgrade the token to “user” role and deny call history.
+
+**Re-upload CRM template Version 4** (`paz-hiring-call-recording-crm.xml`) to stop ReportCall webhooks for every call.
 
 ---
 
@@ -150,7 +137,7 @@ Set in Supabase → **Project Settings → Edge Functions → Secrets**:
 | Item | Needed? |
 |------|---------|
 | PostgreSQL connection string | ❌ No |
-| 3CX OAuth / API Client ID | ❌ No for webhook only · ✅ Yes for **Backfill today's recordings** |
+| 3CX API (System Owner) | ✅ **Required** for Load recording |
 | CRM contact lookup working | ❌ No |
 | Call Control API | ❌ No |
 | Premade Bitrix/Zoho/etc. template | ❌ No |

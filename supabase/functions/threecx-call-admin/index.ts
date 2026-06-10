@@ -5,7 +5,11 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { RECRUITER_3CX_EXTENSIONS } from '../_shared/recruiter3cxExtensions.ts';
-import { fetchThreeCxCallHistory, probeThreeCxHistoryAccess } from '../_shared/threecxApiHistory.ts';
+import {
+  fetchThreeCxCallHistory,
+  fetchThreeCxCallHistoryForWindow,
+  probeThreeCxHistoryAccess,
+} from '../_shared/threecxApiHistory.ts';
 import {
   attachRecordingToCallRecord,
   digitsOnly,
@@ -99,7 +103,14 @@ function externalNumberFromHistory(row: Record<string, unknown>): string {
 }
 
 function extensionFromHistory(row: Record<string, unknown>): string {
-  return pickString(row, ['SrcDn', 'DstDn', 'AgentDn', 'Extension', 'AgentExtension']);
+  const direction = pickString(row, ['Direction', 'CallDirection']).toLowerCase();
+  if (direction.includes('out')) {
+    return pickString(row, ['SrcDn', 'SrcOwnExtension', 'AgentExtension', 'Extension', 'AgentDn']);
+  }
+  if (direction.includes('in')) {
+    return pickString(row, ['DstDn', 'DstOwnExtension', 'AgentExtension', 'Extension', 'AgentDn']);
+  }
+  return pickString(row, ['SrcDn', 'DstDn', 'AgentDn', 'AgentExtension', 'Extension']);
 }
 
 function recordingUrlFromHistory(row: Record<string, unknown>, baseUrl: string, token: string): string | null {
@@ -728,104 +739,76 @@ async function fetchRecordingForCallRecord(
     }
   }
 
-  const windowStart = new Date(disposedMs - 15 * 60 * 1000).toISOString();
-  const windowEnd = new Date(disposedMs + 15 * 60 * 1000).toISOString();
+  const windowStart = new Date(disposedMs - 20 * 60 * 1000).toISOString();
+  const windowEnd = new Date(disposedMs + 20 * 60 * 1000).toISOString();
 
-  const webhookCandidates: RecordingCandidate[] = [];
-  let webhooksWithRecording = 0;
-  let webhooksForRecruiter = 0;
-  const { data: events, error: evErr } = await admin
-    .from('threecx_webhook_events')
-    .select('id, received_at, payload, agent_extension, phone_number')
-    .eq('event_type', 'report_call')
-    .gte('received_at', windowStart)
-    .lte('received_at', windowEnd)
-    .order('received_at', { ascending: true });
-  if (evErr && !/does not exist|schema cache/i.test(evErr.message || '')) throw evErr;
-
-  for (const event of events || []) {
-    const payload = (event.payload && typeof event.payload === 'object')
-      ? event.payload as Record<string, unknown>
-      : {};
-    const recordingUrl = pickString(payload, ['recording_url', 'RecordingUrl']);
-    if (!recordingUrl.startsWith('http')) continue;
-    webhooksWithRecording += 1;
-    const eventPhone = pickString(payload, ['phone_number', 'PhoneNumber']) || String(event.phone_number || '');
-    const eventExt = pickString(payload, ['agent_extension', 'Agent']) || String(event.agent_extension || '');
-    if (!phonesMatch(phone, eventPhone)) continue;
-    if (!await recruiterOwnsExtension(admin, record.recruiter_user_id, eventExt)) continue;
-    webhooksForRecruiter += 1;
-    const receivedAt = String(event.received_at || new Date().toISOString());
-    const anchorIso = parseWebhookAnchorIso(payload, receivedAt);
-    const anchorMs = new Date(anchorIso).getTime();
-    if (Number.isNaN(anchorMs)) continue;
-    webhookCandidates.push({
-      recordingUrl,
-      durationSeconds: parseDurationSecondsFromText(
-        pickString(payload, ['duration_seconds', 'duration', 'Duration']),
-      ),
-      callId: pickString(payload, ['call_id', 'callId']) || `webhook-${event.id}`,
-      anchorMs,
-      extension: eventExt,
-      source: 'webhook',
-    });
-  }
-
-  let best = pickClosestRecordingCandidate(webhookCandidates, disposedMs);
+  let best: RecordingCandidate | null = null;
   let apiWarning: string | null = null;
+  let apiRowsScanned = 0;
+  let apiEndpoint: string | null = null;
 
-  if (!best) {
-    try {
-      const { token, baseUrl } = await getThreeCxToken();
-      const { rows: history } = await fetchThreeCxCallHistory(token, baseUrl);
-      const apiCandidates: RecordingCandidate[] = [];
-      for (const row of history) {
-        const startRaw = pickString(row, ['SegmentStartTime', 'StartTime', 'CallStartTimeUTC', 'CallStartTime']);
-        if (!startRaw) continue;
-        const anchorMs = new Date(startRaw).getTime();
-        if (Number.isNaN(anchorMs) || anchorMs < disposedMs - 15 * 60 * 1000 || anchorMs > disposedMs + 15 * 60 * 1000) {
-          continue;
-        }
-        const recordingUrl = recordingUrlFromHistory(row, baseUrl, token);
-        if (!recordingUrl) continue;
-        const rowPhone = externalNumberFromHistory(row);
-        const rowExt = extensionFromHistory(row);
-        if (!phonesMatch(phone, rowPhone)) continue;
-        if (!await recruiterOwnsExtension(admin, record.recruiter_user_id, rowExt)) continue;
-        apiCandidates.push({
-          recordingUrl,
-          durationSeconds: parseDurationSecondsFromText(
-            pickString(row, ['TalkingDuration', 'Duration', 'TalkingTime']),
-          ),
-          callId: pickString(row, ['MainCallHistoryId', 'CallHistoryId', 'Id']) || `api-${startRaw}`,
-          anchorMs,
-          extension: rowExt,
-          source: 'threecx_api',
-        });
-      }
-      best = pickClosestRecordingCandidate(apiCandidates, disposedMs);
-    } catch (err) {
-      apiWarning = err instanceof Error ? err.message : String(err);
+  try {
+    const { token, baseUrl } = await getThreeCxToken();
+    const probe = await probeThreeCxHistoryAccess(token, baseUrl);
+    if (!probe.ok) {
+      throw new Error(probe.error || '3CX call history API not available.');
     }
+
+    const { rows: history, endpoint } = await fetchThreeCxCallHistoryForWindow(
+      token,
+      baseUrl,
+      windowStart,
+      windowEnd,
+    );
+    apiEndpoint = endpoint;
+    const apiCandidates: RecordingCandidate[] = [];
+
+    for (const row of history) {
+      apiRowsScanned += 1;
+      const startRaw = pickString(row, ['SegmentStartTime', 'StartTime', 'CallStartTimeUTC', 'CallStartTime']);
+      if (!startRaw) continue;
+      const anchorMs = new Date(startRaw).getTime();
+      if (Number.isNaN(anchorMs)) continue;
+
+      const recordingUrl = recordingUrlFromHistory(row, baseUrl, token);
+      if (!recordingUrl) continue;
+
+      const rowPhone = externalNumberFromHistory(row);
+      const rowExt = extensionFromHistory(row);
+      if (!phonesMatch(phone, rowPhone)) continue;
+      if (!await recruiterOwnsExtension(admin, record.recruiter_user_id, rowExt)) continue;
+
+      apiCandidates.push({
+        recordingUrl,
+        durationSeconds: parseDurationSecondsFromText(
+          pickString(row, ['TalkingDuration', 'Duration', 'TalkingTime', 'DurationSeconds']),
+        ),
+        callId: pickString(row, ['MainCallHistoryId', 'CallHistoryId', 'Id', 'RecId']) || `api-${startRaw}`,
+        anchorMs,
+        extension: rowExt,
+        source: 'threecx_api',
+      });
+    }
+    best = pickClosestRecordingCandidate(apiCandidates, disposedMs);
+  } catch (err) {
+    apiWarning = err instanceof Error ? err.message : String(err);
   }
 
   if (!best) {
     const extHint = extension ? `extension ${extension}` : 'recruiter extension';
-    let message = `No matching recording for this call (${extHint}, phone, time).`;
-    if (webhooksForRecruiter === 0 && webhooksWithRecording === 0) {
-      message += ` No 3CX webhooks with recordings near this time — enable Record Calls on this recruiter's 3CX user and complete a test call.`;
-    } else if (webhooksForRecruiter === 0) {
-      message += ` Found ${webhooksWithRecording} webhook recording(s) nearby but none for this recruiter's extension.`;
+    let message = `No matching recording for this call (${extHint}, phone ${digitsOnly(phone).slice(-10)}, disposition time).`;
+    if (apiWarning) {
+      message += ` ${apiWarning}`;
+    } else if (apiRowsScanned === 0) {
+      message += ' 3CX returned no call history rows in this time window — confirm Record Calls is enabled on this extension.';
     } else {
-      message += ` Found ${webhooksForRecruiter} webhook(s) for this recruiter but none matched phone/time.`;
+      message += ` Scanned ${apiRowsScanned} 3CX call(s) via ${apiEndpoint || 'API'} — none matched phone, extension, and time.`;
     }
-    if (apiWarning) message += ` 3CX API: ${apiWarning}`;
     return {
       matched: false,
       callRecordId,
       recruiterExtension: extension,
-      webhooksNearby: webhooksWithRecording,
-      webhooksForRecruiter,
+      apiRowsScanned,
       message,
     };
   }

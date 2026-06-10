@@ -1,14 +1,14 @@
 <?xml version="1.0"?>
 <!--
-  PAZ Hiring — 3CX CRM template (zero-config, 3CX Cloud)
-  Upload: Settings → CRM → + Add Template → select "PAZ Hiring Call Log" → Save
+  PAZ Hiring — 3CX CRM template (ping only — Version 4)
+  Recordings are NOT pushed via webhook. HR loads them on-demand from Call log (3CX API).
 
-  No form fields needed — URL, anon key, and webhook secret are embedded below.
-  Contact lookup is NOT included (3CX TEST "not found" is OK). Recordings sync on hangup.
+  Upload: Settings → CRM → + Add Template → PAZ Hiring Call Log → Save
+  Optional: remove/disable old templates that had ReportCall to stop irrelevant call traffic.
 -->
-<Crm xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" Country="CA" Name="PAZ Hiring Call Log" Version="3" SupportsEmojis="false">
+<Crm xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" Country="CA" Name="PAZ Hiring Call Log" Version="4" SupportsEmojis="false">
   <Number Prefix="AsIs" />
-  <Connection MaxConcurrentRequests="8" />
+  <Connection MaxConcurrentRequests="4" />
   <Authentication Type="No" />
   <Scenarios>
     <Scenario Type="REST">
@@ -16,44 +16,6 @@
       <Rules>
         <Rule Type="Any">ok</Rule>
       </Rules>
-      <Variables />
-      <Outputs AllowEmpty="true" />
-    </Scenario>
-    <Scenario Id="ReportCall" Type="REST">
-      <Request
-        Url="https://hlfufjrjztuknioydlut.supabase.co/functions/v1/threecx-call-webhook"
-        RequestContentType="application/json"
-        RequestEncoding="Json"
-        RequestType="Post"
-        ResponseType="Json"
-        MessagePasses="0"
-        Message="">
-        <Headers>
-          <Value Key="apikey" Passes="0" Type="String">eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhsZnVmanJqenR1a25pb3lkbHV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE0MjM0ODUsImV4cCI6MjA4Njk5OTQ4NX0.tWoUiPb9genUM4YxjwNhA6Pt_v-mPyxqG8w3sMZj8pU</Value>
-          <Value Key="Authorization" Passes="0" Type="String">Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhsZnVmanJqenR1a25pb3lkbHV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE0MjM0ODUsImV4cCI6MjA4Njk5OTQ4NX0.tWoUiPb9genUM4YxjwNhA6Pt_v-mPyxqG8w3sMZj8pU</Value>
-          <Value Key="X-Paz-Webhook-Secret" Passes="0" Type="String">Sa5Y1eArVT9mKJ3EiMH2bGjvgRo0qtyZdWXIkCf4</Value>
-        </Headers>
-        <PostValues>
-          <Value Key="source" Passes="0" Type="String">3cx-report-call</Value>
-          <Value Key="call_type" Passes="0" Type="String">[CallType]</Value>
-          <Value Key="call_direction" Passes="0" Type="String">[CallDirection]</Value>
-          <Value Key="phone_number" Passes="0" Type="String">[Number]</Value>
-          <Value Key="agent_extension" Passes="0" Type="String">[Agent]</Value>
-          <Value Key="agent_email" Passes="0" Type="String">[AgentEmail]</Value>
-          <Value Key="agent_first_name" Passes="0" Type="String">[AgentFirstName]</Value>
-          <Value Key="agent_last_name" Passes="0" Type="String">[AgentLastName]</Value>
-          <Value Key="duration" Passes="0" Type="String">[Duration]</Value>
-          <Value Key="duration_seconds" Passes="2" Type="String">[[[DurationTimespan].get_TotalSeconds()].ToString("F0")]</Value>
-          <Value Key="call_start_utc" Passes="2" Type="String">[[CallStartTimeUTC].ToString("yyyy-MM-ddTHH:mm:ss.fffZ")]</Value>
-          <Value Key="call_end_utc" Passes="2" Type="String">[[CallEndTimeUTC].ToString("yyyy-MM-ddTHH:mm:ss.fffZ")]</Value>
-          <Value Key="call_start_utc_millis" Passes="0" Type="String">[CallStartTimeUTCMillis]</Value>
-          <Value Key="call_end_utc_millis" Passes="0" Type="String">[CallEndTimeUTCMillis]</Value>
-          <Value Key="recording_url" Passes="0" Type="String">[RecordingUrl]</Value>
-          <Value Key="call_id" Passes="2" Type="String">[Agent]-[Number]-[[CallStartTimeUTC].ToString("yyyyMMddHHmmss")]</Value>
-          <Value Key="queue_extension" Passes="0" Type="String">[QueueExtension]</Value>
-          <Value Key="contact_name" Passes="0" Type="String">[Name]</Value>
-        </PostValues>
-      </Request>
       <Variables />
       <Outputs AllowEmpty="true" />
     </Scenario>
