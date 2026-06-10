@@ -1,22 +1,19 @@
 <?xml version="1.0"?>
 <!--
   PAZ Hiring Portal — 3CX CRM template (call recording webhook only)
-  Upload: 3CX Management Console → Settings → CRM Integration → Server side → + Add
+  Upload: Settings → CRM → Server side → + Add Template → select "PAZ Hiring Call Log" in dropdown.
 
-  Does NOT change how recruiters dial (web client in new tab stays as-is).
-  On every completed call, 3CX POSTs call metadata + [RecordingUrl] to Supabase.
-
-  IMPORTANT: Select "PAZ Hiring Call Log" in 3CX CRM dropdown — NOT Database PostgreSQL.
-  This template has NO contact lookup; 3CX TEST "contact not found" is expected. Test with a real call.
+  After upload: pick "PAZ Hiring Call Log" in "Select a CRM Solution" — fields appear below.
+  Does NOT include contact lookup (3CX TEST "contact not found" is OK).
 -->
-<Crm xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" Country="CA" Name="PAZ Hiring Call Log" Version="1" SupportsEmojis="false">
+<Crm xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" Country="CA" Name="PAZ Hiring Call Log" Version="2" SupportsEmojis="false">
   <Number Prefix="AsIs" />
   <Connection MaxConcurrentRequests="8" />
   <Parameters>
-    <Parameter Name="WebhookUrl" Type="String" Parent="PAZ Hiring" Editor="String" Title="Webhook URL:" Default="https://hlfufjrjztuknioydlut.supabase.co/functions/v1/threecx-call-webhook" />
-    <Parameter Name="WebhookAnonKey" Type="Password" Parent="PAZ Hiring" Editor="String" Title="Supabase anon key (apikey):" Default="" />
-    <Parameter Name="WebhookSecret" Type="Password" Parent="PAZ Hiring" Editor="String" Title="Webhook secret (must match Supabase THREECX_WEBHOOK_SECRET):" Default="" />
-    <Parameter Name="ReportCallEnabled" Type="Boolean" Parent="Call journaling" Editor="String" Title="Send completed calls to PAZ Hiring call log?" Default="True" />
+    <Parameter Name="WebhookUrl" Type="String" Parent="Settings" Editor="String" Title="Webhook URL:" Default="https://hlfufjrjztuknioydlut.supabase.co/functions/v1/threecx-call-webhook" />
+    <Parameter Name="WebhookAnonKey" Type="Password" Parent="Settings" Editor="String" Title="Supabase anon key:" Default="" />
+    <Parameter Name="WebhookSecret" Type="Password" Parent="Settings" Editor="String" Title="Webhook secret:" Default="" />
+    <Parameter Name="ReportCallEnabled" Type="Boolean" Parent="Call Reporting" Editor="String" Title="Enable call journaling to PAZ Hiring?" Default="True" />
   </Parameters>
   <Authentication Type="No" />
   <Scenarios>

@@ -59,22 +59,36 @@ npx supabase secrets set THREECX_WEBHOOK_SECRET=paste-your-secret-here --project
 ## Step 3 — 3CX: upload OUR template (not PostgreSQL)
 
 1. **3CX Management Console** → **Settings** → **CRM**
-2. Tab **Server side** (not Client side)
-3. Click **+ Add Template**
-4. Choose file from repo: `docs/threecx/paz-hiring-call-recording-crm.xml`
-5. After upload, in **“Select a CRM Solution”** dropdown pick: **PAZ Hiring Call Log**  
-   (Do **not** use Database PostgreSQL — that is a different integration.)
+2. Open tab **Server side** (top of the CRM page — **not** Client side)
+3. Click **+ Add Template** (right side, not the main CRM dropdown)
+4. Upload: `docs/threecx/paz-hiring-call-recording-crm.xml`
+5. **Important:** In the main dropdown **“Select a CRM Solution”**, choose **PAZ Hiring Call Log**  
+   (If you pick **Database PostgreSQL**, you will see SQL fields instead — wrong template.)
+
+### If you don’t see any form fields
+
+The fields only appear **after** you select **PAZ Hiring Call Log** in the dropdown. They show **below** the dropdown, grouped as:
+
+- **Settings** — Webhook URL, Supabase anon key, Webhook secret  
+- **Call Reporting** — Enable call journaling checkbox  
+
+If still blank:
+
+1. Delete the old template → re-upload the XML (Version 2 in repo)
+2. Confirm you are on **Server side** tab
+3. Click **Save** after selecting the CRM from the dropdown
+4. Try **Show Template** — you should see our `WebhookUrl` / `WebhookAnonKey` parameters in the XML
 
 ---
 
 ## Step 4 — 3CX: fill in template fields
 
-| 3CX field | What to paste |
-|-----------|----------------|
-| **Webhook URL** | `https://hlfufjrjztuknioydlut.supabase.co/functions/v1/threecx-call-webhook` (pre-filled) |
-| **Supabase anon key (apikey)** | anon key from Step 1 |
-| **Webhook secret** | Same string as `THREECX_WEBHOOK_SECRET` from Step 2 |
-| **Send completed calls to PAZ Hiring call log?** | ✅ Enabled |
+| 3CX field (under **Settings**) | What to paste |
+|-------------------------------|----------------|
+| **Webhook URL** | `https://hlfufjrjztuknioydlut.supabase.co/functions/v1/threecx-call-webhook` |
+| **Supabase anon key** | anon key from Step 1 (Supabase → Settings → API) |
+| **Webhook secret** | Same value as `THREECX_WEBHOOK_SECRET` in Supabase (see Step 2) |
+| **Enable call journaling…** (under **Call Reporting**) | ✅ Checked |
 
 Click **Save**.
 

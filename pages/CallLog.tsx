@@ -174,8 +174,10 @@ const CallLog: React.FC = () => {
       const candidate = candidateById.get(row.candidate_id);
       const candidateName = candidate?.full_name || '';
       const candidatePhone = candidate?.phone || '';
+      const candidateEmail = candidate?.email || '';
       const hay = [
         candidateName,
+        candidateEmail,
         candidatePhone,
         row.dialed_number,
         row.disposition,
@@ -207,6 +209,7 @@ const CallLog: React.FC = () => {
       'Disposed at (display)',
       'Recruiter',
       'Candidate',
+      'Email',
       'Candidate ID',
       'Dialed number',
       'Disposition',
@@ -227,6 +230,7 @@ const CallLog: React.FC = () => {
           formatDateTimeCanadaEastern(row.disposed_at),
           resolveRecruiterLabel(row, staffById),
           candidate?.full_name || '',
+          candidate?.email || '',
           row.candidate_id,
           row.dialed_number,
           row.disposition,
@@ -325,7 +329,7 @@ const CallLog: React.FC = () => {
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search candidate name, phone, dialed number, disposition, comment…"
+            placeholder="Search candidate name, email, phone, dialed number, disposition, comment…"
             className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-[#cfe3f9] text-sm text-[#0B1B34] focus:outline-none focus:ring-2 focus:ring-[#005EB8]/30"
           />
         </div>
@@ -384,12 +388,13 @@ const CallLog: React.FC = () => {
 
       <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm overflow-hidden">
         <div className="overflow-x-auto max-h-[calc(100vh-320px)] overflow-y-auto">
-          <table className="min-w-[1400px] w-full text-left text-sm border-collapse">
+          <table className="min-w-[1560px] w-full text-left text-sm border-collapse">
             <thead className="sticky top-0 z-10 bg-[#eef2f7] text-[#0B1B34] text-xs font-semibold border-b border-[#d6deea]">
               <tr>
                 <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[160px]">When</th>
                 <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[140px]">Recruiter</th>
                 <th className="px-3 py-2.5 border-r border-[#d6deea] min-w-[180px]">Candidate</th>
+                <th className="px-3 py-2.5 border-r border-[#d6deea] min-w-[200px]">Email</th>
                 <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[130px]">Number</th>
                 <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[150px]">Disposition</th>
                 <th className="px-3 py-2.5 border-r border-[#d6deea] min-w-[200px]">Details</th>
@@ -428,6 +433,18 @@ const CallLog: React.FC = () => {
                         </Link>
                       ) : (
                         <span className="text-xs font-mono text-[#8a9ab0]">{row.candidate_id.slice(0, 8)}…</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 border-r border-[#eef2f7] text-xs break-all">
+                      {candidate?.email?.trim() ? (
+                        <a
+                          href={`mailto:${candidate.email.trim()}`}
+                          className="text-[#005EB8] hover:underline"
+                        >
+                          {candidate.email.trim()}
+                        </a>
+                      ) : (
+                        '—'
                       )}
                     </td>
                     <td className="px-3 py-2 border-r border-[#eef2f7] whitespace-nowrap font-mono text-xs">
