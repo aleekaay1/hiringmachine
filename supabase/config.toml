@@ -381,6 +381,9 @@ verify_jwt = false
 [functions.send-assessment-email]
 verify_jwt = false
 
+[functions.assessment-lookup]
+verify_jwt = false
+
 [functions.upload-resume]
 verify_jwt = false
 

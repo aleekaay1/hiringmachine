@@ -31,6 +31,7 @@ $functions = @(
   "send-candidate-email",
   "live-session-calendar",
   "send-assessment-email",
+  "assessment-lookup",
   "send-leadership-assessment-reminders",
   "upload-resume",
   "hr-dashboard-data",

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import Layout from '../components/Layout';
 import { Button, Input } from '../components/UI';
-import { getCandidateByEmail } from '../services/storageService';
+import { resolveAssessmentLookup } from '../services/assessmentLookupService';
 import { useNavigate } from 'react-router-dom';
 
 const AssessmentLookup: React.FC = () => {
@@ -9,34 +9,43 @@ const AssessmentLookup: React.FC = () => {
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const [alreadyCompleted, setAlreadyCompleted] = useState(false);
+  const [lookupHint, setLookupHint] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) {
-      alert('Please provide the email you used at check-in so we can find your record.');
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedPhone = phone.trim();
+    if (!normalizedEmail && !normalizedPhone.replace(/\D/g, '')) {
+      alert('Please enter the email or phone you used for the live session (or at check-in).');
       return;
     }
 
     try {
       setLoading(true);
-      const normalizedEmail = email.trim().toLowerCase();
-      const match = await getCandidateByEmail(normalizedEmail);
+      setLookupHint(null);
+      const result = await resolveAssessmentLookup({
+        email: normalizedEmail || undefined,
+        phone: normalizedPhone || undefined,
+      });
 
-      if (!match) {
-        alert('We could not find a matching record. Please confirm your details with the management team.');
+      if (!result.ok) {
+        alert(result.message || result.error);
         setLoading(false);
         return;
       }
 
-      if (match.status === 'assessment_complete' || match.assessment) {
+      if (result.source.startsWith('live_session')) {
+        setLookupHint('Found on the live session list — your assessment profile is ready.');
+      }
+
+      if (result.alreadyCompleted) {
         setAlreadyCompleted(true);
         setLoading(false);
         return;
       }
 
-      // Second QR: go to assessment room form (Basic Info + Professional Background + 30Q)
-      navigate(`/assessment-room/${match.id}`);
+      navigate(`/assessment-room/${result.candidateId}`);
     } catch (err) {
       console.error(err);
       alert('There was an issue looking up your record. Please try again or speak with the management team.');
@@ -54,8 +63,8 @@ const AssessmentLookup: React.FC = () => {
               Leadership & Career Assessment
             </h2>
             <p className="text-sm text-gray-500">
-              Please enter the same contact details you used at check-in so we
-              can connect your assessment to your profile.
+              Enter the email or phone you used on Calendly, Zoom, or at check-in. If you attended a live
+              session but have not checked in yet, we will find you on the session list.
             </p>
           </div>
 
@@ -69,6 +78,11 @@ const AssessmentLookup: React.FC = () => {
             </div>
           ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
+            {lookupHint && (
+              <p className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-900">
+                {lookupHint}
+              </p>
+            )}
             <Input
               label="Email Address (preferred)"
               type="email"
@@ -84,8 +98,8 @@ const AssessmentLookup: React.FC = () => {
               onChange={(e) => setPhone(e.target.value)}
             />
             <p className="text-[11px] text-gray-400">
-              You can provide either email, phone, or both. We’ll match your
-              existing candidate record.
+              Use the same email you registered with on Calendly if possible. Phone alone works when it
+              matches our live session records.
             </p>
 
             <Button type="submit" fullWidth disabled={loading}>
@@ -100,4 +114,3 @@ const AssessmentLookup: React.FC = () => {
 };
 
 export default AssessmentLookup;
-

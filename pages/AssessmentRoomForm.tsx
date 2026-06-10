@@ -110,10 +110,6 @@ const AssessmentRoomForm: React.FC = () => {
     if (!candidate || submitting) return;
 
     const aq = candidate.applicantQuestionnaire;
-    if (!aq) {
-      alert('Missing applicant questionnaire data. Please contact the management team.');
-      return;
-    }
 
     const validateMerged = (): boolean => {
       const e: Record<string, string> = {};
@@ -139,10 +135,10 @@ const AssessmentRoomForm: React.FC = () => {
     if (!validateMerged()) return;
 
     const assessmentData: AssessmentData = {
-      occupation: aq?.occupation || '',
-      currentRole: aq?.currentRole || '',
-      backgroundAreas: aq?.backgroundAreas || [],
-      salesExperience: aq?.salesExperience || '',
+      occupation: aq?.occupation || background.occupation,
+      currentRole: aq?.currentRole || background.currentRole,
+      backgroundAreas: aq?.backgroundAreas?.length ? aq.backgroundAreas : background.areas,
+      salesExperience: aq?.salesExperience || background.salesExperience,
       competitiveness,
       moneyMotivation,
       openEndedAnswers,
@@ -165,7 +161,14 @@ const AssessmentRoomForm: React.FC = () => {
         pipelineStage: pipelineStageAfterAssessmentComplete(candidate.adminData?.pipelineStage),
       },
       applicantQuestionnaire: {
-        ...(aq as ApplicantQuestionnaire),
+        occupation: aq?.occupation || background.occupation,
+        currentRole: aq?.currentRole || background.currentRole,
+        backgroundAreas: aq?.backgroundAreas?.length ? aq.backgroundAreas : background.areas,
+        salesExperience: aq?.salesExperience || background.salesExperience,
+        somethingAboutYourself: aq?.somethingAboutYourself || '',
+        legallyEntitledCanada: aq?.legallyEntitledCanada || 'yes',
+        resumeUrls: aq?.resumeUrls || [],
+        linkedinProfileUrl: aq?.linkedinProfileUrl,
         whatStoodOut: mergedAnswers.whatStoodOut.trim(),
         whyGoodFit: mergedAnswers.whyGoodFit.trim(),
         financialInvestmentLicense: mergedAnswers.financialInvestmentLicense as 'yes' | 'no',
