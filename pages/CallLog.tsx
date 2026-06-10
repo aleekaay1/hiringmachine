@@ -704,7 +704,7 @@ const CallLog: React.FC = () => {
       )}
 
       <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-3">
-        <div className="max-h-[calc(100vh-320px)] overflow-y-auto space-y-3 pr-1">
+        <div className="max-h-[calc(100vh-320px)] overflow-y-auto space-y-2 pr-1">
           {filtered.map((entry) => {
             const row = entry.row;
             const wh = entry.webhook;
@@ -735,81 +735,64 @@ const CallLog: React.FC = () => {
             return (
               <article
                 key={entry.key}
-                className="rounded-xl border border-[#e8edf4] bg-[#fafcff] p-4 space-y-3"
+                className="rounded-lg border border-[#e8edf4] bg-white px-3 py-2.5 space-y-2"
               >
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="min-w-0 space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs text-[#5c6b82]">{formatDateTimeCanadaEastern(entry.at)}</span>
-                      {direction === 'inbound' ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-800">
-                          <PhoneIncoming size={11} /> Incoming
-                        </span>
-                      ) : direction === 'outbound' ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-800">
-                          <PhoneOutgoing size={11} /> Outbound
-                        </span>
-                      ) : null}
-                    </div>
-                    <p className="font-semibold text-[#0B1B34]">{candidate?.full_name || 'Unknown caller'}</p>
-                    <p className="text-xs text-[#5c6b82]">{recruiterLabel}</p>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className={`text-sm ${row ? dispositionTone(row.disposition) : 'text-violet-800 font-medium'}`}>
-                      {row?.disposition || 'Incoming call'}
-                    </p>
-                    {liveOutcome?.isLiveSessionBooked && (
-                      <p className={`text-xs mt-0.5 ${liveSessionOutcomeTone(liveOutcome.status)}`}>
-                        Live: {liveSessionOutcomeLabel(liveOutcome.status)}
-                        {liveOutcome.sessionDate ? ` · ${liveOutcome.sessionDate}` : ''}
-                      </p>
-                    )}
-                  </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                  <span className="text-[#5c6b82] shrink-0">{formatDateTimeCanadaEastern(entry.at)}</span>
+                  {direction === 'inbound' ? (
+                    <span className="inline-flex items-center gap-0.5 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-800">
+                      <PhoneIncoming size={10} /> In
+                    </span>
+                  ) : direction === 'outbound' ? (
+                    <span className="inline-flex items-center gap-0.5 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800">
+                      <PhoneOutgoing size={10} /> Out
+                    </span>
+                  ) : null}
+                  <span className="font-semibold text-[#0B1B34] truncate">{candidate?.full_name || 'Unknown'}</span>
+                  <span className="font-mono text-[#334155]">{phone}</span>
+                  <span className="text-[#5c6b82] truncate">{recruiterLabel}</span>
+                  <span className={`ml-auto shrink-0 ${row ? dispositionTone(row.disposition) : 'text-violet-800 font-medium'}`}>
+                    {row?.disposition || 'Incoming'}
+                  </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
-                  <div className="rounded-lg bg-white border border-[#eef2f7] px-2.5 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-[#8a9ab0]">Phone</p>
-                    <p className="font-mono text-[#0B1B34] mt-0.5">{phone}</p>
-                  </div>
-                  <div className="rounded-lg bg-white border border-[#eef2f7] px-2.5 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-[#8a9ab0]">Email</p>
-                    <p className="text-[#0B1B34] mt-0.5 break-all">{candidate?.email?.trim() || '—'}</p>
-                  </div>
-                  <div className="rounded-lg bg-white border border-[#eef2f7] px-2.5 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-[#8a9ab0]">Duration</p>
-                    <p className="text-[#0B1B34] mt-0.5">{formatDuration(recording.durationSeconds)}</p>
-                  </div>
-                  <div className="rounded-lg bg-white border border-[#eef2f7] px-2.5 py-2">
-                    <p className="text-[10px] uppercase tracking-wide text-[#8a9ab0]">Workspace</p>
-                    {row && candidate ? (
-                      <Link
-                        to={`/pipeline/call?candidateId=${encodeURIComponent(row.candidate_id)}`}
-                        className="text-[#005EB8] hover:underline mt-0.5 inline-block"
-                      >
-                        Open call workspace
-                      </Link>
-                    ) : candidate ? (
-                      <Link
-                        to={`/pipeline?search=${encodeURIComponent(candidate.phone || phone)}`}
-                        className="text-[#005EB8] hover:underline mt-0.5 inline-block"
-                      >
-                        Find in pipeline
-                      </Link>
-                    ) : (
-                      <span className="text-[#8a9ab0]">—</span>
-                    )}
-                  </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-[#5c6b82]">
+                  {candidate?.email?.trim() && (
+                    <a href={`mailto:${candidate.email.trim()}`} className="text-[#005EB8] hover:underline truncate max-w-[220px]">
+                      {candidate.email.trim()}
+                    </a>
+                  )}
+                  <span>{formatDuration(recording.durationSeconds)}</span>
+                  {liveOutcome?.isLiveSessionBooked && (
+                    <span className={liveSessionOutcomeTone(liveOutcome.status)}>
+                      Live {liveSessionOutcomeLabel(liveOutcome.status)}
+                    </span>
+                  )}
+                  {row && candidate ? (
+                    <Link
+                      to={`/pipeline/call?candidateId=${encodeURIComponent(row.candidate_id)}`}
+                      className="text-[#005EB8] hover:underline"
+                    >
+                      Open workspace
+                    </Link>
+                  ) : candidate ? (
+                    <Link
+                      to={`/pipeline?search=${encodeURIComponent(candidate.phone || phone)}`}
+                      className="text-[#005EB8] hover:underline"
+                    >
+                      Find in pipeline
+                    </Link>
+                  ) : null}
                 </div>
 
                 {details.length > 0 && (
-                  <p className="text-xs text-[#334155]">{details.join(' · ')}</p>
+                  <p className="text-[11px] text-[#334155] line-clamp-2">{details.join(' · ')}</p>
                 )}
 
                 {recording.recordingUrl ? (
                   <CallRecordingPlayer url={recording.recordingUrl} durationHint={recording.durationSeconds} />
                 ) : (
-                  <p className="text-xs text-[#8a9ab0]">No recording yet — refresh after disposition is saved.</p>
+                  <p className="text-[11px] text-[#8a9ab0]">No recording — refresh after disposition is saved.</p>
                 )}
               </article>
             );
