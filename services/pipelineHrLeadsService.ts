@@ -340,6 +340,7 @@ export async function assignHrLeads(input: {
 export async function importHrLeadCsvWithProgress(input: {
   label: string;
   sourceFilename: string;
+  leadTeam?: string | null;
   rows: ParsedHrLeadRow[];
   chunkSize?: number;
   onProgress?: (progress: {
@@ -358,7 +359,7 @@ export async function importHrLeadCsvWithProgress(input: {
   errors: string[];
 }> {
   const chunkSize = input.chunkSize ?? 40;
-  const leadTeam = input.rows.find((row) => row.leadAge)?.leadAge || null;
+  const leadTeam = input.leadTeam ?? null;
   let batchId = '';
   let imported = 0;
   let skipped = 0;

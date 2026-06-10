@@ -29,6 +29,29 @@ function normalizePhone(value: string | null | undefined): string | null {
   return v || null;
 }
 
+function filenameTokens(filename: string): string[] {
+  return String(filename || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function inferLeadTeamFromFilename(filename: string): string | null {
+  const tokens = filenameTokens(filename);
+  if (tokens.includes('rms')) return 'RMS';
+  if (tokens.includes('cooper')) return 'Cooper';
+  return null;
+}
+
+function normalizeLeadTeam(value: string | null | undefined): string | null {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  if (lower === 'rms') return 'RMS';
+  if (lower === 'cooper') return 'Cooper';
+  return trimmed;
+}
+
 type CallRecordRow = {
   candidate_id: string;
   disposition: string | null;
@@ -606,6 +629,10 @@ Deno.serve(async (req) => {
         });
       }
 
+      const sourceFilename = String(body.source_filename || '').trim();
+      const resolvedLeadTeam =
+        normalizeLeadTeam(body.lead_team) || inferLeadTeamFromFilename(sourceFilename);
+
       let batchId = String(body.batch_id || '').trim();
       if (!batchId) {
         const { data: batch, error: batchErr } = await admin
@@ -613,9 +640,9 @@ Deno.serve(async (req) => {
           .insert({
             created_by_user_id: user.id,
             created_by_label: actorLabel,
-            label: String(body.label || body.source_filename || `Import ${new Date().toISOString().slice(0, 10)}`).trim(),
-            source_filename: body.source_filename || null,
-            lead_team: body.lead_team || null,
+            label: String(body.label || sourceFilename || `Import ${new Date().toISOString().slice(0, 10)}`).trim(),
+            source_filename: sourceFilename || null,
+            lead_team: resolvedLeadTeam,
             total_rows: rows.length,
           })
           .select('*')
@@ -629,8 +656,13 @@ Deno.serve(async (req) => {
         .select('label, created_at, source_filename, lead_team')
         .eq('id', batchId)
         .maybeSingle();
-      const batchLabel = String((batchInfo as { label?: string } | null)?.label || body.label || body.source_filename || '').trim();
+      const batchLabel = String((batchInfo as { label?: string } | null)?.label || body.label || sourceFilename || '').trim();
       const batchCreatedAt = String((batchInfo as { created_at?: string } | null)?.created_at || new Date().toISOString());
+      const batchLeadTeam =
+        normalizeLeadTeam((batchInfo as { lead_team?: string } | null)?.lead_team) ||
+        resolvedLeadTeam;
+      const batchSourceFilename =
+        String((batchInfo as { source_filename?: string } | null)?.source_filename || sourceFilename || '').trim();
 
       const imported: string[] = [];
       const skipped: Array<{ row_number: number; reason: string }> = [];
@@ -678,10 +710,12 @@ Deno.serve(async (req) => {
             lead_batch_id: batchId,
             metadata: {
               lead_age: row.lead_age || null,
+              lead_team: batchLeadTeam,
               csv_row_number: rowNumber || null,
               import_source: 'hr_csv_batch',
               lead_batch_label: batchLabel || null,
               lead_batch_created_at: batchCreatedAt,
+              lead_source_filename: batchSourceFilename || null,
             },
           })
           .select('id')
@@ -808,7 +842,7 @@ Deno.serve(async (req) => {
         const { data: batchRow } = row.lead_batch_id
           ? await admin
             .from('pipeline_lead_batches')
-            .select('label, created_at')
+            .select('label, created_at, lead_team, source_filename')
             .eq('id', String(row.lead_batch_id))
             .maybeSingle()
           : { data: null };
@@ -820,6 +854,13 @@ Deno.serve(async (req) => {
         const batchLabel = String((batchRow as { label?: string } | null)?.label || existingMeta.lead_batch_label || '').trim();
         const batchCreatedAt = String(
           (batchRow as { created_at?: string } | null)?.created_at || existingMeta.lead_batch_created_at || '',
+        ).trim();
+        const batchLeadTeam =
+          normalizeLeadTeam((batchRow as { lead_team?: string } | null)?.lead_team) ||
+          normalizeLeadTeam(String(existingMeta.lead_team || '')) ||
+          inferLeadTeamFromFilename(String((batchRow as { source_filename?: string } | null)?.source_filename || existingMeta.lead_source_filename || ''));
+        const batchSourceFilename = String(
+          (batchRow as { source_filename?: string } | null)?.source_filename || existingMeta.lead_source_filename || '',
         ).trim();
 
         const { error: upErr } = await admin
@@ -837,6 +878,8 @@ Deno.serve(async (req) => {
               ...existingMeta,
               lead_batch_label: batchLabel || existingMeta.lead_batch_label || null,
               lead_batch_created_at: batchCreatedAt || existingMeta.lead_batch_created_at || null,
+              lead_team: batchLeadTeam || existingMeta.lead_team || null,
+              lead_source_filename: batchSourceFilename || existingMeta.lead_source_filename || null,
               assigned_at: nowIso,
             },
           })

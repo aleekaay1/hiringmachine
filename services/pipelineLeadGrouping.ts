@@ -1,4 +1,5 @@
 import { formatDateCanadaEastern } from './dateDisplay';
+import { formatHrLeadTeamDisplay, readCandidateLeadTeam } from './hrLeadTeamCategories';
 import type { PipelineCandidate } from './pipelineService';
 
 export type LeadBatchGroupKind = 'hr_batch' | 'self_lead' | 'bulk_upload' | 'other';
@@ -26,9 +27,26 @@ export function readCandidateBatchLabel(candidate: PipelineCandidate): string {
   const meta = candidate.metadata && typeof candidate.metadata === 'object' ? candidate.metadata : {};
   const label = String((meta as Record<string, unknown>).lead_batch_label || '').trim();
   if (label) return label;
-  const leadAge = String((meta as Record<string, unknown>).lead_age || '').trim();
-  if (leadAge && candidate.source === 'hr_csv_batch') return `${leadAge} team`;
+  const leadTeam = readCandidateLeadTeam(meta as Record<string, unknown>);
+  if (leadTeam && candidate.source === 'hr_csv_batch') return leadTeam;
   return '';
+}
+
+export function readCandidateSourceFilename(candidate: PipelineCandidate): string {
+  const meta = candidate.metadata && typeof candidate.metadata === 'object' ? candidate.metadata : {};
+  return String((meta as Record<string, unknown>).lead_source_filename || '').trim();
+}
+
+function buildHrBatchDisplayTitle(batchLabel: string, team: string, sourceFilename: string): string {
+  const teamLabel = formatHrLeadTeamDisplay(team);
+  const fileBase = sourceFilename.replace(/\.[^.]+$/, '').trim();
+  if (teamLabel && fileBase && !batchLabel.toLowerCase().includes(teamLabel.toLowerCase())) {
+    return `${teamLabel} · ${fileBase}`;
+  }
+  if (teamLabel && batchLabel && !batchLabel.toLowerCase().startsWith(teamLabel.toLowerCase())) {
+    return `${teamLabel} · ${batchLabel}`;
+  }
+  return batchLabel || (teamLabel ? `${teamLabel} leads` : '');
 }
 
 export function readCandidateBatchDate(candidate: PipelineCandidate): string {
@@ -57,11 +75,20 @@ function buildGroupTitle(kind: LeadBatchGroupKind, batchLabel: string, dateStr: 
   return `HR leads · ${dateFormatted}`;
 }
 
-function buildGroupSubtitle(kind: LeadBatchGroupKind, batchLabel: string, dateStr: string): string {
+function buildGroupSubtitle(
+  kind: LeadBatchGroupKind,
+  batchLabel: string,
+  dateStr: string,
+  sourceFilename = '',
+  team = '',
+): string {
   const dateFormatted = formatDateCanadaEastern(dateStr);
   if (kind === 'self_lead') return 'LinkedIn, referrals, and manual adds';
   if (kind === 'hr_batch') {
-    return batchLabel ? `Week of ${dateFormatted}` : `Assigned ${dateFormatted}`;
+    const fileHint = sourceFilename ? `File: ${sourceFilename}` : '';
+    const teamHint = team ? formatHrLeadTeamDisplay(team) : '';
+    const parts = [teamHint && `${teamHint} leads`, fileHint, `Week of ${dateFormatted}`].filter(Boolean);
+    return parts.join(' · ') || `Assigned ${dateFormatted}`;
   }
   if (kind === 'bulk_upload') return `Uploaded ${dateFormatted}`;
   return dateFormatted;
@@ -88,14 +115,21 @@ export function groupPipelineCandidatesByBatch(
             : candidate.source === 'bulk_upload'
               ? 'bulk_upload'
               : 'other';
-      const batchLabel = readCandidateBatchLabel(candidate);
+      const meta = candidate.metadata && typeof candidate.metadata === 'object' ? candidate.metadata : {};
+      const batchLabel = String((meta as Record<string, unknown>).lead_batch_label || '').trim() || readCandidateBatchLabel(candidate);
+      const team = readCandidateLeadTeam(meta as Record<string, unknown>);
+      const sourceFilename = readCandidateSourceFilename(candidate);
       const dateStr = readCandidateBatchDate(candidate);
+      const title =
+        kind === 'hr_batch'
+          ? buildHrBatchDisplayTitle(batchLabel, team, sourceFilename) || buildGroupTitle(kind, batchLabel, dateStr)
+          : buildGroupTitle(kind, batchLabel, dateStr);
       group = {
         key,
         kind,
         batchNumber: null,
-        title: buildGroupTitle(kind, batchLabel, dateStr),
-        subtitle: buildGroupSubtitle(kind, batchLabel, dateStr),
+        title,
+        subtitle: buildGroupSubtitle(kind, batchLabel, dateStr, sourceFilename, team),
         sortTimestamp: new Date(dateStr).getTime() || 0,
         items: [],
         newCount: 0,
@@ -130,6 +164,8 @@ export type HrLeadBatchRef = {
   id: string;
   label: string;
   created_at: string;
+  source_filename?: string | null;
+  lead_team?: string | null;
   imported_count?: number;
   assigned_count?: number;
 };
@@ -154,12 +190,23 @@ export function groupHrLeadsByBatchId<T extends { lead_batch_id: string | null; 
     let group = map.get(batchId);
     if (!group) {
       const batch = batchId !== 'unbatched' ? batchById.get(batchId) : null;
-      const title = batch?.label || (batchId === 'unbatched' ? 'Unbatched leads' : 'HR import batch');
+      const team = formatHrLeadTeamDisplay(batch?.lead_team);
+      const batchLabel = batch?.label || (batchId === 'unbatched' ? 'Unbatched leads' : 'HR import batch');
+      const sourceFilename = String(batch?.source_filename || '').trim();
+      const title = team
+        ? buildHrBatchDisplayTitle(batchLabel, team, sourceFilename)
+        : batchLabel;
       const dateStr = batch?.created_at || lead.created_at;
       group = {
         key: batchId,
         title,
-        subtitle: `Imported ${formatDateCanadaEastern(dateStr)} · ${batch?.imported_count ?? '—'} imported`,
+        subtitle: [
+          team ? `${team} leads` : '',
+          sourceFilename ? `File: ${sourceFilename}` : '',
+          `Imported ${formatDateCanadaEastern(dateStr)} · ${batch?.imported_count ?? '—'} imported`,
+        ]
+          .filter(Boolean)
+          .join(' · '),
         sortTimestamp: new Date(dateStr).getTime() || 0,
         items: [],
       };

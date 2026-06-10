@@ -34,6 +34,15 @@ import {
   groupHrLeadsByBatchId,
   type LeadBatchGroup,
 } from '../services/pipelineLeadGrouping';
+import {
+  buildHrImportBatchLabel,
+  detectLeadTeamCategoryFromFilename,
+  formatHrLeadTeamDisplay,
+  HR_LEAD_TEAM_OPTIONS,
+  hrLeadTeamBadgeClass,
+  resolveHrLeadTeamValue,
+  type HrLeadTeamCategory,
+} from '../services/hrLeadTeamCategories';
 
 const CHUNK_SIZE = 40;
 
@@ -52,6 +61,8 @@ const HrLeadDistributionPage: React.FC = () => {
   const [assignCount, setAssignCount] = React.useState<number | ''>(10);
   const [importLabel, setImportLabel] = React.useState('');
   const [importSourceFilename, setImportSourceFilename] = React.useState('');
+  const [importTeamCategory, setImportTeamCategory] = React.useState<HrLeadTeamCategory | ''>('');
+  const [importCustomTeamLabel, setImportCustomTeamLabel] = React.useState('');
   const [uploadHistory, setUploadHistory] = React.useState<PipelineLeadBatch[]>([]);
   const [deleting, setDeleting] = React.useState(false);
   const [retracting, setRetracting] = React.useState(false);
@@ -145,9 +156,37 @@ const HrLeadDistributionPage: React.FC = () => {
     const parsed = parseHrLeadCsv(text);
     setParsedPreview(parsed);
     setImportSourceFilename(file.name);
-    setImportLabel(file.name.replace(/\.[^.]+$/, ''));
+    const detectedCategory = detectLeadTeamCategoryFromFilename(file.name);
+    setImportTeamCategory(detectedCategory || '');
+    const leadTeam = resolveHrLeadTeamValue({
+      category: detectedCategory,
+      sourceFilename: file.name,
+    });
+    setImportLabel(buildHrImportBatchLabel(leadTeam, file.name));
     if (parsed.errors.length) {
       setError(parsed.errors.slice(0, 5).join(' '));
+    }
+  };
+
+  const resolvedImportLeadTeam = React.useMemo(
+    () =>
+      resolveHrLeadTeamValue({
+        category: importTeamCategory,
+        customLabel: importCustomTeamLabel,
+        sourceFilename: importSourceFilename,
+      }),
+    [importCustomTeamLabel, importSourceFilename, importTeamCategory],
+  );
+
+  const onImportTeamCategoryChange = (category: HrLeadTeamCategory | '') => {
+    setImportTeamCategory(category);
+    if (importSourceFilename) {
+      const leadTeam = resolveHrLeadTeamValue({
+        category,
+        customLabel: importCustomTeamLabel,
+        sourceFilename: importSourceFilename,
+      });
+      setImportLabel(buildHrImportBatchLabel(leadTeam, importSourceFilename));
     }
   };
 
@@ -156,23 +195,37 @@ const HrLeadDistributionPage: React.FC = () => {
       setError('Upload a CSV with at least one valid row first.');
       return;
     }
+    const leadTeam = resolveHrLeadTeamValue({
+      category: importTeamCategory,
+      customLabel: importCustomTeamLabel,
+      sourceFilename: importSourceFilename,
+    });
+    if (!leadTeam) {
+      setError('Select RMS, Cooper, or a custom lead category before importing.');
+      return;
+    }
     setImporting(true);
     setImportProgress({ pct: 4, label: 'Starting import…' });
     setError(null);
     setMessage(null);
     try {
       const result = await importHrLeadCsvWithProgress({
-        label: importLabel || 'Weekly HR import',
+        label: importLabel || buildHrImportBatchLabel(leadTeam, importSourceFilename || 'HR import'),
         sourceFilename: importSourceFilename || importLabel,
+        leadTeam,
         rows: parsedPreview.rows,
         chunkSize: CHUNK_SIZE,
         onProgress: (progress) => setImportProgress({ pct: progress.pct, label: progress.label }),
       });
       setMessage(
-        `Imported ${result.imported} leads. Skipped ${result.skipped} duplicates. Failed ${result.failed}.`,
+        `Imported ${result.imported} ${leadTeam} lead(s). Skipped ${result.skipped} duplicates. Failed ${result.failed}.`,
       );
       if (result.batchId) setSelectedBatchId(result.batchId);
       setParsedPreview(null);
+      setImportTeamCategory('');
+      setImportCustomTeamLabel('');
+      setImportSourceFilename('');
+      setImportLabel('');
       await loadData();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -403,8 +456,8 @@ const HrLeadDistributionPage: React.FC = () => {
             <FileSpreadsheet size={16} />
             Import CSV
           </div>
-          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
-            <label className="flex-1 text-xs font-medium text-[#365274]">
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <label className="text-xs font-medium text-[#365274] sm:col-span-2">
               CSV file
               <input
                 type="file"
@@ -416,20 +469,96 @@ const HrLeadDistributionPage: React.FC = () => {
                 }}
               />
             </label>
-            <label className="flex-1 text-xs font-medium text-[#365274]">
-              Batch label
-              <input
-                value={importLabel}
-                onChange={(e) => setImportLabel(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
-                placeholder="Batch name"
-              />
+            <label className="text-xs font-medium text-[#365274]">
+              Lead category
+              <select
+                value={importTeamCategory}
+                onChange={(e) => onImportTeamCategoryChange(e.target.value as HrLeadTeamCategory | '')}
+                className="mt-1 w-full rounded-xl border border-[#c8ddf4] bg-white px-3 py-2 text-sm"
+              >
+                <option value="">Select RMS, Cooper, or custom…</option>
+                {HR_LEAD_TEAM_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             </label>
-            <Button className="!min-h-0 h-10 shrink-0" onClick={() => void runImport()} disabled={importing || !parsedPreview?.rows.length}>
-              <Upload size={14} className="mr-1.5" />
-              Import leads
-            </Button>
+            {importTeamCategory === 'custom' ? (
+              <label className="text-xs font-medium text-[#365274]">
+                Custom category name
+                <input
+                  value={importCustomTeamLabel}
+                  onChange={(e) => {
+                    setImportCustomTeamLabel(e.target.value);
+                    if (importSourceFilename) {
+                      const leadTeam = resolveHrLeadTeamValue({
+                        category: 'custom',
+                        customLabel: e.target.value,
+                        sourceFilename: importSourceFilename,
+                      });
+                      setImportLabel(buildHrImportBatchLabel(leadTeam, importSourceFilename));
+                    }
+                  }}
+                  className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
+                  placeholder="e.g. Referral partners"
+                />
+              </label>
+            ) : (
+              <label className="text-xs font-medium text-[#365274]">
+                Batch label
+                <input
+                  value={importLabel}
+                  onChange={(e) => setImportLabel(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
+                  placeholder="Shown to recruiters in the dialer"
+                />
+              </label>
+            )}
+            {importTeamCategory === 'custom' && (
+              <label className="text-xs font-medium text-[#365274] sm:col-span-2">
+                Batch label
+                <input
+                  value={importLabel}
+                  onChange={(e) => setImportLabel(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
+                  placeholder="Shown to recruiters in the dialer"
+                />
+              </label>
+            )}
+            <div className="flex items-end sm:col-span-2">
+              <Button
+                className="!min-h-0 h-10 w-full sm:w-auto"
+                onClick={() => void runImport()}
+                disabled={importing || !parsedPreview?.rows.length || !resolvedImportLeadTeam}
+              >
+                <Upload size={14} className="mr-1.5" />
+                Import leads
+              </Button>
+            </div>
           </div>
+          {(importSourceFilename || resolvedImportLeadTeam) && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-[#e3edf8] bg-[#f8fbff] px-3 py-2 text-xs text-[#4b6d95]">
+              {importSourceFilename && (
+                <span>
+                  File: <span className="font-semibold text-[#0B1B34]">{importSourceFilename}</span>
+                </span>
+              )}
+              {resolvedImportLeadTeam && (
+                <span
+                  className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${hrLeadTeamBadgeClass(resolvedImportLeadTeam)}`}
+                >
+                  {formatHrLeadTeamDisplay(resolvedImportLeadTeam)} leads
+                </span>
+              )}
+              {!importTeamCategory && importSourceFilename && !detectLeadTeamCategoryFromFilename(importSourceFilename) && (
+                <span className="text-amber-700">Pick a category — filename did not match RMS or Cooper.</span>
+              )}
+              {!importTeamCategory && importSourceFilename && detectLeadTeamCategoryFromFilename(importSourceFilename) && (
+                <span className="text-emerald-700">Auto-detected from filename.</span>
+              )}
+            </div>
+          )}
           {parsedPreview && (
             <div className="mt-4 overflow-auto rounded-xl border border-[#e3edf8]">
               <table className="min-w-full text-xs">
@@ -469,6 +598,7 @@ const HrLeadDistributionPage: React.FC = () => {
                 <tr>
                   <th className="px-3 py-2">Uploaded</th>
                   <th className="px-3 py-2">File</th>
+                  <th className="px-3 py-2">Category</th>
                   <th className="px-3 py-2">Batch</th>
                   <th className="px-3 py-2">Imported</th>
                   <th className="px-3 py-2">Assigned</th>
@@ -482,6 +612,17 @@ const HrLeadDistributionPage: React.FC = () => {
                     <td className="px-3 py-2 whitespace-nowrap">{formatDateTimeCanadaEastern(batch.created_at)}</td>
                     <td className="px-3 py-2 max-w-[220px] truncate" title={batch.source_filename || undefined}>
                       {batch.source_filename || '—'}
+                    </td>
+                    <td className="px-3 py-2">
+                      {batch.lead_team ? (
+                        <span
+                          className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${hrLeadTeamBadgeClass(batch.lead_team)}`}
+                        >
+                          {formatHrLeadTeamDisplay(batch.lead_team)}
+                        </span>
+                      ) : (
+                        '—'
+                      )}
                     </td>
                     <td className="px-3 py-2 max-w-[180px] truncate">{batch.label}</td>
                     <td className="px-3 py-2">{batch.imported_count}</td>
