@@ -39,6 +39,10 @@ export interface PastMeetingInvitee {
   questions_and_answers?: Array<{ question: string; answer: string }>;
   invitee_uri?: string;
   event_uri?: string;
+  assessment_email_sent_at?: string | null;
+  assessment_email_status?: string | null;
+  assessment_email_mode?: 'auto' | 'manual' | null;
+  assessment_email_error?: string | null;
 }
 
 export interface PastMeetingStats {
@@ -60,6 +64,20 @@ export interface PastMeetingStats {
   /** Computed by edge function: matched registrations / invited × 100 (null when invited_count = 0) */
   attendance_rate_pct?: number | null;
   zoom_only_emails?: string[];
+  assessment_emails_sent_count?: number;
+  assessment_emails_failed_count?: number;
+  assessment_auto_run_at?: string | null;
+}
+
+export function pastSessionAssessmentSentCount(
+  stats: PastMeetingStats | undefined | null,
+  past?: PastMeetingRow | null,
+): number {
+  if (stats?.assessment_emails_sent_count != null) return stats.assessment_emails_sent_count;
+  if (past) {
+    return past.invitees.filter((i) => i.assessment_email_status === 'sent').length;
+  }
+  return 0;
 }
 
 /** Unique Zoom attendees who showed (deduped). Falls back for older cached payloads. */
@@ -501,6 +519,7 @@ export type LiveSessionScheduleRow = {
   calendlyName: string | null;
   scheduledCount: number;
   attendedCount: number | null;
+  assessmentSentCount: number | null;
   attendanceRatePct: number | null;
   zoomTopic: string;
   zoomJoinUrl: string | null;
@@ -561,6 +580,7 @@ export function buildLiveSessionScheduleRows(
       calendlyName: row.calendly?.name ?? existing?.calendlyName ?? 'Live Online Career Session',
       scheduledCount: countUniqueInvitees(row, existing?.upcoming ?? null),
       attendedCount: pastSessionShowedCount(row.stats, row),
+      assessmentSentCount: pastSessionAssessmentSentCount(row.stats, row),
       attendanceRatePct: row.stats?.attendance_rate_pct ?? null,
       zoomTopic: row.zoom.topic || 'Live Online Career Session',
       zoomJoinUrl: null,
@@ -599,6 +619,7 @@ export function buildLiveSessionScheduleRows(
       calendlyName: row.calendly?.name ?? existing?.calendlyName ?? 'Live Online Career Session',
       scheduledCount: countUniqueInvitees(existing?.past ?? null, row),
       attendedCount: existing?.attendedCount ?? null,
+      assessmentSentCount: existing?.assessmentSentCount ?? null,
       attendanceRatePct: existing?.attendanceRatePct ?? null,
       zoomTopic: row.zoom.topic || existing?.zoomTopic || 'Live Online Career Session',
       zoomJoinUrl: row.zoom.join_url ?? existing?.zoomJoinUrl ?? null,

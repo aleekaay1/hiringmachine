@@ -39,6 +39,8 @@ type InviteeRow = {
   leaveTime: string | null;
   matchMethod?: 'email' | 'hybrid' | 'name' | null;
   isWalkin?: boolean;
+  assessmentStatus?: string | null;
+  assessmentMode?: 'auto' | 'manual' | null;
 };
 
 function mapPastInvitee(i: PastMeetingInvitee): InviteeRow {
@@ -51,7 +53,18 @@ function mapPastInvitee(i: PastMeetingInvitee): InviteeRow {
     joinTime: i.join_time ?? null,
     leaveTime: i.leave_time ?? null,
     matchMethod: i.match_method ?? null,
+    assessmentStatus: i.assessment_email_status ?? null,
+    assessmentMode: i.assessment_email_mode ?? null,
   };
+}
+
+function assessmentStatusLabel(status: string | null | undefined): string {
+  if (!status) return '—';
+  if (status === 'sent') return 'Sent';
+  if (status === 'pending') return 'Pending';
+  if (status === 'failed') return 'Failed';
+  if (status.startsWith('skipped_')) return status.replace(/^skipped_/, '').replace(/_/g, ' ');
+  return status;
 }
 
 function mapUpcomingInvitee(i: UpcomingMeetingInvitee): InviteeRow {
@@ -576,6 +589,7 @@ function SessionsBlock({
                 <th className="px-2 py-2.5">Session time (ET)</th>
                 <th className={`px-2 py-2.5 text-right ${CAL_HEAD}`}>Scheduled</th>
                 <th className={`px-2 py-2.5 text-right ${ZOOM_HEAD}`}>Showed</th>
+                <th className={`px-2 py-2.5 text-right bg-violet-100/90 text-violet-900`}>Assessment</th>
               </tr>
             </thead>
             <tbody>
@@ -627,10 +641,13 @@ function SessionTableRow({
         <td className={`px-2 py-3 text-right font-semibold ${session.isPast ? ZOOM_CELL : 'text-[#9ba8ba]'}`}>
           {session.isPast ? (session.attendedCount ?? 0) : EM_DASH}
         </td>
+        <td className={`px-2 py-3 text-right font-semibold ${session.isPast ? 'bg-violet-50 text-violet-950' : 'text-[#9ba8ba]'}`}>
+          {session.isPast ? (session.assessmentSentCount ?? 0) : EM_DASH}
+        </td>
       </tr>
       {expanded && (
         <tr className="bg-[#f8fbff]">
-          <td colSpan={5} className="px-4 py-4">
+          <td colSpan={6} className="px-4 py-4">
             <div className="space-y-3">
               <p className="text-xs text-[#5a6f8a]">
                 <span className={`inline-block rounded px-1.5 py-0.5 mr-1 ${CAL_HEAD}`}>
@@ -684,6 +701,13 @@ function SessionTableRow({
                       {' '}({matchedCount} of {session.scheduledCount} scheduled)
                     </>
                   )}
+                  {MIDDLE_DOT} leadership assessment sent:{' '}
+                  <strong className="text-violet-900">{session.assessmentSentCount ?? 0}</strong>
+                  {session.past?.stats?.assessment_auto_run_at && (
+                    <span className="text-[#9ba8ba]">
+                      {' '}(auto-run {formatDateTimeCanadaEastern(session.past.stats.assessment_auto_run_at)})
+                    </span>
+                  )}
                 </p>
               )}
 
@@ -700,6 +724,7 @@ function SessionTableRow({
                         <th className={`px-3 py-2 ${CAL_HEAD}`}>Status</th>
                         {session.isPast && <th className={`px-3 py-2 ${ZOOM_HEAD}`}>Attended</th>}
                         {session.isPast && <th className={`px-3 py-2 ${ZOOM_HEAD}`}>Join / leave</th>}
+                        {session.isPast && <th className="px-3 py-2 bg-violet-100/90 text-violet-900">Assessment</th>}
                       </tr>
                     </thead>
                     <tbody>
@@ -737,6 +762,20 @@ function SessionTableRow({
                                       : ''
                                   }`
                                 : EM_DASH}
+                            </td>
+                          )}
+                          {session.isPast && (
+                            <td className="px-3 py-2 bg-violet-50 text-violet-950">
+                              {inv.attended === true ? (
+                                <span className={inv.assessmentStatus === 'sent' ? 'font-semibold text-violet-900' : ''}>
+                                  {assessmentStatusLabel(inv.assessmentStatus)}
+                                  {inv.assessmentMode && inv.assessmentStatus === 'sent' && (
+                                    <span className="ml-1 text-[10px] font-normal opacity-80">({inv.assessmentMode})</span>
+                                  )}
+                                </span>
+                              ) : (
+                                EM_DASH
+                              )}
                             </td>
                           )}
                         </tr>

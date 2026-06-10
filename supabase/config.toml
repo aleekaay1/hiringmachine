@@ -390,6 +390,9 @@ verify_jwt = false
 [functions.sync-live-session-pipeline]
 verify_jwt = false
 
+[functions.live-session-auto-assessment]
+verify_jwt = false
+
 [functions.integrations-webinar-geek]
 verify_jwt = false
 

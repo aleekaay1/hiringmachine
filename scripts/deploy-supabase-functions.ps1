@@ -25,6 +25,7 @@ if (-not $env:SUPABASE_ACCESS_TOKEN) {
 $functions = @(
   "integrations-zoom-calendly",
   "sync-live-session-pipeline",
+  "live-session-auto-assessment",
   "integrations-webinar-geek",
   "send-email",
   "send-candidate-email",

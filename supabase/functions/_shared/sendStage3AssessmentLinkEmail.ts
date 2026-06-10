@@ -47,6 +47,8 @@ export async function sendStage3AssessmentLinkEmail(input: {
   candidateId: string;
   candidateEmail: string;
   firstName: string;
+  sessionDate?: string;
+  sendMode?: 'auto' | 'manual';
 }): Promise<{ sentAt: string; subject: string; type: string }> {
   const to = input.candidateEmail.trim().toLowerCase();
   if (!to) throw new Error('missing_candidate_email');
@@ -77,13 +79,19 @@ export async function sendStage3AssessmentLinkEmail(input: {
 
   const sentAt = new Date().toISOString();
   await insertEmailSendLog(input.admin, {
-    source: 'sync-live-session-pipeline',
+    source: input.sendMode === 'auto' ? 'live-session-auto-assessment' : 'sync-live-session-pipeline',
     trigger_label: AUTOMATED_STAGE3_AFTER_LIVE_SESSION,
     from_email: from,
     to_email: to,
     subject,
     candidate_id: input.candidateId,
     status: 'sent',
+    metadata: {
+      category: 'leadership_assessment',
+      send_mode: input.sendMode ?? 'manual',
+      session_date: input.sessionDate ?? null,
+      template: 'stage3_assessment_link',
+    },
   });
 
   return { sentAt, subject, type: AUTOMATED_STAGE3_AFTER_LIVE_SESSION };

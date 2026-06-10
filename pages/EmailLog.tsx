@@ -21,6 +21,11 @@ import {
 import { Candidate } from '../types';
 import { Download, Mail, RefreshCw, Search } from 'lucide-react';
 import { signInWithGoogle } from '../services/googleAuth';
+import {
+  categorizeEmailLog,
+  type EmailLogCategory,
+  type EmailLogMode,
+} from '../services/emailLogCategories';
 
 type EmailSendLogRow = {
   id: string;
@@ -35,6 +40,7 @@ type EmailSendLogRow = {
   sent_by_user_id: string | null;
   status: string;
   error_message: string | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 type WednesdaySendStatus = 'sent' | 'failed';
@@ -267,6 +273,9 @@ const EmailLog: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState<EmailLogCategory | 'all'>('all');
+  const [modeFilter, setModeFilter] = useState<EmailLogMode | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'sent' | 'failed'>('all');
   const [candidateRows, setCandidateRows] = useState<Candidate[]>([]);
   const [campaignSourceLoading, setCampaignSourceLoading] = useState(false);
   const [campaignSourceError, setCampaignSourceError] = useState<string | null>(null);
@@ -304,7 +313,7 @@ const EmailLog: React.FC = () => {
     const { data, error } = await supabase
       .from('email_send_logs')
       .select(
-        'id, created_at, source, trigger_label, from_email, to_email, cc_email, subject, candidate_id, sent_by_user_id, status, error_message'
+        'id, created_at, source, trigger_label, from_email, to_email, cc_email, subject, candidate_id, sent_by_user_id, status, error_message, metadata'
       )
       .order('created_at', { ascending: false })
       .limit(2500);
@@ -517,27 +526,48 @@ const EmailLog: React.FC = () => {
     setGoogleLoading(false);
   };
 
+  const enriched = useMemo(
+    () => rows.map((r) => ({ row: r, ...categorizeEmailLog(r) })),
+    [rows],
+  );
+
+  const summary = useMemo(() => {
+    const leadership = enriched.filter((e) => e.category === 'leadership_assessment');
+    return {
+      total: enriched.length,
+      leadership: leadership.length,
+      leadershipSent: leadership.filter((e) => e.row.status === 'sent').length,
+      leadershipAuto: leadership.filter((e) => e.mode === 'auto').length,
+      failed: enriched.filter((e) => e.row.status === 'failed').length,
+    };
+  }, [enriched]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) => {
+    return enriched.filter((e) => {
+      if (categoryFilter !== 'all' && e.category !== categoryFilter) return false;
+      if (modeFilter !== 'all' && e.mode !== modeFilter) return false;
+      if (statusFilter !== 'all' && e.row.status !== statusFilter) return false;
+      if (!q) return true;
       const hay = [
-        r.from_email,
-        r.to_email,
-        r.cc_email ?? '',
-        r.subject,
-        r.source,
-        r.trigger_label ?? '',
-        r.candidate_id ?? '',
-        r.sent_by_user_id ?? '',
-        r.status,
-        r.error_message ?? '',
+        e.row.from_email,
+        e.row.to_email,
+        e.row.cc_email ?? '',
+        e.row.subject,
+        e.row.source,
+        e.row.trigger_label ?? '',
+        e.row.candidate_id ?? '',
+        e.row.sent_by_user_id ?? '',
+        e.row.status,
+        e.row.error_message ?? '',
+        e.categoryLabel,
+        e.modeLabel,
       ]
         .join(' ')
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [rows, search]);
+  }, [enriched, search, categoryFilter, modeFilter, statusFilter]);
 
   const selectedSession = useMemo(
     () => sessionOptions.find((option) => option.key === selectedSessionKey) || null,
@@ -868,6 +898,8 @@ const EmailLog: React.FC = () => {
       'To',
       'CC',
       'Subject',
+      'Category',
+      'Mode',
       'Source',
       'Trigger',
       'Candidate ID',
@@ -877,7 +909,7 @@ const EmailLog: React.FC = () => {
     ];
     const lines = [
       header.map(csvEscape).join(','),
-      ...filtered.map((r) =>
+      ...filtered.map(({ row: r, categoryLabel, modeLabel }) =>
         [
           r.created_at,
           formatDateTimeCanadaEastern(r.created_at),
@@ -885,6 +917,8 @@ const EmailLog: React.FC = () => {
           r.to_email,
           r.cc_email ?? '',
           r.subject,
+          categoryLabel,
+          modeLabel,
           r.source,
           r.trigger_label ?? '',
           r.candidate_id ?? '',
@@ -932,7 +966,30 @@ const EmailLog: React.FC = () => {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4 flex flex-col sm:flex-row gap-3 sm:items-center" data-tour="email-log-search">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="rounded-xl border border-[#d6deea] bg-white p-3">
+            <p className="text-[10px] uppercase tracking-wide text-[#7a8ba1]">Total logged</p>
+            <p className="text-xl font-bold text-[#0B1B34]">{summary.total}</p>
+          </div>
+          <div className="rounded-xl border border-[#d6deea] bg-white p-3">
+            <p className="text-[10px] uppercase tracking-wide text-[#7a8ba1]">Leadership assessment</p>
+            <p className="text-xl font-bold text-[#005EB8]">{summary.leadership}</p>
+          </div>
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3">
+            <p className="text-[10px] uppercase tracking-wide text-emerald-800">Assessment sent</p>
+            <p className="text-xl font-bold text-emerald-900">{summary.leadershipSent}</p>
+          </div>
+          <div className="rounded-xl border border-[#d6deea] bg-white p-3">
+            <p className="text-[10px] uppercase tracking-wide text-[#7a8ba1]">Auto-sent</p>
+            <p className="text-xl font-bold text-[#0B1B34]">{summary.leadershipAuto}</p>
+          </div>
+          <div className="rounded-xl border border-red-200 bg-red-50/40 p-3">
+            <p className="text-[10px] uppercase tracking-wide text-red-800">Failed</p>
+            <p className="text-xl font-bold text-red-900">{summary.failed}</p>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4 flex flex-col gap-3" data-tour="email-log-search">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8a9ab0]" size={18} />
             <input
@@ -943,8 +1000,40 @@ const EmailLog: React.FC = () => {
               className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-[#cfe3f9] text-sm text-[#0B1B34] focus:outline-none focus:ring-2 focus:ring-[#005EB8]/30"
             />
           </div>
-          <div className="text-sm text-[#5c6b82] shrink-0">
-            Showing <strong>{filtered.length}</strong> of {rows.length} loaded
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value as EmailLogCategory | 'all')}
+              className="rounded-lg border border-[#cfe3f9] px-2.5 py-1.5 text-sm"
+            >
+              <option value="all">All categories</option>
+              <option value="leadership_assessment">Leadership assessment</option>
+              <option value="wednesday_live">Wednesday live</option>
+              <option value="pipeline_crm">CRM / pipeline</option>
+              <option value="reminder">Reminders</option>
+              <option value="other">Other</option>
+            </select>
+            <select
+              value={modeFilter}
+              onChange={(e) => setModeFilter(e.target.value as EmailLogMode | 'all')}
+              className="rounded-lg border border-[#cfe3f9] px-2.5 py-1.5 text-sm"
+            >
+              <option value="all">Auto + manual</option>
+              <option value="auto">Automated only</option>
+              <option value="manual">Manual only</option>
+            </select>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as 'all' | 'sent' | 'failed')}
+              className="rounded-lg border border-[#cfe3f9] px-2.5 py-1.5 text-sm"
+            >
+              <option value="all">All statuses</option>
+              <option value="sent">Sent</option>
+              <option value="failed">Failed</option>
+            </select>
+            <span className="text-[#5c6b82] shrink-0">
+              Showing <strong>{filtered.length}</strong> of {rows.length} loaded
+            </span>
           </div>
         </div>
 
@@ -1252,6 +1341,8 @@ const EmailLog: React.FC = () => {
                   <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">To</th>
                   <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">CC</th>
                   <th className="px-2 py-2 border-r border-[#d6deea] min-w-[140px]">Subject</th>
+                  <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">Category</th>
+                  <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">Mode</th>
                   <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">Source</th>
                   <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">Trigger</th>
                   <th className="px-2 py-2 border-r border-[#d6deea] whitespace-nowrap">Candidate</th>
@@ -1260,7 +1351,7 @@ const EmailLog: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="font-mono text-[11px] text-[#1A2942]">
-                {filtered.map((r) => (
+                {filtered.map(({ row: r, categoryLabel, modeLabel }) => (
                   <tr key={r.id} className="border-b border-[#e8edf4] hover:bg-[#f8fafc] align-top">
                     <td className="px-2 py-1.5 border-r border-[#eef2f7] whitespace-nowrap text-[#334155]">
                       {formatDateTimeCanadaEastern(r.created_at)}
@@ -1269,6 +1360,8 @@ const EmailLog: React.FC = () => {
                     <td className="px-2 py-1.5 border-r border-[#eef2f7] max-w-[220px] break-all">{r.to_email}</td>
                     <td className="px-2 py-1.5 border-r border-[#eef2f7] max-w-[160px] break-all">{r.cc_email || '—'}</td>
                     <td className="px-2 py-1.5 border-r border-[#eef2f7] max-w-[280px] break-words">{r.subject}</td>
+                    <td className="px-2 py-1.5 border-r border-[#eef2f7] whitespace-nowrap font-sans text-[10px]">{categoryLabel}</td>
+                    <td className="px-2 py-1.5 border-r border-[#eef2f7] whitespace-nowrap font-sans text-[10px]">{modeLabel}</td>
                     <td className="px-2 py-1.5 border-r border-[#eef2f7] whitespace-nowrap">{r.source}</td>
                     <td className="px-2 py-1.5 border-r border-[#eef2f7] max-w-[200px] break-words">
                       {r.trigger_label || '—'}

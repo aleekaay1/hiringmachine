@@ -37,6 +37,10 @@ export type RegistryPastRow = {
     timezone?: string | null;
     invitee_uri?: string;
     event_uri?: string;
+    assessment_email_sent_at?: string | null;
+    assessment_email_status?: string | null;
+    assessment_email_mode?: 'auto' | 'manual' | null;
+    assessment_email_error?: string | null;
   }>;
   stats: {
     invited_count: number;
@@ -50,6 +54,9 @@ export type RegistryPastRow = {
     matched_by_hybrid?: number;
     matched_by_name?: number;
     attendance_rate_pct?: number | null;
+    assessment_emails_sent_count?: number;
+    assessment_emails_failed_count?: number;
+    assessment_auto_run_at?: string | null;
   };
 };
 
@@ -137,6 +144,22 @@ export async function persistLiveSessionsRegistry(
     }, { onConflict: 'session_date' });
     if (occErr) throw occErr;
 
+    const { data: prevRegs } = await admin
+      .from('live_session_registrants')
+      .select('email, assessment_email_sent_at, assessment_email_status, assessment_email_mode, assessment_email_error')
+      .eq('session_date', sessionDate);
+    const preservedByEmail = new Map(
+      (prevRegs ?? []).map((r) => [
+        String((r as { email?: string }).email || '').trim().toLowerCase(),
+        r as {
+          assessment_email_sent_at?: string | null;
+          assessment_email_status?: string | null;
+          assessment_email_mode?: string | null;
+          assessment_email_error?: string | null;
+        },
+      ]),
+    );
+
     const { error: clearRegErr } = await admin
       .from('live_session_registrants')
       .delete()
@@ -150,6 +173,7 @@ export async function persistLiveSessionsRegistry(
       if (!email) return null;
       const pastInv = i as RegistryPastRow['invitees'][number];
       const attended = 'attended_zoom' in pastInv ? pastInv.attended_zoom : false;
+      const preserved = preservedByEmail.get(email);
       return {
         session_date: sessionDate,
         email,
@@ -164,6 +188,10 @@ export async function persistLiveSessionsRegistry(
         match_method: pastInv.match_method ?? null,
         calendly_synced_at: syncedIso,
         zoom_synced_at: attended ? syncedIso : null,
+        assessment_email_sent_at: preserved?.assessment_email_sent_at ?? null,
+        assessment_email_status: preserved?.assessment_email_status ?? (attended ? 'pending' : null),
+        assessment_email_mode: preserved?.assessment_email_mode ?? null,
+        assessment_email_error: preserved?.assessment_email_error ?? null,
         updated_at: syncedIso,
       };
     }).filter(Boolean) as Record<string, unknown>[];
@@ -293,6 +321,10 @@ export async function loadLiveSessionsRegistryPayload(
       leave_time: r.zoom_leave_at,
       phone_number: r.phone,
       invitee_uri: r.calendly_invitee_uri,
+      assessment_email_sent_at: r.assessment_email_sent_at ?? null,
+      assessment_email_status: r.assessment_email_status ?? null,
+      assessment_email_mode: (r.assessment_email_mode as 'auto' | 'manual' | null) ?? null,
+      assessment_email_error: r.assessment_email_error ?? null,
     }));
 
     const synced = String(occ.last_synced_at ?? '');
@@ -336,6 +368,9 @@ export async function loadLiveSessionsRegistryPayload(
               (occ.attended_count ?? inviteesPast.filter((i) => i.attended_zoom).length),
           ),
           attendance_rate_pct: occ.attendance_rate_pct,
+          assessment_emails_sent_count: occ.assessment_emails_sent_count ?? 0,
+          assessment_emails_failed_count: occ.assessment_emails_failed_count ?? 0,
+          assessment_auto_run_at: occ.assessment_auto_run_at ?? null,
         },
       });
     }
