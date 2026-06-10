@@ -1240,6 +1240,7 @@ Deno.serve(async (req) => {
           participants_with_email: participantsWithEmail,
           participants_without_email: Math.max(0, participants.length - participantsWithEmail),
           matched_by_email: matched.stats.matched_by_email,
+          matched_by_hybrid: matched.stats.matched_by_hybrid,
           matched_by_name: matched.stats.matched_by_name,
           calendly_invitees_considered: rawInvitees.length,
           participant_samples: participantSamples,

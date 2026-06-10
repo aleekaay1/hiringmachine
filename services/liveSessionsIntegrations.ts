@@ -28,8 +28,8 @@ export interface PastMeetingInvitee {
   status: string;
   no_show?: boolean;
   attended_zoom: boolean;
-  /** How this invitee was matched to a Zoom participant: 'email' | 'name' | null */
-  match_method?: 'email' | 'name' | null;
+  /** How this invitee was matched to a Zoom participant. */
+  match_method?: 'email' | 'hybrid' | 'name' | null;
   /** UTC ISO string — when they joined Zoom (present when attended_zoom = true) */
   join_time?: string | null;
   /** UTC ISO string — when they left Zoom */
@@ -55,6 +55,7 @@ export interface PastMeetingStats {
   /** Same as unique_zoom_attendee_count — total unique people who showed. */
   total_showed_count?: number;
   matched_by_email?: number;
+  matched_by_hybrid?: number;
   matched_by_name?: number;
   /** Computed by edge function: matched registrations / invited × 100 (null when invited_count = 0) */
   attendance_rate_pct?: number | null;

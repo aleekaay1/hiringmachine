@@ -37,7 +37,7 @@ type InviteeRow = {
   attended: boolean | null;
   joinTime: string | null;
   leaveTime: string | null;
-  matchMethod?: 'email' | 'name' | null;
+  matchMethod?: 'email' | 'hybrid' | 'name' | null;
   isWalkin?: boolean;
 };
 
@@ -610,6 +610,7 @@ function SessionTableRow({
   const matchedCount = pastStats?.attended_matched_count ?? session.past?.invitees.filter((i) => i.attended_zoom).length ?? 0;
   const walkinCount = pastStats?.walkin_count ?? session.past?.walkin_emails?.length ?? 0;
   const matchedByEmail = pastStats?.matched_by_email ?? 0;
+  const matchedByHybrid = pastStats?.matched_by_hybrid ?? 0;
   const matchedByName = pastStats?.matched_by_name ?? 0;
 
   return (
@@ -642,12 +643,34 @@ function SessionTableRow({
                   </span>
                 )}
               </p>
+              {session.isPast && walkinCount > 0 && (
+                <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                  <strong>{walkinCount}</strong> Zoom joiner{walkinCount === 1 ? '' : 's'} not matched to a Calendly registration
+                  {session.past?.participants?.length
+                    ? ` — ${session.past.participants
+                        .filter((p) => {
+                          const email = String(p.email ?? '').trim().toLowerCase();
+                          const name = String(p.name ?? '').trim().toLowerCase();
+                          const matched = session.past?.invitees?.some((i) => {
+                            if (!i.attended_zoom) return false;
+                            const ie = String(i.email ?? '').trim().toLowerCase();
+                            return (email && ie === email) || (name && String(i.name ?? '').trim().toLowerCase() === name);
+                          });
+                          return !matched;
+                        })
+                        .map((p) => p.name || p.email || 'Unknown')
+                        .join(', ')}`
+                    : ''}
+                </p>
+              )}
               {session.isPast && (
                 <p className="text-xs text-[#5a6f8a]">
                   <strong className="text-[#0B1B34]">{matchedCount}</strong> registration{matchedCount === 1 ? '' : 's'} matched to Zoom
-                  {matchedByEmail + matchedByName > 0 && (
+                  {matchedByEmail + matchedByHybrid + matchedByName > 0 && (
                     <>
-                      {' '}({matchedByEmail} by email{matchedByName > 0 ? `, ${matchedByName} by name` : ''})
+                      {' '}({matchedByEmail} email
+                      {matchedByHybrid > 0 ? `, ${matchedByHybrid} email+name` : ''}
+                      {matchedByName > 0 ? `, ${matchedByName} name` : ''})
                     </>
                   )}
                   {walkinCount > 0 && (
@@ -693,6 +716,9 @@ function SessionTableRow({
                                   {inv.isWalkin ? 'Walk-in' : 'Attended'}
                                   {inv.matchMethod === 'name' && !inv.isWalkin && (
                                     <span className="ml-1 font-normal text-[10px] text-green-800/80">(name)</span>
+                                  )}
+                                  {inv.matchMethod === 'hybrid' && !inv.isWalkin && (
+                                    <span className="ml-1 font-normal text-[10px] text-green-800/80">(email+name)</span>
                                   )}
                                 </span>
                               )}

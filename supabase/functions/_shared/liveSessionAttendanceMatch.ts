@@ -14,9 +14,11 @@ export type CalInviteeLike = {
   name: string;
 };
 
+export type MatchMethod = 'email' | 'hybrid' | 'name' | null;
+
 export type MatchedInvitee<TInvitee extends CalInviteeLike> = TInvitee & {
   attended_zoom: boolean;
-  match_method: 'email' | 'name' | null;
+  match_method: MatchMethod;
   join_time: string | null;
   leave_time: string | null;
 };
@@ -46,6 +48,84 @@ export function nameTokens(s: string): string[] {
     .filter((token) => token.length > 1);
 }
 
+export function emailLocalPart(email: string): string {
+  return String(email || '')
+    .trim()
+    .toLowerCase()
+    .split('@')[0]
+    .replace(/[^a-z0-9]/g, '');
+}
+
+/** True when short is an initial or prefix of full (e.g. "n" → "natalie", "nat" → "natalie"). */
+export function isInitialOrPrefix(short: string, full: string): boolean {
+  const s = normName(short).replace(/\s+/g, '');
+  const f = normName(full).replace(/\s+/g, '');
+  if (!s || !f) return false;
+  if (s === f) return true;
+  if (s.length === 1) return f.startsWith(s);
+  if (s.length >= 3 && f.startsWith(s)) return true;
+  return false;
+}
+
+/**
+ * Cross-field match: Calendly name/email vs Zoom name/email when exact email differs.
+ * Handles e.g. Calendly "Anila Usman" + anilakanwal890@gmail.com vs Zoom "Anila Kanwal".
+ */
+export function samePersonByCrossField(
+  calEmail: string,
+  calName: string,
+  zoomEmail: string,
+  zoomName: string,
+): boolean {
+  const calLocal = emailLocalPart(calEmail);
+  const zoomLocal = emailLocalPart(zoomEmail);
+  const calNameTokens = nameTokens(calName).filter((t) => t.length >= 3);
+  const zoomNameTokens = nameTokens(zoomName).filter((t) => t.length >= 3);
+
+  if (calLocal.length >= 5 && zoomLocal.length >= 5) {
+    if (calLocal === zoomLocal) return true;
+    if (calLocal.includes(zoomLocal) || zoomLocal.includes(calLocal)) return true;
+  }
+
+  if (calLocal.length >= 4 && zoomNameTokens.length > 0) {
+    const zoomInCalLocal = zoomNameTokens.filter((t) => calLocal.includes(t));
+    if (zoomInCalLocal.length >= 2) return true;
+    if (zoomInCalLocal.length >= 1 && calNameTokens.length > 0) {
+      const calFirst = calNameTokens[0];
+      const zoomFirst = zoomNameTokens[0];
+      if (calFirst && zoomFirst && calFirst === zoomFirst) return true;
+      if (calFirst && zoomFirst && isInitialOrPrefix(zoomFirst, calFirst)) return true;
+    }
+  }
+
+  if (zoomLocal.length >= 4 && calNameTokens.length > 0) {
+    const calInZoomLocal = calNameTokens.filter((t) => zoomLocal.includes(t));
+    if (calInZoomLocal.length >= 2) return true;
+    if (calInZoomLocal.length >= 1 && zoomNameTokens.length > 0) {
+      const calFirst = calNameTokens[0];
+      const zoomFirst = zoomNameTokens[0];
+      if (calFirst && zoomFirst && calFirst === zoomFirst) return true;
+    }
+  }
+
+  if (calNameTokens.length >= 2 && zoomNameTokens.length >= 2) {
+    const calFirst = calNameTokens[0];
+    const zoomFirst = zoomNameTokens[0];
+    const zoomLast = zoomNameTokens[zoomNameTokens.length - 1];
+    if (
+      calFirst === zoomFirst &&
+      zoomLast &&
+      zoomLast.length >= 4 &&
+      calLocal.includes(zoomLast) &&
+      !calNameTokens.includes(zoomLast)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function samePersonByName(calName: string, zoomName: string): boolean {
   const a = normName(calName);
   const b = cleanZoomDisplayName(zoomName);
@@ -57,18 +137,28 @@ export function samePersonByName(calName: string, zoomName: string): boolean {
   const bp = b.split(' ').filter(Boolean);
   if (!ap.length || !bp.length) return false;
 
+  const calLast = ap[ap.length - 1];
+  const zoomLast = bp[bp.length - 1];
+
+  if (calLast.length >= 3 && calLast === zoomLast) {
+    for (const calPart of ap.slice(0, -1)) {
+      for (const zoomPart of bp.slice(0, -1)) {
+        if (isInitialOrPrefix(zoomPart, calPart) || isInitialOrPrefix(calPart, zoomPart)) return true;
+      }
+    }
+    if (bp.length === 1) return true;
+  }
+
   if (ap.length >= 2 && bp.length >= 2) {
     const allB = new Set(bp);
     const shared = ap.filter((part) => part.length > 1 && allB.has(part));
     if (shared.length >= 2) return true;
   }
 
-  if (ap.length >= 2) {
+  if (ap.length >= 2 && bp.length >= 2) {
     const calFirst = ap[0];
-    const calLast = ap[ap.length - 1];
     const zoomFirst = bp[0];
-    const zoomLast = bp[bp.length - 1];
-    if (calFirst === zoomFirst) {
+    if (calFirst === zoomFirst || isInitialOrPrefix(zoomFirst, calFirst) || isInitialOrPrefix(calFirst, zoomFirst)) {
       if (calLast === zoomLast) return true;
       if (calLast.length >= 3 && zoomLast.startsWith(calLast.slice(0, 3))) return true;
       if (zoomLast.length >= 3 && calLast.startsWith(zoomLast.slice(0, 3))) return true;
@@ -84,9 +174,15 @@ export function samePersonByName(calName: string, zoomName: string): boolean {
 
   if (ap.length >= 2 && bp.length === 1) {
     const calFirst = ap[0];
-    const calLast = ap[ap.length - 1];
     if (bp[0] === calFirst || bp[0] === calLast) return true;
+    if (isInitialOrPrefix(bp[0], calFirst) || isInitialOrPrefix(bp[0], calLast)) return true;
     if (bp[0].startsWith(calFirst) && bp[0].includes(calLast.slice(0, Math.min(4, calLast.length)))) return true;
+    if (bp[0] === calLast) return true;
+  }
+
+  if (ap.length >= 2 && bp.length === 2) {
+    if (bp[1] === calLast && isInitialOrPrefix(bp[0], ap[0])) return true;
+    if (bp[1] === calLast && ap.length >= 3 && isInitialOrPrefix(bp[0], ap[ap.length - 2])) return true;
   }
 
   return false;
@@ -127,12 +223,39 @@ function buildParticipantMaps(participants: ZoomParticipantLike[]) {
     if (email) participantByEmail.set(email, participant);
   }
   const participantNames = participants
-    .filter((participant) => participant.name)
+    .filter((participant) => participant.name || participant.user_email)
     .map((participant) => ({
       norm: cleanZoomDisplayName(participant.name ?? ''),
       raw: participant,
     }));
   return { participantByEmail, participantNames };
+}
+
+function matchParticipantToInvitee<T extends CalInviteeLike>(
+  invitee: T,
+  participant: ZoomParticipantLike,
+): MatchMethod | null {
+  const calEmail = String(invitee.email || '').trim().toLowerCase();
+  const zoomEmail = String(participant.user_email || '').trim().toLowerCase();
+  const calName = String(invitee.name || '').trim();
+  const zoomName = String(participant.name || '').trim();
+
+  if (calEmail && zoomEmail && calEmail === zoomEmail) return 'email';
+
+  if (
+    calEmail &&
+    zoomEmail &&
+    calEmail !== zoomEmail &&
+    samePersonByCrossField(calEmail, calName, zoomEmail, zoomName)
+  ) {
+    return 'hybrid';
+  }
+
+  if (calEmail && samePersonByCrossField(calEmail, calName, '', zoomName)) return 'hybrid';
+
+  if (calName && zoomName && samePersonByName(calName, zoomName)) return 'name';
+
+  return null;
 }
 
 export function matchInviteesToParticipants<T extends CalInviteeLike>(
@@ -152,6 +275,7 @@ export function matchInviteesToParticipants<T extends CalInviteeLike>(
     total_showed_count: number;
     attendance_rate_pct: number | null;
     matched_by_email: number;
+    matched_by_hybrid: number;
     matched_by_name: number;
   };
 } {
@@ -159,31 +283,36 @@ export function matchInviteesToParticipants<T extends CalInviteeLike>(
   const { participantByEmail, participantNames } = buildParticipantMaps(dedupedParticipants);
   const usedKeys = new Set<string>();
 
-  type Slot = { invitee: T; match: ZoomParticipantLike | null; method: 'email' | 'name' | null };
+  type Slot = { invitee: T; match: ZoomParticipantLike | null; method: MatchMethod };
   const slots: Slot[] = rawInvitees.map((invitee) => ({ invitee, match: null, method: null }));
+
+  const tryAssign = (slot: Slot, participant: ZoomParticipantLike, method: MatchMethod): boolean => {
+    const key = participantIdentityKey(participant);
+    if (!key || usedKeys.has(key)) return false;
+    slot.match = participant;
+    slot.method = method;
+    usedKeys.add(key);
+    return true;
+  };
 
   for (const slot of slots) {
     const email = String(slot.invitee.email || '').trim().toLowerCase();
     if (!email || !participantByEmail.has(email)) continue;
-    const participant = participantByEmail.get(email)!;
-    const key = participantIdentityKey(participant);
-    if (!key || usedKeys.has(key)) continue;
-    slot.match = participant;
-    slot.method = 'email';
-    usedKeys.add(key);
+    tryAssign(slot, participantByEmail.get(email)!, 'email');
   }
 
   for (const slot of slots) {
-    if (slot.match || !slot.invitee.name) continue;
+    if (slot.match) continue;
+    let best: { participant: ZoomParticipantLike; method: MatchMethod; score: number } | null = null;
     for (const { raw } of participantNames) {
       const key = participantIdentityKey(raw);
       if (!key || usedKeys.has(key)) continue;
-      if (!samePersonByName(slot.invitee.name, raw.name ?? '')) continue;
-      slot.match = raw;
-      slot.method = 'name';
-      usedKeys.add(key);
-      break;
+      const method = matchParticipantToInvitee(slot.invitee, raw);
+      if (!method || method === 'email') continue;
+      const score = method === 'hybrid' ? 80 : 60;
+      if (!best || score > best.score) best = { participant: raw, method, score };
     }
+    if (best) tryAssign(slot, best.participant, best.method);
   }
 
   const invitees = slots.map((slot) => ({
@@ -195,8 +324,9 @@ export function matchInviteesToParticipants<T extends CalInviteeLike>(
   }));
 
   const attended = invitees.filter((invitee) => invitee.attended_zoom);
-  const noShow = invitees.filter((invitee) => !invitee.attended_zoom);
+  const noShow = invitees.filter((invitee) => !invendee.attended_zoom);
   const matchedByEmail = attended.filter((invitee) => invitee.match_method === 'email').length;
+  const matchedByHybrid = attended.filter((invitee) => invitee.match_method === 'hybrid').length;
   const matchedByName = attended.filter((invitee) => invitee.match_method === 'name').length;
 
   const walkinParticipants = dedupedParticipants.filter((participant) => {
@@ -223,6 +353,7 @@ export function matchInviteesToParticipants<T extends CalInviteeLike>(
       attendance_rate_pct:
         invitedCount > 0 ? Math.round((attended.length / invitedCount) * 100) : null,
       matched_by_email: matchedByEmail,
+      matched_by_hybrid: matchedByHybrid,
       matched_by_name: matchedByName,
     },
   };

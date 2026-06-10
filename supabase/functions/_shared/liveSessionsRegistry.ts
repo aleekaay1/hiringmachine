@@ -30,7 +30,7 @@ export type RegistryPastRow = {
     status: string;
     no_show?: boolean;
     attended_zoom: boolean;
-    match_method?: 'email' | 'name' | null;
+    match_method?: 'email' | 'hybrid' | 'name' | null;
     join_time?: string | null;
     leave_time?: string | null;
     phone_number?: string | null;
@@ -47,6 +47,7 @@ export type RegistryPastRow = {
     walkin_count?: number;
     total_showed_count?: number;
     matched_by_email?: number;
+    matched_by_hybrid?: number;
     matched_by_name?: number;
     attendance_rate_pct?: number | null;
   };
@@ -287,7 +288,7 @@ export async function loadLiveSessionsRegistryPayload(
       status: r.calendly_status ?? 'active',
       no_show: r.calendly_no_show,
       attended_zoom: Boolean(r.attended_zoom),
-      match_method: (r.match_method as 'email' | 'name' | null) ?? null,
+      match_method: (r.match_method as 'email' | 'hybrid' | 'name' | null) ?? null,
       join_time: r.zoom_join_at,
       leave_time: r.zoom_leave_at,
       phone_number: r.phone,
@@ -327,6 +328,7 @@ export async function loadLiveSessionsRegistryPayload(
           unique_zoom_attendee_count: occ.zoom_participant_count ?? 0,
           total_showed_count: occ.zoom_participant_count ?? 0,
           matched_by_email: inviteesPast.filter((i) => i.attended_zoom && i.match_method === 'email').length,
+          matched_by_hybrid: inviteesPast.filter((i) => i.attended_zoom && i.match_method === 'hybrid').length,
           matched_by_name: inviteesPast.filter((i) => i.attended_zoom && i.match_method === 'name').length,
           walkin_count: Math.max(
             0,
