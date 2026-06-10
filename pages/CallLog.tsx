@@ -11,7 +11,7 @@ import {
 } from '../services/accessControl';
 import {
   listPipelineCallRecords,
-  listPipelineCandidates,
+  listPipelineCandidatesByIds,
   readCallRecordMeta,
   readCallRecordRecording,
   type PipelineCallRecord,
@@ -30,6 +30,19 @@ function formatDuration(seconds: number | null): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+function resolveRecruiterLabel(
+  row: PipelineCallRecord,
+  staffById: Map<string, UserProfile>,
+): string {
+  const direct = row.recruiter_label?.trim();
+  if (direct) return direct;
+  const profile = row.recruiter_user_id ? staffById.get(row.recruiter_user_id) : null;
+  if (profile?.full_name?.trim()) return profile.full_name.trim();
+  if (profile?.email?.trim()) return profile.email.trim();
+  if (row.recruiter_user_id) return row.recruiter_user_id.slice(0, 8);
+  return '—';
 }
 
 function dispositionTone(disposition: string): string {
@@ -100,9 +113,10 @@ const CallLog: React.FC = () => {
     setLoadError(null);
     setLoading(true);
     try {
-      const [callRows, candidateRows, profiles] = await Promise.all([
-        listPipelineCallRecords({ limit: 2500 }),
-        listPipelineCandidates().catch(() => [] as PipelineCandidate[]),
+      const callRows = await listPipelineCallRecords({ limit: 2500 });
+      const candidateIds = [...new Set(callRows.map((row) => row.candidate_id).filter(Boolean))];
+      const [candidateRows, profiles] = await Promise.all([
+        listPipelineCandidatesByIds(candidateIds).catch(() => [] as PipelineCandidate[]),
         listAllUserProfiles().catch(() => [] as UserProfile[]),
       ]);
       setRows(callRows);
@@ -126,21 +140,22 @@ const CallLog: React.FC = () => {
     return map;
   }, [candidates]);
 
+  const staffById = useMemo(() => {
+    const map = new Map<string, UserProfile>();
+    for (const profile of staffProfiles) map.set(profile.user_id, profile);
+    return map;
+  }, [staffProfiles]);
+
   const recruiterOptions = useMemo(() => {
     const byId = new Map<string, string>();
     for (const row of rows) {
       if (!row.recruiter_user_id) continue;
-      const label =
-        row.recruiter_label?.trim() ||
-        staffProfiles.find((p) => p.user_id === row.recruiter_user_id)?.full_name ||
-        staffProfiles.find((p) => p.user_id === row.recruiter_user_id)?.email ||
-        row.recruiter_user_id.slice(0, 8);
-      byId.set(row.recruiter_user_id, label);
+      byId.set(row.recruiter_user_id, resolveRecruiterLabel(row, staffById));
     }
     return [...byId.entries()]
       .map(([id, label]) => ({ id, label }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [rows, staffProfiles]);
+  }, [rows, staffById]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -165,14 +180,14 @@ const CallLog: React.FC = () => {
         row.dialed_number,
         row.disposition,
         row.comment || '',
-        row.recruiter_label || '',
+        resolveRecruiterLabel(row, staffById),
         row.candidate_id,
       ]
         .join(' ')
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [rows, search, recruiterFilter, dispositionFilter, dateFrom, dateTo, candidateById]);
+  }, [rows, search, recruiterFilter, dispositionFilter, dateFrom, dateTo, candidateById, staffById]);
 
   const summary = useMemo(() => {
     const withRecording = filtered.filter((r) => readCallRecordRecording(r).recordingUrl).length;
@@ -210,7 +225,7 @@ const CallLog: React.FC = () => {
         return [
           row.disposed_at,
           formatDateTimeCanadaEastern(row.disposed_at),
-          row.recruiter_label || row.recruiter_user_id || '',
+          resolveRecruiterLabel(row, staffById),
           candidate?.full_name || '',
           row.candidate_id,
           row.dialed_number,
@@ -400,7 +415,7 @@ const CallLog: React.FC = () => {
                       {formatDateTimeCanadaEastern(row.disposed_at)}
                     </td>
                     <td className="px-3 py-2 border-r border-[#eef2f7] whitespace-nowrap text-xs">
-                      {row.recruiter_label || '—'}
+                      {resolveRecruiterLabel(row, staffById)}
                     </td>
                     <td className="px-3 py-2 border-r border-[#eef2f7]">
                       <div className="font-medium text-[#0B1B34]">{candidate?.full_name || '—'}</div>

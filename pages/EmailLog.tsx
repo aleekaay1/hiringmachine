@@ -301,12 +301,6 @@ const EmailLog: React.FC = () => {
   const [campaignBodyDraft, setCampaignBodyDraft] = useState(WEDNESDAY_REMINDER_BODY_DEFAULT);
   const selectedSessionKeyRef = useRef('');
 
-  useEffect(() => {
-    void supabase.auth.getSession().then(({ data: s }) => {
-      if (s.session) setIsAuthenticated(true);
-    });
-  }, []);
-
   const load = useCallback(async () => {
     setLoadError(null);
     setLoading(true);
@@ -515,7 +509,6 @@ const EmailLog: React.FC = () => {
       setAuthError('Invalid email or password.');
       return;
     }
-    setIsAuthenticated(true);
   };
 
   const handleGoogleLogin = async () => {

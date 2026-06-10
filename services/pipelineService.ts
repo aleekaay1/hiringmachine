@@ -875,6 +875,23 @@ export function getPipelineResumeOpenInNewTabUrl(resume: PipelineResume): string
   return sourceUrl;
 }
 
+export async function listPipelineCandidatesByIds(candidateIds: string[]): Promise<PipelineCandidate[]> {
+  const uniqueIds = [...new Set(candidateIds.map((id) => id.trim()).filter(Boolean))];
+  if (!uniqueIds.length) return [];
+  const chunkSize = 200;
+  const rows: PipelineCandidate[] = [];
+  for (let i = 0; i < uniqueIds.length; i += chunkSize) {
+    const chunk = uniqueIds.slice(i, i + chunkSize);
+    const { data, error } = await supabase
+      .from('pipeline_candidates')
+      .select(PIPELINE_CANDIDATE_SELECT)
+      .in('id', chunk);
+    if (error) throw error;
+    rows.push(...((data || []) as PipelineCandidate[]));
+  }
+  return rows;
+}
+
 export async function listPipelineCandidates(): Promise<PipelineCandidate[]> {
   const scope = await resolvePipelineViewerScope();
   let query = supabase
@@ -2333,11 +2350,15 @@ export async function listPipelineCallRecords(input?: {
   const mergedById = new Map<string, PipelineCallRecord>();
   for (const row of normalizedFallbackRows) mergedById.set(row.id, row);
   for (const row of primaryRows) {
+    const fallback = mergedById.get(row.id);
     const meta = row.threecx_metadata && typeof row.threecx_metadata === 'object'
       ? row.threecx_metadata
       : {};
     mergedById.set(row.id, {
       ...row,
+      recruiter_user_id: row.recruiter_user_id || fallback?.recruiter_user_id || null,
+      recruiter_label: row.recruiter_label?.trim() || fallback?.recruiter_label?.trim() || null,
+      comment: row.comment?.trim() || fallback?.comment?.trim() || null,
       threecx_metadata: meta as Record<string, unknown>,
     });
   }
