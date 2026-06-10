@@ -17,7 +17,10 @@ export type ThreeCxConnectionStatus = {
   error?: string;
 };
 
-async function invokeThreeCxCallAdmin<T>(action: string): Promise<T> {
+async function invokeThreeCxCallAdmin<T>(
+  action: string,
+  extra?: Record<string, unknown>,
+): Promise<T> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
   if (!supabaseUrl || !anonKey) throw new Error('Missing Supabase environment configuration.');
@@ -33,7 +36,7 @@ async function invokeThreeCxCallAdmin<T>(action: string): Promise<T> {
       apikey: anonKey,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ action }),
+    body: JSON.stringify({ action, ...extra }),
   });
 
   const body = (await res.json().catch(() => ({}))) as T & { error?: string };
@@ -87,6 +90,23 @@ export async function syncThreeCxRecordings(): Promise<{
   message?: string;
 }> {
   return invokeThreeCxCallAdmin('sync-recordings');
+}
+
+export type CallLogWebhookRow = {
+  id: string;
+  receivedAt: string;
+  phoneNumber: string;
+  agentExtension: string | null;
+  callDirection: string | null;
+  recordingUrl: string | null;
+  durationSeconds: number | null;
+  matched: boolean;
+  callRecordId: string | null;
+};
+
+export async function fetchCallLogWebhookRows(hoursBack = 72): Promise<CallLogWebhookRow[]> {
+  const data = await invokeThreeCxCallAdmin<{ rows?: CallLogWebhookRow[] }>('list-webhook-calls', { hoursBack });
+  return data.rows || [];
 }
 
 export async function backfillTodayThreeCxRecordings(): Promise<{

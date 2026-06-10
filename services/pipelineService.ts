@@ -584,6 +584,21 @@ export function readCallRecordLiveSessionOutcome(
   };
 }
 
+export function readCallRecordDirection(
+  record: Pick<PipelineCallRecord, 'threecx_metadata'>,
+): 'inbound' | 'outbound' | 'unknown' {
+  const meta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
+    ? (record.threecx_metadata as Record<string, unknown>)
+    : {};
+  const report = meta.threecx_report && typeof meta.threecx_report === 'object'
+    ? (meta.threecx_report as Record<string, unknown>)
+    : {};
+  const raw = String(report.call_direction || meta.call_direction || '').trim().toLowerCase();
+  if (raw.includes('in')) return 'inbound';
+  if (raw.includes('out')) return 'outbound';
+  return 'unknown';
+}
+
 export function readCallRecordRecording(
   record: Pick<PipelineCallRecord, 'recording_url' | 'duration_seconds' | 'threecx_metadata'>,
 ): {

@@ -156,9 +156,14 @@ Deno.serve(async (req) => {
     }
 
     let coinsSynced = 0;
+    let coinsError: string | null = null;
     if (body.syncCoins !== false) {
-      const coinResult = await syncAllEligibleRecruiterCoins(admin);
-      coinsSynced = coinResult.usersSynced || 0;
+      try {
+        const coinResult = await syncAllEligibleRecruiterCoins(admin);
+        coinsSynced = coinResult.usersSynced || 0;
+      } catch (coinErr) {
+        coinsError = coinErr instanceof Error ? coinErr.message : 'Coin sync skipped';
+      }
     }
 
     return json(200, {
@@ -170,6 +175,7 @@ Deno.serve(async (req) => {
       updated,
       registrantRows: liveRows.length,
       coinsSynced,
+      coinsError,
       message: updated > 0
         ? `Matched ${updated} live session booking(s) (${attended} attended, ${scheduled} scheduled).`
         : scanned > 0

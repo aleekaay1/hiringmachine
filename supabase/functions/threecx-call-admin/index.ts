@@ -503,13 +503,49 @@ async function backfillToday(admin: ReturnType<typeof createClient>) {
   };
 }
 
+async function listWebhookCalls(admin: ReturnType<typeof createClient>, hoursBack = 72) {
+  const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
+  const { data: events, error } = await admin
+    .from('threecx_webhook_events')
+    .select('id, received_at, payload, agent_extension, phone_number, matched, call_record_id')
+    .eq('event_type', 'report_call')
+    .gte('received_at', since)
+    .order('received_at', { ascending: false })
+    .limit(800);
+  if (error) throw error;
+
+  const rows = (events || []).map((event) => {
+    const payload = (event.payload && typeof event.payload === 'object')
+      ? event.payload as Record<string, unknown>
+      : {};
+    const recordingUrl = pickString(payload, ['recording_url', 'RecordingUrl']);
+    const direction = pickString(payload, ['call_direction', 'CallDirection']) || null;
+    const duration = parseDurationSecondsFromText(
+      pickString(payload, ['duration_seconds', 'duration', 'Duration']),
+    );
+    return {
+      id: String(event.id),
+      receivedAt: String(event.received_at || ''),
+      phoneNumber: pickString(payload, ['phone_number', 'PhoneNumber']) || String(event.phone_number || ''),
+      agentExtension: pickString(payload, ['agent_extension', 'Agent']) || String(event.agent_extension || '') || null,
+      callDirection: direction,
+      recordingUrl: recordingUrl.startsWith('http') ? recordingUrl : null,
+      durationSeconds: duration,
+      matched: Boolean(event.matched),
+      callRecordId: event.call_record_id ? String(event.call_record_id) : null,
+    };
+  }).filter((r) => r.recordingUrl);
+
+  return { rows };
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
   if (req.method !== 'POST') return json(405, { error: 'Method not allowed' });
 
   try {
     const { admin } = await assertCallLogAdmin(req.headers.get('Authorization'));
-    const body = (await req.json().catch(() => ({}))) as { action?: string };
+    const body = (await req.json().catch(() => ({}))) as { action?: string; hoursBack?: number };
     const action = String(body.action || 'status').trim().toLowerCase();
 
     if (action === 'status') {
@@ -525,6 +561,11 @@ Deno.serve(async (req) => {
       const result = action === 'backfill-today'
         ? await backfillToday(admin)
         : await syncRecordings(admin, hoursBack);
+      return json(200, { ok: true, ...result });
+    }
+    if (action === 'list-webhook-calls') {
+      const hoursBack = Number(body.hoursBack) > 0 ? Math.min(Number(body.hoursBack), 168) : 72;
+      const result = await listWebhookCalls(admin, hoursBack);
       return json(200, { ok: true, ...result });
     }
 
