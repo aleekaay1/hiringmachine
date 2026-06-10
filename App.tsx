@@ -37,6 +37,7 @@ import OpsConsolePage from './pages/OpsConsolePage';
 import HrLeadDistributionPage from './pages/HrLeadDistributionPage';
 import HrAllLeadsPage from './pages/HrAllLeadsPage';
 import AccountSettingsPage from './pages/AccountSettingsPage';
+import StaffDirectoryPage from './pages/StaffDirectoryPage';
 
 const App: React.FC = () => {
   return (
@@ -84,6 +85,7 @@ const App: React.FC = () => {
           <Route path="/call-log" element={<CallLog />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/reports/:userId" element={<ReportDetail />} />
+          <Route path="/admin/staff" element={<StaffDirectoryPage />} />
           <Route path="/support" element={<SupportPage />} />
           <Route path="/ops-console" element={<OpsConsolePage />} />
         </Route>

@@ -30,7 +30,8 @@ export type AppSection =
   | 'ops-console'
   | 'superdashboard'
   | 'pipeline-hr-leads'
-  | 'account';
+  | 'account'
+  | 'staff-directory';
 
 export interface UserProfile {
   user_id: string;
@@ -175,6 +176,7 @@ const ADMIN_DATA_SECTIONS: AppSection[] = [
   'hr-dashboard',
   'pipeline-performance',
   'pipeline-settings',
+  'staff-directory',
 ];
 
 /** Recruiter-style pipeline: dialer + email. Resume uploads are HR-only (see canAccessResumeUploads). */
@@ -233,6 +235,11 @@ export function canAccessCallLog(
   return role === 'admin';
 }
 
+/** Staff directory — admins only. */
+export function canAccessStaffDirectory(role: AppRole | null): boolean {
+  return role === 'admin';
+}
+
 export async function resolveOpsConsoleAccessEmail(): Promise<string | null> {
   const { data } = await supabase.auth.getUser();
   return data.user?.email ?? null;
@@ -262,6 +269,7 @@ export function canAccessSection(
 ): boolean {
   if (section === 'ops-console') return isOpsConsoleEmail(email);
   if (section === 'call-log') return canAccessCallLog(role, email);
+  if (section === 'staff-directory') return canAccessStaffDirectory(role);
   if (section === 'pipeline-hr-leads') return canAccessHrLeadDistribution(role, email);
   if (section === 'pipeline-uploads') return canAccessResumeUploads(role, email);
   if (section === 'account') return Boolean(role);
@@ -327,16 +335,36 @@ export function defaultRouteForRole(_role: AppRole | null): string {
 export async function listAllUserProfiles(): Promise<UserProfile[]> {
   const full = await supabase
     .from('user_profiles')
-    .select('user_id, email, full_name, role, points, points_updated_at, avatar_url')
+    .select('user_id, email, full_name, role, points, points_updated_at, avatar_url, phone, extension')
     .order('full_name', { ascending: true })
     .order('email', { ascending: true });
   if (!full.error) return filterProductionStaffProfiles((full.data || []) as UserProfile[]);
+
+  const withoutContact = await supabase
+    .from('user_profiles')
+    .select('user_id, email, full_name, role, points, points_updated_at, avatar_url')
+    .order('full_name', { ascending: true })
+    .order('email', { ascending: true });
+  if (!withoutContact.error) {
+    return filterProductionStaffProfiles(
+      ((withoutContact.data || []) as UserProfile[]).map((row) => ({ ...row, phone: null, extension: null })),
+    );
+  }
 
   const withoutPoints = await supabase
     .from('user_profiles')
     .select('user_id, email, full_name, role')
     .order('email', { ascending: true });
-  if (!withoutPoints.error) return filterProductionStaffProfiles((withoutPoints.data || []) as UserProfile[]);
+  if (!withoutPoints.error) {
+    return filterProductionStaffProfiles(
+      ((withoutPoints.data || []) as UserProfile[]).map((row) => ({
+        ...row,
+        avatar_url: null,
+        phone: null,
+        extension: null,
+      })),
+    );
+  }
 
   const viaFn = await fetchDashboardTeamMetricsViaFunction('last7');
   if (viaFn.ok && viaFn.profiles.length > 0) return filterProductionStaffProfiles(viaFn.profiles);

@@ -55,6 +55,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { name: 'Candidates', route: '/dashboard?view=candidates', icon: Users, section: 'candidates' },
       { name: 'QR Codes', route: '/qr', icon: QrCode, section: 'qr' },
       { name: 'Reports', route: '/reports', icon: FileText, section: 'reports' },
+      { name: 'Staff directory', route: '/admin/staff', icon: Users, section: 'staff-directory' },
     ],
   },
   {
