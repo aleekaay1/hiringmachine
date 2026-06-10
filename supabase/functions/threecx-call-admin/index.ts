@@ -158,8 +158,18 @@ async function loadConnectionStatus(admin: ReturnType<typeof createClient>) {
   let apiError: string | null = null;
   if (apiConfigured) {
     try {
-      await getThreeCxToken();
-      apiOk = true;
+      const { token, baseUrl } = await getThreeCxToken();
+      const probe = await fetch(`${baseUrl}/xapi/v1/CallHistoryView?$top=1`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      });
+      if (probe.ok) {
+        apiOk = true;
+      } else if (probe.status === 403) {
+        apiError = 'Call history denied — set API integration Role to System Owner (not System Administrator), Department DEFAULT, then regenerate the API key.';
+      } else {
+        const raw = await probe.text();
+        apiError = `CallHistoryView probe failed (${probe.status}): ${raw.slice(0, 200)}`;
+      }
     } catch (e) {
       apiError = e instanceof Error ? e.message : String(e);
     }
@@ -231,15 +241,98 @@ async function syncExtensions(admin: ReturnType<typeof createClient>) {
   return { updated, skipped, details };
 }
 
-async function backfillToday(admin: ReturnType<typeof createClient>) {
+function parseWebhookAnchorIso(payload: Record<string, unknown>, receivedAt: string): string {
+  const end = pickString(payload, ['call_end_utc', 'call_end_utc_millis']);
+  const start = pickString(payload, ['call_start_utc', 'call_start_utc_millis']);
+  if (end) {
+    const d = new Date(end);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+  if (start) {
+    const d = new Date(start);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+  return receivedAt;
+}
+
+async function backfillFromWebhookEvents(admin: ReturnType<typeof createClient>, bounds: ReturnType<typeof torontoTodayBounds>) {
+  const fromMs = new Date(bounds.fromIso).getTime();
+  const toMs = new Date(bounds.toIso).getTime();
+
+  const { data: events, error } = await admin
+    .from('threecx_webhook_events')
+    .select('id, received_at, payload, agent_extension, phone_number')
+    .eq('event_type', 'report_call')
+    .gte('received_at', bounds.fromIso)
+    .lte('received_at', bounds.toIso)
+    .order('received_at', { ascending: true });
+  if (error) throw error;
+
+  let scanned = 0;
+  let withRecording = 0;
+  let matched = 0;
+  let updated = 0;
+
+  for (const event of events || []) {
+    const payload = (event.payload && typeof event.payload === 'object')
+      ? event.payload as Record<string, unknown>
+      : {};
+    const receivedAt = String(event.received_at || new Date().toISOString());
+    const receivedMs = new Date(receivedAt).getTime();
+    if (Number.isNaN(receivedMs) || receivedMs < fromMs || receivedMs > toMs) continue;
+
+    scanned += 1;
+    const recordingUrl = pickString(payload, ['recording_url', 'RecordingUrl']);
+    if (!recordingUrl.startsWith('http')) continue;
+    withRecording += 1;
+
+    const phone = pickString(payload, ['phone_number', 'PhoneNumber']) || String(event.phone_number || '');
+    const extension = pickString(payload, ['agent_extension', 'Agent']) || String(event.agent_extension || '');
+    const duration = parseDurationSecondsFromText(pickString(payload, ['duration_seconds', 'duration', 'Duration']));
+    const callId = pickString(payload, ['call_id', 'callId']) || `webhook-${event.id}`;
+    const anchorIso = parseWebhookAnchorIso(payload, receivedAt);
+
+    const result = await attachRecordingToCallRecord(admin, {
+      phoneNumber: phone,
+      agentExtension: extension,
+      agentEmail: pickString(payload, ['agent_email', 'AgentEmail']),
+      recordingUrl,
+      callId,
+      durationSeconds: duration,
+      anchorIso,
+      reportMeta: { source: 'backfill_webhook_events', backfill_date: bounds.dateKey },
+    });
+    if (result.matched) {
+      matched += 1;
+      updated += 1;
+      await admin.from('threecx_webhook_events').update({
+        matched: true,
+        recording_attached: true,
+        call_record_id: result.callRecordId || null,
+        detail: 'backfill_ok',
+      }).eq('id', event.id);
+    }
+  }
+
+  return { scanned, withRecording, matched, updated };
+}
+
+async function backfillFromCallHistory(
+  admin: ReturnType<typeof createClient>,
+  bounds: ReturnType<typeof torontoTodayBounds>,
+) {
   const { token, baseUrl } = await getThreeCxToken();
-  const bounds = torontoTodayBounds();
   const url = `${baseUrl}/xapi/v1/CallHistoryView?$top=500&$orderby=SegmentStartTime%20desc`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
   });
   const raw = await res.text();
   if (!res.ok) {
+    if (res.status === 403) {
+      throw new Error(
+        'CallHistoryView denied (403). In 3CX Admin → Integrations → API, set Department DEFAULT and Role System Owner (not System Administrator), then regenerate the API key and update Supabase secrets.',
+      );
+    }
     throw new Error(`CallHistoryView failed (${res.status}): ${raw.slice(0, 300)}`);
   }
   const parsed = JSON.parse(raw) as { value?: Array<Record<string, unknown>> };
@@ -279,20 +372,47 @@ async function backfillToday(admin: ReturnType<typeof createClient>) {
       callId,
       durationSeconds: duration,
       anchorIso: startRaw,
-      reportMeta: { source: 'backfill_today', backfill_date: bounds.dateKey },
+      reportMeta: { source: 'backfill_call_history', backfill_date: bounds.dateKey },
     });
     if (result.matched) {
       matched += 1;
-      if (recordingUrl) updated += 1;
+      updated += 1;
     }
+  }
+
+  return { scanned, withRecording, matched, updated };
+}
+
+async function backfillToday(admin: ReturnType<typeof createClient>) {
+  const bounds = torontoTodayBounds();
+  const webhook = await backfillFromWebhookEvents(admin, bounds);
+
+  let apiWarning: string | null = null;
+  let api = { scanned: 0, withRecording: 0, matched: 0, updated: 0 };
+  try {
+    api = await backfillFromCallHistory(admin, bounds);
+  } catch (err) {
+    apiWarning = err instanceof Error ? err.message : String(err);
   }
 
   return {
     todayDate: bounds.dateKey,
-    scanned,
-    withRecording,
-    matched,
-    updated,
+    scanned: webhook.scanned + api.scanned,
+    withRecording: webhook.withRecording + api.withRecording,
+    matched: webhook.matched + api.matched,
+    updated: webhook.updated + api.updated,
+    webhookScanned: webhook.scanned,
+    webhookMatched: webhook.matched,
+    apiScanned: api.scanned,
+    apiMatched: api.matched,
+    warning: apiWarning,
+    message: apiWarning && webhook.updated > 0
+      ? `Attached ${webhook.updated} from today's webhooks. 3CX API history skipped: ${apiWarning}`
+      : apiWarning && webhook.updated === 0
+        ? apiWarning
+        : webhook.updated > 0
+          ? `Attached ${webhook.updated} recording(s) from today's webhooks.`
+          : undefined,
   };
 }
 

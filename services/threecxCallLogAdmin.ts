@@ -82,6 +82,12 @@ export async function backfillTodayThreeCxRecordings(): Promise<{
   withRecording: number;
   matched: number;
   updated: number;
+  webhookScanned?: number;
+  webhookMatched?: number;
+  apiScanned?: number;
+  apiMatched?: number;
+  warning?: string | null;
+  message?: string;
 }> {
   return invokeThreeCxCallAdmin('backfill-today');
 }

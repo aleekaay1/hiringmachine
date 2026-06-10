@@ -62,6 +62,42 @@ type CallRecordRow = {
   threecx_metadata: Record<string, unknown> | null;
 };
 
+async function findCallRecordCandidates(
+  admin: SupabaseClient,
+  input: {
+    phoneNumber: string;
+    anchorMs: number;
+    recruiterIds: string[];
+    allowAnyRecruiter: boolean;
+  },
+): Promise<CallRecordRow[]> {
+  const windowStart = new Date(input.anchorMs - 90 * 60 * 1000).toISOString();
+  const windowEnd = new Date(input.anchorMs + 60 * 60 * 1000).toISOString();
+
+  let query = admin
+    .from('pipeline_call_records')
+    .select('id, dialed_number, recruiter_user_id, disposed_at, threecx_metadata, threecx_call_id')
+    .gte('disposed_at', windowStart)
+    .lte('disposed_at', windowEnd)
+    .order('disposed_at', { ascending: false })
+    .limit(120);
+
+  if (!input.allowAnyRecruiter) {
+    if (input.recruiterIds.length === 1) {
+      query = query.eq('recruiter_user_id', input.recruiterIds[0]);
+    } else if (input.recruiterIds.length > 1) {
+      query = query.in('recruiter_user_id', input.recruiterIds);
+    }
+  }
+
+  const { data: rows, error } = await query;
+  if (error) throw error;
+
+  return (rows || []).filter((row: CallRecordRow) =>
+    phonesMatch(input.phoneNumber, String(row.dialed_number || ''))
+  );
+}
+
 export async function attachRecordingToCallRecord(
   admin: SupabaseClient,
   input: {
@@ -77,29 +113,24 @@ export async function attachRecordingToCallRecord(
 ): Promise<{ matched: boolean; callRecordId?: string; reason?: string }> {
   const recruiterIds = await resolveRecruiterUserIds(admin, input.agentExtension, input.agentEmail);
   const anchorMs = new Date(input.anchorIso).getTime();
-  const windowStart = new Date(anchorMs - 45 * 60 * 1000).toISOString();
-  const windowEnd = new Date(anchorMs + 15 * 60 * 1000).toISOString();
-
-  let query = admin
-    .from('pipeline_call_records')
-    .select('id, dialed_number, recruiter_user_id, disposed_at, threecx_metadata, threecx_call_id')
-    .gte('disposed_at', windowStart)
-    .lte('disposed_at', windowEnd)
-    .order('disposed_at', { ascending: false })
-    .limit(80);
-
-  if (recruiterIds.length === 1) {
-    query = query.eq('recruiter_user_id', recruiterIds[0]);
-  } else if (recruiterIds.length > 1) {
-    query = query.in('recruiter_user_id', recruiterIds);
+  if (Number.isNaN(anchorMs)) {
+    return { matched: false, reason: 'invalid_anchor_time' };
   }
 
-  const { data: rows, error } = await query;
-  if (error) throw error;
-
-  const candidates = (rows || []).filter((row: CallRecordRow) =>
-    phonesMatch(input.phoneNumber, String(row.dialed_number || ''))
-  );
+  let candidates = await findCallRecordCandidates(admin, {
+    phoneNumber: input.phoneNumber,
+    anchorMs,
+    recruiterIds,
+    allowAnyRecruiter: false,
+  });
+  if (!candidates.length && recruiterIds.length > 0) {
+    candidates = await findCallRecordCandidates(admin, {
+      phoneNumber: input.phoneNumber,
+      anchorMs,
+      recruiterIds,
+      allowAnyRecruiter: true,
+    });
+  }
   if (!candidates.length) {
     return { matched: false, reason: 'no_call_record_match' };
   }

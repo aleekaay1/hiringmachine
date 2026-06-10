@@ -186,10 +186,17 @@ const CallLog: React.FC = () => {
     setBackfilling(true);
     try {
       const result = await backfillTodayThreeCxRecordings();
-      setAdminMessage(
-        `Backfill for ${result.todayDate}: scanned ${result.scanned} call(s), `
-          + `${result.withRecording} with recording, ${result.matched} matched, ${result.updated} updated.`,
-      );
+      const summary = result.message
+        || `Backfill for ${result.todayDate}: scanned ${result.scanned} call(s), `
+          + `${result.withRecording} with recording, ${result.matched} matched, ${result.updated} updated.`;
+      if (result.warning && result.updated > 0) {
+        setAdminMessage(summary);
+        setAdminError(result.warning);
+      } else if (result.warning) {
+        setAdminError(result.warning);
+      } else {
+        setAdminMessage(summary);
+      }
       await load();
       await loadThreeCxStatus();
     } catch (err) {
@@ -416,12 +423,12 @@ const CallLog: React.FC = () => {
                     {threeCxStatus.extensionMapCount} recruiter(s)
                   </p>
                   <p>
-                    3CX API (backfill):{' '}
+                    3CX API (call history):{' '}
                     {!threeCxStatus.threecxApiConfigured
-                      ? 'Not configured — add THREECX_BASE_URL, CLIENT_ID, CLIENT_SECRET in Supabase'
+                      ? 'Not configured — webhook replay still works; API needs THREECX secrets'
                       : threeCxStatus.threecxApiOk
-                        ? 'OK'
-                        : `Error — ${threeCxStatus.threecxApiError || 'token failed'}`}
+                        ? 'OK (System Owner role)'
+                        : `Limited — ${threeCxStatus.threecxApiError || 'token or call history failed'}`}
                   </p>
                   {threeCxStatus.error && <p className="text-red-700">{threeCxStatus.error}</p>}
                 </div>
@@ -457,12 +464,8 @@ const CallLog: React.FC = () => {
               type="button"
               variant="secondary"
               onClick={() => void handleBackfillToday()}
-              disabled={backfilling || !threeCxStatus?.threecxApiOk}
-              title={
-                !threeCxStatus?.threecxApiOk
-                  ? 'Requires 3CX API secrets in Supabase'
-                  : "Pull today's recordings from 3CX and match to call log"
-              }
+              disabled={backfilling}
+              title="Replay today's webhooks and match recordings to call log (API history optional)"
             >
               {backfilling ? 'Backfilling…' : "Backfill today's recordings"}
             </Button>

@@ -135,7 +135,9 @@ Set in Supabase → **Project Settings → Edge Functions → Secrets**:
 | `THREECX_CLIENT_ID` | From 3CX → Integrations → API |
 | `THREECX_CLIENT_SECRET` | Same integration |
 
-Webhook-only recording sync does **not** need these; backfill does.
+**Important:** For call history / backfill API access, the integration must use **Department: DEFAULT** and **Role: System Owner** (not System Administrator). Regenerate the API key after changing role, then update Supabase secrets.
+
+Webhook-only recording sync does **not** need these. **Backfill** replays today's webhooks first (no API needed); the 3CX API is only used as a fallback for extra history.
 
 ---
 
