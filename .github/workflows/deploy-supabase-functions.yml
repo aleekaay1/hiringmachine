@@ -37,6 +37,8 @@ jobs:
             threecx-call-control
             threecx-call-webhook
             threecx-call-admin
+            sync-live-session-outcomes
+            live-session-auto-assessment
             pipeline-convert-resume
           )
           for fn in "${FUNCTIONS[@]}"; do

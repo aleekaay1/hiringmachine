@@ -3,7 +3,9 @@ import { loadLeaderboardSnapshot } from './pipelineLeaderboardCache';
 import { loadScopedWebinarRowsForViewer } from './pipelineBookedOutcomes';
 import {
   buildLiveSessionRowsByEmail,
+  buildLiveSessionRowsByPhone,
   loadCandidateEmailsById,
+  loadCandidatePhonesById,
   loadLiveSessionRegistrantsForMatching,
 } from './liveSessionBookedOutcomes';
 import {
@@ -124,10 +126,13 @@ export async function loadRecruiterPersonalMetrics(profile: UserProfile): Promis
     }),
     loadLiveSessionRegistrantsForMatching().catch(() => []),
   ]);
-  const candidateEmailById = await loadCandidateEmailsById(
-    [...new Set(records.map((r) => r.candidate_id).filter(Boolean))],
-  ).catch(() => new Map<string, string>());
+  const candidateIds = [...new Set(records.map((r) => r.candidate_id).filter(Boolean))];
+  const [candidateEmailById, candidatePhoneById] = await Promise.all([
+    loadCandidateEmailsById(candidateIds).catch(() => new Map<string, string>()),
+    loadCandidatePhonesById(candidateIds).catch(() => new Map<string, string>()),
+  ]);
   const liveSessionByEmail = buildLiveSessionRowsByEmail(liveRegistrants);
+  const liveSessionByPhone = buildLiveSessionRowsByPhone(liveRegistrants);
 
   const sinceYmd = windows.current.sinceYmd;
   const untilYmd = windows.current.untilYmd;
@@ -176,7 +181,9 @@ export async function loadRecruiterPersonalMetrics(profile: UserProfile): Promis
       recruiterDirectory: directory,
       recruiterSeeds: seeds,
       candidateEmailById,
+      candidatePhoneById,
       liveSessionByEmail,
+      liveSessionByPhone,
       restrictToUserIds: [userId],
     });
     const mine = rows[0];
@@ -249,8 +256,12 @@ export async function computeLeadershipTeamMetricsLive(): Promise<LeadershipTeam
     ]);
 
     const candidateIds = [...new Set(currentRecords.map((r) => r.candidate_id).filter(Boolean))];
-    const candidateEmailById = await loadCandidateEmailsById(candidateIds).catch(() => new Map<string, string>());
+    const [candidateEmailById, candidatePhoneById] = await Promise.all([
+      loadCandidateEmailsById(candidateIds).catch(() => new Map<string, string>()),
+      loadCandidatePhonesById(candidateIds).catch(() => new Map<string, string>()),
+    ]);
     const liveSessionByEmail = buildLiveSessionRowsByEmail(liveRegistrants);
+    const liveSessionByPhone = buildLiveSessionRowsByPhone(liveRegistrants);
     const recruiterDirectory = new Map(
       profiles.map((item) => [item.user_id, { fullName: item.full_name, email: item.email ?? null }]),
     );
@@ -263,7 +274,9 @@ export async function computeLeadershipTeamMetricsLive(): Promise<LeadershipTeam
       recruiterDirectory,
       recruiterSeeds: seedsFromProfiles(profiles),
       candidateEmailById,
+      candidatePhoneById,
       liveSessionByEmail,
+      liveSessionByPhone,
     });
 
     if (!rows.length) return null;

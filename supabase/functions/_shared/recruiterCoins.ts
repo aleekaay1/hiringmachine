@@ -2,8 +2,15 @@
  * Synced logic for services/recruiterCoins.ts — keep in sync when changing earn rules.
  */
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
+import {
+  buildLiveSessionRowsByEmail,
+  buildLiveSessionRowsByPhone,
+  pickRegistrantForCallDisposition,
+  type LiveSessionRegistrantRow,
+} from './liveSessionBookedOutcomes.ts';
 
 export const COINS_PER_SHOW = 10;
+export const COINS_PER_LIVE_SESSION_SHOW = 15;
 export const COINS_PER_HIRE = 50;
 export const COIN_LOOKBACK_DAYS = 90;
 
@@ -26,20 +33,13 @@ type UserProfileRow = {
   role: string;
 };
 
-type LiveSessionRegistrantRow = {
-  session_date: string;
-  email: string;
-  attended_zoom: boolean;
-  calendly_no_show: boolean | null;
-  zoom_join_at: string | null;
-};
-
 type PipelineCallRecord = {
   id: string;
   candidate_id: string;
   recruiter_user_id: string | null;
   disposition: string | null;
   booked_subtype: string | null;
+  dialed_number?: string | null;
   disposed_at: string;
   created_at: string;
   meta?: Record<string, unknown> | null;
@@ -268,43 +268,6 @@ function splitIdentityWords(value: string): string[] {
     .filter((w) => w.length >= 2);
 }
 
-function buildLiveSessionRowsByEmail(rows: LiveSessionRegistrantRow[]): Map<string, LiveSessionRegistrantRow[]> {
-  const map = new Map<string, LiveSessionRegistrantRow[]>();
-  for (const row of rows) {
-    const email = normalizeEmail(row.email);
-    if (!email) continue;
-    const list = map.get(email) || [];
-    list.push(row);
-    map.set(email, list);
-  }
-  for (const list of map.values()) {
-    list.sort((a, b) => a.session_date.localeCompare(b.session_date));
-  }
-  return map;
-}
-
-function pickRegistrantForDisposition(rows: LiveSessionRegistrantRow[], disposedAtMs: number): LiveSessionRegistrantRow | null {
-  if (!rows.length) return null;
-  const disposeYmd = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Toronto',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  })
-    .formatToParts(new Date(disposedAtMs))
-    .reduce(
-      (acc, p) => {
-        if (p.type !== 'literal') acc[p.type] = p.value;
-        return acc;
-      },
-      {} as Record<string, string>,
-    );
-  const ymd = `${disposeYmd.year}-${disposeYmd.month}-${disposeYmd.day}`;
-  const onOrAfter = rows.filter((r) => r.session_date >= ymd);
-  if (onOrAfter.length) return onOrAfter[0];
-  return rows[rows.length - 1];
-}
-
 function readBookedSubtype(record: PipelineCallRecord): string {
   const meta = record.meta && typeof record.meta === 'object' ? record.meta : {};
   const three =
@@ -329,11 +292,13 @@ export function buildRecruiterCoinEventDrafts(input: {
   webinarRows: AnyRow[];
   callRecords: PipelineCallRecord[];
   candidateEmailById: Map<string, string>;
+  candidatePhoneById?: Map<string, string>;
   liveRegistrants: LiveSessionRegistrantRow[];
   earnWindow?: { sinceYmd: string; untilYmd: string };
 }): RecruiterCoinEventDraft[] {
   const window = input.earnWindow ?? coinEarnWindow();
   const liveSessionByEmail = buildLiveSessionRowsByEmail(input.liveRegistrants);
+  const liveSessionByPhone = buildLiveSessionRowsByPhone(input.liveRegistrants);
   const events: RecruiterCoinEventDraft[] = [];
   const seen = new Set<string>();
 
@@ -377,15 +342,15 @@ export function buildRecruiterCoinEventDrafts(input: {
     if (String(record.disposition || '').trim().toLowerCase() !== 'booked') continue;
     if (readBookedSubtype(record) !== 'live session') continue;
 
-    const email = input.candidateEmailById.get(record.candidate_id);
-    if (!email) continue;
-
-    const liveRows = liveSessionByEmail.get(email) || [];
     const disposedMs = Date.parse(record.disposed_at || record.created_at);
-    const match = pickRegistrantForDisposition(
-      liveRows,
-      Number.isFinite(disposedMs) ? disposedMs : Date.now(),
-    );
+    const { registrant: match } = pickRegistrantForCallDisposition({
+      email: input.candidateEmailById.get(record.candidate_id),
+      candidatePhone: input.candidatePhoneById?.get(record.candidate_id),
+      dialedNumber: record.dialed_number,
+      disposedAtMs: Number.isFinite(disposedMs) ? disposedMs : Date.now(),
+      byEmail: liveSessionByEmail,
+      byPhone: liveSessionByPhone,
+    });
     if (!match?.attended_zoom) continue;
     if (!ymdInCoinEarnWindow(match.session_date, window)) continue;
 
@@ -399,7 +364,7 @@ export function buildRecruiterCoinEventDrafts(input: {
       userId: input.userId,
       sourceType: 'live_session_show',
       sourceKey,
-      points: COINS_PER_SHOW,
+      points: COINS_PER_LIVE_SESSION_SHOW,
       label: `Live session show · ${match.session_date}`,
       earnedAt: match.zoom_join_at || `${match.session_date}T12:00:00.000Z`,
     });
@@ -675,7 +640,7 @@ export async function syncRecruiterCoinsForUser(
 
   const { data: liveRows, error: liveErr } = await admin
     .from('live_session_registrants')
-    .select('session_date, email, attended_zoom, calendly_no_show, zoom_join_at')
+    .select('session_date, email, phone, attended_zoom, calendly_no_show, zoom_join_at')
     .gte('session_date', liveSinceYmd);
   if (liveErr && !isLedgerMissingError(liveErr.message)) throw liveErr;
 
@@ -683,7 +648,7 @@ export async function syncRecruiterCoinsForUser(
   const { data: primaryCalls, error: primaryErr } = await admin
     .from('pipeline_call_records')
     .select(
-      'id, candidate_id, recruiter_user_id, disposition, booked_subtype, disposed_at, created_at, meta, threecx_metadata',
+      'id, candidate_id, recruiter_user_id, disposition, booked_subtype, dialed_number, disposed_at, created_at, meta, threecx_metadata',
     )
     .eq('recruiter_user_id', userId)
     .gte('disposed_at', bookingFromIso)
@@ -724,19 +689,22 @@ export async function syncRecruiterCoinsForUser(
 
   const candidateIds = [...new Set(callRecords.map((r) => r.candidate_id).filter(Boolean))];
   const candidateEmailById = new Map<string, string>();
+  const candidatePhoneById = new Map<string, string>();
   const chunk = 200;
   for (let i = 0; i < candidateIds.length; i += chunk) {
     const slice = candidateIds.slice(i, i + chunk);
     if (!slice.length) continue;
     const { data: candidates, error: cErr } = await admin
       .from('pipeline_candidates')
-      .select('id, email')
+      .select('id, email, phone')
       .in('id', slice);
     if (cErr) throw cErr;
     for (const row of candidates || []) {
       const id = String((row as { id?: string }).id || '').trim();
       const email = normalizeEmail((row as { email?: string }).email);
+      const phone = String((row as { phone?: string }).phone || '').trim();
       if (id && email) candidateEmailById.set(id, email);
+      if (id && phone) candidatePhoneById.set(id, phone);
     }
   }
 
@@ -751,6 +719,7 @@ export async function syncRecruiterCoinsForUser(
     webinarRows,
     callRecords,
     candidateEmailById,
+    candidatePhoneById,
     liveRegistrants: (liveRows || []) as LiveSessionRegistrantRow[],
     earnWindow,
   });

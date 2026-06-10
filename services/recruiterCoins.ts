@@ -1,11 +1,12 @@
 /**
- * Paz Coins — 10 coins per show (WebinarGeek + live session rules aligned with rankings).
+ * Paz Coins — webinar shows + live session shows + hire bonuses.
  */
 import { filterRowsForRecruiterOwnership } from './recruiterDataScope';
 import {
   buildLiveSessionRowsByEmail,
+  buildLiveSessionRowsByPhone,
   liveSessionAttendedFromRegistrant,
-  pickRegistrantForDisposition,
+  pickRegistrantForCallDisposition,
   type LiveSessionRegistrantRow,
 } from './liveSessionBookedOutcomes';
 import {
@@ -19,6 +20,7 @@ import {
 } from './webinarGeekRecruiterAnalytics';
 
 export const COINS_PER_SHOW = 10;
+export const COINS_PER_LIVE_SESSION_SHOW = 15;
 export const COINS_PER_HIRE = 50;
 /** Internal rolling window for crediting shows on sync. */
 export const COIN_LOOKBACK_DAYS = 90;
@@ -126,7 +128,9 @@ function liveSessionShowCoinEvents(
   userId: string,
   records: PipelineCallRecord[],
   candidateEmailById: Map<string, string>,
+  candidatePhoneById: Map<string, string>,
   liveSessionByEmail: Map<string, LiveSessionRegistrantRow[]>,
+  liveSessionByPhone: Map<string, LiveSessionRegistrantRow[]>,
   window: CoinEarnWindow,
 ): RecruiterCoinEventDraft[] {
   const events: RecruiterCoinEventDraft[] = [];
@@ -139,15 +143,15 @@ function liveSessionShowCoinEvents(
     const bookedSubtype = String(record.booked_subtype || meta.bookedSubtype || '').trim().toLowerCase();
     if (bookedSubtype !== 'live session') continue;
 
-    const email = candidateEmailById.get(record.candidate_id);
-    if (!email) continue;
-
-    const liveRows = liveSessionByEmail.get(email) || [];
     const disposedMs = Date.parse(record.disposed_at || record.created_at);
-    const match = pickRegistrantForDisposition(
-      liveRows,
-      Number.isFinite(disposedMs) ? disposedMs : Date.now(),
-    );
+    const { registrant: match } = pickRegistrantForCallDisposition({
+      email: candidateEmailById.get(record.candidate_id),
+      candidatePhone: candidatePhoneById.get(record.candidate_id),
+      dialedNumber: record.dialed_number,
+      disposedAtMs: Number.isFinite(disposedMs) ? disposedMs : Date.now(),
+      byEmail: liveSessionByEmail,
+      byPhone: liveSessionByPhone,
+    });
     if (!match || !liveSessionAttendedFromRegistrant(match)) continue;
     if (!ymdInCoinEarnWindow(match.session_date, window)) continue;
 
@@ -158,7 +162,7 @@ function liveSessionShowCoinEvents(
       userId,
       sourceType: 'live_session_show',
       sourceKey: `live_show:${recordId}`,
-      points: COINS_PER_SHOW,
+      points: COINS_PER_LIVE_SESSION_SHOW,
       label: `Live session show · ${match.session_date}`,
       earnedAt: match.zoom_join_at || `${match.session_date}T12:00:00.000Z`,
     });
@@ -278,6 +282,7 @@ export function buildRecruiterCoinEventDrafts(input: {
   webinarRows: AnyRow[];
   callRecords: PipelineCallRecord[];
   candidateEmailById: Map<string, string>;
+  candidatePhoneById?: Map<string, string>;
   liveRegistrants: LiveSessionRegistrantRow[];
   earnWindow?: CoinEarnWindow;
   bookedPipelineIds?: Set<string>;
@@ -287,6 +292,7 @@ export function buildRecruiterCoinEventDrafts(input: {
 }): RecruiterCoinEventDraft[] {
   const window = input.earnWindow ?? coinEarnWindow();
   const liveSessionByEmail = buildLiveSessionRowsByEmail(input.liveRegistrants);
+  const liveSessionByPhone = buildLiveSessionRowsByPhone(input.liveRegistrants);
 
   const merged = [
     ...webinarShowCoinEvents(
@@ -300,7 +306,9 @@ export function buildRecruiterCoinEventDrafts(input: {
       input.userId,
       input.callRecords,
       input.candidateEmailById,
+      input.candidatePhoneById ?? new Map(),
       liveSessionByEmail,
+      liveSessionByPhone,
       window,
     ),
     ...candidateHireCoinEvents(

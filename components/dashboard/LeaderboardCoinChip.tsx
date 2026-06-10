@@ -1,6 +1,6 @@
 import React from 'react';
 import { Coins } from 'lucide-react';
-import { COINS_PER_SHOW } from '../../services/recruiterCoins';
+import { COINS_PER_LIVE_SESSION_SHOW, COINS_PER_SHOW } from '../../services/recruiterCoins';
 
 export function LeaderboardCoinChip({
   balance,
@@ -22,7 +22,7 @@ export function LeaderboardCoinChip({
     return (
       <span
         className="inline-flex items-center gap-1 rounded-lg border border-amber-200/80 bg-gradient-to-r from-amber-50 to-yellow-50 px-2 py-1 text-[11px] font-bold tabular-nums text-amber-950"
-        title={`${COINS_PER_SHOW} Paz Coins per show`}
+        title={`${COINS_PER_SHOW} Paz Coins per webinar show · ${COINS_PER_LIVE_SESSION_SHOW} per live session show`}
       >
         <Coins size={12} className="text-amber-800" strokeWidth={2.25} aria-hidden />
         {balance.toLocaleString()}
@@ -33,7 +33,7 @@ export function LeaderboardCoinChip({
   return (
     <span
       className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200/80 bg-gradient-to-r from-amber-50 via-yellow-50 to-amber-100/90 px-2.5 py-1.5 text-xs font-bold tabular-nums text-amber-950 shadow-[0_2px_10px_-4px_rgba(180,120,0,0.35)]"
-      title={`${COINS_PER_SHOW} Paz Coins per webinar or live session show`}
+      title={`${COINS_PER_SHOW} Paz Coins per webinar show · ${COINS_PER_LIVE_SESSION_SHOW} per live session show`}
     >
       <Coins size={14} className="text-amber-800" strokeWidth={2.25} aria-hidden />
       <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-amber-800/85">Paz Coins</span>

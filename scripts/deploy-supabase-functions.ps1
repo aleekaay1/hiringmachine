@@ -41,6 +41,7 @@ $functions = @(
   "threecx-call-control",
   "threecx-call-webhook",
   "threecx-call-admin",
+  "sync-live-session-outcomes",
   "pipeline-convert-resume",
   "pipeline-hr-leads"
 )

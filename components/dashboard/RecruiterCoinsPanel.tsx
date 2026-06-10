@@ -1,7 +1,7 @@
 import React from 'react';
 import { Coins } from 'lucide-react';
 import type { RecruiterCoinWallet } from '../../services/recruiterCoinService';
-import { COINS_PER_HIRE, COINS_PER_SHOW } from '../../services/recruiterCoins';
+import { COINS_PER_HIRE, COINS_PER_LIVE_SESSION_SHOW, COINS_PER_SHOW } from '../../services/recruiterCoins';
 
 const RecruiterCoinsPanel: React.FC<{ wallet: RecruiterCoinWallet | null; loading?: boolean }> = ({
   wallet,
@@ -30,7 +30,8 @@ const RecruiterCoinsPanel: React.FC<{ wallet: RecruiterCoinWallet | null; loadin
             {wallet.balance.toLocaleString()}
           </p>
           <p className="mt-1 max-w-md text-xs text-amber-900/80">
-            You earn <strong>{COINS_PER_SHOW} coins</strong> when your webinar or live session bookings show up, and{' '}
+            You earn <strong>{COINS_PER_SHOW} coins</strong> per webinar show,{' '}
+            <strong>{COINS_PER_LIVE_SESSION_SHOW} coins</strong> per live session show, and{' '}
             <strong>{COINS_PER_HIRE} coins</strong> when a candidate you booked is marked hired.
           </p>
         </div>

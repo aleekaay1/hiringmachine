@@ -554,6 +554,36 @@ export function readCallRecordMeta(record: Pick<PipelineCallRecord, 'threecx_met
   };
 }
 
+export type LiveSessionCallOutcome = 'pending' | 'scheduled' | 'attended' | 'no_show';
+
+export function readCallRecordLiveSessionOutcome(
+  record: Pick<PipelineCallRecord, 'booked_subtype' | 'threecx_metadata'>,
+): {
+  isLiveSessionBooked: boolean;
+  status: LiveSessionCallOutcome | null;
+  sessionDate: string | null;
+  matchMethod: string | null;
+} {
+  const meta = readCallRecordMeta(record);
+  const subtype = String(record.booked_subtype || meta.bookedSubtype || '').trim().toLowerCase();
+  if (subtype !== 'live session') {
+    return { isLiveSessionBooked: false, status: null, sessionDate: null, matchMethod: null };
+  }
+  const rawMeta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
+    ? record.threecx_metadata as Record<string, unknown>
+    : {};
+  const statusRaw = String(rawMeta.live_session_outcome || '').trim().toLowerCase();
+  const status = (['pending', 'scheduled', 'attended', 'no_show'].includes(statusRaw)
+    ? statusRaw
+    : null) as LiveSessionCallOutcome | null;
+  return {
+    isLiveSessionBooked: true,
+    status,
+    sessionDate: typeof rawMeta.live_session_date === 'string' ? rawMeta.live_session_date : null,
+    matchMethod: typeof rawMeta.live_session_match_method === 'string' ? rawMeta.live_session_match_method : null,
+  };
+}
+
 export function readCallRecordRecording(
   record: Pick<PipelineCallRecord, 'recording_url' | 'duration_seconds' | 'threecx_metadata'>,
 ): {

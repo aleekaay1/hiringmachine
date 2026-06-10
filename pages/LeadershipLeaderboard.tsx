@@ -35,9 +35,12 @@ import { getCurrentUserProfile, listAllUserProfiles, type AppRole } from '../ser
 import { loadScopedWebinarRowsForViewer } from '../services/pipelineBookedOutcomes';
 import {
   buildLiveSessionRowsByEmail,
+  buildLiveSessionRowsByPhone,
   loadCandidateEmailsById,
+  loadCandidatePhonesById,
   loadLiveSessionRegistrantsForMatching,
 } from '../services/liveSessionBookedOutcomes';
+import { refreshLiveSessionsAndMatchOutcomes } from '../services/liveSessionOutcomeService';
 import { loadLeaderboardSnapshot, saveLeaderboardSnapshot } from '../services/pipelineLeaderboardCache';
 import {
   buildCompositeLeaderboard,
@@ -386,18 +389,24 @@ const LeadershipLeaderboard: React.FC = () => {
         ),
       ];
 
+      setRefreshProgress({ pct: 30, label: 'Syncing Calendly & Zoom live sessions…' });
+      await refreshLiveSessionsAndMatchOutcomes({ syncCoins: true }).catch(() => null);
+
       setRefreshProgress({ pct: 38, label: 'Loading webinar & live session data…' });
-      const [scopedWebinarRows, profiles, liveRegistrants, candidateEmailById] = await Promise.all([
-        loadScopedWebinarRowsForViewer({
-          role: 'admin',
-          viewerEmail: null,
-          viewerFullName: null,
-        }),
-        listAllUserProfiles().catch(() => []),
-        loadLiveSessionRegistrantsForMatching().catch(() => []),
-        loadCandidateEmailsById(candidateIds).catch(() => new Map<string, string>()),
-      ]);
+      const [scopedWebinarRows, profiles, liveRegistrants, candidateEmailById, candidatePhoneById] =
+        await Promise.all([
+          loadScopedWebinarRowsForViewer({
+            role: 'admin',
+            viewerEmail: null,
+            viewerFullName: null,
+          }),
+          listAllUserProfiles().catch(() => []),
+          loadLiveSessionRegistrantsForMatching().catch(() => []),
+          loadCandidateEmailsById(candidateIds).catch(() => new Map<string, string>()),
+          loadCandidatePhonesById(candidateIds).catch(() => new Map<string, string>()),
+        ]);
       const liveSessionByEmail = buildLiveSessionRowsByEmail(liveRegistrants);
+      const liveSessionByPhone = buildLiveSessionRowsByPhone(liveRegistrants);
 
       const recruiterDirectory = new Map<string, { fullName: string | null; email: string | null }>(
         profiles.map((item) => [item.user_id, { fullName: item.full_name, email: item.email ?? null }]),
@@ -415,7 +424,9 @@ const LeadershipLeaderboard: React.FC = () => {
         recruiterDirectory,
         recruiterSeeds,
         candidateEmailById,
+        candidatePhoneById,
         liveSessionByEmail,
+        liveSessionByPhone,
         excludedUserIds,
       });
       const previousComputed = buildCompositeLeaderboard({
@@ -430,7 +441,9 @@ const LeadershipLeaderboard: React.FC = () => {
         recruiterDirectory,
         recruiterSeeds,
         candidateEmailById,
+        candidatePhoneById,
         liveSessionByEmail,
+        liveSessionByPhone,
         excludedUserIds,
       });
 

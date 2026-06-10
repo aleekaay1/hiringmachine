@@ -6,8 +6,9 @@ import {
 } from './accessControl';
 import {
   buildLiveSessionRowsByEmail,
+  buildLiveSessionRowsByPhone,
   liveSessionAttendedFromRegistrant,
-  pickRegistrantForDisposition,
+  pickRegistrantForCallDisposition,
   type LiveSessionRegistrantRow,
 } from './liveSessionBookedOutcomes';
 import { readCallRecordMeta, type PipelineCallRecord } from './pipelineService';
@@ -459,7 +460,9 @@ function aggregateCallRecords(
   directory: RecruiterDirectory,
   seeds: LeaderboardRecruiterSeed[],
   candidateEmailById: Map<string, string>,
+  candidatePhoneById: Map<string, string>,
   liveSessionByEmail: Map<string, LiveSessionRegistrantRow[]>,
+  liveSessionByPhone: Map<string, LiveSessionRegistrantRow[]>,
 ): Map<string, Aggregate> {
   const map = new Map<string, Aggregate>();
 
@@ -488,17 +491,17 @@ function aggregateCallRecords(
     const bookedSubtype = String(record.booked_subtype || meta.bookedSubtype || '').trim().toLowerCase();
     if (bookedSubtype === 'live session') {
       agg.liveSessionBooked += 1;
-      const email = candidateEmailById.get(record.candidate_id);
-      if (email) {
-        const liveRows = liveSessionByEmail.get(email) || [];
-        const disposedMs = Date.parse(record.disposed_at || record.created_at);
-        const match = pickRegistrantForDisposition(
-          liveRows,
-          Number.isFinite(disposedMs) ? disposedMs : Date.now(),
-        );
-        if (match && liveSessionAttendedFromRegistrant(match)) {
-          agg.liveSessionShowed += 1;
-        }
+      const disposedMs = Date.parse(record.disposed_at || record.created_at);
+      const { registrant: match } = pickRegistrantForCallDisposition({
+        email: candidateEmailById.get(record.candidate_id),
+        candidatePhone: candidatePhoneById.get(record.candidate_id),
+        dialedNumber: record.dialed_number,
+        disposedAtMs: Number.isFinite(disposedMs) ? disposedMs : Date.now(),
+        byEmail: liveSessionByEmail,
+        byPhone: liveSessionByPhone,
+      });
+      if (match && liveSessionAttendedFromRegistrant(match)) {
+        agg.liveSessionShowed += 1;
       }
       agg.booked = agg.webinarBooked + agg.liveSessionBooked;
     }
@@ -679,7 +682,9 @@ export function buildCompositeLeaderboard(input: {
   recruiterDirectory: RecruiterDirectory;
   recruiterSeeds?: LeaderboardRecruiterSeed[];
   candidateEmailById?: Map<string, string>;
+  candidatePhoneById?: Map<string, string>;
   liveSessionByEmail?: Map<string, LiveSessionRegistrantRow[]>;
+  liveSessionByPhone?: Map<string, LiveSessionRegistrantRow[]>;
   /** When set, only these user ids are included (recruiter self-view). */
   restrictToUserIds?: string[] | null;
   excludedUserIds?: Set<string>;
@@ -690,15 +695,17 @@ export function buildCompositeLeaderboard(input: {
   const previousWebinar = filterWebinarRowsInWindow(input.webinarRows, input.previousWindow);
 
   const emailById = input.candidateEmailById ?? new Map<string, string>();
+  const phoneById = input.candidatePhoneById ?? new Map<string, string>();
   const liveByEmail = input.liveSessionByEmail ?? new Map<string, LiveSessionRegistrantRow[]>();
+  const liveByPhone = input.liveSessionByPhone ?? new Map<string, LiveSessionRegistrantRow[]>();
 
   const currentMerged = mergeAggregates(
     aggregateWebinarRows(currentWebinar, seeds, input.recruiterDirectory),
-    aggregateCallRecords(input.currentRecords, input.recruiterDirectory, seeds, emailById, liveByEmail),
+    aggregateCallRecords(input.currentRecords, input.recruiterDirectory, seeds, emailById, phoneById, liveByEmail, liveByPhone),
   );
   const previousMerged = mergeAggregates(
     aggregateWebinarRows(previousWebinar, seeds, input.recruiterDirectory),
-    aggregateCallRecords(input.previousRecords, input.recruiterDirectory, seeds, emailById, liveByEmail),
+    aggregateCallRecords(input.previousRecords, input.recruiterDirectory, seeds, emailById, phoneById, liveByEmail, liveByPhone),
   );
 
   let currentRows = toRows(filterAggregates(currentMerged, excludedUserIds));

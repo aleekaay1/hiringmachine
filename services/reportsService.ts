@@ -20,10 +20,12 @@ import {
 import { webinarShowedFromRow } from './recruiterCoins';
 import {
   buildLiveSessionRowsByEmail,
+  buildLiveSessionRowsByPhone,
   liveSessionAttendedFromRegistrant,
   loadCandidateEmailsById,
+  loadCandidatePhonesById,
   loadLiveSessionRegistrantsForMatching,
-  pickRegistrantForDisposition,
+  pickRegistrantForCallDisposition,
 } from './liveSessionBookedOutcomes';
 import {
   listPipelineCallRecords,
@@ -319,7 +321,9 @@ function summarizeCalls(calls: PipelineCallRecord[]): Pick<RecruiterReportSummar
 function buildLiveSessionsForRecruiter(
   calls: PipelineCallRecord[],
   candidateEmailById: Map<string, string>,
+  candidatePhoneById: Map<string, string>,
   liveByEmail: ReturnType<typeof buildLiveSessionRowsByEmail>,
+  liveByPhone: ReturnType<typeof buildLiveSessionRowsByPhone>,
   range: ReportDateRange,
 ): { rows: ReportLiveSessionRow[]; booked: number; showed: number } {
   const rows: ReportLiveSessionRow[] = [];
@@ -330,17 +334,21 @@ function buildLiveSessionsForRecruiter(
     if (String(record.disposition || '').toLowerCase() !== 'booked') continue;
     if (readBookedSubtype(record) !== 'live session') continue;
     booked += 1;
-    const email = candidateEmailById.get(record.candidate_id);
-    if (!email) continue;
-    const liveRows = liveByEmail.get(email) || [];
     const disposedMs = Date.parse(record.disposed_at || record.created_at);
-    const match = pickRegistrantForDisposition(liveRows, Number.isFinite(disposedMs) ? disposedMs : Date.now());
+    const { registrant: match } = pickRegistrantForCallDisposition({
+      email: candidateEmailById.get(record.candidate_id),
+      candidatePhone: candidatePhoneById.get(record.candidate_id),
+      dialedNumber: record.dialed_number,
+      disposedAtMs: Number.isFinite(disposedMs) ? disposedMs : Date.now(),
+      byEmail: liveByEmail,
+      byPhone: liveByPhone,
+    });
     const attended = match ? liveSessionAttendedFromRegistrant(match) : false;
     if (attended) showed += 1;
     if (!isoInRange(record.disposed_at || record.created_at, range.fromIso, range.toIso)) continue;
     rows.push({
       callRecordId: record.id,
-      candidateEmail: email,
+      candidateEmail: candidateEmailById.get(record.candidate_id) || match?.email || '',
       sessionDate: match?.session_date || '—',
       attended,
       disposedAt: record.disposed_at || record.created_at,
@@ -459,9 +467,20 @@ export async function loadRecruiterReport(
   }));
 
   const candidateIds = [...new Set(callRecords.map((r) => r.candidate_id).filter(Boolean))];
-  const candidateEmailById = await loadCandidateEmailsById(candidateIds);
+  const [candidateEmailById, candidatePhoneById] = await Promise.all([
+    loadCandidateEmailsById(candidateIds),
+    loadCandidatePhonesById(candidateIds),
+  ]);
   const liveByEmail = buildLiveSessionRowsByEmail(liveRegs);
-  const live = buildLiveSessionsForRecruiter(callRecords, candidateEmailById, liveByEmail, range);
+  const liveByPhone = buildLiveSessionRowsByPhone(liveRegs);
+  const live = buildLiveSessionsForRecruiter(
+    callRecords,
+    candidateEmailById,
+    candidatePhoneById,
+    liveByEmail,
+    liveByPhone,
+    range,
+  );
 
   const [emailSentLogs, inbound] = await Promise.all([
     listPipelineEmailSendLogsByCandidates(candidateIds, {

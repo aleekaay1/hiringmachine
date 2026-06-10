@@ -12,11 +12,13 @@ import {
 import {
   listPipelineCallRecords,
   listPipelineCandidatesByIds,
+  readCallRecordLiveSessionOutcome,
   readCallRecordMeta,
   readCallRecordRecording,
   type PipelineCallRecord,
   type PipelineCandidate,
 } from '../services/pipelineService';
+import { refreshLiveSessionsAndMatchOutcomes } from '../services/liveSessionOutcomeService';
 import { PIPELINE_CALL_DISPOSITIONS } from '../services/pipelineCallDispositions';
 import {
   fetchThreeCxConnectionStatus,
@@ -49,6 +51,23 @@ function resolveRecruiterLabel(
   if (profile?.email?.trim()) return profile.email.trim();
   if (row.recruiter_user_id) return row.recruiter_user_id.slice(0, 8);
   return '—';
+}
+
+function liveSessionOutcomeLabel(status: string | null): string {
+  if (!status) return '—';
+  if (status === 'attended') return 'Showed';
+  if (status === 'scheduled') return 'Scheduled';
+  if (status === 'no_show') return 'No show';
+  if (status === 'pending') return 'Pending match';
+  return status;
+}
+
+function liveSessionOutcomeTone(status: string | null): string {
+  if (status === 'attended') return 'text-emerald-800 font-medium';
+  if (status === 'scheduled') return 'text-[#005EB8] font-medium';
+  if (status === 'no_show') return 'text-red-700';
+  if (status === 'pending') return 'text-amber-800';
+  return 'text-[#8a9ab0]';
 }
 
 function dispositionTone(disposition: string): string {
@@ -185,16 +204,23 @@ const CallLog: React.FC = () => {
     setAdminMessage(null);
     setSyncingRecordings(true);
     try {
-      const result = await syncThreeCxRecordings();
-      if (result.message) setAdminMessage(result.message);
-      if (result.warning) {
-        if (result.updated > 0) setAdminError(result.warning);
-        else setAdminError(result.warning);
+      const [recordingResult, liveResult] = await Promise.all([
+        syncThreeCxRecordings(),
+        refreshLiveSessionsAndMatchOutcomes({ syncCoins: true }),
+      ]);
+      const messages: string[] = [];
+      if (recordingResult.message) messages.push(recordingResult.message);
+      if (liveResult.message) messages.push(liveResult.message);
+      if (messages.length) setAdminMessage(messages.join(' · '));
+      if (recordingResult.warning) {
+        setAdminError(recordingResult.warning);
+      } else if (liveResult.error) {
+        setAdminError(liveResult.error);
       }
       await load();
       await loadThreeCxStatus();
     } catch (err) {
-      setAdminError(err instanceof Error ? err.message : 'Recording sync failed.');
+      setAdminError(err instanceof Error ? err.message : 'Sync failed.');
     } finally {
       setSyncingRecordings(false);
     }
@@ -285,6 +311,8 @@ const CallLog: React.FC = () => {
       'Disposition',
       'Callback at',
       'Booked subtype',
+      'Live session',
+      'Live session date',
       'Comment',
       'Duration (sec)',
       'Recording URL',
@@ -294,6 +322,7 @@ const CallLog: React.FC = () => {
       ...filtered.map((row) => {
         const candidate = candidateById.get(row.candidate_id);
         const meta = readCallRecordMeta(row);
+        const liveOutcome = readCallRecordLiveSessionOutcome(row);
         const recording = readCallRecordRecording(row);
         return [
           row.disposed_at,
@@ -306,6 +335,8 @@ const CallLog: React.FC = () => {
           row.disposition,
           meta.callbackAt || '',
           meta.bookedSubtype || '',
+          liveOutcome.isLiveSessionBooked ? liveSessionOutcomeLabel(liveOutcome.status) : '',
+          liveOutcome.sessionDate || '',
           row.comment || '',
           recording.durationSeconds != null ? String(recording.durationSeconds) : '',
           recording.recordingUrl || '',
@@ -356,15 +387,15 @@ const CallLog: React.FC = () => {
           <div className="min-w-0">
             <h1 className="text-lg font-bold text-[#0B1B34] truncate">Call log</h1>
             <p className="text-sm text-[#5c6b82]">
-              Pipeline dispositions from all recruiters. Click Refresh to pull recordings from 3CX webhooks and match
-              them to disposition rows (dispositions are saved after hangup).
+              Pipeline dispositions from all recruiters. Refresh pulls 3CX recordings and matches Booked (Live Session)
+              rows to Calendly/Zoom attendance by email or phone.
             </p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="secondary" onClick={() => void handleRefresh()} disabled={loading || syncingRecordings}>
             <RefreshCw size={16} className={loading || syncingRecordings ? 'animate-spin inline mr-1.5' : 'inline mr-1.5'} />
-            {syncingRecordings ? 'Syncing recordings…' : 'Refresh & sync recordings'}
+            {syncingRecordings ? 'Syncing…' : 'Refresh & sync'}
           </Button>
           <Button type="button" variant="secondary" onClick={downloadCsv} disabled={filtered.length === 0}>
             <Download size={16} className="inline mr-1.5" />
@@ -577,6 +608,7 @@ const CallLog: React.FC = () => {
                 <th className="px-3 py-2.5 border-r border-[#d6deea] min-w-[200px]">Email</th>
                 <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[130px]">Number</th>
                 <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[150px]">Disposition</th>
+                <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[120px]">Live session</th>
                 <th className="px-3 py-2.5 border-r border-[#d6deea] min-w-[200px]">Details</th>
                 <th className="px-3 py-2.5 border-r border-[#d6deea] whitespace-nowrap min-w-[80px]">Duration</th>
                 <th className="px-3 py-2.5 whitespace-nowrap min-w-[220px]">Recording</th>
@@ -586,6 +618,7 @@ const CallLog: React.FC = () => {
               {filtered.map((row) => {
                 const candidate = candidateById.get(row.candidate_id);
                 const meta = readCallRecordMeta(row);
+                const liveOutcome = readCallRecordLiveSessionOutcome(row);
                 const recording = readCallRecordRecording(row);
                 const details: string[] = [];
                 if (row.comment?.trim()) details.push(row.comment.trim());
@@ -632,6 +665,18 @@ const CallLog: React.FC = () => {
                     </td>
                     <td className={`px-3 py-2 border-r border-[#eef2f7] whitespace-nowrap text-xs ${dispositionTone(row.disposition)}`}>
                       {row.disposition}
+                    </td>
+                    <td className={`px-3 py-2 border-r border-[#eef2f7] whitespace-nowrap text-xs ${liveSessionOutcomeTone(liveOutcome.status)}`}>
+                      {liveOutcome.isLiveSessionBooked ? (
+                        <div>
+                          <div>{liveSessionOutcomeLabel(liveOutcome.status)}</div>
+                          {liveOutcome.sessionDate && (
+                            <div className="text-[10px] text-[#6f7b8d] font-normal">{liveOutcome.sessionDate}</div>
+                          )}
+                        </div>
+                      ) : (
+                        '—'
+                      )}
                     </td>
                     <td className="px-3 py-2 border-r border-[#eef2f7] text-xs text-[#334155] max-w-[280px] whitespace-normal">
                       {details.length > 0 ? details.join(' · ') : '—'}
