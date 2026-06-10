@@ -14,7 +14,7 @@ import {
   type PipelineCandidate,
   type PipelineUploadProgress,
 } from '../services/pipelineService';
-import { canAccessHrLeadDistribution, getCurrentUserProfile } from '../services/accessControl';
+import { canAccessResumeUploads, getCurrentUserProfile } from '../services/accessControl';
 import { supabase } from '../services/supabaseClient';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { Link } from 'react-router-dom';
@@ -71,7 +71,7 @@ const PipelineUploadsWorkspace: React.FC = () => {
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(() => new Set());
   const [deleting, setDeleting] = React.useState(false);
   const [themeMode, setThemeMode] = React.useState<WorkspaceThemeMode>('dark');
-  const [hrDistributor, setHrDistributor] = React.useState(false);
+  const [allowed, setAllowed] = React.useState<boolean | null>(null);
   const [activeBatchKey, setActiveBatchKey] = React.useState<string | 'all'>('all');
   const [expandedBatchKeys, setExpandedBatchKeys] = React.useState<Set<string>>(() => new Set());
 
@@ -106,12 +106,13 @@ const PipelineUploadsWorkspace: React.FC = () => {
   }, []);
 
   React.useEffect(() => {
+    if (!allowed) return;
     void loadData();
-  }, [loadData]);
+  }, [allowed, loadData]);
 
   React.useEffect(() => {
     void getCurrentUserProfile().then((profile) => {
-      setHrDistributor(canAccessHrLeadDistribution(profile?.role ?? null, profile?.email));
+      setAllowed(canAccessResumeUploads(profile?.role ?? null, profile?.email));
     });
   }, []);
 
@@ -297,10 +298,22 @@ const PipelineUploadsWorkspace: React.FC = () => {
     [isDark],
   );
 
+  if (allowed === false) {
+    return (
+      <div className="mx-auto max-w-2xl p-8">
+        <h1 className="text-xl font-semibold text-slate-900">Resume uploads</h1>
+        <p className="mt-2 text-sm text-slate-600">Resume uploads are managed by HR. Use Call workspace for your assigned leads.</p>
+        <Link to="/pipeline/call" className="mt-4 inline-block text-sm font-semibold text-[#005EB8] hover:underline">
+          Open call workspace
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <PipelineAuthShell
       title="Resume Upload Workspace"
-      subtitle="Sign in to manage recruiter uploads"
+      subtitle="Sign in to manage HR resume uploads"
       redirectPath="/pipeline/uploads"
     >
       <div className={`mx-auto w-full max-w-[1320px] ${tone.page} ${tone.pageTheme}`}>
@@ -317,17 +330,13 @@ const PipelineUploadsWorkspace: React.FC = () => {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className={`text-[10px] uppercase tracking-[0.22em] ${tone.panelLabel}`}>Pipeline recruiter studio</p>
-              <h1 className={`text-lg font-semibold ${tone.panelTitle}`}>{hrDistributor ? 'Resume Upload Workspace' : 'My assigned leads'}</h1>
+              <h1 className={`text-lg font-semibold ${tone.panelTitle}`}>Resume Upload Workspace</h1>
               <p className={`text-xs ${tone.panelMuted}`}>
-                {hrDistributor
-                  ? 'HR bulk resume upload, or use Lead distribution for weekly CSV imports.'
-                  : 'Leads assigned to you by HR appear here. Add your own leads from the Call workspace.'}
+                HR bulk resume upload, or use Lead distribution for weekly CSV imports.
               </p>
-              {hrDistributor && (
-                <Link to="/hr/lead-distribution" className="mt-1 inline-block text-xs font-semibold text-[#005EB8] hover:underline">
-                  Open lead distribution →
-                </Link>
-              )}
+              <Link to="/hr/lead-distribution" className="mt-1 inline-block text-xs font-semibold text-[#005EB8] hover:underline">
+                Open lead distribution →
+              </Link>
             </div>
             <button
               type="button"
@@ -351,25 +360,18 @@ const PipelineUploadsWorkspace: React.FC = () => {
           className="mt-4 grid gap-4 xl:grid-cols-[380px_1fr]"
         >
           <section className={`rounded-2xl border p-4 space-y-3 ${tone.glassPanel}`}>
-            {hrDistributor ? (
-              <label className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs cursor-pointer ${tone.actionButton}`}>
-                <FileUp size={14} />
-                {uploading ? 'Uploading...' : 'Bulk upload resumes (HR)'}
-                <input
-                  type="file"
-                  className="hidden"
-                  multiple
-                  accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.rtf,.txt"
-                  onChange={(e) => void uploadFiles(e.target.files)}
-                  disabled={uploading}
-                />
-              </label>
-            ) : (
-              <div className={`rounded-xl border px-3 py-2 text-xs ${tone.subtle} ${tone.panelMuted}`}>
-                Weekly leads are distributed by HR. To add a LinkedIn or referral lead yourself, use{' '}
-                <Link to="/pipeline/call" className="font-semibold text-[#005EB8] hover:underline">Call workspace → Add your own lead</Link>.
-              </div>
-            )}
+            <label className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs cursor-pointer ${tone.actionButton}`}>
+              <FileUp size={14} />
+              {uploading ? 'Uploading...' : 'Bulk upload resumes'}
+              <input
+                type="file"
+                className="hidden"
+                multiple
+                accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx,.rtf,.txt"
+                onChange={(e) => void uploadFiles(e.target.files)}
+                disabled={uploading}
+              />
+            </label>
 
             <div className={`rounded-xl border p-3 space-y-2 ${tone.subtle}`}>
               <p className={`text-xs font-semibold ${tone.panelTitle}`}>Daily upload target</p>

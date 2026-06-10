@@ -175,11 +175,10 @@ const ADMIN_DATA_SECTIONS: AppSection[] = [
   'pipeline-settings',
 ];
 
-/** Recruiter-style pipeline: own uploads + dialer. Leadership included; most admins excluded. */
+/** Recruiter-style pipeline: dialer + email. Resume uploads are HR-only (see canAccessResumeUploads). */
 const PIPELINE_OPERATIONAL_SECTIONS: AppSection[] = [
   'pipeline',
   'pipeline-call',
-  'pipeline-uploads',
   'pipeline-email',
   'pipeline-webinar-verify',
   'pipeline-performance',
@@ -206,6 +205,13 @@ export function canAccessHrLeadDistribution(
 ): boolean {
   if (isHrLeadDistributorEmail(email)) return true;
   return role === 'hr';
+}
+
+export function canAccessResumeUploads(
+  role: AppRole | null,
+  email?: string | null,
+): boolean {
+  return canAccessHrLeadDistribution(role, email);
 }
 
 export function isOpsConsoleEmail(email: string | null | undefined): boolean {
@@ -242,6 +248,7 @@ export function canAccessSection(
 ): boolean {
   if (section === 'ops-console') return isOpsConsoleEmail(email);
   if (section === 'pipeline-hr-leads') return canAccessHrLeadDistribution(role, email);
+  if (section === 'pipeline-uploads') return canAccessResumeUploads(role, email);
   if (section === 'account') return Boolean(role);
   if (section === 'support') return Boolean(role);
   if (!role) return section === 'overview' || section === 'home';

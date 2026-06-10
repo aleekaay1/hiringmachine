@@ -41,12 +41,11 @@ const RecruiterDashboardView: React.FC<Props> = ({ profile, payload }) => {
           <StatTile label="Combined show rate" value={pct(metrics.showRatio)} />
           <StatTile label="Calls" value={metrics.calls} sub={`${metrics.bookedCalls} booked on calls`} />
         </div>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          <GoalRow label="Daily resume uploads" current={0} goal={metrics.uploadGoal} />
+        <div className="mt-3">
           <GoalRow label="Daily webinar bookings" current={metrics.webinarBooked} goal={metrics.webinarGoal} />
         </div>
         <p className="mt-2 text-[10px] text-[#6a839f]">
-          Upload progress updates in the uploads workspace. Booking goal compares to your week total above until daily tracking is added.
+          Booking goal compares to your week total above until daily tracking is added.
         </p>
       </div>
 
@@ -57,7 +56,6 @@ const RecruiterDashboardView: React.FC<Props> = ({ profile, payload }) => {
             <QuickLinkCard title="Call workspace" description="Dial candidates and log outcomes." to="/pipeline/call" accent="border-[#9bc8f6] bg-[#eef6ff] hover:bg-[#e7f4ff]" />
             <QuickLinkCard title="Performance" description="Review your activity over time." to="/pipeline/performance" />
             <QuickLinkCard title="Email" description="Send and track candidate email." to="/pipeline/email" />
-            <QuickLinkCard title="Resume uploads" description="Upload resumes for your queue." to="/pipeline/uploads" />
             <QuickLinkCard title="Webinar activity" description="See bookings and attendance." to="/webinar-geek" />
             <QuickLinkCard title="Leaderboard" description="See how you rank on the team board." to="/calls-analytics/leaderboard" />
             <QuickLinkCard title="Support" description="Submit an issue or track your ticket." to="/support" accent="border-[#c8ddf4] bg-[#f4f9ff] hover:bg-[#ebf5ff]" />

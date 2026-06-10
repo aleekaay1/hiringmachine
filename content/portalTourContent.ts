@@ -22,7 +22,7 @@ export const PORTAL_TOUR_STEPS: TourStep[] = [
     id: 'workstation',
     target: '[data-tour="nav-workstation"]',
     title: 'Workstation',
-    body: 'Phone workspace for 3CX dialing, email workspace for candidate threads, and resume uploads for pipeline files.',
+    body: 'Phone workspace for 3CX dialing and email workspace for candidate threads.',
   },
   {
     id: 'insights',

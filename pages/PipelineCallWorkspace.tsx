@@ -63,13 +63,48 @@ type CandidateBookedOutcomeMap = Map<string, BookedOutcomeBucket>;
 
 const AUTO_ADVANCE = true;
 
-function webinarVerifyHref(candidate: PipelineCandidate): string {
+const WEBINAR_VERIFY_PATH = '/pipeline/webinar-verify';
+
+function sanitizeWebinarQueryValue(value: string, maxLength = 200): string {
+  return String(value || '')
+    .replace(/[\u0000-\u001f\u007f]+/g, '')
+    .trim()
+    .slice(0, maxLength);
+}
+
+function webinarVerifyHref(
+  candidate: PipelineCandidate,
+  overrides?: { email?: string; fullName?: string },
+): string {
   const params = new URLSearchParams();
-  if (candidate.email?.trim()) params.set('email', candidate.email.trim());
-  if (candidate.full_name?.trim()) params.set('name', candidate.full_name.trim());
-  params.set('candidateId', candidate.id);
+  const email = sanitizeWebinarQueryValue(overrides?.email ?? candidate.email ?? '');
+  const fullName = sanitizeWebinarQueryValue(overrides?.fullName ?? candidate.full_name ?? '');
+  if (email) params.set('email', email);
+  if (fullName) {
+    params.set('name', fullName);
+    const parts = fullName.split(/\s+/).filter(Boolean);
+    if (parts[0]) params.set('first', parts[0]);
+    if (parts.length > 1) params.set('last', parts.slice(1).join(' '));
+  }
+  if (candidate.id) params.set('candidateId', candidate.id);
   const query = params.toString();
-  return `/pipeline/webinar-verify${query ? `?${query}` : ''}`;
+  return `${WEBINAR_VERIFY_PATH}${query ? `?${query}` : ''}`;
+}
+
+function openWebinarVerifyTab(
+  candidate: PipelineCandidate,
+  overrides?: { email?: string; fullName?: string },
+): boolean {
+  const href = webinarVerifyHref(candidate, overrides);
+  if (!href.startsWith(WEBINAR_VERIFY_PATH) || href.includes('://')) return false;
+  const opened = window.open(href, '_blank', 'noopener,noreferrer');
+  if (!opened) return false;
+  try {
+    opened.opener = null;
+  } catch {
+    // noopener feature policy may already detach opener
+  }
+  return true;
 }
 
 const TERMINAL_EXCLUDED_DISPOSITIONS = new Set(['not interested', 'do not call']);
@@ -86,6 +121,13 @@ function normalizeDispositionLabel(value: string | null | undefined): string {
 
 function dispositionIsRetry(label: string): boolean {
   return Object.prototype.hasOwnProperty.call(RETRY_PRIORITY_ORDER, label);
+}
+
+function toDatetimeLocalValue(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function latestRecordByCandidate(records: PipelineCallRecord[]): Map<string, PipelineCallRecord> {
@@ -121,6 +163,7 @@ const PipelineCallWorkspace: React.FC = () => {
   const [savingEmail, setSavingEmail] = React.useState(false);
   const [emailMsg, setEmailMsg] = React.useState<string | null>(null);
   const [showDispositionModal, setShowDispositionModal] = React.useState(false);
+  const [dispositionModalMode, setDispositionModalMode] = React.useState<'call' | 'edit'>('call');
   const [submitAttempted, setSubmitAttempted] = React.useState(false);
   const [candidates, setCandidates] = React.useState<PipelineCandidate[]>([]);
   const [resumesByCandidate, setResumesByCandidate] = React.useState<Map<string, PipelineResume[]>>(new Map());
@@ -685,6 +728,7 @@ const PipelineCallWorkspace: React.FC = () => {
     window.open(url, '_blank', 'noopener,noreferrer');
     setActionMsg(`Opened 3CX popup for ${candidate.full_name || 'candidate'}.`);
     setSubmitAttempted(false);
+    setDispositionModalMode('call');
     setShowDispositionModal(true);
     try {
       await logPipelineCallAction({
@@ -697,6 +741,32 @@ const PipelineCallWorkspace: React.FC = () => {
     } catch {
       // Call flow should continue even when log write fails.
     }
+  };
+
+  const openEditDispositionModal = (candidate: PipelineCandidate) => {
+    setSelectedCandidateId(candidate.id);
+    const latest = latestByCandidate.get(candidate.id);
+    setDisposition('');
+    setBookedSubtype('');
+    setCallbackAtInput('');
+    setComment('');
+    if (latest) {
+      const dispositionLabel = String(latest.disposition || '').trim();
+      if (PIPELINE_CALL_DISPOSITIONS.includes(dispositionLabel as PipelineCallDisposition)) {
+        setDisposition(dispositionLabel as PipelineCallDisposition);
+      }
+      setComment(latest.comment || '');
+      const meta = readCallRecordMeta(latest);
+      const subtype = meta.bookedSubtype || latest.booked_subtype || '';
+      if (PIPELINE_BOOKED_SUBTYPES.includes(subtype as PipelineBookedSubtype)) {
+        setBookedSubtype(subtype as PipelineBookedSubtype);
+      }
+      const callbackAt = meta.callbackAt || latest.callback_at;
+      if (callbackAt) setCallbackAtInput(toDatetimeLocalValue(callbackAt));
+    }
+    setSubmitAttempted(false);
+    setDispositionModalMode('edit');
+    setShowDispositionModal(true);
   };
 
   const saveCandidatePhoneOverride = async () => {
@@ -928,7 +998,7 @@ const PipelineCallWorkspace: React.FC = () => {
           data-tour="call-disposition-guide"
           className={`rounded-xl border px-3 py-2 text-xs ${isDark ? 'border-white/10 bg-white/5 text-slate-300' : 'border-[#cfe0f5] bg-[#f0f7ff] text-[#365274]'}`}
         >
-          After each call, the post-call disposition form opens automatically — choose an outcome and save so the lead moves to Done.
+          After each call, the disposition window opens — use Open webinar page to register them while on the call, then save disposition when you are done.
         </p>
 
         {error && <div className={`rounded-xl border px-3 py-2 text-sm ${isDark ? 'border-red-300/40 bg-red-500/12 text-red-200' : 'border-red-200 bg-red-50 text-red-700'}`}>{error}</div>}
@@ -1269,25 +1339,35 @@ const PipelineCallWorkspace: React.FC = () => {
                   const latest = latestByCandidate.get(candidate.id);
                   const isSelected = candidate.id === currentCandidate?.id;
                   return (
-                    <button
+                    <div
                       key={candidate.id}
-                      type="button"
-                      onClick={() => setSelectedCandidateId(candidate.id)}
-                      className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left transition ${
+                      className={`flex items-center gap-1.5 rounded-xl border px-2 py-1.5 transition ${
                         isSelected ? 'border-[#9dc6ef] bg-[#e8f3ff]' : tone.doneCard
                       }`}
                     >
-                      <div className="min-w-0 pr-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCandidateId(candidate.id)}
+                        className="min-w-0 flex-1 px-1 py-1 text-left"
+                      >
                         <p className={`truncate text-xs font-semibold ${tone.panelTitle}`}>
                           {candidate.full_name || 'Unknown Candidate'}
                         </p>
                         <p className={`truncate text-[10px] ${tone.panelMuted}`}>{latest?.disposition || 'Disposed'}</p>
-                      </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openEditDispositionModal(candidate)}
+                        className={`shrink-0 rounded-lg border px-2 py-1 text-[10px] font-semibold ${tone.actionButton}`}
+                        title="Edit disposition"
+                      >
+                        Edit
+                      </button>
                       <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
                         <CheckCircle2 size={11} />
                         Done
                       </span>
-                    </button>
+                    </div>
                   );
                 }}
               />
@@ -1322,6 +1402,10 @@ const PipelineCallWorkspace: React.FC = () => {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               className={`fixed inset-0 z-50 flex items-center justify-center p-4 ${tone.modalBackdrop}`}
+              role="presentation"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) event.preventDefault();
+              }}
             >
             <motion.div
               initial={{ opacity: 0, y: 14, scale: 0.98 }}
@@ -1330,11 +1414,19 @@ const PipelineCallWorkspace: React.FC = () => {
               transition={{ duration: 0.2 }}
               className={`w-full max-w-xl space-y-3 rounded-2xl border p-4 shadow-2xl ${tone.glassPanel}`}
               data-tour="call-disposition-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="call-disposition-modal-title"
+              onMouseDown={(event) => event.stopPropagation()}
             >
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <p className={`text-xs ${tone.panelLabel}`}>Post-call disposition</p>
-                  <h3 className={`text-base font-semibold ${tone.panelTitle}`}>{currentCandidate.full_name || 'Candidate'}</h3>
+                  <p className={`text-xs ${tone.panelLabel}`}>
+                    {dispositionModalMode === 'edit' ? 'Update disposition' : 'Post-call disposition'}
+                  </p>
+                  <h3 id="call-disposition-modal-title" className={`text-base font-semibold ${tone.panelTitle}`}>
+                    {currentCandidate.full_name || 'Candidate'}
+                  </h3>
                   <p className={`text-[11px] ${tone.panelLabel}`}>Dialed number: {dialNumberPreview || 'No dialable number'}</p>
                 </div>
                 <button
@@ -1409,9 +1501,36 @@ const PipelineCallWorkspace: React.FC = () => {
                 />
               </label>
 
-              <Button className="w-full" onClick={() => void saveDisposition()} disabled={savingDisposition || !currentCandidate}>
-                {savingDisposition ? 'Saving...' : 'Save disposition'}
-              </Button>
+              <div className="flex items-stretch gap-2 pt-1" data-tour="call-disposition-webinar">
+                <Button
+                  className="min-w-0 flex-1"
+                  onClick={() => void saveDisposition()}
+                  disabled={savingDisposition || !currentCandidate}
+                >
+                  {savingDisposition ? 'Saving...' : dispositionModalMode === 'edit' ? 'Update disposition' : 'Save disposition'}
+                </Button>
+                <button
+                  type="button"
+                  title="Open webinar verify in a new tab (this window stays open)"
+                  onClick={() => {
+                    const opened = openWebinarVerifyTab(currentCandidate, {
+                      email: emailInput,
+                      fullName: currentCandidate.full_name || '',
+                    });
+                    if (!opened) {
+                      setError('Pop-up blocked. Allow pop-ups for this site to open webinar verify.');
+                    }
+                  }}
+                  className="inline-flex w-[9.5rem] shrink-0 items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
+                >
+                  <Video size={14} />
+                  Webinar
+                  <ExternalLink size={11} className="opacity-80" />
+                </button>
+              </div>
+              <p className={`text-center text-[10px] ${tone.panelMuted}`}>
+                Webinar opens in a new tab — keep this window open to save disposition when done.
+              </p>
             </motion.div>
           </motion.div>
           )}

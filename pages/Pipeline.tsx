@@ -1390,10 +1390,6 @@ const Pipeline: React.FC = () => {
               <ExternalLink size={13} />
               Email workspace
             </Link>
-            <Link to="/pipeline/uploads" className="inline-flex items-center gap-1 rounded-xl border border-[#b8d2ef] px-3 py-2 text-xs text-[#0B1B34] hover:bg-[#f2f8ff]">
-              <FileUp size={13} />
-              Uploads
-            </Link>
           </div>
         </div>
 

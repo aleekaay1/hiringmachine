@@ -63,7 +63,6 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { name: 'Phone workspace', route: '/pipeline/call', icon: PhoneCall, section: 'pipeline-call' },
       { name: 'Email workspace', route: '/pipeline/email', icon: Mail, section: 'pipeline-email' },
-      { name: 'Resume uploads', route: '/pipeline/uploads', icon: FileUp, section: 'pipeline-uploads' },
     ],
   },
   {
@@ -85,6 +84,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { name: 'Lead distribution', route: '/hr/lead-distribution', icon: UserPlus, section: 'pipeline-hr-leads' },
       { name: 'All leads', route: '/hr/leads', icon: FileSpreadsheet, section: 'pipeline-hr-leads' },
+      { name: 'Resume uploads', route: '/pipeline/uploads', icon: FileUp, section: 'pipeline-uploads' },
       { name: 'HR dashboard', route: '/hr-dashboard', icon: BarChart3, section: 'hr-dashboard' },
     ],
   },

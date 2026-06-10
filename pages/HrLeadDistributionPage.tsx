@@ -56,6 +56,9 @@ const HrLeadDistributionPage: React.FC = () => {
   const [recruiterOverview, setRecruiterOverview] = React.useState<HrRecruiterOverview[]>([]);
   const [recruiters, setRecruiters] = React.useState<UserProfile[]>([]);
   const [selectedBatchId, setSelectedBatchId] = React.useState('');
+  const [performanceBatchId, setPerformanceBatchId] = React.useState('');
+  const [performanceLoading, setPerformanceLoading] = React.useState(false);
+  const [performanceError, setPerformanceError] = React.useState<string | null>(null);
   const [selectedPoolIds, setSelectedPoolIds] = React.useState<Set<string>>(() => new Set());
   const [assignToUserId, setAssignToUserId] = React.useState('');
   const [assignCount, setAssignCount] = React.useState<number | ''>(10);
@@ -84,10 +87,9 @@ const HrLeadDistributionPage: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [summaryRes, poolRes, overviewRes, historyRes, profiles] = await Promise.all([
+      const [summaryRes, poolRes, historyRes, profiles] = await Promise.all([
         fetchHrLeadSummary(),
         fetchHrLeadPool(selectedBatchId || undefined),
-        fetchHrRecruiterOverview(selectedBatchId || undefined),
         fetchHrLeadBatches(30),
         listAllUserProfiles(),
       ]);
@@ -98,10 +100,8 @@ const HrLeadDistributionPage: React.FC = () => {
         recent_batches: summaryRes.data.recent_batches || [],
       });
       if (!poolRes.ok) throw new Error(poolRes.error);
-      if (!overviewRes.ok) throw new Error(overviewRes.error);
       if (!historyRes.ok) throw new Error(historyRes.error);
       setPool(poolRes.pool);
-      setRecruiterOverview(overviewRes.recruiters);
       setUploadHistory(historyRes.batches);
       setRecruiters(
         profiles.filter((p) => p.role === 'recruiter' || p.role === 'leadership' || p.role === 'admin'),
@@ -113,10 +113,34 @@ const HrLeadDistributionPage: React.FC = () => {
     }
   }, [selectedBatchId]);
 
+  const loadRecruiterPerformance = React.useCallback(async () => {
+    setPerformanceLoading(true);
+    setPerformanceError(null);
+    try {
+      const overviewRes = await fetchHrRecruiterOverview(performanceBatchId || undefined);
+      if (!overviewRes.ok) throw new Error(overviewRes.error);
+      setRecruiterOverview(overviewRes.recruiters);
+    } catch (e) {
+      setPerformanceError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPerformanceLoading(false);
+    }
+  }, [performanceBatchId]);
+
+  const refreshAll = React.useCallback(async () => {
+    await loadData();
+    await loadRecruiterPerformance();
+  }, [loadData, loadRecruiterPerformance]);
+
   React.useEffect(() => {
     if (!allowed) return;
     void loadData();
   }, [allowed, loadData]);
+
+  React.useEffect(() => {
+    if (!allowed) return;
+    void loadRecruiterPerformance();
+  }, [allowed, loadRecruiterPerformance]);
 
   const poolBatchGroups = React.useMemo((): LeadBatchGroup<HrPoolLead>[] => {
     const rows = selectedBatchId ? pool.filter((lead) => lead.lead_batch_id === selectedBatchId) : pool;
@@ -142,11 +166,11 @@ const HrLeadDistributionPage: React.FC = () => {
 
   const loadRecruiterLeads = React.useCallback(
     async (userId: string) => {
-      const result = await fetchHrRecruiterLeads(userId, selectedBatchId || undefined);
+      const result = await fetchHrRecruiterLeads(userId, performanceBatchId || undefined);
       if (!result.ok) throw new Error(result.error);
       return result.leads;
     },
-    [selectedBatchId],
+    [performanceBatchId],
   );
 
   const onCsvFile = async (file: File) => {
@@ -227,6 +251,7 @@ const HrLeadDistributionPage: React.FC = () => {
       setImportSourceFilename('');
       setImportLabel('');
       await loadData();
+      await loadRecruiterPerformance();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -260,6 +285,7 @@ const HrLeadDistributionPage: React.FC = () => {
       );
       setSelectedPoolIds(new Set());
       await loadData();
+      await loadRecruiterPerformance();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -325,6 +351,7 @@ const HrLeadDistributionPage: React.FC = () => {
         `Retracted ${result.data.retracted_count} lead(s) from recruiters.${errCount ? ` ${errCount} could not be retracted.` : ''}`,
       );
       await loadData();
+      await loadRecruiterPerformance();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -418,8 +445,13 @@ const HrLeadDistributionPage: React.FC = () => {
             </p>
             <h1 className="text-2xl font-bold text-[#0B1B34]">Lead distribution</h1>
           </div>
-          <Button variant="outline" className="!min-h-0 h-9 gap-1.5 text-xs" onClick={() => void loadData()} disabled={loading}>
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          <Button
+            variant="outline"
+            className="!min-h-0 h-9 gap-1.5 text-xs"
+            onClick={() => void refreshAll()}
+            disabled={loading || performanceLoading}
+          >
+            <RefreshCw size={14} className={loading || performanceLoading ? 'animate-spin' : ''} />
             Refresh
           </Button>
         </div>
@@ -817,25 +849,42 @@ const HrLeadDistributionPage: React.FC = () => {
                 <Users size={15} />
                 Recruiter performance ({recruiterOverview.length})
               </p>
-              <select
-                value={selectedBatchId}
-                onChange={(e) => setSelectedBatchId(e.target.value)}
-                className="rounded-lg border border-[#c8ddf4] px-2 py-1 text-xs"
-              >
-                <option value="">All batches</option>
-                {(summary?.recent_batches || []).map((batch) => (
-                  <option key={batch.id} value={batch.id}>
-                    {batch.label}
-                  </option>
-                ))}
-              </select>
+              <div className="flex items-center gap-1.5">
+                <select
+                  value={performanceBatchId}
+                  onChange={(e) => setPerformanceBatchId(e.target.value)}
+                  className="rounded-lg border border-[#c8ddf4] px-2 py-1 text-xs"
+                >
+                  <option value="">All batches</option>
+                  {(uploadHistory.length ? uploadHistory : summary?.recent_batches || []).map((batch) => (
+                    <option key={batch.id} value={batch.id}>
+                      {batch.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void loadRecruiterPerformance()}
+                  disabled={performanceLoading}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[#c8ddf4] text-[#4b6d95] hover:bg-[#f4f8ff] disabled:opacity-50"
+                  title="Refresh recruiter performance"
+                  aria-label="Refresh recruiter performance"
+                >
+                  <RefreshCw size={14} className={performanceLoading ? 'animate-spin' : ''} />
+                </button>
+              </div>
             </div>
-            <div className="max-h-[min(72vh,720px)] overflow-auto">
+            {performanceError && (
+              <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {performanceError}
+              </div>
+            )}
+            <div className={`max-h-[min(72vh,720px)] overflow-auto ${performanceLoading && recruiterOverview.length ? 'opacity-60' : ''}`}>
               <HrRecruiterTrackingPanel
                 recruiters={recruiterOverview}
                 batches={uploadHistory.length ? uploadHistory : summary?.recent_batches || []}
-                selectedBatchId={selectedBatchId}
-                loading={loading}
+                selectedBatchId={performanceBatchId}
+                loading={performanceLoading}
                 onLoadRecruiterLeads={loadRecruiterLeads}
                 onRetractBatch={(batchId, assigneeUserId, _batchTitle, leadCount) => {
                   const batch = (uploadHistory.length ? uploadHistory : summary?.recent_batches || []).find(
