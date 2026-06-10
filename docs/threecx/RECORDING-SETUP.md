@@ -1,122 +1,175 @@
-# 3CX call recordings → PAZ Hiring Call Log
+# 3CX recordings → Call Log — simple setup
 
-Recruiters keep dialing the **same way** (3CX web client opens in a new tab). This setup only adds **call journaling** so completed calls send metadata + a recording link into `/call-log`.
+**You do NOT need PostgreSQL CRM, Bitrix, or any premade CRM template.**
 
-No Call Control API changes are required.
-
----
-
-## Part A — One-time in Supabase
-
-1. **Recording columns** (if not already applied): run `supabase/sql/paste_pipeline_call_recordings.sql` in the Supabase SQL editor.
-
-2. **Deploy the webhook** (from repo root):
-
-   ```bash
-   npx supabase functions deploy threecx-call-webhook --no-verify-jwt --project-ref hlfufjrjztuknioydlut
-   ```
-
-3. **Set the webhook secret** (pick a long random string; reuse it in 3CX below):
-
-   ```bash
-   npx supabase secrets set THREECX_WEBHOOK_SECRET=your-long-random-secret-here
-   ```
-
-4. Note your **Supabase anon key** (Project Settings → API → `anon` `public`). The 3CX template needs it as `apikey`.
+Our file `paz-hiring-call-recording-crm.xml` only sends **finished call data + recording link** to the portal when a call ends. It does **not** look up contacts inside 3CX — that is intentional. Recruiters keep using the portal + 3CX web client in a new tab exactly as today.
 
 ---
 
-## Part B — Upload CRM template in 3CX
+## Important: “Contact not found” on 3CX TEST is normal
 
-1. Open **3CX Management Console** → **Settings** → **CRM Integration**.
-2. Tab **Server side** → **+ Add**.
-3. Upload:
+When you click **TEST** in 3CX CRM settings, 3CX tries **contact lookup by phone number**.
 
-   `docs/threecx/paz-hiring-call-recording-crm.xml`
+Our template **does not include contact lookup** — only **ReportCall** (after hangup).
 
-4. Fill in the template parameters:
+So you may see:
 
-   | Field | Value |
-   |-------|--------|
-   | Webhook URL | `https://hlfufjrjztuknioydlut.supabase.co/functions/v1/threecx-call-webhook` (pre-filled) |
-   | Supabase anon key | Your project anon key |
-   | Webhook secret | Same string as `THREECX_WEBHOOK_SECRET` |
-   | Send completed calls… | **Enabled** |
+- ✅ Test connection / template loads fine  
+- ❌ “Contact number not found” on TEST  
 
-5. **Save** the integration.
+**That is OK.** Ignore the TEST for phone lookup.
+
+The real test: make a real call, hang up, save disposition in the portal, then check **Call log** for a recording link.
+
+Also make sure the dropdown says **“PAZ Hiring Call Log”** — **not** “Database PostgreSQL”.
 
 ---
 
-## Part C — Enable call recording on extensions
+## Step 1 — Supabase: get two values
 
-Recording URLs are empty unless the call was actually recorded.
+Open [Supabase Dashboard](https://supabase.com/dashboard/project/hlfufjrjztuknioydlut) → **Project Settings** → **API**
 
-For **each recruiter extension** (or the outbound route they use):
+| Copy this | Where it lives | Used for |
+|-----------|----------------|----------|
+| **Project URL** | `https://hlfufjrjztuknioydlut.supabase.co` | Already in XML |
+| **anon public key** | API → Project API keys → `anon` `public` | 3CX template field “Supabase anon key” |
 
-1. **Users** → select the extension → **Options**.
-2. Enable **Record calls** (inbound and/or outbound as required).
-3. Confirm your 3CX **recording policy** retains files long enough for review (retention is set under recording/storage settings).
-
-Optional: under **Advanced → Recordings**, confirm where files are stored and that HTTPS download links are generated for completed calls.
-
----
-
-## Part D — Map extensions in PAZ Hiring
-
-So the webhook can match a 3CX call to the right disposition row:
-
-1. Each recruiter opens **Account** → **Call settings** (or admin sets it).
-2. Enter their **3CX extension** (same value 3CX sends as `[Agent]`, e.g. `104`).
-
-Matching uses extension + dialed number + time window (~45 minutes).
+You do **not** need the service role key in 3CX.
 
 ---
 
-## Part E — Test
+## Step 2 — Supabase: set webhook secret
 
-1. Place a short **outbound** test call from a recruiter extension to a known lead number.
-2. Save disposition in **Call workspace** as usual.
-3. Wait for the call to end (3CX fires **ReportCall** when the call completes).
-4. Open **Insights → Call log** — the row should show an inline **Recording** player when `[RecordingUrl]` was present.
+1. Pick a long random password (example: `paz-3cx-rec-` + 20 random characters). Save it in your password manager.
 
-### If recording column stays `—`
-
-| Check | Action |
-|-------|--------|
-| Call not recorded | Enable recording on extension / route |
-| Webhook not firing | 3CX → Dashboard → Activity Logs → enable verbose; inspect `3cxSystemService.log` after a test call |
-| Secret mismatch | `THREECX_WEBHOOK_SECRET` must equal 3CX **Webhook secret** |
-| Wrong extension | Recruiter extension in Account must match 3CX `[Agent]` |
-| No disposition row | Save disposition in app before or shortly after the call |
-| Empty `[RecordingUrl]` | Recording may still be processing; retry after a few seconds or check 3CX recording storage |
-
-### Manual webhook test (optional)
+2. In terminal (repo folder) or Supabase Dashboard → **Edge Functions** → **Secrets**:
 
 ```bash
-curl -X POST "https://hlfufjrjztuknioydlut.supabase.co/functions/v1/threecx-call-webhook" \
-  -H "Content-Type: application/json" \
-  -H "apikey: YOUR_ANON_KEY" \
-  -H "Authorization: Bearer YOUR_ANON_KEY" \
-  -H "X-Paz-Webhook-Secret: your-secret" \
-  -d "{\"phone_number\":\"5551234567\",\"agent_extension\":\"104\",\"recording_url\":\"https://example.com/test.wav\",\"call_id\":\"test-1\",\"duration_seconds\":12}"
+npx supabase secrets set THREECX_WEBHOOK_SECRET=paste-your-secret-here --project-ref hlfufjrjztuknioydlut
 ```
 
----
+| Secret name | Value | Who uses it |
+|-------------|-------|-------------|
+| `THREECX_WEBHOOK_SECRET` | Your random string | Supabase edge function + 3CX template (same string both places) |
 
-## What the template sends
-
-On every completed call, 3CX POSTs JSON including:
-
-- `phone_number`, `agent_extension`, `agent_email`
-- `call_type`, `call_direction`, `duration`, `duration_seconds`
-- `call_start_utc`, `call_end_utc`
-- **`recording_url`** — direct link from 3CX (`[RecordingUrl]`)
-- `call_id` — composite id for dedupe
-
-The webhook updates the nearest matching `pipeline_call_records` row.
+**Edge function `threecx-call-webhook` is already deployed** on this project. No action needed unless you change the code.
 
 ---
 
-## Browser playback
+## Step 3 — 3CX: upload OUR template (not PostgreSQL)
 
-If the recording link requires 3CX login, in-browser `<audio>` may fail. In that case use **Open / download** on the call log row, or ask IT whether recording URLs can be issued as signed public HTTPS links. A proxy edge function can be added later if needed.
+1. **3CX Management Console** → **Settings** → **CRM**
+2. Tab **Server side** (not Client side)
+3. Click **+ Add Template**
+4. Choose file from repo: `docs/threecx/paz-hiring-call-recording-crm.xml`
+5. After upload, in **“Select a CRM Solution”** dropdown pick: **PAZ Hiring Call Log**  
+   (Do **not** use Database PostgreSQL — that is a different integration.)
+
+---
+
+## Step 4 — 3CX: fill in template fields
+
+| 3CX field | What to paste |
+|-----------|----------------|
+| **Webhook URL** | `https://hlfufjrjztuknioydlut.supabase.co/functions/v1/threecx-call-webhook` (pre-filled) |
+| **Supabase anon key (apikey)** | anon key from Step 1 |
+| **Webhook secret** | Same string as `THREECX_WEBHOOK_SECRET` from Step 2 |
+| **Send completed calls to PAZ Hiring call log?** | ✅ Enabled |
+
+Click **Save**.
+
+You do **not** need OAuth, Client ID, PostgreSQL username/password, or SQL statements.
+
+---
+
+## Step 5 — 3CX: turn on call recording
+
+For **each recruiter extension** (e.g. Hassaan’s):
+
+1. **Users** → click the user → **Options** (or edit extension)
+2. Enable **Record Calls** (inbound and/or outbound as you require)
+3. **Save**
+
+Also check: **Recordings** in left menu → confirm recordings are enabled system-wide and retention is long enough.
+
+**No recording = empty `[RecordingUrl]` = no link in Call log.**
+
+---
+
+## Step 6 — 3CX: note each recruiter’s extension number
+
+For Hassaan (example):
+
+1. **Users** → Hassaan → note **Extension** (e.g. `104`, `802`, etc.)
+2. In the portal: **Account** → **Call settings** → enter the **same extension number**
+
+The webhook matches calls using: **extension + dialed phone number + time**.
+
+| Where | What to copy |
+|-------|----------------|
+| 3CX → Users → recruiter → Extension | e.g. `104` |
+| Portal → Account → Call settings → Extension | Same number |
+
+---
+
+## Step 7 — Real test (ignore CRM phone TEST)
+
+1. Hassaan dials a lead from the portal (web client tab — same as now)
+2. Talk briefly, hang up
+3. Save disposition in Call workspace
+4. Wait ~30 seconds
+5. Open **Insights → Call log** → find the row → **Recording** column
+
+Optional: Supabase → **Edge Functions** → `threecx-call-webhook` → **Logs** — you should see POSTs after each completed call.
+
+---
+
+## What you do NOT need from 3CX
+
+| Item | Needed? |
+|------|---------|
+| PostgreSQL connection string | ❌ No |
+| 3CX OAuth / API Client ID | ❌ No (Call Control not used) |
+| CRM contact lookup working | ❌ No |
+| Call Control API | ❌ No |
+| Premade Bitrix/Zoho/etc. template | ❌ No |
+
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| Dropdown shows PostgreSQL fields | Select **PAZ Hiring Call Log** instead |
+| TEST says contact not found | Expected — use Step 7 real call test |
+| Call log row exists, no recording | Recording not enabled on extension, or call too short |
+| Nothing in Supabase function logs | Wrong template selected, or ReportCall not enabled, or secret/anon key wrong |
+| 401 in function logs | `THREECX_WEBHOOK_SECRET` ≠ 3CX Webhook secret |
+| Recording link but won’t play in browser | Click “Open / download” — link may need 3CX login |
+
+### Manual curl test (optional)
+
+Replace `YOUR_ANON_KEY` and `your-secret`:
+
+```bash
+curl -X POST "https://hlfufjrjztuknioydlut.supabase.co/functions/v1/threecx-call-webhook" ^
+  -H "Content-Type: application/json" ^
+  -H "apikey: YOUR_ANON_KEY" ^
+  -H "Authorization: Bearer YOUR_ANON_KEY" ^
+  -H "X-Paz-Webhook-Secret: your-secret" ^
+  -d "{\"phone_number\":\"4379868221\",\"agent_extension\":\"104\",\"recording_url\":\"https://example.com/test.wav\",\"call_id\":\"test-1\",\"duration_seconds\":30}"
+```
+
+Expected response: `{"ok":true,"matched":true,...}` if a matching disposition row exists.
+
+---
+
+## Why not use 3CX PostgreSQL template?
+
+The built-in **Database PostgreSQL** template would connect 3CX directly to your database for **caller ID popup inside 3CX**. That would require:
+
+- Exposing Supabase Postgres to your 3CX server IP
+- SQL queries against `pipeline_candidates`
+- Extra security and maintenance
+
+We don’t need that — recruiters already work in the portal. Our XML only pushes **recording URLs after hangup**, which is simpler and safer.

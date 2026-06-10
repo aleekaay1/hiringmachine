@@ -5,6 +5,9 @@
 
   Does NOT change how recruiters dial (web client in new tab stays as-is).
   On every completed call, 3CX POSTs call metadata + [RecordingUrl] to Supabase.
+
+  IMPORTANT: Select "PAZ Hiring Call Log" in 3CX CRM dropdown — NOT Database PostgreSQL.
+  This template has NO contact lookup; 3CX TEST "contact not found" is expected. Test with a real call.
 -->
 <Crm xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" Country="CA" Name="PAZ Hiring Call Log" Version="1" SupportsEmojis="false">
   <Number Prefix="AsIs" />
