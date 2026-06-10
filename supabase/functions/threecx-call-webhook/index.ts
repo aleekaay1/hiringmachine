@@ -77,7 +77,9 @@ function webhookSecretOk(req: Request): boolean {
   const expected = Deno.env.get('THREECX_WEBHOOK_SECRET')?.trim() || '';
   if (!expected) return true;
   const header = req.headers.get('x-paz-webhook-secret')?.trim() || '';
-  return header.length > 0 && header === expected;
+  if (header.length > 0 && header === expected) return true;
+  const query = new URL(req.url).searchParams.get('secret')?.trim() || '';
+  return query.length > 0 && query === expected;
 }
 
 async function resolveRecruiterUserIds(
@@ -122,6 +124,15 @@ async function resolveRecruiterUserIds(
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
+
+  const url = new URL(req.url);
+  if (req.method === 'GET' && url.searchParams.get('ping') === '1') {
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
       status: 405,

@@ -1,26 +1,27 @@
 <?xml version="1.0"?>
 <!--
-  PAZ Hiring Portal — 3CX CRM template (call recording webhook only)
-  Upload: Settings → CRM → Server side → + Add Template → select "PAZ Hiring Call Log" in dropdown.
+  PAZ Hiring — 3CX CRM template (zero-config, 3CX Cloud)
+  Upload: Settings → CRM → + Add Template → select "PAZ Hiring Call Log" → Save
 
-  After upload: pick "PAZ Hiring Call Log" in "Select a CRM Solution" — fields appear below.
-  Does NOT include contact lookup (3CX TEST "contact not found" is OK).
+  No form fields needed — URL, anon key, and webhook secret are embedded below.
+  Contact lookup is NOT included (3CX TEST "not found" is OK). Recordings sync on hangup.
 -->
-<Crm xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" Country="CA" Name="PAZ Hiring Call Log" Version="2" SupportsEmojis="false">
+<Crm xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" Country="CA" Name="PAZ Hiring Call Log" Version="3" SupportsEmojis="false">
   <Number Prefix="AsIs" />
   <Connection MaxConcurrentRequests="8" />
-  <Parameters>
-    <Parameter Name="WebhookUrl" Type="String" Parent="Settings" Editor="String" Title="Webhook URL:" Default="https://hlfufjrjztuknioydlut.supabase.co/functions/v1/threecx-call-webhook" />
-    <Parameter Name="WebhookAnonKey" Type="Password" Parent="Settings" Editor="String" Title="Supabase anon key:" Default="" />
-    <Parameter Name="WebhookSecret" Type="Password" Parent="Settings" Editor="String" Title="Webhook secret:" Default="" />
-    <Parameter Name="ReportCallEnabled" Type="Boolean" Parent="Call Reporting" Editor="String" Title="Enable call journaling to PAZ Hiring?" Default="True" />
-  </Parameters>
   <Authentication Type="No" />
   <Scenarios>
+    <Scenario Type="REST">
+      <Request Url="https://hlfufjrjztuknioydlut.supabase.co/functions/v1/threecx-call-webhook?ping=1" RequestType="Get" ResponseType="Json" MessagePasses="0" Message="" />
+      <Rules>
+        <Rule Type="Any">ok</Rule>
+      </Rules>
+      <Variables />
+      <Outputs AllowEmpty="true" />
+    </Scenario>
     <Scenario Id="ReportCall" Type="REST">
       <Request
-        SkipIf="[ReportCallEnabled]!=True"
-        Url="[WebhookUrl]"
+        Url="https://hlfufjrjztuknioydlut.supabase.co/functions/v1/threecx-call-webhook"
         RequestContentType="application/json"
         RequestEncoding="Json"
         RequestType="Post"
@@ -28,9 +29,9 @@
         MessagePasses="0"
         Message="">
         <Headers>
-          <Value Key="apikey" Passes="0" Type="String">[WebhookAnonKey]</Value>
-          <Value Key="Authorization" Passes="0" Type="String">Bearer [WebhookAnonKey]</Value>
-          <Value Key="X-Paz-Webhook-Secret" Passes="0" Type="String">[WebhookSecret]</Value>
+          <Value Key="apikey" Passes="0" Type="String">eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhsZnVmanJqenR1a25pb3lkbHV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE0MjM0ODUsImV4cCI6MjA4Njk5OTQ4NX0.tWoUiPb9genUM4YxjwNhA6Pt_v-mPyxqG8w3sMZj8pU</Value>
+          <Value Key="Authorization" Passes="0" Type="String">Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhsZnVmanJqenR1a25pb3lkbHV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE0MjM0ODUsImV4cCI6MjA4Njk5OTQ4NX0.tWoUiPb9genUM4YxjwNhA6Pt_v-mPyxqG8w3sMZj8pU</Value>
+          <Value Key="X-Paz-Webhook-Secret" Passes="0" Type="String">Sa5Y1eArVT9mKJ3EiMH2bGjvgRo0qtyZdWXIkCf4</Value>
         </Headers>
         <PostValues>
           <Value Key="source" Passes="0" Type="String">3cx-report-call</Value>

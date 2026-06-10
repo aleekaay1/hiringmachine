@@ -25,78 +25,38 @@ Also make sure the dropdown says **“PAZ Hiring Call Log”** — **not** “Da
 
 ---
 
-## Step 1 — Supabase: get two values
+## Step 1 — Supabase (already done)
 
-Open [Supabase Dashboard](https://supabase.com/dashboard/project/hlfufjrjztuknioydlut) → **Project Settings** → **API**
-
-| Copy this | Where it lives | Used for |
-|-----------|----------------|----------|
-| **Project URL** | `https://hlfufjrjztuknioydlut.supabase.co` | Already in XML |
-| **anon public key** | API → Project API keys → `anon` `public` | 3CX template field “Supabase anon key” |
-
-You do **not** need the service role key in 3CX.
+- Edge function **`threecx-call-webhook`** — deployed
+- Secret **`THREECX_WEBHOOK_SECRET`** — set in Supabase
+- Anon key + webhook URL + secret — baked into XML Version 3 (no typing in 3CX UI)
 
 ---
 
-## Step 2 — Supabase: set webhook secret
+## Step 2 — 3CX Cloud: upload template (no form fields — that’s normal)
 
-1. Pick a long random password (example: `paz-3cx-rec-` + 20 random characters). Save it in your password manager.
+**3CX Cloud does not show “Server side / Client side” tabs.** One CRM page only.
 
-2. In terminal (repo folder) or Supabase Dashboard → **Edge Functions** → **Secrets**:
+1. **Settings** → **CRM**
+2. **Delete** the old “PAZ Hiring Call Log” if already uploaded
+3. **+ Add Template** → upload `docs/threecx/paz-hiring-call-recording-crm.xml` (**Version 3**)
+4. Dropdown **Select a CRM Solution** → **PAZ Hiring Call Log**
+5. You will only see:
+   - Query CRM (leave **Always query** or **Only if no local match** — either is fine)
+   - Optional phonebook checkbox (leave **unchecked**)
+6. Click **Save**
 
-```bash
-npx supabase secrets set THREECX_WEBHOOK_SECRET=paste-your-secret-here --project-ref hlfufjrjztuknioydlut
-```
+**No Webhook URL / anon key / secret fields appear on 3CX Cloud — that is expected.**
 
-| Secret name | Value | Who uses it |
-|-------------|-------|-------------|
-| `THREECX_WEBHOOK_SECRET` | Your random string | Supabase edge function + 3CX template (same string both places) |
+Version 3 embeds everything inside the XML (URL, anon key, webhook secret). Nothing to type in the UI.
 
-**Edge function `threecx-call-webhook` is already deployed** on this project. No action needed unless you change the code.
+`THREECX_WEBHOOK_SECRET` is already set in Supabase.
 
----
-
-## Step 3 — 3CX: upload OUR template (not PostgreSQL)
-
-1. **3CX Management Console** → **Settings** → **CRM**
-2. Open tab **Server side** (top of the CRM page — **not** Client side)
-3. Click **+ Add Template** (right side, not the main CRM dropdown)
-4. Upload: `docs/threecx/paz-hiring-call-recording-crm.xml`
-5. **Important:** In the main dropdown **“Select a CRM Solution”**, choose **PAZ Hiring Call Log**  
-   (If you pick **Database PostgreSQL**, you will see SQL fields instead — wrong template.)
-
-### If you don’t see any form fields
-
-The fields only appear **after** you select **PAZ Hiring Call Log** in the dropdown. They show **below** the dropdown, grouped as:
-
-- **Settings** — Webhook URL, Supabase anon key, Webhook secret  
-- **Call Reporting** — Enable call journaling checkbox  
-
-If still blank:
-
-1. Delete the old template → re-upload the XML (Version 2 in repo)
-2. Confirm you are on **Server side** tab
-3. Click **Save** after selecting the CRM from the dropdown
-4. Try **Show Template** — you should see our `WebhookUrl` / `WebhookAnonKey` parameters in the XML
+You do **not** need OAuth, PostgreSQL, or SQL fields.
 
 ---
 
-## Step 4 — 3CX: fill in template fields
-
-| 3CX field (under **Settings**) | What to paste |
-|-------------------------------|----------------|
-| **Webhook URL** | `https://hlfufjrjztuknioydlut.supabase.co/functions/v1/threecx-call-webhook` |
-| **Supabase anon key** | anon key from Step 1 (Supabase → Settings → API) |
-| **Webhook secret** | Same value as `THREECX_WEBHOOK_SECRET` in Supabase (see Step 2) |
-| **Enable call journaling…** (under **Call Reporting**) | ✅ Checked |
-
-Click **Save**.
-
-You do **not** need OAuth, Client ID, PostgreSQL username/password, or SQL statements.
-
----
-
-## Step 5 — 3CX: turn on call recording
+## Step 3 — 3CX: turn on call recording
 
 For **each recruiter extension** (e.g. Hassaan’s):
 
@@ -110,7 +70,7 @@ Also check: **Recordings** in left menu → confirm recordings are enabled syste
 
 ---
 
-## Step 6 — 3CX: note each recruiter’s extension number
+## Step 4 — 3CX: note each recruiter’s extension number
 
 For Hassaan (example):
 
@@ -126,7 +86,7 @@ The webhook matches calls using: **extension + dialed phone number + time**.
 
 ---
 
-## Step 7 — Real test (ignore CRM phone TEST)
+## Step 5 — Real test (ignore CRM phone TEST)
 
 1. Hassaan dials a lead from the portal (web client tab — same as now)
 2. Talk briefly, hang up
