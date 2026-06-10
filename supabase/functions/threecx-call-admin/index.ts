@@ -393,23 +393,36 @@ async function clearAutoAttachedRecordings(admin: ReturnType<typeof createClient
   return ids.length;
 }
 
-/** Replay stored webhooks (last N hours) — match by dialed_number + call time only. */
-async function syncRecordings(admin: ReturnType<typeof createClient>, hoursBack = 48) {
+/** Replay webhooks — incremental by default (unmatched only, no mass clear). */
+async function syncRecordings(
+  admin: ReturnType<typeof createClient>,
+  hoursBack = 24,
+  incremental = true,
+) {
   const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString();
 
-  const cleared = await clearAutoAttachedRecordings(admin, since);
-  await admin
-    .from('threecx_webhook_events')
-    .update({ matched: false, recording_attached: false, call_record_id: null, detail: 'pending_rematch' })
-    .eq('event_type', 'report_call')
-    .gte('received_at', since);
+  let cleared = 0;
+  if (!incremental) {
+    cleared = await clearAutoAttachedRecordings(admin, since);
+    await admin
+      .from('threecx_webhook_events')
+      .update({ matched: false, recording_attached: false, call_record_id: null, detail: 'pending_rematch' })
+      .eq('event_type', 'report_call')
+      .gte('received_at', since);
+  }
 
-  const { data: events, error } = await admin
+  let eventsQuery = admin
     .from('threecx_webhook_events')
-    .select('id, received_at, payload, agent_extension, phone_number, matched')
+    .select('id, received_at, payload, agent_extension, phone_number, matched, call_record_id')
     .eq('event_type', 'report_call')
     .gte('received_at', since)
     .order('received_at', { ascending: true });
+
+  if (incremental) {
+    eventsQuery = eventsQuery.or('matched.eq.false,matched.is.null');
+  }
+
+  const { data: events, error } = await eventsQuery;
   if (error) throw error;
 
   let scanned = 0;
@@ -467,11 +480,14 @@ async function syncRecordings(admin: ReturnType<typeof createClient>, hoursBack 
     matched,
     updated,
     cleared,
+    incremental,
     message: updated > 0
-      ? `Synced ${updated} recording(s) by phone number and call time${cleared ? ` (rematched ${cleared} row(s))` : ''}.`
+      ? `Attached ${updated} recording(s).`
       : withRecording > 0
-        ? 'Found recordings in webhooks but no disposition with the same phone number and time window — save the disposition after each call.'
-        : 'No recordings found in webhooks for this period.',
+        ? 'No new matches — check phone, recruiter extension, and disposition time.'
+        : incremental
+          ? 'No new recordings to attach.'
+          : 'No recordings found in webhooks for this period.',
   };
 }
 
@@ -548,7 +564,12 @@ Deno.serve(async (req) => {
 
   try {
     const { admin } = await assertCallLogAdmin(req.headers.get('Authorization'));
-    const body = (await req.json().catch(() => ({}))) as { action?: string; hoursBack?: number };
+    const body = (await req.json().catch(() => ({}))) as {
+      action?: string;
+      hoursBack?: number;
+      incremental?: boolean;
+      fullRematch?: boolean;
+    };
     const action = String(body.action || 'status').trim().toLowerCase();
 
     if (action === 'status') {
@@ -560,10 +581,13 @@ Deno.serve(async (req) => {
       return json(200, { ok: true, ...result });
     }
     if (action === 'backfill-today' || action === 'sync-recordings') {
-      const hoursBack = action === 'backfill-today' ? 24 : 48;
+      const hoursBack = Number(body.hoursBack) > 0
+        ? Math.min(Number(body.hoursBack), 72)
+        : (action === 'backfill-today' ? 24 : 24);
+      const incremental = body.fullRematch === true ? false : body.incremental !== false;
       const result = action === 'backfill-today'
         ? await backfillToday(admin)
-        : await syncRecordings(admin, hoursBack);
+        : await syncRecordings(admin, hoursBack, incremental);
       return json(200, { ok: true, ...result });
     }
     if (action === 'list-webhook-calls') {

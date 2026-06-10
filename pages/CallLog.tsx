@@ -20,17 +20,13 @@ import {
   type PipelineCallRecord,
   type PipelineCandidate,
 } from '../services/pipelineService';
-import { refreshLiveSessionsAndMatchOutcomes } from '../services/liveSessionOutcomeService';
 import { PIPELINE_CALL_DISPOSITIONS } from '../services/pipelineCallDispositions';
 import {
   fetchCallLogWebhookRows,
-  fetchThreeCxConnectionStatus,
-  syncRecruiter3cxExtensions,
   syncThreeCxRecordings,
   type CallLogWebhookRow,
-  type ThreeCxConnectionStatus,
 } from '../services/threecxCallLogAdmin';
-import { Download, PhoneCall, PhoneIncoming, PhoneOutgoing, RefreshCw, Search, Wifi, WifiOff } from 'lucide-react';
+import { PhoneCall, PhoneIncoming, PhoneOutgoing, RefreshCw, Search } from 'lucide-react';
 
 type CallLogEntry = {
   key: string;
@@ -43,17 +39,6 @@ type CallLogEntry = {
 function phoneLast10(value: string): string {
   const digits = value.replace(/\D/g, '');
   return digits.length >= 10 ? digits.slice(-10) : digits;
-}
-
-function phonesMatch(a: string, b: string): boolean {
-  const da = phoneLast10(a);
-  const db = phoneLast10(b);
-  return da.length >= 10 && db.length >= 10 && da === db;
-}
-
-function csvEscape(s: string): string {
-  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
 }
 
 function formatDuration(seconds: number | null): string {
@@ -122,12 +107,10 @@ const CallLog: React.FC = () => {
   const [dispositionFilter, setDispositionFilter] = useState<string>('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [threeCxStatus, setThreeCxStatus] = useState<ThreeCxConnectionStatus | null>(null);
-  const [threeCxStatusLoading, setThreeCxStatusLoading] = useState(false);
-  const [syncingExtensions, setSyncingExtensions] = useState(false);
-  const [syncingRecordings, setSyncingRecordings] = useState(false);
-  const [adminMessage, setAdminMessage] = useState<string | null>(null);
-  const [adminError, setAdminError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<{ pct: number; label: string } | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -139,14 +122,14 @@ const CallLog: React.FC = () => {
     });
   }, [isAuthenticated]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options?: { includeWebhooks?: boolean }) => {
     setLoadError(null);
     setLoading(true);
     try {
-      const [callRows, webhooks] = await Promise.all([
-        listPipelineCallRecords({ limit: 2500 }),
-        fetchCallLogWebhookRows(96).catch(() => [] as CallLogWebhookRow[]),
-      ]);
+      const callRows = await listPipelineCallRecords({ limit: 2500 });
+      const webhooks = options?.includeWebhooks
+        ? await fetchCallLogWebhookRows(48).catch(() => [] as CallLogWebhookRow[])
+        : [];
       const candidateIds = [...new Set(callRows.map((row) => row.candidate_id).filter(Boolean))];
       const [candidateRows, profiles] = await Promise.all([
         listPipelineCandidatesByIds(candidateIds).catch(() => [] as PipelineCandidate[]),
@@ -164,84 +147,41 @@ const CallLog: React.FC = () => {
     }
   }, []);
 
-  const loadThreeCxStatus = useCallback(async () => {
-    setThreeCxStatusLoading(true);
-    try {
-      const status = await fetchThreeCxConnectionStatus();
-      setThreeCxStatus(status);
-    } catch {
-      setThreeCxStatus(null);
-    } finally {
-      setThreeCxStatusLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     if (isAuthenticated && accessAllowed) {
       void load();
-      void loadThreeCxStatus();
     }
-  }, [isAuthenticated, accessAllowed, load, loadThreeCxStatus]);
-
-  const handleSyncExtensions = async () => {
-    setAdminError(null);
-    setAdminMessage(null);
-    setSyncingExtensions(true);
-    try {
-      const result = await syncRecruiter3cxExtensions();
-      const ok = result.details?.filter((d) => d.status === 'ok').length ?? result.updated;
-      setAdminMessage(
-        result.message
-          || `Synced ${ok} extension(s)${result.skipped ? `, ${result.skipped} skipped` : ''}.`,
-      );
-      await loadThreeCxStatus();
-    } catch (err) {
-      setAdminError(err instanceof Error ? err.message : 'Extension sync failed.');
-    } finally {
-      setSyncingExtensions(false);
-    }
-  };
-
-  const handleSyncRecordings = async () => {
-    setAdminError(null);
-    setAdminMessage(null);
-    setSyncingRecordings(true);
-    try {
-      const messages: string[] = [];
-      let recordingFailed = false;
-      try {
-        const recordingResult = await syncThreeCxRecordings();
-        if (recordingResult.message) messages.push(recordingResult.message);
-        if (recordingResult.warning && (recordingResult.updated ?? 0) === 0) {
-          setAdminError(recordingResult.warning);
-        }
-      } catch (err) {
-        recordingFailed = true;
-        setAdminError(err instanceof Error ? err.message : 'Recording sync failed.');
-      }
-
-      try {
-        const liveResult = await refreshLiveSessionsAndMatchOutcomes({ syncCoins: false, daysBack: 30 });
-        if (liveResult.message) messages.push(liveResult.message);
-        if (liveResult.error && !recordingFailed) {
-          messages.push(`Live sessions: ${liveResult.error}`);
-        }
-      } catch {
-        // Live session sync is optional on call log refresh
-      }
-
-      if (messages.length) setAdminMessage(messages.join(' · '));
-      await load();
-      await loadThreeCxStatus();
-    } catch (err) {
-      setAdminError(err instanceof Error ? err.message : 'Sync failed.');
-    } finally {
-      setSyncingRecordings(false);
-    }
-  };
+  }, [isAuthenticated, accessAllowed, load]);
 
   const handleRefresh = async () => {
-    await handleSyncRecordings();
+    setStatusError(null);
+    setStatusMessage(null);
+    setSyncing(true);
+    setSyncProgress({ pct: 8, label: 'Matching recordings to dispositions…' });
+
+    const tick = window.setInterval(() => {
+      setSyncProgress((prev) => {
+        if (!prev || prev.pct >= 82) return prev;
+        return { ...prev, pct: Math.min(82, prev.pct + 3) };
+      });
+    }, 700);
+
+    try {
+      const recordingResult = await syncThreeCxRecordings({ hoursBack: 24, incremental: true });
+      setSyncProgress({ pct: 88, label: 'Loading call log…' });
+      await load({ includeWebhooks: true });
+      setSyncProgress({ pct: 100, label: 'Done' });
+      if (recordingResult.message) setStatusMessage(recordingResult.message);
+      if (recordingResult.warning && (recordingResult.updated ?? 0) === 0) {
+        setStatusError(recordingResult.warning);
+      }
+    } catch (err) {
+      setStatusError(err instanceof Error ? err.message : 'Sync failed.');
+    } finally {
+      window.clearInterval(tick);
+      setSyncing(false);
+      window.setTimeout(() => setSyncProgress(null), 800);
+    }
   };
 
   const candidateById = useMemo(() => {
@@ -395,70 +335,6 @@ const CallLog: React.FC = () => {
     };
   }, [filtered, recruiterByExtension]);
 
-  const downloadCsv = () => {
-    const header = [
-      'Disposed at (raw)',
-      'Disposed at (display)',
-      'Recruiter',
-      'Candidate',
-      'Email',
-      'Candidate ID',
-      'Dialed number',
-      'Disposition',
-      'Callback at',
-      'Booked subtype',
-      'Live session',
-      'Live session date',
-      'Comment',
-      'Duration (sec)',
-      'Recording URL',
-    ];
-    const lines = [
-      header.map(csvEscape).join(','),
-      ...filtered.map((entry) => {
-        const row = entry.row;
-        const wh = entry.webhook;
-        const candidate = row
-          ? candidateById.get(row.candidate_id)
-          : (wh ? candidateByPhone.get(phoneLast10(wh.phoneNumber)) : null);
-        const meta = row ? readCallRecordMeta(row) : { callbackAt: null, bookedSubtype: null };
-        const liveOutcome = row ? readCallRecordLiveSessionOutcome(row) : null;
-        const recording = row
-          ? readCallRecordRecording(row)
-          : { recordingUrl: wh?.recordingUrl || null, durationSeconds: wh?.durationSeconds ?? null };
-        const recruiter = row
-          ? resolveRecruiterLabel(row, staffById)
-          : (wh?.agentExtension ? recruiterByExtension.get(wh.agentExtension)?.full_name || wh.agentExtension : '');
-        return [
-          entry.at,
-          formatDateTimeCanadaEastern(entry.at),
-          recruiter,
-          candidate?.full_name || '',
-          candidate?.email || '',
-          row?.candidate_id || '',
-          row?.dialed_number || wh?.phoneNumber || '',
-          row?.disposition || 'Incoming call',
-          meta.callbackAt || '',
-          meta.bookedSubtype || '',
-          liveOutcome?.isLiveSessionBooked ? liveSessionOutcomeLabel(liveOutcome.status) : '',
-          liveOutcome?.sessionDate || '',
-          row?.comment || '',
-          recording.durationSeconds != null ? String(recording.durationSeconds) : '',
-          recording.recordingUrl || '',
-        ]
-          .map((c) => csvEscape(String(c)))
-          .join(',');
-      }),
-    ];
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `call-log-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
   if (!isAuthenticated) {
     return (
       <div className="w-full p-6 text-sm text-[#5c6b82]">
@@ -483,141 +359,41 @@ const CallLog: React.FC = () => {
   }
 
   return (
-    <div className="w-full p-5 lg:p-6 space-y-5 text-[#1A2942]">
-      <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-5 py-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="h-10 w-10 rounded-xl bg-[#005EB8]/10 flex items-center justify-center shrink-0">
-            <PhoneCall size={20} className="text-[#005EB8]" />
-          </div>
-          <div className="min-w-0">
-            <h1 className="text-lg font-bold text-[#0B1B34] truncate">Call log</h1>
-            <p className="text-sm text-[#5c6b82]">
-              Pipeline dispositions from all recruiters. Refresh pulls 3CX recordings and matches Booked (Live Session)
-              rows to Calendly/Zoom attendance by email or phone.
-            </p>
-          </div>
+    <div className="w-full p-5 lg:p-6 space-y-4 text-[#1A2942]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <PhoneCall size={20} className="text-[#005EB8] shrink-0" />
+          <h1 className="text-lg font-bold text-[#0B1B34]">Call log</h1>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="secondary" onClick={() => void handleRefresh()} disabled={loading || syncingRecordings}>
-            <RefreshCw size={16} className={loading || syncingRecordings ? 'animate-spin inline mr-1.5' : 'inline mr-1.5'} />
-            {syncingRecordings ? 'Syncing…' : 'Refresh & sync'}
-          </Button>
-          <Button type="button" variant="secondary" onClick={downloadCsv} disabled={filtered.length === 0}>
-            <Download size={16} className="inline mr-1.5" />
-            Export CSV
-          </Button>
-        </div>
+        <Button type="button" variant="secondary" onClick={() => void handleRefresh()} disabled={loading || syncing}>
+          <RefreshCw size={16} className={loading || syncing ? 'animate-spin inline mr-1.5' : 'inline mr-1.5'} />
+          {syncing ? 'Syncing…' : 'Refresh & sync'}
+        </Button>
       </div>
 
-      <div
-        className={`rounded-2xl border px-4 py-3 flex flex-col gap-3 ${
-          threeCxStatus?.webhookLive
-            ? 'border-emerald-200 bg-emerald-50/60'
-            : threeCxStatus?.ok === false
-              ? 'border-red-200 bg-red-50/60'
-              : 'border-amber-200 bg-amber-50/50'
-        }`}
-      >
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex items-start gap-3 min-w-0">
-            {threeCxStatus?.webhookLive ? (
-              <Wifi size={20} className="text-emerald-700 shrink-0 mt-0.5" />
-            ) : (
-              <WifiOff size={20} className="text-amber-700 shrink-0 mt-0.5" />
-            )}
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-[#0B1B34]">
-                3CX connection
-                {threeCxStatusLoading && <span className="font-normal text-[#5c6b82]"> — checking…</span>}
-              </p>
-              {threeCxStatus ? (
-                <div className="text-xs text-[#334155] mt-1 space-y-0.5">
-                  <p>
-                    Webhook:{' '}
-                    <strong>
-                      {threeCxStatus.webhookLive
-                        ? 'Receiving events'
-                        : threeCxStatus.lastWebhookAt
-                          ? 'No recent events (24h+)'
-                          : 'No events yet'}
-                    </strong>
-                    {threeCxStatus.lastWebhookAt && (
-                      <>
-                        {' '}
-                        · last {threeCxStatus.lastEventType || 'event'}{' '}
-                        {threeCxStatus.lastWebhookMinutesAgo != null
-                          ? `${threeCxStatus.lastWebhookMinutesAgo}m ago`
-                          : ''}
-                      </>
-                    )}
-                  </p>
-                  <p>
-                    Today ({threeCxStatus.todayDate}): {threeCxStatus.webhooksToday} webhook call(s),{' '}
-                    {threeCxStatus.recordingsAttachedToday} recording(s) attached · extension map:{' '}
-                    {threeCxStatus.extensionMapCount} recruiter(s)
-                  </p>
-                  <p>
-                    3CX API (optional backfill):{' '}
-                    {!threeCxStatus.threecxApiConfigured
-                      ? 'Not configured — recordings sync from webhooks only'
-                      : threeCxStatus.threecxApiOk
-                        ? 'Available'
-                        : 'Not used — recordings sync from webhooks'}
-                  </p>
-                  {threeCxStatus.error && <p className="text-red-700">{threeCxStatus.error}</p>}
-                </div>
-              ) : (
-                <p className="text-xs text-[#5c6b82] mt-1">Status unavailable — sign in and refresh.</p>
-              )}
-            </div>
+      {syncProgress && (
+        <div className="rounded-lg border border-[#cfe3f9] bg-white px-3 py-2.5">
+          <div className="flex items-center justify-between text-xs text-[#334155] mb-1.5">
+            <span>{syncProgress.label}</span>
+            <span className="tabular-nums font-medium">{syncProgress.pct}%</span>
           </div>
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => void loadThreeCxStatus()}
-              disabled={threeCxStatusLoading}
-            >
-              <RefreshCw size={14} className={threeCxStatusLoading ? 'animate-spin inline mr-1' : 'inline mr-1'} />
-              Check
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => void handleSyncExtensions()}
-              disabled={syncingExtensions || (threeCxStatus?.extensionMapCount ?? 0) === 0}
-              title={
-                (threeCxStatus?.extensionMapCount ?? 0) === 0
-                  ? 'Add recruiters to recruiter3cxExtensions.ts first'
-                  : 'Push hardcoded extensions into user profiles'
-              }
-            >
-              {syncingExtensions ? 'Syncing…' : 'Sync extensions'}
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => void handleSyncRecordings()}
-              disabled={syncingRecordings}
-              title="Pull recordings from stored 3CX webhooks and match to disposition rows"
-            >
-              {syncingRecordings ? 'Syncing…' : 'Sync recordings'}
-            </Button>
+          <div className="h-2 rounded-full bg-[#e8edf4] overflow-hidden">
+            <div
+              className="h-full rounded-full bg-[#005EB8] transition-all duration-500 ease-out"
+              style={{ width: `${syncProgress.pct}%` }}
+            />
           </div>
         </div>
-        {adminMessage && (
-          <p className="text-xs text-emerald-800 bg-emerald-100/80 rounded-lg px-3 py-2">{adminMessage}</p>
-        )}
-        {adminError && (
-          <p className="text-xs text-red-800 bg-red-100/80 rounded-lg px-3 py-2">{adminError}</p>
-        )}
-        {(threeCxStatus?.extensionMapCount ?? 0) === 0 && (
-          <p className="text-xs text-[#5c6b82]">
-            Send your recruiter list (name, email, extension) and we will hardcode it — then use Sync extensions so
-            nobody has to set extensions in Settings.
-          </p>
-        )}
-      </div>
+      )}
+
+      {statusMessage && (
+        <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+          {statusMessage}
+        </p>
+      )}
+      {statusError && (
+        <p className="text-xs text-red-800 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{statusError}</p>
+      )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="rounded-xl border border-[#d6deea] bg-white p-3">

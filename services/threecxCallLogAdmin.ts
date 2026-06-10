@@ -79,17 +79,25 @@ export async function syncRecruiter3cxExtensions(): Promise<{
   return invokeThreeCxCallAdmin('sync-extensions');
 }
 
-export async function syncThreeCxRecordings(): Promise<{
+export async function syncThreeCxRecordings(options?: {
+  hoursBack?: number;
+  incremental?: boolean;
+  fullRematch?: boolean;
+}): Promise<{
   hoursBack?: number;
   scanned: number;
   withRecording: number;
   matched: number;
   updated: number;
-  apiMatched?: number;
+  incremental?: boolean;
   warning?: string | null;
   message?: string;
 }> {
-  return invokeThreeCxCallAdmin('sync-recordings');
+  return invokeThreeCxCallAdmin('sync-recordings', {
+    hoursBack: options?.hoursBack ?? 24,
+    incremental: options?.incremental !== false,
+    fullRematch: options?.fullRematch === true,
+  });
 }
 
 export type CallLogWebhookRow = {
