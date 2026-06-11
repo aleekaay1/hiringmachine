@@ -17,10 +17,25 @@ export type ThreeCxConnectionStatus = {
   error?: string;
 };
 
-async function invokeThreeCxCallAdmin<T>(
-  action: string,
-  extra?: Record<string, unknown>,
-): Promise<T> {
+function parseJsonResponse<T>(text: string, status: number): T & { error?: string } {
+  const trimmed = text.trim();
+  if (!trimmed) return {} as T & { error?: string };
+  try {
+    return JSON.parse(trimmed) as T & { error?: string };
+  } catch {
+    if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html')) {
+      throw new Error(
+        `Server returned HTML instead of JSON (${status}). Try refreshing — the call-log API may be unavailable.`,
+      );
+    }
+    throw new Error(`Invalid server response (${status}).`);
+  }
+}
+
+async function callLogAdminAuthHeaders(): Promise<{
+  supabaseUrl: string;
+  headers: Record<string, string>;
+}> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
   if (!supabaseUrl || !anonKey) throw new Error('Missing Supabase environment configuration.');
@@ -29,17 +44,31 @@ async function invokeThreeCxCallAdmin<T>(
   const token = session.session?.access_token;
   if (!token) throw new Error('You must be signed in.');
 
-  const res = await fetch(`${supabaseUrl}/functions/v1/threecx-call-admin`, {
-    method: 'POST',
+  return {
+    supabaseUrl,
     headers: {
       Authorization: `Bearer ${token}`,
       apikey: anonKey,
+    },
+  };
+}
+
+async function invokeThreeCxCallAdmin<T>(
+  action: string,
+  extra?: Record<string, unknown>,
+): Promise<T> {
+  const { supabaseUrl, headers } = await callLogAdminAuthHeaders();
+
+  const res = await fetch(`${supabaseUrl}/functions/v1/threecx-call-admin`, {
+    method: 'POST',
+    headers: {
+      ...headers,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ action, ...extra }),
   });
 
-  const body = (await res.json().catch(() => ({}))) as T & { error?: string };
+  const body = parseJsonResponse<T>(await res.text(), res.status);
   if (!res.ok) {
     throw new Error(String(body.error || `Request failed (${res.status})`));
   }
@@ -146,14 +175,55 @@ export type RecordingTranscript = {
   language: string;
 };
 
+function parseRecordingTranscript(raw: unknown): RecordingTranscript | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Record<string, unknown>;
+  const text = String(obj.text || '').trim();
+  if (!text) return null;
+  const segments = Array.isArray(obj.segments)
+    ? obj.segments
+      .map((row) => {
+        if (!row || typeof row !== 'object') return null;
+        const seg = row as Record<string, unknown>;
+        const start = Number(seg.start);
+        const end = Number(seg.end);
+        const segText = String(seg.text || '').trim();
+        if (!Number.isFinite(start) || !Number.isFinite(end) || !segText) return null;
+        return { start, end, text: segText };
+      })
+      .filter((row): row is RecordingTranscriptSegment => row != null)
+    : [];
+  return {
+    text,
+    segments,
+    model: String(obj.model || 'whisper-small.en-local'),
+    transcribedAt: String(obj.transcribed_at || obj.transcribedAt || ''),
+    language: String(obj.language || 'en'),
+  };
+}
+
+/** Same GET pattern as stream-recording (avoids POST/HTML proxy quirks). */
 export async function loadCachedRecordingTranscript(
   callRecordId: string,
 ): Promise<RecordingTranscript | null> {
-  const data = await invokeThreeCxCallAdmin<{ transcript: RecordingTranscript | null }>(
-    'get-recording-transcript',
-    { callRecordId },
+  const { supabaseUrl, headers } = await callLogAdminAuthHeaders();
+  const params = new URLSearchParams({
+    action: 'get-recording-transcript',
+    callRecordId,
+  });
+  const res = await fetch(`${supabaseUrl}/functions/v1/threecx-call-admin?${params}`, {
+    method: 'GET',
+    headers,
+  });
+  const body = parseJsonResponse<{ transcript?: unknown; error?: string }>(
+    await res.text(),
+    res.status,
   );
-  return data.transcript?.text ? data.transcript : null;
+  if (!res.ok) {
+    throw new Error(String(body.error || `Transcript cache lookup failed (${res.status})`));
+  }
+  const transcript = parseRecordingTranscript(body.transcript);
+  return transcript?.text ? transcript : null;
 }
 
 export async function saveRecordingTranscript(
@@ -168,13 +238,7 @@ export async function saveRecordingTranscript(
 }
 
 export async function fetchCallRecordingStreamUrl(callRecordId: string): Promise<string> {
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-  if (!supabaseUrl || !anonKey) throw new Error('Missing Supabase environment configuration.');
-
-  const { data: session } = await supabase.auth.getSession();
-  const token = session.session?.access_token;
-  if (!token) throw new Error('You must be signed in.');
+  const { supabaseUrl, headers } = await callLogAdminAuthHeaders();
 
   const params = new URLSearchParams({
     action: 'stream-recording',
@@ -182,14 +246,11 @@ export async function fetchCallRecordingStreamUrl(callRecordId: string): Promise
   });
   const res = await fetch(`${supabaseUrl}/functions/v1/threecx-call-admin?${params}`, {
     method: 'GET',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      apikey: anonKey,
-    },
+    headers,
   });
 
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    const body = parseJsonResponse<{ error?: string }>(await res.text(), res.status);
     throw new Error(String(body.error || `Recording stream failed (${res.status})`));
   }
 

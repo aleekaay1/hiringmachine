@@ -59,7 +59,12 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
         setSrc(blobUrl);
         setLoading(false);
 
-        const cached = await loadCachedRecordingTranscript(callRecordId);
+        let cached: RecordingTranscript | null = null;
+        try {
+          cached = await loadCachedRecordingTranscript(callRecordId);
+        } catch {
+          /* cache miss or API glitch — still try local transcription */
+        }
         if (cancelled) return;
         if (cached) {
           setTranscript(cached);

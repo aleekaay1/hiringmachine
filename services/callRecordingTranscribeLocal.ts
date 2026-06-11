@@ -12,11 +12,34 @@ type Transcriber = (
 
 let transcriberPromise: Promise<Transcriber> | null = null;
 
+const ONNX_WASM_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/';
+
+function configureTransformersEnv(env: {
+  allowLocalModels: boolean;
+  useBrowserCache: boolean;
+  backends: { onnx: { wasm: { wasmPaths: string } } };
+}): void {
+  env.allowLocalModels = false;
+  env.useBrowserCache = true;
+  env.backends.onnx.wasm.wasmPaths = ONNX_WASM_CDN;
+}
+
+function friendlyTranscribeError(err: unknown): Error {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes('<!DOCTYPE') || msg.includes('Unexpected token')) {
+    return new Error(
+      'Could not download the free speech model (Hugging Face or CDN blocked on this network). Try another network, disable ad blockers, then reload.',
+    );
+  }
+  return err instanceof Error ? err : new Error(msg || 'Local transcription failed.');
+}
+
 async function getTranscriber(onStatus?: (message: string) => void): Promise<Transcriber> {
   if (!transcriberPromise) {
     transcriberPromise = (async () => {
       onStatus?.('Loading free local speech model (first time only)…');
-      const { pipeline } = await import('@xenova/transformers');
+      const { pipeline, env } = await import('@xenova/transformers');
+      configureTransformersEnv(env);
       return pipeline('automatic-speech-recognition', LOCAL_WHISPER_MODEL, {
         progress_callback: (progress: { status?: string; file?: string; progress?: number }) => {
           if (progress.status === 'progress' && progress.file && Number.isFinite(progress.progress)) {
@@ -59,24 +82,28 @@ export async function transcribeRecordingLocally(
   audioUrl: string,
   onStatus?: (message: string) => void,
 ): Promise<RecordingTranscript> {
-  onStatus?.('Transcribing in your browser…');
-  const transcriber = await getTranscriber(onStatus);
-  const output = await transcriber(audioUrl, {
-    chunk_length_s: 30,
-    stride_length_s: 5,
-    return_timestamps: true,
-    language: 'english',
-    task: 'transcribe',
-  });
+  try {
+    onStatus?.('Transcribing in your browser…');
+    const transcriber = await getTranscriber(onStatus);
+    const output = await transcriber(audioUrl, {
+      chunk_length_s: 30,
+      stride_length_s: 5,
+      return_timestamps: true,
+      language: 'english',
+      task: 'transcribe',
+    });
 
-  const text = String(output?.text || '').trim();
-  const segments = Array.isArray(output?.chunks) ? chunksToSegments(output.chunks) : [];
+    const text = String(output?.text || '').trim();
+    const segments = Array.isArray(output?.chunks) ? chunksToSegments(output.chunks) : [];
 
-  return {
-    text: text || segments.map((seg) => seg.text).join(' ').trim(),
-    segments,
-    model: LOCAL_WHISPER_MODEL,
-    transcribedAt: new Date().toISOString(),
-    language: 'en',
-  };
+    return {
+      text: text || segments.map((seg) => seg.text).join(' ').trim(),
+      segments,
+      model: LOCAL_WHISPER_MODEL,
+      transcribedAt: new Date().toISOString(),
+      language: 'en',
+    };
+  } catch (err) {
+    throw friendlyTranscribeError(err);
+  }
 }

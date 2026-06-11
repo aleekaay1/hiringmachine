@@ -1047,6 +1047,13 @@ Deno.serve(async (req) => {
         const { admin } = await assertCallLogAdmin(req.headers.get('Authorization'));
         return await streamRecordingResponse(admin, callRecordId, req);
       }
+      if (action === 'get-recording-transcript') {
+        const callRecordId = String(url.searchParams.get('callRecordId') || '').trim();
+        if (!callRecordId) return json(400, { error: 'callRecordId is required' });
+        const { admin } = await assertCallLogAdmin(req.headers.get('Authorization'));
+        const result = await getRecordingTranscriptForCallRecord(admin, callRecordId);
+        return json(200, { ok: true, callRecordId, transcript: result.transcript });
+      }
       return json(400, { error: 'Unknown GET action' });
     }
 
