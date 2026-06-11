@@ -9,6 +9,7 @@ import {
   fetchCallHistoryPaginatedForDay,
   fetchThreeCxCallHistory,
   fetchThreeCxCallHistoryForWindow,
+  fetchThreeCxCallLogData,
   fetchThreeCxRecordingsForWindow,
   filterRowsForExtension,
   probeThreeCxHistoryAccess,
@@ -21,6 +22,7 @@ import {
   computeMatchWindow,
   findHistoryRecording,
   findWebhookRecording,
+  firstWebhookForExtensionToday,
   type RecordingCandidate,
 } from '../_shared/threecxRecordingFetch.ts';
 import { extensionsFromHistory } from '../_shared/threecxHistoryParse.ts';
@@ -744,7 +746,7 @@ async function fetchRecordingForCallRecord(
       endMs,
       targetMs: anchorMs,
     });
-    diag.webhookRows = webhook.rowsScanned;
+    diag.webhookRows = webhook.diag.rowsScanned;
     if (webhook.candidate) {
       diag.webhookHits = 1;
       best = webhook.candidate;
@@ -755,8 +757,23 @@ async function fetchRecordingForCallRecord(
       const probe = await probeThreeCxHistoryAccess(token, baseUrl);
       if (!probe.ok) throw new Error(probe.error || '3CX call history API not available.');
 
-      const paginated = await fetchCallHistoryPaginatedForDay(token, baseUrl, utcPeriod.dateKey);
-      const extRows = filterRowsForExtension(paginated.rows, extension);
+      let paginated = await fetchCallHistoryPaginatedForDay(token, baseUrl, utcPeriod.dateKey);
+      let extRows = filterRowsForExtension(paginated.rows, extension);
+      if (!paginated.rows.length) {
+        const callLog = await fetchThreeCxCallLogData(
+          token,
+          baseUrl,
+          utcPeriod.periodFrom,
+          utcPeriod.periodTo,
+          extension,
+          phone,
+        );
+        diag.getCallLogAttempts = callLog.attempts;
+        if (callLog.rows.length) {
+          paginated = { rows: callLog.rows, pages: 1, endpoint: callLog.endpoint };
+          extRows = filterRowsForExtension(callLog.rows, extension);
+        }
+      }
       diag.extensionDayRows = extRows.length;
       diag.sampleExtPhones = sampleExternalNumbers(extRows.length ? extRows : paginated.rows.slice(0, 40));
       apiRowsScanned = extRows.length || paginated.rows.length;
@@ -826,11 +843,25 @@ async function fetchRecordingForCallRecord(
       message += ` CDR ext ${extension}: ${diag.extensionDayRows} segment(s).`;
       if (diag.sampleExtPhones.length) message += ` Sample numbers: ${diag.sampleExtPhones.join(', ')}.`;
     }
-    if (apiWarning) message += ` ${apiWarning}`;
-    else if (!diag.webhookRows && !diag.extensionDayRows) {
-      message += ' Re-upload CRM template v5 in 3CX (ReportCall) so hangup events are stored for recruiter extensions.';
-    } else if (diag.webhookRows && !diag.webhookHits) {
-      message += ' Webhook events exist but none matched phone+extension+time — call may predate CRM v5.';
+    if (diag.getCallLogAttempts.length) {
+      message += ` GetCallLogData: ${diag.getCallLogAttempts.slice(0, 2).join('; ')}.`;
+    }
+    if (apiWarning) {
+      message += ` ${apiWarning}`;
+    } else {
+      const firstExtWebhook = await firstWebhookForExtensionToday(admin, extension, utcPeriod.periodFrom);
+      if (firstExtWebhook) {
+        const firstMs = Date.parse(firstExtWebhook);
+        if (Number.isFinite(firstMs) && disposedMs < firstMs - 60 * 1000) {
+          message += ` No ReportCall for ext ${extension} at this time — CRM webhooks for this extension started at ${firstExtWebhook.slice(11, 19)} UTC (${dayKey}). Make a new test call after CRM v5 was uploaded.`;
+        } else if (diag.webhookRows && !diag.webhookHits) {
+          message += ' Webhooks exist for other extensions but none matched this phone+extension+time.';
+        }
+      } else if (!diag.webhookRows && !diag.extensionDayRows) {
+        message += ' Re-upload CRM template v5 in 3CX (ReportCall) so hangup events are stored for recruiter extensions.';
+      } else if (diag.webhookRows && !diag.webhookHits) {
+        message += ' Webhook events exist but none matched phone+extension+time.';
+      }
     }
     return { matched: false, callRecordId, recruiterExtension: extension, apiRowsScanned, message };
   }
@@ -852,6 +883,8 @@ async function fetchRecordingForCallRecord(
     source: best.source,
     message: best.source === 'threecx_webhook'
       ? 'Recording loaded from 3CX hangup webhook.'
+      : best.source === 'threecx_webhook_ext_time'
+        ? 'Recording matched from webhook by extension + time (phone not in webhook payload).'
       : best.source === 'threecx_api_ext_time'
         ? 'Recording matched by extension + time (phone not in CDR).'
         : 'Recording loaded from 3CX API.',

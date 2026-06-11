@@ -69,21 +69,57 @@ function extensionsMatch(a: string, b: string): boolean {
 }
 
 function anchorMsFromWebhookPayload(payload: Record<string, unknown>, receivedAt: string): number {
+  const receivedMs = Date.parse(receivedAt);
+  let callMs: number | null = null;
   for (const key of ['call_end_utc', 'call_start_utc']) {
     const raw = pickString(payload, [key]);
     if (raw) {
       const ms = Date.parse(raw);
-      if (Number.isFinite(ms)) return ms;
+      if (Number.isFinite(ms)) {
+        callMs = ms;
+        break;
+      }
     }
   }
-  for (const key of ['call_end_utc_millis', 'call_start_utc_millis']) {
-    const n = Number(payload[key]);
-    if (Number.isFinite(n) && n > 0) {
-      const ms = n > 1e12 ? n : n * 1000;
-      if (Number.isFinite(ms)) return ms;
+  if (callMs == null) {
+    for (const key of ['call_end_utc_millis', 'call_start_utc_millis']) {
+      const n = Number(payload[key]);
+      if (Number.isFinite(n) && n > 0) {
+        const ms = n > 1e12 ? n : n * 1000;
+        if (Number.isFinite(ms)) {
+          callMs = ms;
+          break;
+        }
+      }
     }
   }
-  return Date.parse(receivedAt);
+  if (callMs == null) return receivedMs;
+  // CRM replay can POST old calls with stale call_end — trust received_at when far apart.
+  if (Number.isFinite(receivedMs) && Math.abs(callMs - receivedMs) > 2 * 60 * 60 * 1000) {
+    return receivedMs;
+  }
+  return callMs;
+}
+
+function phoneFromCallId(callId: string): string {
+  const parts = String(callId || '').split('-').filter(Boolean);
+  if (parts.length < 3) return '';
+  const middle = parts.slice(1, -1).join('');
+  return digitsOnly(middle).length >= 10 ? middle : '';
+}
+
+function phoneFromWebhookEvent(
+  payload: Record<string, unknown>,
+  event: { phone_number?: string | null },
+): string {
+  const direct = pickString(payload, ['phone_number', 'PhoneNumber']) || String(event.phone_number || '');
+  if (direct.trim()) return direct.trim();
+  const fromCallId = phoneFromCallId(pickString(payload, ['call_id', 'callId']));
+  if (fromCallId) return fromCallId;
+  for (const v of Object.values(payload)) {
+    if (typeof v === 'string' && digitsOnly(v).length >= 10) return v.trim();
+  }
+  return '';
 }
 
 /** Disposition is saved after hangup; dial_started_at may equal disposed_at in Call Workspace bug — widen window. */
@@ -100,10 +136,11 @@ export function computeMatchWindow(input: {
     if (gap > 2 * 60 * 1000) {
       anchorMs = dialMs + Math.round(gap * 0.35);
     } else {
-      anchorMs = disposedMs - 8 * 60 * 1000;
+      // Disposition saved at hangup — anchor on disposition, not minutes earlier.
+      anchorMs = disposedMs;
     }
   } else {
-    anchorMs = disposedMs - 10 * 60 * 1000;
+    anchorMs = disposedMs - 5 * 60 * 1000;
   }
 
   const startMs = Math.min(
@@ -121,6 +158,15 @@ function pickClosest(candidates: RecordingCandidate[], targetMs: number): Record
   });
 }
 
+export type WebhookRecordingDiag = {
+  rowsScanned: number;
+  withRecording: number;
+  extMatches: number;
+  phoneMatches: number;
+  timeMatches: number;
+  extOnlyNear: number;
+};
+
 export async function findWebhookRecording(
   admin: SupabaseClient,
   input: {
@@ -131,7 +177,7 @@ export async function findWebhookRecording(
     endMs: number;
     targetMs: number;
   },
-): Promise<{ candidate: RecordingCandidate | null; rowsScanned: number }> {
+): Promise<{ candidate: RecordingCandidate | null; diag: WebhookRecordingDiag }> {
   const queryStart = new Date(input.startMs - 60 * 60 * 1000).toISOString();
   const queryEnd = new Date(input.endMs + 60 * 60 * 1000).toISOString();
 
@@ -145,28 +191,40 @@ export async function findWebhookRecording(
     .limit(300);
   if (error) throw error;
 
-  const candidates: RecordingCandidate[] = [];
+  const diag: WebhookRecordingDiag = {
+    rowsScanned: (events || []).length,
+    withRecording: 0,
+    extMatches: 0,
+    phoneMatches: 0,
+    timeMatches: 0,
+    extOnlyNear: 0,
+  };
+
+  const strictCandidates: RecordingCandidate[] = [];
+  const extOnlyCandidates: RecordingCandidate[] = [];
+
   for (const event of events || []) {
     const payload = event.payload && typeof event.payload === 'object'
       ? event.payload as Record<string, unknown>
       : {};
     const recordingUrl = pickString(payload, ['recording_url', 'RecordingUrl']);
     if (!recordingUrl.startsWith('http')) continue;
+    diag.withRecording += 1;
 
-    const rowPhone = pickString(payload, ['phone_number', 'PhoneNumber']) || String(event.phone_number || '');
+    const rowPhone = phoneFromWebhookEvent(payload, event);
     const rowExt = pickString(payload, ['agent_extension', 'Agent']) || String(event.agent_extension || '');
-    if (!phonesMatch(input.phone, rowPhone)) continue;
-    if (!extensionsMatch(input.extension, rowExt)) continue;
+    const extOk = extensionsMatch(input.extension, rowExt);
+    if (!extOk) continue;
+    diag.extMatches += 1;
 
-    if (input.recruiterUserId) {
-      const ids = await resolveRecruiterUserIds(admin, normalizeExtensionDigits(rowExt), '');
-      if (ids.length && !ids.includes(String(input.recruiterUserId))) continue;
-    }
+    const phoneOk = phonesMatch(input.phone, rowPhone);
+    if (phoneOk) diag.phoneMatches += 1;
 
     const anchorMs = anchorMsFromWebhookPayload(payload, String(event.received_at || ''));
-    if (anchorMs < input.startMs || anchorMs > input.endMs) continue;
+    const timeOk = anchorMs >= input.startMs && anchorMs <= input.endMs;
+    if (timeOk) diag.timeMatches += 1;
 
-    candidates.push({
+    const candidate: RecordingCandidate = {
       recordingUrl,
       durationSeconds: parseDurationSecondsFromText(
         pickString(payload, ['duration_seconds', 'duration', 'Duration']),
@@ -175,10 +233,54 @@ export async function findWebhookRecording(
       anchorMs,
       extension: rowExt,
       source: 'threecx_webhook',
-    });
+    };
+
+    if (phoneOk && timeOk) {
+      if (input.recruiterUserId) {
+        const ids = await resolveRecruiterUserIds(admin, normalizeExtensionDigits(rowExt), '');
+        if (ids.length && !ids.includes(String(input.recruiterUserId))) continue;
+      }
+      strictCandidates.push(candidate);
+    }
+
+    // Extension + time only when 3CX omitted phone in the webhook payload
+    const receivedMs = Date.parse(String(event.received_at || ''));
+    const receivedNear = Number.isFinite(receivedMs)
+      && receivedMs >= input.startMs - 2 * 60 * 1000
+      && receivedMs <= input.endMs + 2 * 60 * 1000;
+    const phoneMissing = digitsOnly(rowPhone).length < 10;
+    if (phoneMissing && (timeOk || receivedNear)) {
+      diag.extOnlyNear += 1;
+      extOnlyCandidates.push({
+        ...candidate,
+        anchorMs: timeOk ? anchorMs : receivedMs,
+        source: 'threecx_webhook_ext_time',
+      });
+    }
   }
 
-  return { candidate: pickClosest(candidates, input.targetMs), rowsScanned: (events || []).length };
+  const strict = pickClosest(strictCandidates, input.targetMs);
+  if (strict) return { candidate: strict, diag };
+
+  const extOnly = pickClosest(extOnlyCandidates, input.targetMs);
+  return { candidate: extOnly, diag };
+}
+
+export async function firstWebhookForExtensionToday(
+  admin: SupabaseClient,
+  extension: string,
+  dayStartIso: string,
+): Promise<string | null> {
+  const { data, error } = await admin
+    .from('threecx_webhook_events')
+    .select('received_at')
+    .eq('event_type', 'report_call')
+    .eq('agent_extension', extension)
+    .gte('received_at', dayStartIso)
+    .order('received_at', { ascending: true })
+    .limit(1);
+  if (error || !data?.length) return null;
+  return String(data[0].received_at || '') || null;
 }
 
 export function findHistoryRecording(input: {
