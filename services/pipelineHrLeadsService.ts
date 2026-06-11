@@ -259,6 +259,36 @@ export async function fetchHrLeadAssignments(batchId?: string) {
   return { ok: true as const, assignments: (json.assignments || []) as HrAssignmentLead[] };
 }
 
+export type HrLeadDuplicateCheckRow = {
+  row_number: number;
+  full_name: string;
+  email: string | null;
+  phone: string | null;
+  kind: string;
+  match_row_number?: number;
+  existing_candidate_id?: string;
+  existing_assigned_to?: string | null;
+  message: string;
+};
+
+export async function checkHrLeadDuplicates(rows: ParsedHrLeadRow[]) {
+  return callHrLeads<{
+    duplicate_count: number;
+    clean_count: number;
+    duplicates: HrLeadDuplicateCheckRow[];
+  }>('check-duplicates', {
+    method: 'POST',
+    body: JSON.stringify({
+      rows: rows.map((row) => ({
+        row_number: row.rowNumber,
+        full_name: row.fullName,
+        email: row.email,
+        phone: row.phone,
+      })),
+    }),
+  });
+}
+
 export async function importHrLeadRowsChunk(input: {
   batchId?: string;
   label: string;

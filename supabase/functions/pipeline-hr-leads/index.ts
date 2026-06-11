@@ -1,4 +1,12 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import {
+  existingMatchReason,
+  findWithinFileDuplicates,
+  normalizeEmail,
+  normalizeStoredPhone,
+  phoneLast10,
+  type ExistingCandidateMatch,
+} from '../_shared/pipelineDuplicateDetection.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -18,16 +26,6 @@ type ImportRow = {
   email?: string | null;
   phone?: string | null;
 };
-
-function normalizeEmail(value: string | null | undefined): string | null {
-  const v = String(value || '').trim().toLowerCase();
-  return v || null;
-}
-
-function normalizePhone(value: string | null | undefined): string | null {
-  const v = String(value || '').trim();
-  return v || null;
-}
 
 function filenameTokens(filename: string): string[] {
   return String(filename || '')
@@ -290,6 +288,56 @@ async function fetchDispositionMaps(
     }
   }
   return { latest, counts };
+}
+
+async function loadExistingOpenMatches(
+  admin: ReturnType<typeof createClient>,
+  phones: string[],
+  emails: string[],
+): Promise<ExistingCandidateMatch[]> {
+  const phoneKeys = [...new Set(phones.map((p) => phoneLast10(p)).filter((p) => p.length >= 10))];
+  const emailKeys = [...new Set(emails.map((e) => normalizeEmail(e)).filter(Boolean))] as string[];
+  const byId = new Map<string, ExistingCandidateMatch>();
+
+  if (phoneKeys.length) {
+    const { data, error } = await admin
+      .from('pipeline_candidates')
+      .select('id, full_name, email, phone, assigned_to_user_id, assigned_to_label, source, status, phone_last10')
+      .in('phone_last10', phoneKeys)
+      .in('status', ['open', 'in_progress']);
+    if (error && /phone_last10/i.test(error.message || '')) {
+      const { data: fallback } = await admin
+        .from('pipeline_candidates')
+        .select('id, full_name, email, phone, assigned_to_user_id, assigned_to_label, source, status')
+        .in('status', ['open', 'in_progress'])
+        .not('phone', 'is', null)
+        .limit(5000);
+      for (const row of fallback || []) {
+        const key = phoneLast10(String((row as { phone?: string }).phone || ''));
+        if (!key || !phoneKeys.includes(key)) continue;
+        byId.set(String((row as { id: string }).id), row as ExistingCandidateMatch);
+      }
+    } else if (!error) {
+      for (const row of data || []) {
+        byId.set(String((row as { id: string }).id), row as ExistingCandidateMatch);
+      }
+    }
+  }
+
+  if (emailKeys.length) {
+    const filters = emailKeys.map((e) => `email.ilike.${e}`).join(',');
+    const { data } = await admin
+      .from('pipeline_candidates')
+      .select('id, full_name, email, phone, assigned_to_user_id, assigned_to_label, source, status')
+      .in('status', ['open', 'in_progress'])
+      .or(filters)
+      .limit(500);
+    for (const row of data || []) {
+      byId.set(String((row as { id: string }).id), row as ExistingCandidateMatch);
+    }
+  }
+
+  return [...byId.values()];
 }
 
 async function assertHrDistributor(
@@ -613,6 +661,84 @@ Deno.serve(async (req) => {
       });
     }
 
+    if (req.method === 'POST' && mode === 'check-duplicates') {
+      const body = (await req.json().catch(() => ({}))) as { rows?: ImportRow[] };
+      const rows = Array.isArray(body.rows) ? body.rows : [];
+      const withinFile = findWithinFileDuplicates(rows);
+      const existing = await loadExistingOpenMatches(
+        admin,
+        rows.map((row) => String(row.phone || '')),
+        rows.map((row) => String(row.email || '')),
+      );
+      const phoneIndex = new Map<string, ExistingCandidateMatch>();
+      const emailIndex = new Map<string, ExistingCandidateMatch>();
+      for (const match of existing) {
+        const pk = phoneLast10(match.phone);
+        if (pk.length >= 10 && !phoneIndex.has(pk)) phoneIndex.set(pk, match);
+        const ek = normalizeEmail(match.email);
+        if (ek && !emailIndex.has(ek)) emailIndex.set(ek, match);
+      }
+
+      const duplicates: Array<{
+        row_number: number;
+        full_name: string;
+        email: string | null;
+        phone: string | null;
+        kind: string;
+        match_row_number?: number;
+        existing_candidate_id?: string;
+        existing_assigned_to?: string | null;
+        message: string;
+      }> = [];
+
+      for (const issue of withinFile) {
+        const row = rows.find((r) => Number(r.row_number || 0) === issue.rowNumber);
+        duplicates.push({
+          row_number: issue.rowNumber,
+          full_name: String(row?.full_name || '').trim() || 'Unknown',
+          email: normalizeEmail(row?.email),
+          phone: normalizeStoredPhone(row?.phone),
+          kind: issue.kind,
+          match_row_number: issue.matchRowNumber,
+          message: issue.message,
+        });
+      }
+
+      for (const row of rows) {
+        const rowNumber = Number(row.row_number || 0) || 0;
+        if (withinFile.some((issue) => issue.rowNumber === rowNumber)) continue;
+        const phoneKey = phoneLast10(row.phone);
+        const emailKey = normalizeEmail(row.email);
+        const phoneHit = phoneKey.length >= 10 ? phoneIndex.get(phoneKey) : undefined;
+        const emailHit = emailKey ? emailIndex.get(emailKey) : undefined;
+        const hit = phoneHit || emailHit;
+        if (!hit) continue;
+        duplicates.push({
+          row_number: rowNumber,
+          full_name: String(row.full_name || '').trim() || 'Unknown',
+          email: emailKey,
+          phone: normalizeStoredPhone(row.phone),
+          kind: phoneHit ? 'existing_phone' : 'existing_email',
+          existing_candidate_id: hit.id,
+          existing_assigned_to: hit.assigned_to_label,
+          message: phoneHit
+            ? `Phone already in pipeline — ${existingMatchReason(hit)}`
+            : `Email already in pipeline — ${existingMatchReason(hit)}`,
+        });
+      }
+
+      duplicates.sort((a, b) => a.row_number - b.row_number);
+      return new Response(JSON.stringify({
+        ok: true,
+        duplicate_count: duplicates.length,
+        duplicates,
+        clean_count: rows.length - new Set(duplicates.map((d) => d.row_number)).size,
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     if (req.method === 'POST' && mode === 'import-rows') {
       const body = (await req.json().catch(() => ({}))) as {
         batch_id?: string;
@@ -667,11 +793,14 @@ Deno.serve(async (req) => {
       const imported: string[] = [];
       const skipped: Array<{ row_number: number; reason: string }> = [];
       const failed: Array<{ row_number: number; error: string }> = [];
+      const seenPhones = new Set<string>();
+      const seenEmails = new Set<string>();
 
       for (const row of rows) {
         const rowNumber = Number(row.row_number || 0) || 0;
         const email = normalizeEmail(row.email);
-        const phone = normalizePhone(row.phone);
+        const phone = normalizeStoredPhone(row.phone);
+        const phoneKey = phoneLast10(phone);
         const fullName = String(row.full_name || '').trim() || email || phone || 'Unknown Candidate';
 
         if (!email && !phone) {
@@ -679,11 +808,37 @@ Deno.serve(async (req) => {
           continue;
         }
 
+        if (phoneKey.length >= 10) {
+          if (seenPhones.has(phoneKey)) {
+            skipped.push({ row_number: rowNumber, reason: 'Duplicate phone in this import batch.' });
+            continue;
+          }
+          const { data: existingPhone } = await admin
+            .from('pipeline_candidates')
+            .select('id, assigned_to_user_id, assigned_to_label')
+            .eq('phone_last10', phoneKey)
+            .in('status', ['open', 'in_progress'])
+            .limit(1);
+          const phoneRow = existingPhone?.[0] as { assigned_to_user_id?: string; assigned_to_label?: string } | undefined;
+          if (phoneRow) {
+            skipped.push({
+              row_number: rowNumber,
+              reason: phoneRow.assigned_to_user_id
+                ? `Phone already assigned to ${phoneRow.assigned_to_label || 'another recruiter'}.`
+                : 'Phone already in the pipeline pool.',
+            });
+            continue;
+          }
+        }
+
         if (email) {
+          if (seenEmails.has(email)) {
+            skipped.push({ row_number: rowNumber, reason: 'Duplicate email in this import batch.' });
+            continue;
+          }
           const { data: existing } = await admin
             .from('pipeline_candidates')
             .select('id, assigned_to_user_id, assigned_to_label')
-            .eq('source', 'hr_csv_batch')
             .ilike('email', email)
             .in('status', ['open', 'in_progress'])
             .limit(1);
@@ -692,7 +847,7 @@ Deno.serve(async (req) => {
               row_number: rowNumber,
               reason: existing[0].assigned_to_user_id
                 ? `Already assigned to ${existing[0].assigned_to_label || 'another recruiter'}.`
-                : 'Already in the unassigned pool.',
+                : 'Already in the pipeline pool.',
             });
             continue;
           }
@@ -723,13 +878,20 @@ Deno.serve(async (req) => {
 
         if (insErr) {
           const msg = insErr.message || 'Insert failed';
-          if (/unique|duplicate/i.test(msg) && email) {
-            skipped.push({ row_number: rowNumber, reason: 'Duplicate email already assigned in pipeline.' });
+          if (/unique|duplicate/i.test(msg)) {
+            skipped.push({
+              row_number: rowNumber,
+              reason: /phone/i.test(msg)
+                ? 'Phone already in pipeline (one number per lead).'
+                : 'Duplicate email or phone already in pipeline.',
+            });
           } else {
             failed.push({ row_number: rowNumber, error: msg });
           }
           continue;
         }
+        if (phoneKey.length >= 10) seenPhones.add(phoneKey);
+        if (email) seenEmails.add(email);
         imported.push(String((inserted as { id: string }).id));
       }
 
@@ -819,7 +981,7 @@ Deno.serve(async (req) => {
       for (const candidateId of candidateIds) {
         const { data: existing, error: getErr } = await admin
           .from('pipeline_candidates')
-          .select('id, assigned_to_user_id, assigned_to_label, lead_batch_id, source, metadata')
+          .select('id, assigned_to_user_id, assigned_to_label, lead_batch_id, source, metadata, phone, phone_last10, email')
           .eq('id', candidateId)
           .maybeSingle();
         if (getErr || !existing) {
@@ -837,6 +999,26 @@ Deno.serve(async (req) => {
             error: `Already assigned to ${String(row.assigned_to_label || 'another recruiter')}.`,
           });
           continue;
+        }
+
+        const assignPhoneKey = phoneLast10(String(row.phone || ''));
+        if (assignPhoneKey.length >= 10) {
+          const { data: phoneConflict } = await admin
+            .from('pipeline_candidates')
+            .select('id, assigned_to_label')
+            .eq('phone_last10', assignPhoneKey)
+            .in('status', ['open', 'in_progress'])
+            .not('assigned_to_user_id', 'is', null)
+            .neq('id', candidateId)
+            .limit(1);
+          const conflict = phoneConflict?.[0] as { assigned_to_label?: string } | undefined;
+          if (conflict) {
+            errors.push({
+              id: candidateId,
+              error: `Phone already assigned to ${conflict.assigned_to_label || 'another recruiter'}.`,
+            });
+            continue;
+          }
         }
 
         const { data: batchRow } = row.lead_batch_id

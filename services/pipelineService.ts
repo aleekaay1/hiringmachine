@@ -1530,6 +1530,34 @@ export async function triggerPipelineResumeConversion(resumeId: string): Promise
   await invokePipelineConvertResume({ resume_id: resumeId });
 }
 
+async function findOpenPipelineDuplicate(
+  phone: string | null,
+  email: string | null,
+): Promise<{ id: string; full_name: string | null; assigned_to_label: string | null } | null> {
+  const digits = normalizePhone(phone || '');
+  const phoneKey = digits.length >= 10 ? digits.slice(-10) : '';
+  if (phoneKey) {
+    const { data } = await supabase
+      .from('pipeline_candidates')
+      .select('id, full_name, assigned_to_label')
+      .eq('phone_last10', phoneKey)
+      .in('status', ['open', 'in_progress'])
+      .limit(1);
+    if (data?.[0]) return data[0] as { id: string; full_name: string | null; assigned_to_label: string | null };
+  }
+  const normalizedEmail = normalizeEmail(email || '');
+  if (normalizedEmail) {
+    const { data } = await supabase
+      .from('pipeline_candidates')
+      .select('id, full_name, assigned_to_label')
+      .ilike('email', normalizedEmail)
+      .in('status', ['open', 'in_progress'])
+      .limit(1);
+    if (data?.[0]) return data[0] as { id: string; full_name: string | null; assigned_to_label: string | null };
+  }
+  return null;
+}
+
 export async function bulkUploadPipelineResumes(
   files: File[],
   actorLabel?: string,
@@ -1574,6 +1602,13 @@ export async function bulkUploadPipelineResumes(
       const parsedText = await extractResumeParsedText(file, cleanName);
       const hints = mergeHints(cleanName, parsedText);
       const profile = buildOcrProfile(parsedText);
+      const duplicate = await findOpenPipelineDuplicate(hints.phone, hints.email);
+      if (duplicate) {
+        const who = duplicate.assigned_to_label
+          ? `assigned to ${duplicate.assigned_to_label}`
+          : 'already in the pipeline';
+        throw new Error(`Duplicate lead (${who}) — same phone or email.`);
+      }
       emit(index, file.name, 'saving_candidate', 35, 'Creating candidate record...');
       const { data: cand, error: cErr } = await supabase
         .from('pipeline_candidates')

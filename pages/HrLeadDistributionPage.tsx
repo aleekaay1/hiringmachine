@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { FileSpreadsheet, History, RefreshCw, Trash2, Undo2, Upload, UserPlus, Users } from 'lucide-react';
+import { AlertTriangle, FileSpreadsheet, History, RefreshCw, Trash2, Undo2, Upload, UserPlus, Users } from 'lucide-react';
 import HomeLoadingScreen from '../components/dashboard/HomeLoadingScreen';
 import { Button } from '../components/UI';
 import {
@@ -20,11 +20,19 @@ import {
   fetchHrLeadSummary,
   fetchHrRecruiterLeads,
   fetchHrRecruiterOverview,
+  checkHrLeadDuplicates,
   importHrLeadCsvWithProgress,
+  type HrLeadDuplicateCheckRow,
   type HrPoolLead,
   type HrRecruiterOverview,
   type PipelineLeadBatch,
 } from '../services/pipelineHrLeadsService';
+import {
+  defaultExcludedDuplicateRows,
+  findWithinFileDuplicateIssues,
+  mergeDuplicateIssues,
+  type HrLeadDuplicateIssue,
+} from '../services/pipelineDuplicateDetection';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import HrRecruiterTrackingPanel from '../components/pipeline/HrRecruiterTrackingPanel';
 import LeadBatchAccordion from '../components/pipeline/LeadBatchAccordion';
@@ -70,6 +78,9 @@ const HrLeadDistributionPage: React.FC = () => {
   const [deleting, setDeleting] = React.useState(false);
   const [retracting, setRetracting] = React.useState(false);
   const [parsedPreview, setParsedPreview] = React.useState<ReturnType<typeof parseHrLeadCsv> | null>(null);
+  const [duplicateIssues, setDuplicateIssues] = React.useState<HrLeadDuplicateIssue[]>([]);
+  const [excludedRowNumbers, setExcludedRowNumbers] = React.useState<Set<number>>(() => new Set());
+  const [checkingDuplicates, setCheckingDuplicates] = React.useState(false);
   const [importing, setImporting] = React.useState(false);
   const [importProgress, setImportProgress] = React.useState<{ pct: number; label: string } | null>(null);
   const [assigning, setAssigning] = React.useState(false);
@@ -173,6 +184,41 @@ const HrLeadDistributionPage: React.FC = () => {
     [performanceBatchId],
   );
 
+  const refreshDuplicateReview = React.useCallback(async (rows: ReturnType<typeof parseHrLeadCsv>['rows']) => {
+    if (!rows.length) {
+      setDuplicateIssues([]);
+      setExcludedRowNumbers(new Set());
+      return;
+    }
+    setCheckingDuplicates(true);
+    try {
+      const withinFile = findWithinFileDuplicateIssues(rows);
+      const serverRes = await checkHrLeadDuplicates(rows);
+      const serverIssues: HrLeadDuplicateIssue[] = serverRes.ok
+        ? (serverRes.data.duplicates || []).map((row: HrLeadDuplicateCheckRow) => ({
+            rowNumber: row.row_number,
+            fullName: row.full_name,
+            email: row.email,
+            phone: row.phone,
+            kind: row.kind as HrLeadDuplicateIssue['kind'],
+            matchRowNumber: row.match_row_number,
+            existingCandidateId: row.existing_candidate_id,
+            existingAssignedTo: row.existing_assigned_to,
+            message: row.message,
+          }))
+        : [];
+      const merged = mergeDuplicateIssues(withinFile, serverIssues);
+      setDuplicateIssues(merged);
+      setExcludedRowNumbers(defaultExcludedDuplicateRows(merged));
+    } catch {
+      const withinFile = findWithinFileDuplicateIssues(rows);
+      setDuplicateIssues(withinFile);
+      setExcludedRowNumbers(defaultExcludedDuplicateRows(withinFile));
+    } finally {
+      setCheckingDuplicates(false);
+    }
+  }, []);
+
   const onCsvFile = async (file: File) => {
     setError(null);
     setMessage(null);
@@ -190,6 +236,29 @@ const HrLeadDistributionPage: React.FC = () => {
     if (parsed.errors.length) {
       setError(parsed.errors.slice(0, 5).join(' '));
     }
+    void refreshDuplicateReview(parsed.rows);
+  };
+
+  const importableRows = React.useMemo(() => {
+    if (!parsedPreview?.rows.length) return [];
+    return parsedPreview.rows.filter((row) => !excludedRowNumbers.has(row.rowNumber));
+  }, [parsedPreview, excludedRowNumbers]);
+
+  const toggleExcludedRow = (rowNumber: number, excluded: boolean) => {
+    setExcludedRowNumbers((prev) => {
+      const next = new Set(prev);
+      if (excluded) next.add(rowNumber);
+      else next.delete(rowNumber);
+      return next;
+    });
+  };
+
+  const excludeAllDuplicates = () => {
+    setExcludedRowNumbers(defaultExcludedDuplicateRows(duplicateIssues));
+  };
+
+  const includeAllDuplicates = () => {
+    setExcludedRowNumbers(new Set());
   };
 
   const resolvedImportLeadTeam = React.useMemo(
@@ -215,8 +284,10 @@ const HrLeadDistributionPage: React.FC = () => {
   };
 
   const runImport = async () => {
-    if (!parsedPreview?.rows.length) {
-      setError('Upload a CSV with at least one valid row first.');
+    if (!importableRows.length) {
+      setError(parsedPreview?.rows.length
+        ? 'All rows are excluded as duplicates. Uncheck rows to import or upload a different file.'
+        : 'Upload a CSV with at least one valid row first.');
       return;
     }
     const leadTeam = resolveHrLeadTeamValue({
@@ -237,15 +308,20 @@ const HrLeadDistributionPage: React.FC = () => {
         label: importLabel || buildHrImportBatchLabel(leadTeam, importSourceFilename || 'HR import'),
         sourceFilename: importSourceFilename || importLabel,
         leadTeam,
-        rows: parsedPreview.rows,
+        rows: importableRows,
         chunkSize: CHUNK_SIZE,
         onProgress: (progress) => setImportProgress({ pct: progress.pct, label: progress.label }),
       });
+      const excludedCount = (parsedPreview?.rows.length || 0) - importableRows.length;
       setMessage(
-        `Imported ${result.imported} ${leadTeam} lead(s). Skipped ${result.skipped} duplicates. Failed ${result.failed}.`,
+        `Imported ${result.imported} ${leadTeam} lead(s).`
+        + (excludedCount ? ` Excluded ${excludedCount} duplicate(s) before import.` : '')
+        + ` Skipped ${result.skipped} pipeline duplicates. Failed ${result.failed}.`,
       );
       if (result.batchId) setSelectedBatchId(result.batchId);
       setParsedPreview(null);
+      setDuplicateIssues([]);
+      setExcludedRowNumbers(new Set());
       setImportTeamCategory('');
       setImportCustomTeamLabel('');
       setImportSourceFilename('');
@@ -562,7 +638,7 @@ const HrLeadDistributionPage: React.FC = () => {
               <Button
                 className="!min-h-0 h-10 w-full sm:w-auto"
                 onClick={() => void runImport()}
-                disabled={importing || !parsedPreview?.rows.length || !resolvedImportLeadTeam}
+                disabled={importing || !importableRows.length || !resolvedImportLeadTeam || checkingDuplicates}
               >
                 <Upload size={14} className="mr-1.5" />
                 Import leads
@@ -592,30 +668,120 @@ const HrLeadDistributionPage: React.FC = () => {
             </div>
           )}
           {parsedPreview && (
-            <div className="mt-4 overflow-auto rounded-xl border border-[#e3edf8]">
-              <table className="min-w-full text-xs">
-                <thead className="bg-[#f4f8ff] text-left text-[#4b6d95]">
-                  <tr>
-                    <th className="px-3 py-2">#</th>
-                    <th className="px-3 py-2">Lead age</th>
-                    <th className="px-3 py-2">Name</th>
-                    <th className="px-3 py-2">Email</th>
-                    <th className="px-3 py-2">Phone</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {parsedPreview.rows.slice(0, 8).map((row) => (
-                    <tr key={row.rowNumber} className="border-t border-[#edf3fa]">
-                      <td className="px-3 py-2">{row.rowNumber}</td>
-                      <td className="px-3 py-2">{row.leadAge || '—'}</td>
-                      <td className="px-3 py-2">{row.fullName}</td>
-                      <td className="px-3 py-2">{row.email || '—'}</td>
-                      <td className="px-3 py-2">{row.phone || '—'}</td>
+            <>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-[#4b6d95]">
+                <span>
+                  {importableRows.length} of {parsedPreview.rows.length} row(s) will import
+                  {checkingDuplicates ? ' · checking duplicates…' : ''}
+                </span>
+                {duplicateIssues.length > 0 && (
+                  <span className="font-semibold text-amber-800">
+                    {duplicateIssues.length} duplicate issue(s) found
+                  </span>
+                )}
+              </div>
+              {duplicateIssues.length > 0 && (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-amber-950">
+                      <AlertTriangle className="h-4 w-4 shrink-0" />
+                      Duplicate review
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="rounded-lg border border-amber-300 bg-white px-2 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-100"
+                        onClick={excludeAllDuplicates}
+                      >
+                        Exclude all duplicates
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-amber-300 bg-white px-2 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-100"
+                        onClick={includeAllDuplicates}
+                      >
+                        Include all rows
+                      </button>
+                    </div>
+                  </div>
+                  <p className="mt-1 text-[11px] text-amber-900/90">
+                    One phone number can only belong to one lead. Excluded rows will not be imported.
+                  </p>
+                  <div className="mt-3 max-h-56 overflow-auto rounded-lg border border-amber-200 bg-white">
+                    <table className="min-w-full text-xs">
+                      <thead className="sticky top-0 bg-[#fffaf0] text-left text-[#7a5a12]">
+                        <tr>
+                          <th className="px-3 py-2">Import?</th>
+                          <th className="px-3 py-2">#</th>
+                          <th className="px-3 py-2">Name</th>
+                          <th className="px-3 py-2">Phone</th>
+                          <th className="px-3 py-2">Issue</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {duplicateIssues.map((issue) => (
+                          <tr key={`${issue.rowNumber}-${issue.kind}`} className="border-t border-amber-100">
+                            <td className="px-3 py-2">
+                              <input
+                                type="checkbox"
+                                checked={!excludedRowNumbers.has(issue.rowNumber)}
+                                onChange={(e) => toggleExcludedRow(issue.rowNumber, !e.target.checked)}
+                                aria-label={`Include row ${issue.rowNumber}`}
+                              />
+                            </td>
+                            <td className="px-3 py-2">{issue.rowNumber}</td>
+                            <td className="px-3 py-2">{issue.fullName}</td>
+                            <td className="px-3 py-2 tabular-nums">{issue.phone || '—'}</td>
+                            <td className="px-3 py-2 text-amber-900">{issue.message}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+              <div className="mt-4 overflow-auto rounded-xl border border-[#e3edf8]">
+                <table className="min-w-full text-xs">
+                  <thead className="bg-[#f4f8ff] text-left text-[#4b6d95]">
+                    <tr>
+                      <th className="px-3 py-2">#</th>
+                      <th className="px-3 py-2">Lead age</th>
+                      <th className="px-3 py-2">Name</th>
+                      <th className="px-3 py-2">Email</th>
+                      <th className="px-3 py-2">Phone</th>
+                      <th className="px-3 py-2">Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {parsedPreview.rows.slice(0, 12).map((row) => {
+                      const isDuplicate = duplicateIssues.some((issue) => issue.rowNumber === row.rowNumber);
+                      const excluded = excludedRowNumbers.has(row.rowNumber);
+                      return (
+                        <tr
+                          key={row.rowNumber}
+                          className={`border-t border-[#edf3fa] ${excluded ? 'bg-slate-50 text-slate-400' : ''}`}
+                        >
+                          <td className="px-3 py-2">{row.rowNumber}</td>
+                          <td className="px-3 py-2">{row.leadAge || '—'}</td>
+                          <td className="px-3 py-2">{row.fullName}</td>
+                          <td className="px-3 py-2">{row.email || '—'}</td>
+                          <td className="px-3 py-2 tabular-nums">{row.phone || '—'}</td>
+                          <td className="px-3 py-2">
+                            {excluded ? (
+                              <span className="text-amber-700">Excluded</span>
+                            ) : isDuplicate ? (
+                              <span className="text-amber-700">Duplicate</span>
+                            ) : (
+                              <span className="text-emerald-700">OK</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </section>
 
