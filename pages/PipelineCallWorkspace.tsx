@@ -211,6 +211,8 @@ const PipelineCallWorkspace: React.FC = () => {
   const [doneSearch, setDoneSearch] = React.useState('');
   const selectedCandidateIdRef = React.useRef<string | null>(null);
   const appliedDialIntentRef = React.useRef(false);
+  /** When Place call opens 3CX — used as dial_started_at (not disposition save time). */
+  const callPlacedAtRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     selectedCandidateIdRef.current = selectedCandidateId;
@@ -806,6 +808,7 @@ const PipelineCallWorkspace: React.FC = () => {
       return;
     }
     window.open(url, '_blank', 'noopener,noreferrer');
+    callPlacedAtRef.current = new Date().toISOString();
     setActionMsg(`Opened 3CX popup for ${candidate.full_name || 'candidate'}.`);
     setSubmitAttempted(false);
     setDispositionModalMode('call');
@@ -945,13 +948,14 @@ const PipelineCallWorkspace: React.FC = () => {
     setError(null);
     try {
       const nowIso = new Date().toISOString();
+      const dialStartedAt = callPlacedAtRef.current || nowIso;
       const saved = await savePipelineCallDisposition({
         candidateId: currentCandidate.id,
         resumeId: selectedResumes[0]?.id ?? null,
         disposition,
         comment,
         dialedNumber,
-        dialStartedAt: nowIso,
+        dialStartedAt,
         actorLabel: null,
         callbackAt: callbackAtInput || null,
         bookedSubtype: bookedSubtype || null,
@@ -975,6 +979,7 @@ const PipelineCallWorkspace: React.FC = () => {
       setComment('');
       setSubmitAttempted(false);
       setShowDispositionModal(false);
+      callPlacedAtRef.current = null;
       const latestSaved: PipelineCallRecord = {
         ...saved,
         threecx_metadata: (saved.threecx_metadata && typeof saved.threecx_metadata === 'object')
