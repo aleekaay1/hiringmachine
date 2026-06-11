@@ -2,9 +2,11 @@ import React from 'react';
 import AudioPlayer from 'react-h5-audio-player';
 import type H5AudioPlayer from 'react-h5-audio-player';
 import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { transcribeRecordingLocally } from '../../services/callRecordingTranscribeLocal';
 import {
   fetchCallRecordingStreamUrl,
-  fetchCallRecordingTranscript,
+  loadCachedRecordingTranscript,
+  saveRecordingTranscript,
   type RecordingTranscript,
 } from '../../services/threecxCallLogAdmin';
 import CallRecordingTranscript from './CallRecordingTranscript';
@@ -32,15 +34,22 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
   const [transcript, setTranscript] = React.useState<RecordingTranscript | null>(null);
   const [transcriptLoading, setTranscriptLoading] = React.useState(true);
   const [transcriptError, setTranscriptError] = React.useState<string | null>(null);
+  const [transcriptStatus, setTranscriptStatus] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setSrc(null);
 
-    void fetchCallRecordingStreamUrl(callRecordId)
-      .then((blobUrl) => {
+    const run = async () => {
+      setLoading(true);
+      setTranscriptLoading(true);
+      setError(null);
+      setTranscriptError(null);
+      setTranscript(null);
+      setTranscriptStatus(null);
+      setSrc(null);
+
+      try {
+        const blobUrl = await fetchCallRecordingStreamUrl(callRecordId);
         if (cancelled) {
           URL.revokeObjectURL(blobUrl);
           return;
@@ -49,12 +58,42 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
         objectUrlRef.current = blobUrl;
         setSrc(blobUrl);
         setLoading(false);
-      })
-      .catch((err) => {
+
+        const cached = await loadCachedRecordingTranscript(callRecordId);
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : 'Recording could not be loaded.');
-        setLoading(false);
-      });
+        if (cached) {
+          setTranscript(cached);
+          setTranscriptLoading(false);
+          return;
+        }
+
+        setTranscriptStatus('Starting free local transcription…');
+        const local = await transcribeRecordingLocally(blobUrl, (message) => {
+          if (!cancelled) setTranscriptStatus(message);
+        });
+        if (cancelled) return;
+
+        setTranscript(local);
+        setTranscriptLoading(false);
+        setTranscriptStatus(null);
+        void saveRecordingTranscript(callRecordId, local).catch(() => {
+          /* playback still works if save fails */
+        });
+      } catch (err) {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : 'Recording could not be loaded.';
+        if (!objectUrlRef.current) {
+          setError(message);
+          setLoading(false);
+          setTranscriptLoading(false);
+        } else {
+          setTranscriptError(message);
+          setTranscriptLoading(false);
+        }
+      }
+    };
+
+    void run();
 
     return () => {
       cancelled = true;
@@ -62,29 +101,6 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
         URL.revokeObjectURL(objectUrlRef.current);
         objectUrlRef.current = null;
       }
-    };
-  }, [callRecordId]);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    setTranscriptLoading(true);
-    setTranscriptError(null);
-    setTranscript(null);
-
-    void fetchCallRecordingTranscript(callRecordId)
-      .then(({ transcript: next }) => {
-        if (cancelled) return;
-        setTranscript(next);
-        setTranscriptLoading(false);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setTranscriptError(err instanceof Error ? err.message : 'Transcription failed.');
-        setTranscriptLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
     };
   }, [callRecordId]);
 
@@ -173,6 +189,7 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
           transcript={transcript}
           loading={transcriptLoading}
           error={transcriptError}
+          statusMessage={transcriptStatus}
           currentTime={currentTime}
           onSeek={seekTo}
         />

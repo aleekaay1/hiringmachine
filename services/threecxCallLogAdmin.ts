@@ -146,15 +146,25 @@ export type RecordingTranscript = {
   language: string;
 };
 
-export async function fetchCallRecordingTranscript(callRecordId: string): Promise<{
-  transcript: RecordingTranscript;
-  cached: boolean;
-}> {
-  const data = await invokeThreeCxCallAdmin<{
-    transcript: RecordingTranscript;
-    cached?: boolean;
-  }>('transcribe-recording', { callRecordId });
-  return { transcript: data.transcript, cached: data.cached === true };
+export async function loadCachedRecordingTranscript(
+  callRecordId: string,
+): Promise<RecordingTranscript | null> {
+  const data = await invokeThreeCxCallAdmin<{ transcript: RecordingTranscript | null }>(
+    'get-recording-transcript',
+    { callRecordId },
+  );
+  return data.transcript?.text ? data.transcript : null;
+}
+
+export async function saveRecordingTranscript(
+  callRecordId: string,
+  transcript: RecordingTranscript,
+): Promise<RecordingTranscript> {
+  const data = await invokeThreeCxCallAdmin<{ transcript: RecordingTranscript }>(
+    'save-recording-transcript',
+    { callRecordId, transcript },
+  );
+  return data.transcript;
 }
 
 export async function fetchCallRecordingStreamUrl(callRecordId: string): Promise<string> {

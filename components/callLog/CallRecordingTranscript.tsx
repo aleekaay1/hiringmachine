@@ -6,6 +6,7 @@ type CallRecordingTranscriptProps = {
   transcript: RecordingTranscript | null;
   loading: boolean;
   error: string | null;
+  statusMessage?: string | null;
   currentTime: number;
   onSeek: (seconds: number) => void;
 };
@@ -14,6 +15,7 @@ const CallRecordingTranscript: React.FC<CallRecordingTranscriptProps> = ({
   transcript,
   loading,
   error,
+  statusMessage,
   currentTime,
   onSeek,
 }) => {
@@ -38,7 +40,9 @@ const CallRecordingTranscript: React.FC<CallRecordingTranscriptProps> = ({
         <Loader2 size={16} className="animate-spin text-[#005EB8]" />
         <div className="min-w-0">
           <p className="text-sm font-medium text-[#0B1B34]">Transcribing…</p>
-          <p className="text-[11px] text-[#5c7594]">English speech-to-text runs once and is cached.</p>
+          <p className="text-[11px] text-[#5c7594]">
+            {statusMessage || 'Free local Whisper model — runs in your browser, no API key.'}
+          </p>
           <div className="call-recording-transcript__track" aria-hidden>
             <div className="call-recording-transcript__bar" />
           </div>

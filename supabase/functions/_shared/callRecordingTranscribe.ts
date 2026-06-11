@@ -12,17 +12,7 @@ export type CallRecordingTranscript = {
   language: string;
 };
 
-function extensionFromContentType(contentType: string): string {
-  const ct = contentType.toLowerCase();
-  if (ct.includes('wav')) return 'wav';
-  if (ct.includes('ogg')) return 'ogg';
-  if (ct.includes('webm')) return 'webm';
-  if (ct.includes('mp4') || ct.includes('m4a')) return 'm4a';
-  return 'mp3';
-}
-
-function parseCachedTranscript(meta: Record<string, unknown>): CallRecordingTranscript | null {
-  const raw = meta.recording_transcript;
+function parseCachedTranscript(raw: unknown): CallRecordingTranscript | null {
   if (!raw || typeof raw !== 'object') return null;
   const obj = raw as Record<string, unknown>;
   const text = String(obj.text || '').trim();
@@ -43,7 +33,7 @@ function parseCachedTranscript(meta: Record<string, unknown>): CallRecordingTran
   return {
     text,
     segments,
-    model: String(obj.model || 'whisper-1'),
+    model: String(obj.model || 'whisper-small.en-local'),
     transcribedAt: String(obj.transcribed_at || obj.transcribedAt || ''),
     language: String(obj.language || 'en'),
   };
@@ -53,42 +43,26 @@ export function readTranscriptFromCallMetadata(
   metadata: Record<string, unknown> | null | undefined,
 ): CallRecordingTranscript | null {
   if (!metadata || typeof metadata !== 'object') return null;
-  return parseCachedTranscript(metadata);
+  return parseCachedTranscript(metadata.recording_transcript);
 }
 
-export async function transcribeRecordingAudio(
-  audioBytes: ArrayBuffer,
-  contentType: string,
-): Promise<CallRecordingTranscript> {
-  const apiKey = Deno.env.get('OPENAI_API_KEY')?.trim();
-  if (!apiKey) {
-    throw new Error('OPENAI_API_KEY is not configured for transcription.');
-  }
+export function transcriptForMetadataStorage(transcript: CallRecordingTranscript): Record<string, unknown> {
+  return {
+    text: transcript.text,
+    segments: transcript.segments,
+    model: transcript.model,
+    language: transcript.language,
+    transcribed_at: transcript.transcribedAt,
+  };
+}
 
-  const ext = extensionFromContentType(contentType);
-  const form = new FormData();
-  form.append('file', new Blob([audioBytes], { type: contentType || 'audio/mpeg' }), `recording.${ext}`);
-  form.append('model', 'whisper-1');
-  form.append('language', 'en');
-  form.append('response_format', 'verbose_json');
-
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: form,
-  });
-
-  const payload = await res.json().catch(() => ({})) as Record<string, unknown>;
-  if (!res.ok) {
-    const detail = String(payload.error && typeof payload.error === 'object'
-      ? (payload.error as Record<string, unknown>).message
-      : payload.error || payload.message || `Transcription failed (${res.status})`);
-    throw new Error(detail);
-  }
-
-  const text = String(payload.text || '').trim();
-  const segments = Array.isArray(payload.segments)
-    ? payload.segments
+export function normalizeTranscriptInput(input: unknown): CallRecordingTranscript | null {
+  if (!input || typeof input !== 'object') return null;
+  const obj = input as Record<string, unknown>;
+  const text = String(obj.text || '').trim();
+  if (!text) return null;
+  const segments = Array.isArray(obj.segments)
+    ? obj.segments
       .map((row) => {
         if (!row || typeof row !== 'object') return null;
         const seg = row as Record<string, unknown>;
@@ -100,22 +74,11 @@ export async function transcribeRecordingAudio(
       })
       .filter((row): row is TranscriptSegment => row != null)
     : [];
-
   return {
     text,
     segments,
-    model: 'whisper-1',
-    transcribedAt: new Date().toISOString(),
-    language: String(payload.language || 'en'),
-  };
-}
-
-export function transcriptForMetadataStorage(transcript: CallRecordingTranscript): Record<string, unknown> {
-  return {
-    text: transcript.text,
-    segments: transcript.segments,
-    model: transcript.model,
-    language: transcript.language,
-    transcribed_at: transcript.transcribedAt,
+    model: String(obj.model || 'whisper-small.en-local'),
+    transcribedAt: String(obj.transcribedAt || obj.transcribed_at || new Date().toISOString()),
+    language: String(obj.language || 'en'),
   };
 }

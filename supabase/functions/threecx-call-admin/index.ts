@@ -33,8 +33,8 @@ import {
   resolveRecruiterUserIds,
 } from '../_shared/threecxCallMatch.ts';
 import {
+  normalizeTranscriptInput,
   readTranscriptFromCallMetadata,
-  transcribeRecordingAudio,
   transcriptForMetadataStorage,
   type CallRecordingTranscript,
 } from '../_shared/callRecordingTranscribe.ts';
@@ -956,10 +956,10 @@ async function recordingUrlForCallRecord(
   return url;
 }
 
-async function transcribeRecordingForCallRecord(
+async function getRecordingTranscriptForCallRecord(
   admin: ReturnType<typeof createClient>,
   callRecordId: string,
-): Promise<{ transcript: CallRecordingTranscript; cached: boolean }> {
+): Promise<{ transcript: CallRecordingTranscript | null }> {
   const { data: record, error } = await admin
     .from('pipeline_call_records')
     .select('threecx_metadata')
@@ -971,22 +971,28 @@ async function transcribeRecordingForCallRecord(
   const existingMeta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
     ? record.threecx_metadata as Record<string, unknown>
     : {};
-  const cached = readTranscriptFromCallMetadata(existingMeta);
-  if (cached?.text) {
-    return { transcript: cached, cached: true };
-  }
+  return { transcript: readTranscriptFromCallMetadata(existingMeta) };
+}
 
-  const recordingUrl = await recordingUrlForCallRecord(admin, callRecordId);
-  const audioRes = await fetch(recordingUrl);
-  if (!audioRes.ok) {
-    throw new Error(`3CX recording fetch failed (${audioRes.status})`);
-  }
+async function saveRecordingTranscriptForCallRecord(
+  admin: ReturnType<typeof createClient>,
+  callRecordId: string,
+  transcriptInput: unknown,
+): Promise<{ transcript: CallRecordingTranscript }> {
+  const transcript = normalizeTranscriptInput(transcriptInput);
+  if (!transcript) throw new Error('Invalid transcript payload.');
 
-  const contentType = audioRes.headers.get('Content-Type') || 'audio/mpeg';
-  const audioBytes = await audioRes.arrayBuffer();
-  if (!audioBytes.byteLength) throw new Error('Recording file was empty.');
+  const { data: record, error } = await admin
+    .from('pipeline_call_records')
+    .select('threecx_metadata')
+    .eq('id', callRecordId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!record) throw new Error('Call record not found');
 
-  const transcript = await transcribeRecordingAudio(audioBytes, contentType);
+  const existingMeta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
+    ? record.threecx_metadata as Record<string, unknown>
+    : {};
   const { error: upErr } = await admin.from('pipeline_call_records').update({
     threecx_metadata: {
       ...existingMeta,
@@ -995,7 +1001,7 @@ async function transcribeRecordingForCallRecord(
   }).eq('id', callRecordId);
   if (upErr) throw upErr;
 
-  return { transcript, cached: false };
+  return { transcript };
 }
 
 async function streamRecordingResponse(
@@ -1100,11 +1106,17 @@ Deno.serve(async (req) => {
       const result = await fetchRecordingForCallRecord(admin, callRecordId);
       return json(200, { ok: true, ...result });
     }
-    if (action === 'transcribe-recording') {
+    if (action === 'get-recording-transcript') {
       const callRecordId = String(body.callRecordId || '').trim();
       if (!callRecordId) return json(400, { error: 'callRecordId is required' });
-      const result = await transcribeRecordingForCallRecord(admin, callRecordId);
-      return json(200, { ok: true, callRecordId, cached: result.cached, transcript: result.transcript });
+      const result = await getRecordingTranscriptForCallRecord(admin, callRecordId);
+      return json(200, { ok: true, callRecordId, transcript: result.transcript });
+    }
+    if (action === 'save-recording-transcript') {
+      const callRecordId = String(body.callRecordId || '').trim();
+      if (!callRecordId) return json(400, { error: 'callRecordId is required' });
+      const result = await saveRecordingTranscriptForCallRecord(admin, callRecordId, body.transcript);
+      return json(200, { ok: true, callRecordId, transcript: result.transcript });
     }
 
     return json(400, { error: `Unknown action: ${action}` });
