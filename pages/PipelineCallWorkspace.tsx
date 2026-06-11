@@ -961,6 +961,8 @@ const PipelineCallWorkspace: React.FC = () => {
         actorLabel: null,
         callbackAt: callbackAtInput || null,
         bookedSubtype: bookedSubtype || null,
+        candidateName: currentCandidate.full_name || null,
+        candidateEmail: currentCandidate.email || null,
         threecxMetadata: {
           source: 'phase2_call_workspace',
           auto_mode: AUTO_ADVANCE,

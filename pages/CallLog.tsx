@@ -11,7 +11,8 @@ import {
 import CallRecordingPlayer from '../components/callLog/CallRecordingPlayer';
 import {
   listPipelineCallRecords,
-  listPipelineCandidatesByIds,
+  listPipelineCandidatesForCallLog,
+  readCallRecordCandidateSnapshot,
   readCallRecordMeta,
   readCallRecordRecording,
   type PipelineCallRecord,
@@ -39,6 +40,18 @@ function resolveRecruiterLabel(
   if (profile?.email?.trim()) return profile.email.trim();
   if (row.recruiter_user_id) return row.recruiter_user_id.slice(0, 8);
   return '—';
+}
+
+function resolveCandidateDisplay(
+  row: PipelineCallRecord,
+  candidateById: Map<string, PipelineCandidate>,
+): { fullName: string; email: string | null } {
+  const candidate = candidateById.get(row.candidate_id);
+  const snapshot = readCallRecordCandidateSnapshot(row);
+  return {
+    fullName: candidate?.full_name?.trim() || snapshot.fullName || '—',
+    email: candidate?.email?.trim() || snapshot.email || null,
+  };
 }
 
 function dispositionTone(disposition: string): string {
@@ -91,7 +104,7 @@ const CallLog: React.FC = () => {
       const callRows = await listPipelineCallRecords({ limit: 2500 });
       const candidateIds = [...new Set(callRows.map((row) => row.candidate_id).filter(Boolean))];
       const [candidateRows, profiles] = await Promise.all([
-        listPipelineCandidatesByIds(candidateIds).catch(() => [] as PipelineCandidate[]),
+        listPipelineCandidatesForCallLog(candidateIds),
         listAllUserProfiles().catch(() => [] as UserProfile[]),
       ]);
       setRows(callRows);
@@ -208,10 +221,11 @@ const CallLog: React.FC = () => {
       if (dispositionFilter !== 'all' && row.disposition !== dispositionFilter) return false;
 
       if (!q) return true;
+      const display = resolveCandidateDisplay(row, candidateById);
       const candidate = candidateById.get(row.candidate_id);
       const hay = [
-        candidate?.full_name || '',
-        candidate?.email || '',
+        display.fullName,
+        display.email || '',
         candidate?.phone || '',
         row.dialed_number || '',
         row.disposition || '',
@@ -383,6 +397,7 @@ const CallLog: React.FC = () => {
             <tbody>
               {filtered.map((row) => {
                 const candidate = candidateById.get(row.candidate_id);
+                const candidateDisplay = resolveCandidateDisplay(row, candidateById);
                 const meta = readCallRecordMeta(row);
                 const recording = readCallRecordRecording(row);
                 const recruiterLabel = resolveRecruiterLabel(row, staffById);
@@ -401,12 +416,12 @@ const CallLog: React.FC = () => {
                         {recruiterLabel}
                       </td>
                       <td className="px-3 py-2 text-[#0B1B34] font-medium max-w-[160px]">
-                        <div className="truncate" title={candidate?.full_name || ''}>
-                          {candidate?.full_name || '—'}
+                        <div className="truncate" title={candidateDisplay.fullName}>
+                          {candidateDisplay.fullName}
                         </div>
-                        {candidate?.email?.trim() && (
-                          <div className="truncate text-[10px] text-[#5c6b82] font-normal" title={candidate.email}>
-                            {candidate.email.trim()}
+                        {candidateDisplay.email && (
+                          <div className="truncate text-[10px] text-[#5c6b82] font-normal" title={candidateDisplay.email}>
+                            {candidateDisplay.email}
                           </div>
                         )}
                       </td>

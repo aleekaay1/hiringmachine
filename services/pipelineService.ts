@@ -937,6 +937,60 @@ export async function listPipelineCandidatesByIds(candidateIds: string[]): Promi
   return rows;
 }
 
+/** Call log admin view — bypasses per-candidate RLS gaps for telemetry viewers. */
+export async function listPipelineCandidatesForCallLog(candidateIds: string[]): Promise<PipelineCandidate[]> {
+  const uniqueIds = [...new Set(candidateIds.map((id) => id.trim()).filter(Boolean))];
+  if (!uniqueIds.length) return [];
+  const chunkSize = 200;
+  const rows: PipelineCandidate[] = [];
+  for (let i = 0; i < uniqueIds.length; i += chunkSize) {
+    const chunk = uniqueIds.slice(i, i + chunkSize);
+    const { data, error } = await supabase.rpc('list_pipeline_candidates_for_call_log', { p_ids: chunk });
+    if (error) {
+      return listPipelineCandidatesByIds(uniqueIds);
+    }
+    for (const row of (data || []) as Array<{
+      id: string;
+      full_name: string | null;
+      email: string | null;
+      phone: string | null;
+    }>) {
+      rows.push({
+        id: row.id,
+        full_name: String(row.full_name || '').trim() || 'Unknown Candidate',
+        phone: row.phone,
+        email: row.email,
+        source: 'call_log_lookup',
+        journey_stage: 'new',
+        status: 'open',
+        uploader_user_id: null,
+        uploader_label: null,
+        lead_batch_id: null,
+        assigned_to_user_id: null,
+        assigned_to_label: null,
+        assigned_at: null,
+        scheduled_for: null,
+        metadata: null,
+        created_at: '',
+        updated_at: '',
+      });
+    }
+  }
+  if (rows.length) return rows;
+  return listPipelineCandidatesByIds(uniqueIds);
+}
+
+export function readCallRecordCandidateSnapshot(
+  record: Pick<PipelineCallRecord, 'threecx_metadata'>,
+): { fullName: string | null; email: string | null } {
+  const meta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
+    ? record.threecx_metadata as Record<string, unknown>
+    : {};
+  const fullName = String(meta.candidate_name || meta.candidate_full_name || '').trim() || null;
+  const email = String(meta.candidate_email || '').trim().toLowerCase() || null;
+  return { fullName, email };
+}
+
 export async function listPipelineCandidates(): Promise<PipelineCandidate[]> {
   const scope = await resolvePipelineViewerScope();
   let query = supabase
@@ -2031,6 +2085,8 @@ export async function savePipelineCallDisposition(input: {
   callContext?: PipelineCallContext | null;
   callbackAt?: string | null;
   bookedSubtype?: string | null;
+  candidateName?: string | null;
+  candidateEmail?: string | null;
 }): Promise<PipelineCallRecord> {
   const { data: auth } = await supabase.auth.getUser();
   const disposedAt = new Date().toISOString();
@@ -2052,10 +2108,14 @@ export async function savePipelineCallDisposition(input: {
     booked_subtype: bookedSubtype,
     call_context: input.callContext ?? null,
   };
+  const candidateName = String(input.candidateName || '').trim() || null;
+  const candidateEmail = String(input.candidateEmail || '').trim().toLowerCase() || null;
   const threecxMetadata = mergeCallContextMetadata({
     ...(input.threecxMetadata ?? {}),
     callback_at: callbackAt,
     booked_subtype: bookedSubtype,
+    candidate_name: candidateName,
+    candidate_email: candidateEmail,
   }, input.callContext) ?? {};
 
   let savedRecord: PipelineCallRecord | null = null;

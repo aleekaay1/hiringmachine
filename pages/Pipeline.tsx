@@ -1107,6 +1107,8 @@ const Pipeline: React.FC = () => {
         callContext,
         callbackAt: callDispositionCallbackAt || null,
         bookedSubtype: callDispositionBookedSubtype || null,
+        candidateName: pendingCall.candidateName || pendingCallCandidate?.full_name || null,
+        candidateEmail: pendingCallCandidate?.email || null,
       });
       await markPipelineCandidateTouched(pendingCall.candidateId);
       setPendingCall(null);
