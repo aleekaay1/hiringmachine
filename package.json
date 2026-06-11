@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "prepare-ml-assets": "node scripts/copy-onnx-wasm.mjs && node scripts/download-whisper-model.mjs",
+    "build": "npm run prepare-ml-assets && vite build",
     "preview": "vite preview",
     "github:login": "gh auth login -h github.com -p https -w"
   },

@@ -12,43 +12,59 @@ type Transcriber = (
 
 let transcriberPromise: Promise<Transcriber> | null = null;
 
-const ONNX_WASM_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.14.0/dist/';
-
 function configureTransformersEnv(env: {
   allowLocalModels: boolean;
+  allowRemoteModels: boolean;
   useBrowserCache: boolean;
+  localModelPath: string;
   backends: { onnx: { wasm: { wasmPaths: string } } };
 }): void {
-  env.allowLocalModels = false;
+  env.allowLocalModels = true;
+  env.allowRemoteModels = false;
+  env.localModelPath = '/models/';
   env.useBrowserCache = true;
-  env.backends.onnx.wasm.wasmPaths = ONNX_WASM_CDN;
+  env.backends.onnx.wasm.wasmPaths = '/onnxruntime-web/';
+}
+
+function userStatusMessage(raw: string): string {
+  if (raw.includes('Downloading model') || raw.includes('progress')) {
+    const pct = raw.match(/(\d+)%/);
+    return pct ? `Getting ready… ${pct[1]}%` : 'Getting ready…';
+  }
+  if (raw.includes('first time') || raw.includes('Loading free') || raw.includes('speech model')) {
+    return 'Setting up on your device — only needed once';
+  }
+  if (raw.includes('Preparing')) return 'Almost ready…';
+  if (raw.includes('Transcribing')) return 'Transcribing your call…';
+  return 'Transcribing your call…';
 }
 
 function friendlyTranscribeError(err: unknown): Error {
   const msg = err instanceof Error ? err.message : String(err);
-  if (msg.includes('<!DOCTYPE') || msg.includes('Unexpected token')) {
-    return new Error(
-      'Could not download the free speech model (Hugging Face or CDN blocked on this network). Try another network, disable ad blockers, then reload.',
-    );
+  if (msg.includes('<!DOCTYPE') || msg.includes('Unexpected token') || msg.includes('404')) {
+    return new Error('We could not load transcription on this device. Refresh and try again.');
   }
-  return err instanceof Error ? err : new Error(msg || 'Local transcription failed.');
+  if (/fetch|network|failed/i.test(msg)) {
+    return new Error('Connection issue while transcribing. Try again in a moment.');
+  }
+  return new Error('We could not transcribe this call. Try again in a moment.');
 }
 
 async function getTranscriber(onStatus?: (message: string) => void): Promise<Transcriber> {
   if (!transcriberPromise) {
     transcriberPromise = (async () => {
-      onStatus?.('Loading free local speech model (first time only)…');
+      onStatus?.('Setting up on your device — only needed once');
       const { pipeline, env } = await import('@xenova/transformers');
       configureTransformersEnv(env);
       return pipeline('automatic-speech-recognition', LOCAL_WHISPER_MODEL, {
         progress_callback: (progress: { status?: string; file?: string; progress?: number }) => {
           if (progress.status === 'progress' && progress.file && Number.isFinite(progress.progress)) {
             const pct = Math.round(Number(progress.progress));
-            onStatus?.(`Downloading model… ${pct}%`);
+            onStatus?.(`Getting ready… ${pct}%`);
             return;
           }
           if (progress.status === 'done' && progress.file) {
-            onStatus?.('Preparing local transcriber…');
+            onStatus?.('Almost ready…');
           }
         },
       }) as Promise<Transcriber>;
@@ -77,14 +93,14 @@ function chunksToSegments(
   return segments;
 }
 
-/** Free in-browser English transcription (Whisper via Transformers.js). */
+/** In-browser English transcription — model served from this app, runs on the user's device. */
 export async function transcribeRecordingLocally(
   audioUrl: string,
   onStatus?: (message: string) => void,
 ): Promise<RecordingTranscript> {
   try {
-    onStatus?.('Transcribing in your browser…');
-    const transcriber = await getTranscriber(onStatus);
+    onStatus?.('Transcribing your call…');
+    const transcriber = await getTranscriber((message) => onStatus?.(userStatusMessage(message)));
     const output = await transcriber(audioUrl, {
       chunk_length_s: 30,
       stride_length_s: 5,

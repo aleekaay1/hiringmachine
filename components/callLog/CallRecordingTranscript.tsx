@@ -37,11 +37,11 @@ const CallRecordingTranscript: React.FC<CallRecordingTranscriptProps> = ({
   if (loading) {
     return (
       <div className="call-recording-transcript call-recording-transcript--loading">
-        <Loader2 size={16} className="animate-spin text-[#005EB8]" />
+        <Loader2 size={18} className="call-recording-transcript__spinner" />
         <div className="min-w-0">
-          <p className="text-sm font-medium text-[#0B1B34]">Transcribing…</p>
-          <p className="text-[11px] text-[#5c7594]">
-            {statusMessage || 'Free local Whisper model — runs in your browser, no API key.'}
+          <p className="call-recording-transcript__title">Transcribing your call</p>
+          <p className="call-recording-transcript__subtitle">
+            {statusMessage || 'This runs on your computer and may take a minute.'}
           </p>
           <div className="call-recording-transcript__track" aria-hidden>
             <div className="call-recording-transcript__bar" />
@@ -54,8 +54,8 @@ const CallRecordingTranscript: React.FC<CallRecordingTranscriptProps> = ({
   if (error) {
     return (
       <div className="call-recording-transcript call-recording-transcript--error">
-        <p className="text-sm font-medium text-[#b42318]">Transcript unavailable</p>
-        <p className="text-[11px] text-[#8b3a3a]">{error}</p>
+        <p className="call-recording-transcript__title">Couldn&apos;t transcribe</p>
+        <p className="call-recording-transcript__subtitle">{error}</p>
       </div>
     );
   }
@@ -63,7 +63,7 @@ const CallRecordingTranscript: React.FC<CallRecordingTranscriptProps> = ({
   if (!transcript?.text) {
     return (
       <div className="call-recording-transcript call-recording-transcript--empty">
-        <p className="text-sm text-[#5c7594]">No speech detected in this recording.</p>
+        <p className="call-recording-transcript__subtitle">No speech detected in this recording.</p>
       </div>
     );
   }

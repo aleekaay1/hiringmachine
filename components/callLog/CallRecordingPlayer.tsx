@@ -1,7 +1,6 @@
 import React from 'react';
-import AudioPlayer from 'react-h5-audio-player';
-import type H5AudioPlayer from 'react-h5-audio-player';
-import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Captions, Loader2, Pause, Play, X } from 'lucide-react';
 import { transcribeRecordingLocally } from '../../services/callRecordingTranscribeLocal';
 import {
   fetchCallRecordingStreamUrl,
@@ -10,7 +9,6 @@ import {
   type RecordingTranscript,
 } from '../../services/threecxCallLogAdmin';
 import CallRecordingTranscript from './CallRecordingTranscript';
-import 'react-h5-audio-player/lib/styles.css';
 import './call-recording-player.css';
 
 const SPEED_OPTIONS = [1, 1.5, 2] as const;
@@ -21,18 +19,22 @@ type CallRecordingPlayerProps = {
 };
 
 const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId }) => {
-  const playerRef = React.useRef<H5AudioPlayer>(null);
+  const audioRef = React.useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = React.useRef<string | null>(null);
+  const progressRef = React.useRef<HTMLDivElement | null>(null);
+  const transcribeStartedRef = React.useRef(false);
 
   const [src, setSrc] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [playing, setPlaying] = React.useState(false);
   const [speed, setSpeed] = React.useState<PlaybackSpeed>(1);
   const [currentTime, setCurrentTime] = React.useState(0);
+  const [duration, setDuration] = React.useState(0);
 
-  const [transcriptOpen, setTranscriptOpen] = React.useState(true);
+  const [transcriptOpen, setTranscriptOpen] = React.useState(false);
   const [transcript, setTranscript] = React.useState<RecordingTranscript | null>(null);
-  const [transcriptLoading, setTranscriptLoading] = React.useState(true);
+  const [transcriptLoading, setTranscriptLoading] = React.useState(false);
   const [transcriptError, setTranscriptError] = React.useState<string | null>(null);
   const [transcriptStatus, setTranscriptStatus] = React.useState<string | null>(null);
 
@@ -41,12 +43,17 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
 
     const run = async () => {
       setLoading(true);
-      setTranscriptLoading(true);
       setError(null);
-      setTranscriptError(null);
-      setTranscript(null);
-      setTranscriptStatus(null);
       setSrc(null);
+      setPlaying(false);
+      setCurrentTime(0);
+      setDuration(0);
+      setTranscriptOpen(false);
+      setTranscript(null);
+      setTranscriptLoading(false);
+      setTranscriptError(null);
+      setTranscriptStatus(null);
+      transcribeStartedRef.current = false;
 
       try {
         const blobUrl = await fetchCallRecordingStreamUrl(callRecordId);
@@ -58,43 +65,10 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
         objectUrlRef.current = blobUrl;
         setSrc(blobUrl);
         setLoading(false);
-
-        let cached: RecordingTranscript | null = null;
-        try {
-          cached = await loadCachedRecordingTranscript(callRecordId);
-        } catch {
-          /* cache miss or API glitch — still try local transcription */
-        }
-        if (cancelled) return;
-        if (cached) {
-          setTranscript(cached);
-          setTranscriptLoading(false);
-          return;
-        }
-
-        setTranscriptStatus('Starting free local transcription…');
-        const local = await transcribeRecordingLocally(blobUrl, (message) => {
-          if (!cancelled) setTranscriptStatus(message);
-        });
-        if (cancelled) return;
-
-        setTranscript(local);
-        setTranscriptLoading(false);
-        setTranscriptStatus(null);
-        void saveRecordingTranscript(callRecordId, local).catch(() => {
-          /* playback still works if save fails */
-        });
       } catch (err) {
         if (cancelled) return;
-        const message = err instanceof Error ? err.message : 'Recording could not be loaded.';
-        if (!objectUrlRef.current) {
-          setError(message);
-          setLoading(false);
-          setTranscriptLoading(false);
-        } else {
-          setTranscriptError(message);
-          setTranscriptLoading(false);
-        }
+        setError(err instanceof Error ? err.message : 'Recording could not be loaded.');
+        setLoading(false);
       }
     };
 
@@ -110,30 +84,112 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
   }, [callRecordId]);
 
   React.useEffect(() => {
-    const audio = playerRef.current?.audio.current;
-    if (audio) audio.playbackRate = speed;
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.playbackRate = speed;
   }, [src, speed]);
 
-  const applySpeed = (rate: PlaybackSpeed) => {
-    setSpeed(rate);
-    const audio = playerRef.current?.audio.current;
-    if (audio) audio.playbackRate = rate;
+  const runTranscription = React.useCallback(async () => {
+    const blobUrl = objectUrlRef.current;
+    if (!blobUrl || transcribeStartedRef.current) return;
+    transcribeStartedRef.current = true;
+    setTranscriptLoading(true);
+    setTranscriptError(null);
+    setTranscriptStatus(null);
+
+    try {
+      let cached: RecordingTranscript | null = null;
+      try {
+        cached = await loadCachedRecordingTranscript(callRecordId);
+      } catch {
+        /* continue to local transcription */
+      }
+      if (cached) {
+        setTranscript(cached);
+        setTranscriptLoading(false);
+        return;
+      }
+
+      const local = await transcribeRecordingLocally(blobUrl, (message) => {
+        setTranscriptStatus(message);
+      });
+      setTranscript(local);
+      setTranscriptLoading(false);
+      setTranscriptStatus(null);
+      void saveRecordingTranscript(callRecordId, local).catch(() => {
+        /* playback still works if save fails */
+      });
+    } catch (err) {
+      transcribeStartedRef.current = false;
+      setTranscriptError(err instanceof Error ? err.message : 'We could not transcribe this call.');
+      setTranscriptLoading(false);
+    }
+  }, [callRecordId]);
+
+  const openTranscript = () => {
+    setTranscriptOpen(true);
+    if (transcript || transcriptLoading) return;
+    if (transcriptError) {
+      transcribeStartedRef.current = false;
+      setTranscriptError(null);
+    }
+    void runTranscription();
+  };
+
+  const closeTranscript = () => {
+    setTranscriptOpen(false);
+  };
+
+  const togglePlay = async () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      try {
+        await audio.play();
+        setPlaying(true);
+      } catch {
+        setError('Playback was blocked by your browser.');
+      }
+    } else {
+      audio.pause();
+      setPlaying(false);
+    }
   };
 
   const seekTo = (seconds: number) => {
-    const audio = playerRef.current?.audio.current;
+    const audio = audioRef.current;
     if (!audio || !Number.isFinite(seconds)) return;
     audio.currentTime = seconds;
     setCurrentTime(seconds);
   };
 
+  const seekFromClientX = (clientX: number) => {
+    const bar = progressRef.current;
+    const audio = audioRef.current;
+    if (!bar || !audio || !duration) return;
+    const rect = bar.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    seekTo(ratio * duration);
+  };
+
+  const onProgressPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    seekFromClientX(event.clientX);
+    const onMove = (e: PointerEvent) => seekFromClientX(e.clientX);
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
   if (loading) {
     return (
       <div className="call-recording-player call-recording-player--loading">
-        <Loader2 size={18} className="animate-spin text-[#005EB8]" />
+        <Loader2 size={20} className="call-recording-player__spinner" />
         <div className="min-w-0">
-          <span>Loading recording…</span>
-          <div className="call-recording-load-track mt-2" aria-hidden>
+          <span className="call-recording-player__loading-label">Loading recording…</span>
+          <div className="call-recording-load-track" aria-hidden>
             <div className="call-recording-load-bar" />
           </div>
         </div>
@@ -149,58 +205,143 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
     );
   }
 
+  const progressPct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+
   return (
-    <div className="call-recording-player call-recording-player--with-transcript">
-      <div className="call-recording-player__main">
-        <AudioPlayer
-          ref={playerRef}
+    <div className={`call-recording-shell${transcriptOpen ? ' is-transcript-open' : ''}`}>
+      <motion.div
+        className="call-recording-shell__player"
+        layout
+        transition={{ type: 'spring', stiffness: 420, damping: 36 }}
+      >
+        <audio
+          ref={audioRef}
           src={src}
           preload="auto"
-          showJumpControls={false}
-          customAdditionalControls={[]}
-          customVolumeControls={[]}
-          layout="horizontal-reverse"
-          className="call-recording-player__h5"
-          listenInterval={200}
-          onListen={(e) => setCurrentTime(e.target.currentTime)}
-          onPlayError={(err) => setError(err.message)}
+          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+          onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onEnded={() => setPlaying(false)}
         />
-        <div className="call-recording-player__controls-row">
-          <div className="call-recording-player__speeds">
-            {SPEED_OPTIONS.map((rate) => (
-              <button
-                key={rate}
-                type="button"
-                className={`call-recording-player__speed${speed === rate ? ' is-active' : ''}`}
-                onClick={() => applySpeed(rate)}
-              >
-                {rate}x
-              </button>
-            ))}
-          </div>
+
+        <div className="call-recording-deck">
           <button
             type="button"
-            className="call-recording-player__transcript-toggle"
-            onClick={() => setTranscriptOpen((open) => !open)}
+            className="call-recording-deck__play"
+            onClick={() => void togglePlay()}
+            aria-label={playing ? 'Pause' : 'Play'}
           >
-            {transcriptOpen ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-            {transcriptOpen ? 'Hide transcript' : 'Show transcript'}
+            {playing ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" className="ml-0.5" />}
           </button>
-        </div>
-      </div>
 
-      {transcriptOpen && (
-        <CallRecordingTranscript
-          transcript={transcript}
-          loading={transcriptLoading}
-          error={transcriptError}
-          statusMessage={transcriptStatus}
-          currentTime={currentTime}
-          onSeek={seekTo}
-        />
-      )}
+          <div className="call-recording-deck__body">
+            <div className="call-recording-deck__times">
+              <span>{formatClock(currentTime)}</span>
+              <span>{formatClock(duration)}</span>
+            </div>
+            <div
+              ref={progressRef}
+              className="call-recording-deck__progress"
+              onPointerDown={onProgressPointerDown}
+              role="slider"
+              aria-valuemin={0}
+              aria-valuemax={duration}
+              aria-valuenow={currentTime}
+              aria-label="Seek"
+            >
+              <div className="call-recording-deck__progress-rail" />
+              <div
+                className="call-recording-deck__progress-fill"
+                style={{ width: `${progressPct}%` }}
+              />
+              <div
+                className="call-recording-deck__progress-thumb"
+                style={{ left: `${progressPct}%` }}
+              />
+            </div>
+            <div className="call-recording-deck__meta">
+              <div className="call-recording-deck__speeds">
+                {SPEED_OPTIONS.map((rate) => (
+                  <button
+                    key={rate}
+                    type="button"
+                    className={`call-recording-deck__speed${speed === rate ? ' is-active' : ''}`}
+                    onClick={() => setSpeed(rate)}
+                  >
+                    {rate}x
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {!transcriptOpen && (
+            <motion.button
+              type="button"
+              className="call-recording-deck__transcribe"
+              onClick={openTranscript}
+              aria-label="Transcribe call"
+              whileHover={{ scale: 1.04 }}
+              whileTap={{ scale: 0.96 }}
+              layoutId="transcribe-trigger"
+            >
+              <Captions size={17} strokeWidth={2.1} />
+            </motion.button>
+          )}
+        </div>
+      </motion.div>
+
+      <AnimatePresence>
+        {transcriptOpen && (
+          <motion.aside
+            className="call-recording-shell__transcript"
+            initial={{ width: 0, opacity: 0, x: 12 }}
+            animate={{ width: 320, opacity: 1, x: 0 }}
+            exit={{ width: 0, opacity: 0, x: 12 }}
+            transition={{ type: 'spring', stiffness: 380, damping: 34 }}
+          >
+            <div className="call-recording-transcript-panel">
+              <div className="call-recording-transcript-panel__head">
+                <motion.div
+                  className="call-recording-transcript-panel__icon"
+                  layoutId="transcribe-trigger"
+                >
+                  <Captions size={15} strokeWidth={2.1} />
+                </motion.div>
+                <span className="call-recording-transcript-panel__label">Transcript</span>
+                <button
+                  type="button"
+                  className="call-recording-transcript-panel__close"
+                  onClick={closeTranscript}
+                  aria-label="Close transcript"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="call-recording-transcript-panel__body">
+                <CallRecordingTranscript
+                  transcript={transcript}
+                  loading={transcriptLoading}
+                  error={transcriptError}
+                  statusMessage={transcriptStatus}
+                  currentTime={currentTime}
+                  onSeek={seekTo}
+                />
+              </div>
+            </div>
+          </motion.aside>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
+
+function formatClock(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
 
 export default CallRecordingPlayer;
