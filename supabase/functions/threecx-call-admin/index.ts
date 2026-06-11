@@ -38,8 +38,9 @@ const MATCH_AFTER_MS = 30 * 60_000;
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Authorization, Content-Type, apikey, x-client-info',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type, apikey, x-client-info, Range',
+  'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
 };
 
 const CALL_LOG_EMAILS = new Set(['ali@globelife-paz.com', 'hr.licensing@globelife-paz.com']);
@@ -927,11 +928,76 @@ async function listWebhookCalls(admin: ReturnType<typeof createClient>, hoursBac
   return { rows };
 }
 
+async function recordingUrlForCallRecord(
+  admin: ReturnType<typeof createClient>,
+  callRecordId: string,
+): Promise<string> {
+  const { data: record, error } = await admin
+    .from('pipeline_call_records')
+    .select('recording_url, threecx_metadata')
+    .eq('id', callRecordId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!record) throw new Error('Call record not found');
+
+  const meta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
+    ? record.threecx_metadata as Record<string, unknown>
+    : {};
+  const url = String(record.recording_url || meta.recording_url || '').trim();
+  if (!url.startsWith('http')) {
+    throw new Error('No recording URL saved for this call — click Load recording first.');
+  }
+  return url;
+}
+
+async function streamRecordingResponse(
+  admin: ReturnType<typeof createClient>,
+  callRecordId: string,
+  req: Request,
+): Promise<Response> {
+  const recordingUrl = await recordingUrlForCallRecord(admin, callRecordId);
+  const upstreamHeaders: Record<string, string> = {};
+  const range = req.headers.get('Range');
+  if (range) upstreamHeaders.Range = range;
+
+  const upstream = await fetch(recordingUrl, { headers: upstreamHeaders });
+  if (!upstream.ok) {
+    return json(upstream.status === 404 ? 404 : 502, {
+      error: `3CX recording fetch failed (${upstream.status})`,
+    });
+  }
+
+  const headers = new Headers(corsHeaders);
+  const contentType = upstream.headers.get('Content-Type');
+  headers.set('Content-Type', contentType && !contentType.includes('text/html')
+    ? contentType
+    : 'audio/mpeg');
+  for (const key of ['Content-Length', 'Content-Range', 'Accept-Ranges'] as const) {
+    const value = upstream.headers.get(key);
+    if (value) headers.set(key, value);
+  }
+
+  return new Response(upstream.body, { status: upstream.status, headers });
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
-  if (req.method !== 'POST') return json(405, { error: 'Method not allowed' });
 
   try {
+    if (req.method === 'GET') {
+      const url = new URL(req.url);
+      const action = String(url.searchParams.get('action') || '').trim().toLowerCase();
+      if (action === 'stream-recording') {
+        const callRecordId = String(url.searchParams.get('callRecordId') || '').trim();
+        if (!callRecordId) return json(400, { error: 'callRecordId is required' });
+        const { admin } = await assertCallLogAdmin(req.headers.get('Authorization'));
+        return await streamRecordingResponse(admin, callRecordId, req);
+      }
+      return json(400, { error: 'Unknown GET action' });
+    }
+
+    if (req.method !== 'POST') return json(405, { error: 'Method not allowed' });
+
     const { admin } = await assertCallLogAdmin(req.headers.get('Authorization'));
     const body = (await req.json().catch(() => ({}))) as {
       action?: string;

@@ -476,7 +476,7 @@ const CallLog: React.FC = () => {
                     {showPlayer && recording.recordingUrl && (
                       <tr className="border-b border-[#eef2f7] bg-[#fafcff]">
                         <td colSpan={9} className="px-3 py-2">
-                          <CallRecordingPlayer url={recording.recordingUrl} durationHint={recording.durationSeconds} />
+                          <CallRecordingPlayer callRecordId={row.id} />
                         </td>
                       </tr>
                     )}

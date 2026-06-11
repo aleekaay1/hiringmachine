@@ -131,6 +131,38 @@ export async function fetchCallRecordingForDisposition(callRecordId: string): Pr
   return invokeThreeCxCallAdmin('fetch-recording', { callRecordId });
 }
 
+/** Proxy 3CX audio through our edge function (3CX blocks browser CORS). */
+export async function fetchCallRecordingStreamUrl(callRecordId: string): Promise<string> {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+  if (!supabaseUrl || !anonKey) throw new Error('Missing Supabase environment configuration.');
+
+  const { data: session } = await supabase.auth.getSession();
+  const token = session.session?.access_token;
+  if (!token) throw new Error('You must be signed in.');
+
+  const params = new URLSearchParams({
+    action: 'stream-recording',
+    callRecordId,
+  });
+  const res = await fetch(`${supabaseUrl}/functions/v1/threecx-call-admin?${params}`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: anonKey,
+    },
+  });
+
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(String(body.error || `Recording stream failed (${res.status})`));
+  }
+
+  const blob = await res.blob();
+  if (!blob.size) throw new Error('Recording file was empty.');
+  return URL.createObjectURL(blob);
+}
+
 export async function fetchCallLogWebhookRows(hoursBack = 72): Promise<CallLogWebhookRow[]> {
   const data = await invokeThreeCxCallAdmin<{ rows?: CallLogWebhookRow[] }>('list-webhook-calls', { hoursBack });
   return data.rows || [];
