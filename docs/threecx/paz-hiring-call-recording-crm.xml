@@ -1,12 +1,12 @@
 <?xml version="1.0"?>
 <!--
-  PAZ Hiring — 3CX CRM template (Version 5)
+  PAZ Hiring — 3CX CRM template (Version 6)
   - Ping: health check
-  - ReportCall: hangup webhook for RECRUITER extensions only (stored for Call log → Load recording)
+  - ReportCall: hangup webhook for RECRUITER extensions (recording + 3CX AI transcript/summary)
 
   Upload: Settings → CRM → + Add Template → PAZ Hiring Call Log → Save
 -->
-<Crm xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" Country="CA" Name="PAZ Hiring Call Log" Version="5" SupportsEmojis="false">
+<Crm xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" Country="CA" Name="PAZ Hiring Call Log" Version="6" SupportsEmojis="false">
   <Number Prefix="AsIs" />
   <Connection MaxConcurrentRequests="8" />
   <Authentication Type="No" />
@@ -47,6 +47,9 @@
           <Value Key="call_start_utc_millis" Passes="0" Type="String">[CallStartTimeUTCMillis]</Value>
           <Value Key="call_end_utc_millis" Passes="0" Type="String">[CallEndTimeUTCMillis]</Value>
           <Value Key="recording_url" Passes="0" Type="String">[RecordingUrl]</Value>
+          <Value Key="transcription" Passes="0" Type="String">[Transcription]</Value>
+          <Value Key="summary" Passes="0" Type="String">[Summary]</Value>
+          <Value Key="sentiment_score" Passes="0" Type="String">[SentimentScore]</Value>
           <Value Key="call_id" Passes="2" Type="String">[Agent]-[Number]-[[CallStartTimeUTC].ToString("yyyyMMddHHmmss")]</Value>
         </PostValues>
       </Request>

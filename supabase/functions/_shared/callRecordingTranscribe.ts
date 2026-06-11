@@ -43,6 +43,16 @@ export function readTranscriptFromCallMetadata(
   metadata: Record<string, unknown> | null | undefined,
 ): CallRecordingTranscript | null {
   if (!metadata || typeof metadata !== 'object') return null;
+  const from3cx = String(metadata.threecx_transcription || '').trim();
+  if (from3cx) {
+    return {
+      text: from3cx,
+      segments: [],
+      model: '3cx-ai',
+      transcribedAt: String(metadata.transcription_synced_at || ''),
+      language: 'en',
+    };
+  }
   return parseCachedTranscript(metadata.recording_transcript);
 }
 

@@ -599,6 +599,20 @@ export function readCallRecordDirection(
   return 'unknown';
 }
 
+export function readCallRecordThreeCxContent(
+  record: Pick<PipelineCallRecord, 'threecx_metadata'>,
+): { transcript: string | null; summary: string | null } {
+  const meta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
+    ? (record.threecx_metadata as Record<string, unknown>)
+    : {};
+  const fromMeta = meta.recording_transcript && typeof meta.recording_transcript === 'object'
+    ? String((meta.recording_transcript as Record<string, unknown>).text || '').trim()
+    : '';
+  const transcript = String(meta.threecx_transcription || fromMeta || '').trim() || null;
+  const summary = String(meta.threecx_summary || '').trim() || null;
+  return { transcript, summary };
+}
+
 export function readCallRecordRecording(
   record: Pick<PipelineCallRecord, 'recording_url' | 'duration_seconds' | 'threecx_metadata'>,
 ): {

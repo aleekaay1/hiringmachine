@@ -93,6 +93,12 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     setMobileOpen(false);
   }, [pathname, search]);
 
+  React.useEffect(() => {
+    if (pathname === '/call-log') {
+      setCollapsed(true);
+    }
+  }, [pathname]);
+
   const toggleGroup = (groupId: string) => {
     setOpenGroups((prev) => (prev.has(groupId) ? new Set<string>() : new Set([groupId])));
   };

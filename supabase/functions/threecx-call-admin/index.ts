@@ -38,6 +38,11 @@ import {
   transcriptForMetadataStorage,
   type CallRecordingTranscript,
 } from '../_shared/callRecordingTranscribe.ts';
+import {
+  extractThreeCxTranscriptFromPayload,
+  readThreeCxSummaryFromMetadata,
+  threeCxTranscriptMetaPatch,
+} from '../_shared/threecxTranscript.ts';
 
 const MATCH_BEFORE_MS = 30_000;
 const MATCH_AFTER_MS = 30 * 60_000;
@@ -291,6 +296,7 @@ async function backfillFromWebhookEvents(admin: ReturnType<typeof createClient>,
     const callId = pickString(payload, ['call_id', 'callId']) || `webhook-${event.id}`;
     const anchorIso = parseWebhookAnchorIso(payload, receivedAt);
 
+    const transcriptFields = extractThreeCxTranscriptFromPayload(payload);
     const result = await attachRecordingToCallRecord(admin, {
       phoneNumber: phone,
       agentExtension: extension,
@@ -301,6 +307,9 @@ async function backfillFromWebhookEvents(admin: ReturnType<typeof createClient>,
       anchorIso,
       replayMode: true,
       reportMeta: { source: 'backfill_webhook_events', backfill_date: bounds.dateKey },
+      transcription: transcriptFields.transcription,
+      summary: transcriptFields.summary,
+      sentiment: transcriptFields.sentiment,
     });
     if (result.matched) {
       matched += 1;
@@ -496,6 +505,7 @@ async function syncRecordings(
     const receivedAt = String(event.received_at || new Date().toISOString());
     const anchorIso = parseWebhookAnchorIso(payload, receivedAt);
 
+    const transcriptFields = extractThreeCxTranscriptFromPayload(payload);
     const result = await attachRecordingToCallRecord(admin, {
       phoneNumber: phone,
       agentExtension: extension,
@@ -507,6 +517,9 @@ async function syncRecordings(
       replayMode: true,
       excludeRecordIds: claimedRecordIds,
       reportMeta: { source: 'sync_recordings', received_at: receivedAt },
+      transcription: transcriptFields.transcription,
+      summary: transcriptFields.summary,
+      sentiment: transcriptFields.sentiment,
     });
     if (result.matched) {
       matched += 1;
@@ -604,6 +617,9 @@ async function saveRecordingOnCallRecord(
     source: string;
     extension: string;
     anchorIso: string;
+    transcription?: string | null;
+    summary?: string | null;
+    sentiment?: string | null;
   },
 ) {
   const { data: record, error } = await admin
@@ -618,6 +634,12 @@ async function saveRecordingOnCallRecord(
     ? record.threecx_metadata as Record<string, unknown>
     : {};
 
+  const transcriptPatch = threeCxTranscriptMetaPatch({
+    transcription: input.transcription || null,
+    summary: input.summary || null,
+    sentiment: input.sentiment || null,
+  });
+
   const { error: upErr } = await admin.from('pipeline_call_records').update({
     recording_url: input.recordingUrl,
     duration_seconds: input.durationSeconds,
@@ -631,9 +653,102 @@ async function saveRecordingOnCallRecord(
       match_anchor: input.anchorIso,
       fetch_source: input.source,
       fetched_at: new Date().toISOString(),
+      ...transcriptPatch,
     },
   }).eq('id', callRecordId);
   if (upErr) throw upErr;
+}
+
+async function syncThreeCxTranscriptForCallRecord(
+  admin: ReturnType<typeof createClient>,
+  callRecordId: string,
+): Promise<{
+  transcript: CallRecordingTranscript | null;
+  summary: string | null;
+  synced: boolean;
+  message?: string;
+}> {
+  const { data: record, error } = await admin
+    .from('pipeline_call_records')
+    .select('id, dialed_number, recruiter_user_id, disposed_at, dial_started_at, threecx_metadata')
+    .eq('id', callRecordId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!record) throw new Error('Call record not found');
+
+  const meta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
+    ? record.threecx_metadata as Record<string, unknown>
+    : {};
+  const existing = readTranscriptFromCallMetadata(meta);
+  const existingSummary = readThreeCxSummaryFromMetadata(meta);
+  if (existing?.text) {
+    return { transcript: existing, summary: existingSummary, synced: false };
+  }
+
+  const phone = String(record.dialed_number || '').trim();
+  const disposedMs = Date.parse(String(record.disposed_at || ''));
+  const dialStartedMs = Date.parse(String(record.dial_started_at || ''));
+  if (digitsOnly(phone).length < 10 || !Number.isFinite(disposedMs)) {
+    return {
+      transcript: null,
+      summary: null,
+      synced: false,
+      message: 'Missing phone or disposition time for 3CX transcript lookup.',
+    };
+  }
+
+  const extension = await resolveExtensionForRecruiter(admin, record.recruiter_user_id);
+  if (!extension) {
+    return {
+      transcript: null,
+      summary: null,
+      synced: false,
+      message: 'Recruiter extension not set.',
+    };
+  }
+
+  const { anchorMs, startMs, endMs } = computeMatchWindow({
+    disposedMs,
+    dialStartedMs: Number.isFinite(dialStartedMs) ? dialStartedMs : null,
+  });
+
+  const webhook = await findWebhookRecording(admin, {
+    phone,
+    extension,
+    recruiterUserId: record.recruiter_user_id,
+    startMs,
+    endMs,
+    targetMs: anchorMs,
+  });
+
+  const fields = webhook.candidate
+    ? {
+      transcription: webhook.candidate.transcription || null,
+      summary: webhook.candidate.summary || null,
+      sentiment: webhook.candidate.sentiment || null,
+    }
+    : { transcription: null, summary: null, sentiment: null };
+
+  if (!fields.transcription && !fields.summary) {
+    return {
+      transcript: null,
+      summary: null,
+      synced: false,
+      message: 'No 3CX transcript on file yet. Enable AI transcription in 3CX and re-upload CRM template v6.',
+    };
+  }
+
+  const patch = threeCxTranscriptMetaPatch(fields);
+  const { error: upErr } = await admin.from('pipeline_call_records').update({
+    threecx_metadata: { ...meta, ...patch },
+  }).eq('id', callRecordId);
+  if (upErr) throw upErr;
+
+  return {
+    transcript: readTranscriptFromCallMetadata({ ...meta, ...patch }),
+    summary: readThreeCxSummaryFromMetadata({ ...meta, ...patch }),
+    synced: true,
+  };
 }
 
 function normalizeExtensionDigits(ext: string): string {
@@ -709,6 +824,9 @@ async function fetchRecordingForCallRecord(
       || extensionsMatch(cachedExt, extension)
       || await recruiterOwnsExtension(admin, record.recruiter_user_id, cachedExt);
     if (cacheOk) {
+      if (!readTranscriptFromCallMetadata(meta)) {
+        await syncThreeCxTranscriptForCallRecord(admin, callRecordId).catch(() => null);
+      }
       const duration = Number(record.duration_seconds ?? meta.duration_seconds);
       return {
         matched: true,
@@ -880,6 +998,9 @@ async function fetchRecordingForCallRecord(
     source: best.source,
     extension: best.extension,
     anchorIso: new Date(best.anchorMs).toISOString(),
+    transcription: best.transcription,
+    summary: best.summary,
+    sentiment: best.sentiment,
   });
 
   return {
@@ -959,7 +1080,7 @@ async function recordingUrlForCallRecord(
 async function getRecordingTranscriptForCallRecord(
   admin: ReturnType<typeof createClient>,
   callRecordId: string,
-): Promise<{ transcript: CallRecordingTranscript | null }> {
+): Promise<{ transcript: CallRecordingTranscript | null; summary: string | null }> {
   const { data: record, error } = await admin
     .from('pipeline_call_records')
     .select('threecx_metadata')
@@ -971,7 +1092,10 @@ async function getRecordingTranscriptForCallRecord(
   const existingMeta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
     ? record.threecx_metadata as Record<string, unknown>
     : {};
-  return { transcript: readTranscriptFromCallMetadata(existingMeta) };
+  return {
+    transcript: readTranscriptFromCallMetadata(existingMeta),
+    summary: readThreeCxSummaryFromMetadata(existingMeta),
+  };
 }
 
 async function saveRecordingTranscriptForCallRecord(
@@ -1052,7 +1176,14 @@ Deno.serve(async (req) => {
         if (!callRecordId) return json(400, { error: 'callRecordId is required' });
         const { admin } = await assertCallLogAdmin(req.headers.get('Authorization'));
         const result = await getRecordingTranscriptForCallRecord(admin, callRecordId);
-        return json(200, { ok: true, callRecordId, transcript: result.transcript });
+        return json(200, { ok: true, callRecordId, ...result });
+      }
+      if (action === 'sync-threecx-transcript') {
+        const callRecordId = String(url.searchParams.get('callRecordId') || '').trim();
+        if (!callRecordId) return json(400, { error: 'callRecordId is required' });
+        const { admin } = await assertCallLogAdmin(req.headers.get('Authorization'));
+        const result = await syncThreeCxTranscriptForCallRecord(admin, callRecordId);
+        return json(200, { ok: true, callRecordId, ...result });
       }
       return json(400, { error: 'Unknown GET action' });
     }
@@ -1124,6 +1255,12 @@ Deno.serve(async (req) => {
       if (!callRecordId) return json(400, { error: 'callRecordId is required' });
       const result = await saveRecordingTranscriptForCallRecord(admin, callRecordId, body.transcript);
       return json(200, { ok: true, callRecordId, transcript: result.transcript });
+    }
+    if (action === 'sync-threecx-transcript') {
+      const callRecordId = String(body.callRecordId || '').trim();
+      if (!callRecordId) return json(400, { error: 'callRecordId is required' });
+      const result = await syncThreeCxTranscriptForCallRecord(admin, callRecordId);
+      return json(200, { ok: true, callRecordId, ...result });
     }
 
     return json(400, { error: `Unknown action: ${action}` });

@@ -1,11 +1,10 @@
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Captions, Loader2, Pause, Play, X } from 'lucide-react';
-import { transcribeRecordingLocally } from '../../services/callRecordingTranscribeLocal';
 import {
   fetchCallRecordingStreamUrl,
-  loadCachedRecordingTranscript,
-  saveRecordingTranscript,
+  loadCallTranscript,
+  syncThreeCxCallTranscript,
   type RecordingTranscript,
 } from '../../services/threecxCallLogAdmin';
 import CallRecordingTranscript from './CallRecordingTranscript';
@@ -16,13 +15,18 @@ type PlaybackSpeed = (typeof SPEED_OPTIONS)[number];
 
 type CallRecordingPlayerProps = {
   callRecordId: string;
+  initialTranscript?: string | null;
+  initialSummary?: string | null;
 };
 
-const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId }) => {
+const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({
+  callRecordId,
+  initialTranscript,
+  initialSummary,
+}) => {
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
   const objectUrlRef = React.useRef<string | null>(null);
   const progressRef = React.useRef<HTMLDivElement | null>(null);
-  const transcribeStartedRef = React.useRef(false);
 
   const [src, setSrc] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(true);
@@ -33,7 +37,12 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
   const [duration, setDuration] = React.useState(0);
 
   const [transcriptOpen, setTranscriptOpen] = React.useState(false);
-  const [transcript, setTranscript] = React.useState<RecordingTranscript | null>(null);
+  const [transcript, setTranscript] = React.useState<RecordingTranscript | null>(
+    initialTranscript
+      ? { text: initialTranscript, segments: [], model: '3cx-ai', transcribedAt: '', language: 'en' }
+      : null,
+  );
+  const [summary, setSummary] = React.useState<string | null>(initialSummary || null);
   const [transcriptLoading, setTranscriptLoading] = React.useState(false);
   const [transcriptError, setTranscriptError] = React.useState<string | null>(null);
   const [transcriptStatus, setTranscriptStatus] = React.useState<string | null>(null);
@@ -49,11 +58,15 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
       setCurrentTime(0);
       setDuration(0);
       setTranscriptOpen(false);
-      setTranscript(null);
+      setTranscript(
+        initialTranscript
+          ? { text: initialTranscript, segments: [], model: '3cx-ai', transcribedAt: '', language: 'en' }
+          : null,
+      );
+      setSummary(initialSummary || null);
       setTranscriptLoading(false);
       setTranscriptError(null);
       setTranscriptStatus(null);
-      transcribeStartedRef.current = false;
 
       try {
         const blobUrl = await fetchCallRecordingStreamUrl(callRecordId);
@@ -81,7 +94,7 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
         objectUrlRef.current = null;
       }
     };
-  }, [callRecordId]);
+  }, [callRecordId, initialTranscript, initialSummary]);
 
   React.useEffect(() => {
     const audio = audioRef.current;
@@ -89,55 +102,43 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
     audio.playbackRate = speed;
   }, [src, speed]);
 
-  const runTranscription = React.useCallback(async () => {
-    const blobUrl = objectUrlRef.current;
-    if (!blobUrl || transcribeStartedRef.current) return;
-    transcribeStartedRef.current = true;
+  const loadThreeCxTranscript = React.useCallback(async () => {
     setTranscriptLoading(true);
     setTranscriptError(null);
-    setTranscriptStatus(null);
+    setTranscriptStatus('Loading transcript from 3CX…');
 
     try {
-      let cached: RecordingTranscript | null = null;
-      try {
-        cached = await loadCachedRecordingTranscript(callRecordId);
-      } catch {
-        /* continue to local transcription */
+      let payload = await loadCallTranscript(callRecordId);
+      if (!payload.transcript?.text) {
+        setTranscriptStatus('Checking 3CX for this call…');
+        payload = await syncThreeCxCallTranscript(callRecordId);
       }
-      if (cached) {
-        setTranscript(cached);
+      if (payload.transcript?.text) {
+        setTranscript(payload.transcript);
+        setSummary(payload.summary);
         setTranscriptLoading(false);
+        setTranscriptStatus(null);
         return;
       }
-
-      const local = await transcribeRecordingLocally(blobUrl, (message) => {
-        setTranscriptStatus(message);
-      });
-      setTranscript(local);
+      setTranscript(null);
+      setSummary(payload.summary);
+      setTranscriptError(
+        payload.message || 'No transcript from 3CX yet. Enable AI transcription in 3CX and upload CRM template v6.',
+      );
       setTranscriptLoading(false);
       setTranscriptStatus(null);
-      void saveRecordingTranscript(callRecordId, local).catch(() => {
-        /* playback still works if save fails */
-      });
     } catch (err) {
-      transcribeStartedRef.current = false;
-      setTranscriptError(err instanceof Error ? err.message : 'We could not transcribe this call.');
+      setTranscriptError(err instanceof Error ? err.message : 'Could not load transcript.');
       setTranscriptLoading(false);
+      setTranscriptStatus(null);
     }
   }, [callRecordId]);
 
   const openTranscript = () => {
     setTranscriptOpen(true);
-    if (transcript || transcriptLoading) return;
-    if (transcriptError) {
-      transcribeStartedRef.current = false;
-      setTranscriptError(null);
+    if (!transcript?.text && !transcriptLoading) {
+      void loadThreeCxTranscript();
     }
-    void runTranscription();
-  };
-
-  const closeTranscript = () => {
-    setTranscriptOpen(false);
   };
 
   const togglePlay = async () => {
@@ -251,14 +252,8 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
               aria-label="Seek"
             >
               <div className="call-recording-deck__progress-rail" />
-              <div
-                className="call-recording-deck__progress-fill"
-                style={{ width: `${progressPct}%` }}
-              />
-              <div
-                className="call-recording-deck__progress-thumb"
-                style={{ left: `${progressPct}%` }}
-              />
+              <div className="call-recording-deck__progress-fill" style={{ width: `${progressPct}%` }} />
+              <div className="call-recording-deck__progress-thumb" style={{ left: `${progressPct}%` }} />
             </div>
             <div className="call-recording-deck__meta">
               <div className="call-recording-deck__speeds">
@@ -281,7 +276,7 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
               type="button"
               className="call-recording-deck__transcribe"
               onClick={openTranscript}
-              aria-label="Transcribe call"
+              aria-label="Show 3CX transcript"
               whileHover={{ scale: 1.04 }}
               whileTap={{ scale: 0.96 }}
               layoutId="transcribe-trigger"
@@ -303,23 +298,26 @@ const CallRecordingPlayer: React.FC<CallRecordingPlayerProps> = ({ callRecordId 
           >
             <div className="call-recording-transcript-panel">
               <div className="call-recording-transcript-panel__head">
-                <motion.div
-                  className="call-recording-transcript-panel__icon"
-                  layoutId="transcribe-trigger"
-                >
+                <motion.div className="call-recording-transcript-panel__icon" layoutId="transcribe-trigger">
                   <Captions size={15} strokeWidth={2.1} />
                 </motion.div>
                 <span className="call-recording-transcript-panel__label">Transcript</span>
                 <button
                   type="button"
                   className="call-recording-transcript-panel__close"
-                  onClick={closeTranscript}
+                  onClick={() => setTranscriptOpen(false)}
                   aria-label="Close transcript"
                 >
                   <X size={14} />
                 </button>
               </div>
               <div className="call-recording-transcript-panel__body">
+                {summary && !transcriptLoading && !transcriptError && (
+                  <div className="call-recording-transcript-panel__summary">
+                    <p className="call-recording-transcript-panel__summary-label">Summary</p>
+                    <p>{summary}</p>
+                  </div>
+                )}
                 <CallRecordingTranscript
                   transcript={transcript}
                   loading={transcriptLoading}

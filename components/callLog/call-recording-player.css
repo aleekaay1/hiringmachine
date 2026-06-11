@@ -306,6 +306,80 @@
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.call-recording-transcript-panel__summary {
+  margin: 10px 12px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(0, 94, 184, 0.06);
+  border: 1px solid rgba(0, 94, 184, 0.1);
+}
+
+.call-recording-transcript-panel__summary-label {
+  margin: 0 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #5c7594;
+}
+
+.call-recording-transcript-panel__summary p:last-child {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #334155;
+}
+
+/* ── Full-page call log ── */
+.call-log-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 1rem 1.25rem;
+}
+
+.call-log-page__table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border-radius: 14px;
+  border: 1px solid #d6deea;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(11, 27, 52, 0.05);
+}
+
+.call-log-page__table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.call-log-page__table th,
+.call-log-page__table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.call-log-page__table .col-time { width: 9.5rem; }
+.call-log-page__table .col-recruiter { width: 7.5rem; }
+.call-log-page__table .col-candidate { width: 11rem; }
+.call-log-page__table .col-phone { width: 7rem; }
+.call-log-page__table .col-disposition { width: 7.5rem; }
+.call-log-page__table .col-booked { width: 5rem; }
+.call-log-page__table .col-duration { width: 4.5rem; }
+.call-log-page__table .col-recording { width: 6.5rem; }
+.call-log-page__table .col-comment { width: auto; }
+
+.call-log-page__player-row td {
+  padding: 0.5rem 0.75rem 0.75rem;
+  background: #f8fbff;
 }
 
 /* ── Transcript content ── */

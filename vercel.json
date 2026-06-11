@@ -6,7 +6,7 @@
   "framework": "vite",
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/((?!assets/|models/|onnxruntime-web/|.*\\..*).*)",
       "destination": "/index.html"
     }
   ]

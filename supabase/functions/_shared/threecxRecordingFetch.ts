@@ -12,6 +12,7 @@ import {
 } from './threecxHistoryParse.ts';
 import { digitsOnly, parseDurationSecondsFromText, phonesMatch, resolveRecruiterUserIds } from './threecxCallMatch.ts';
 import { RECRUITER_3CX_EXTENSIONS } from './recruiter3cxExtensions.ts';
+import { extractThreeCxTranscriptFromPayload } from './threecxTranscript.ts';
 
 export type RecordingCandidate = {
   recordingUrl: string;
@@ -20,6 +21,9 @@ export type RecordingCandidate = {
   anchorMs: number;
   extension: string;
   source: string;
+  transcription?: string | null;
+  summary?: string | null;
+  sentiment?: string | null;
 };
 
 export type RecordingFetchDiag = {
@@ -224,6 +228,7 @@ export async function findWebhookRecording(
     const timeOk = anchorMs >= input.startMs && anchorMs <= input.endMs;
     if (timeOk) diag.timeMatches += 1;
 
+    const transcriptFields = extractThreeCxTranscriptFromPayload(payload);
     const candidate: RecordingCandidate = {
       recordingUrl,
       durationSeconds: parseDurationSecondsFromText(
@@ -233,6 +238,9 @@ export async function findWebhookRecording(
       anchorMs,
       extension: rowExt,
       source: 'threecx_webhook',
+      transcription: transcriptFields.transcription,
+      summary: transcriptFields.summary,
+      sentiment: transcriptFields.sentiment,
     };
 
     if (phoneOk && timeOk) {

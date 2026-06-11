@@ -39,9 +39,9 @@ const CallRecordingTranscript: React.FC<CallRecordingTranscriptProps> = ({
       <div className="call-recording-transcript call-recording-transcript--loading">
         <Loader2 size={18} className="call-recording-transcript__spinner" />
         <div className="min-w-0">
-          <p className="call-recording-transcript__title">Transcribing your call</p>
+          <p className="call-recording-transcript__title">Loading transcript</p>
           <p className="call-recording-transcript__subtitle">
-            {statusMessage || 'This runs on your computer and may take a minute.'}
+            {statusMessage || 'Fetching from 3CX…'}
           </p>
           <div className="call-recording-transcript__track" aria-hidden>
             <div className="call-recording-transcript__bar" />

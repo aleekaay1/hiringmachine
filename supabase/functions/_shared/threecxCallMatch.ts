@@ -1,5 +1,6 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import { RECRUITER_3CX_EXTENSIONS } from './recruiter3cxExtensions.ts';
+import { threeCxTranscriptMetaPatch } from './threecxTranscript.ts';
 
 export function digitsOnly(value: string): string {
   return value.replace(/\D/g, '');
@@ -194,6 +195,9 @@ export async function attachRecordingToCallRecord(
     reportMeta?: Record<string, unknown>;
     replayMode?: boolean;
     excludeRecordIds?: Set<string>;
+    transcription?: string | null;
+    summary?: string | null;
+    sentiment?: string | null;
   },
 ): Promise<{ matched: boolean; callRecordId?: string; reason?: string }> {
   const anchorMs = new Date(input.anchorIso).getTime();
@@ -242,6 +246,12 @@ export async function attachRecordingToCallRecord(
       ? best.threecx_metadata
       : {};
 
+  const transcriptPatch = threeCxTranscriptMetaPatch({
+    transcription: input.transcription || null,
+    summary: input.summary || null,
+    sentiment: input.sentiment || null,
+  });
+
   const patch: Record<string, unknown> = {
     threecx_metadata: {
       ...existingMeta,
@@ -257,6 +267,7 @@ export async function attachRecordingToCallRecord(
         received_at: new Date().toISOString(),
         match_method: 'phone_recruiter_time',
       },
+      ...transcriptPatch,
     },
   };
   if (input.recordingUrl) patch.recording_url = input.recordingUrl;

@@ -19,8 +19,5 @@ export default defineConfig(({ mode }) => {
           '@': path.resolve(__dirname, '.'),
         }
       },
-      optimizeDeps: {
-        exclude: ['@xenova/transformers'],
-      },
     };
 });

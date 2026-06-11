@@ -202,10 +202,13 @@ function parseRecordingTranscript(raw: unknown): RecordingTranscript | null {
   };
 }
 
-/** Same GET pattern as stream-recording (avoids POST/HTML proxy quirks). */
-export async function loadCachedRecordingTranscript(
-  callRecordId: string,
-): Promise<RecordingTranscript | null> {
+export type CallTranscriptPayload = {
+  transcript: RecordingTranscript | null;
+  summary: string | null;
+};
+
+/** Load 3CX transcript already saved on the call record. */
+export async function loadCallTranscript(callRecordId: string): Promise<CallTranscriptPayload> {
   const { supabaseUrl, headers } = await callLogAdminAuthHeaders();
   const params = new URLSearchParams({
     action: 'get-recording-transcript',
@@ -215,26 +218,49 @@ export async function loadCachedRecordingTranscript(
     method: 'GET',
     headers,
   });
-  const body = parseJsonResponse<{ transcript?: unknown; error?: string }>(
-    await res.text(),
-    res.status,
-  );
+  const body = parseJsonResponse<{
+    transcript?: unknown;
+    summary?: string | null;
+    error?: string;
+  }>(await res.text(), res.status);
   if (!res.ok) {
-    throw new Error(String(body.error || `Transcript cache lookup failed (${res.status})`));
+    throw new Error(String(body.error || `Transcript lookup failed (${res.status})`));
   }
   const transcript = parseRecordingTranscript(body.transcript);
-  return transcript?.text ? transcript : null;
+  return {
+    transcript: transcript?.text ? transcript : null,
+    summary: body.summary?.trim() ? body.summary.trim() : null,
+  };
 }
 
-export async function saveRecordingTranscript(
+/** Pull transcript from stored 3CX webhook payload and attach to the call record. */
+export async function syncThreeCxCallTranscript(
   callRecordId: string,
-  transcript: RecordingTranscript,
-): Promise<RecordingTranscript> {
-  const data = await invokeThreeCxCallAdmin<{ transcript: RecordingTranscript }>(
-    'save-recording-transcript',
-    { callRecordId, transcript },
-  );
-  return data.transcript;
+): Promise<CallTranscriptPayload & { message?: string }> {
+  const { supabaseUrl, headers } = await callLogAdminAuthHeaders();
+  const params = new URLSearchParams({
+    action: 'sync-threecx-transcript',
+    callRecordId,
+  });
+  const res = await fetch(`${supabaseUrl}/functions/v1/threecx-call-admin?${params}`, {
+    method: 'GET',
+    headers,
+  });
+  const body = parseJsonResponse<{
+    transcript?: unknown;
+    summary?: string | null;
+    message?: string;
+    error?: string;
+  }>(await res.text(), res.status);
+  if (!res.ok) {
+    throw new Error(String(body.error || `Transcript sync failed (${res.status})`));
+  }
+  const transcript = parseRecordingTranscript(body.transcript);
+  return {
+    transcript: transcript?.text ? transcript : null,
+    summary: body.summary?.trim() ? body.summary.trim() : null,
+    message: body.message,
+  };
 }
 
 export async function fetchCallRecordingStreamUrl(callRecordId: string): Promise<string> {

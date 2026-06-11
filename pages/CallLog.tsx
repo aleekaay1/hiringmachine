@@ -11,11 +11,17 @@ import {
 import CallRecordingPlayer from '../components/callLog/CallRecordingPlayer';
 import '../components/callLog/call-recording-player.css';
 import {
+  formatCallLogCacheAge,
+  readCallLogCache,
+  writeCallLogCache,
+} from '../services/callLogCache';
+import {
   listPipelineCallRecords,
   listPipelineCandidatesForCallLog,
   readCallRecordCandidateSnapshot,
   readCallRecordMeta,
   readCallRecordRecording,
+  readCallRecordThreeCxContent,
   type PipelineCallRecord,
   type PipelineCandidate,
 } from '../services/pipelineService';
@@ -84,6 +90,8 @@ const CallLog: React.FC = () => {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [cacheAge, setCacheAge] = useState<string | null>(null);
+  const [hydratedFromCache, setHydratedFromCache] = useState(false);
   const [fetchingRecordingId, setFetchingRecordingId] = useState<string | null>(null);
   const [recordingErrors, setRecordingErrors] = useState<Record<string, string>>({});
   const [expandedRecordingIds, setExpandedRecordingIds] = useState<Set<string>>(new Set());
@@ -111,6 +119,12 @@ const CallLog: React.FC = () => {
       setRows(callRows);
       setCandidates(candidateRows);
       setStaffProfiles(profiles);
+      writeCallLogCache({
+        rows: callRows,
+        candidates: candidateRows,
+        staffProfiles: profiles,
+      });
+      setCacheAge('just now');
     } catch (err) {
       setRows([]);
       setLoadError(err instanceof Error ? err.message : 'Failed to load call log.');
@@ -120,13 +134,22 @@ const CallLog: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (isAuthenticated && accessAllowed) {
-      void load();
+    if (!isAuthenticated || !accessAllowed) return;
+    const cached = readCallLogCache();
+    if (cached) {
+      setRows(cached.rows);
+      setCandidates(cached.candidates);
+      setStaffProfiles(cached.staffProfiles);
+      setCacheAge(formatCallLogCacheAge(cached.savedAt));
+      setHydratedFromCache(true);
+      return;
     }
+    void load();
   }, [isAuthenticated, accessAllowed, load]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
+    setHydratedFromCache(false);
     try {
       await load();
     } finally {
@@ -284,19 +307,28 @@ const CallLog: React.FC = () => {
   }
 
   return (
-    <div className="w-full p-5 lg:p-6 space-y-4 text-[#1A2942]">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="call-log-page text-[#1A2942]">
+      <div className="flex flex-wrap items-center justify-between gap-3 shrink-0 mb-3">
         <div className="flex items-center gap-2 min-w-0">
           <PhoneCall size={20} className="text-[#005EB8] shrink-0" />
-          <h1 className="text-lg font-bold text-[#0B1B34]">Call log</h1>
+          <div>
+            <h1 className="text-lg font-bold text-[#0B1B34]">Call log</h1>
+            {cacheAge && (
+              <p className="text-[11px] text-[#6b84a8]">
+                {hydratedFromCache && !loading && !refreshing
+                  ? `Showing saved data · ${cacheAge}`
+                  : `Updated ${cacheAge}`}
+              </p>
+            )}
+          </div>
         </div>
         <Button type="button" variant="secondary" onClick={() => void handleRefresh()} disabled={loading || refreshing}>
           <RefreshCw size={16} className={loading || refreshing ? 'animate-spin inline mr-1.5' : 'inline mr-1.5'} />
-          {refreshing ? 'Refreshing…' : 'Refresh'}
+          {refreshing || loading ? 'Refreshing…' : 'Refresh'}
         </Button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 shrink-0 mb-3">
         <div className="rounded-xl border border-[#d6deea] bg-white p-3">
           <p className="text-[10px] uppercase tracking-wide text-[#7a8ba1]">Calls shown</p>
           <p className="text-xl font-bold text-[#0B1B34]">{summary.total}</p>
@@ -315,7 +347,7 @@ const CallLog: React.FC = () => {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4 flex flex-col gap-3">
+      <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4 flex flex-col gap-3 shrink-0 mb-3">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8a9ab0]" size={18} />
           <input
@@ -379,20 +411,19 @@ const CallLog: React.FC = () => {
         <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-sm px-4 py-3">{loadError}</div>
       )}
 
-      <div className="rounded-xl border border-[#d6deea] bg-white shadow-sm overflow-hidden">
-        <div className="max-h-[calc(100vh-300px)] overflow-auto">
-          <table className="w-full min-w-[1000px] text-xs border-collapse">
+      <div className="call-log-page__table-wrap">
+          <table className="call-log-page__table">
             <thead className="sticky top-0 z-10 bg-[#f4f7fb] border-b border-[#d6deea]">
               <tr className="text-left text-[10px] uppercase tracking-wide text-[#6b7c93]">
-                <th className="px-3 py-2 font-semibold whitespace-nowrap">Time</th>
-                <th className="px-3 py-2 font-semibold whitespace-nowrap">Recruiter</th>
-                <th className="px-3 py-2 font-semibold whitespace-nowrap">Candidate</th>
-                <th className="px-3 py-2 font-semibold whitespace-nowrap">Phone</th>
-                <th className="px-3 py-2 font-semibold whitespace-nowrap">Disposition</th>
-                <th className="px-3 py-2 font-semibold whitespace-nowrap">Booked</th>
-                <th className="px-3 py-2 font-semibold whitespace-nowrap">Duration</th>
-                <th className="px-3 py-2 font-semibold whitespace-nowrap">Recording</th>
-                <th className="px-3 py-2 font-semibold whitespace-nowrap">Comment</th>
+                <th className="px-3 py-2 font-semibold col-time">Time</th>
+                <th className="px-3 py-2 font-semibold col-recruiter">Recruiter</th>
+                <th className="px-3 py-2 font-semibold col-candidate">Candidate</th>
+                <th className="px-3 py-2 font-semibold col-phone">Phone</th>
+                <th className="px-3 py-2 font-semibold col-disposition">Disposition</th>
+                <th className="px-3 py-2 font-semibold col-booked">Booked</th>
+                <th className="px-3 py-2 font-semibold col-duration">Duration</th>
+                <th className="px-3 py-2 font-semibold col-recording">Recording</th>
+                <th className="px-3 py-2 font-semibold col-comment">Comment</th>
               </tr>
             </thead>
             <tbody>
@@ -406,6 +437,7 @@ const CallLog: React.FC = () => {
                 const isFetching = fetchingRecordingId === row.id;
                 const fetchError = recordingErrors[row.id];
                 const showPlayer = Boolean(recording.recordingUrl) && expandedRecordingIds.has(row.id);
+                const threeCxContent = readCallRecordThreeCxContent(row);
 
                 return (
                   <React.Fragment key={row.id}>
@@ -475,21 +507,28 @@ const CallLog: React.FC = () => {
                       </td>
                     </tr>
                     {showPlayer && recording.recordingUrl && (
-                      <tr className="border-b border-[#eef2f7] bg-[#fafcff]">
-                        <td colSpan={9} className="px-3 py-2">
-                          <CallRecordingPlayer callRecordId={row.id} />
+                      <tr className="border-b border-[#eef2f7] call-log-page__player-row">
+                        <td colSpan={9}>
+                          <CallRecordingPlayer
+                            callRecordId={row.id}
+                            initialTranscript={threeCxContent.transcript}
+                            initialSummary={threeCxContent.summary}
+                          />
                         </td>
                       </tr>
                     )}
                   </React.Fragment>
                 );
               })}
+              {!loading && filtered.length === 0 && !loadError && (
+                <tr>
+                  <td colSpan={9} className="p-8 text-center text-sm text-[#6f7b8d]">
+                    No calls match your filters, or the log is empty.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
-          {!loading && filtered.length === 0 && !loadError && (
-            <div className="p-8 text-center text-sm text-[#6f7b8d]">No calls match your filters, or the log is empty.</div>
-          )}
-        </div>
       </div>
     </div>
   );
