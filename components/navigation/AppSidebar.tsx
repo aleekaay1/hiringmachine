@@ -1,5 +1,5 @@
 import React from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { ChevronDown, Crown, LogOut, Menu, X } from 'lucide-react';
 import type { AppRole } from '../../services/accessControl';
 import { canAccessSection } from '../../services/accessControl';
@@ -11,6 +11,7 @@ import {
   NAV_GROUPS,
   type NavGroup,
 } from './navigationConfig';
+import NavMenuLink from './NavMenuLink';
 
 type AppSidebarProps = {
   role: AppRole | null;
@@ -45,7 +46,6 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
   roleResolved,
   onLogout,
 }) => {
-  const navigate = useNavigate();
   const location = useLocation();
   const pathname = location.pathname;
   const search = location.search;
@@ -102,10 +102,9 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
     if (isMobile) setMobileOpen(true);
   }, [isMobile]);
 
-  const go = (route: string, options?: { keepOpen?: boolean }) => {
-    navigate(route);
-    if (!options?.keepOpen) setMobileOpen(false);
-  };
+  const closeMobileMenu = React.useCallback(() => {
+    setMobileOpen(false);
+  }, []);
 
   const handleMenuToggle = () => {
     if (isMobile) {
@@ -141,9 +140,10 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         const active = isItemActive(pathname, search, item.route);
         return (
           <li key={item.route}>
-            <button
-              type="button"
-              onClick={() => go(item.route)}
+            <NavMenuLink
+              to={item.route}
+              active={active}
+              onNavigate={closeMobileMenu}
               className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition ${
                 active
                   ? 'bg-white font-medium text-[#11101d] shadow-sm'
@@ -152,7 +152,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             >
               <Icon size={16} className="shrink-0" />
               {(!isRailView || flyout) && <span className="truncate">{item.name}</span>}
-            </button>
+            </NavMenuLink>
           </li>
         );
       })}
@@ -187,6 +187,27 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
           const singleItem = group.items.length === 1;
 
           if (isRailView) {
+            if (singleItem) {
+              const item = group.items[0];
+              const active = isItemActive(pathname, search, item.route);
+              return (
+                <div key={group.id} data-tour={group.tourId} className="px-1.5 py-0.5">
+                  <NavMenuLink
+                    to={item.route}
+                    active={active}
+                    onNavigate={closeMobileMenu}
+                    className={`flex w-full items-center justify-center rounded-xl p-2 transition ${
+                      active ? 'bg-white text-[#11101d]' : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                    }`}
+                    title={item.name}
+                    aria-label={item.name}
+                  >
+                    <GroupIcon size={20} />
+                  </NavMenuLink>
+                </div>
+              );
+            }
+
             return (
               <div
                 key={group.id}
@@ -197,7 +218,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
               >
                 <button
                   type="button"
-                  onClick={() => handleCollapsedNavClick(group, singleItem)}
+                  onClick={() => handleCollapsedNavClick(group, false)}
                   className={`flex w-full items-center justify-center rounded-xl p-2 transition ${
                     groupActive ? 'bg-white text-[#11101d]' : 'text-slate-300 hover:bg-white/10 hover:text-white'
                   }`}
@@ -222,16 +243,17 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
             const active = isItemActive(pathname, search, item.route);
             return (
               <div key={group.id} data-tour={group.tourId} className="px-2 py-0.5">
-                <button
-                  type="button"
-                  onClick={() => go(item.route)}
+                <NavMenuLink
+                  to={item.route}
+                  active={active}
+                  onNavigate={closeMobileMenu}
                   className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm transition ${
                     active ? 'bg-white text-[#11101d]' : 'text-slate-300 hover:bg-white/10 hover:text-white'
                   }`}
                 >
                   <Icon size={18} />
                   <span>{item.name}</span>
-                </button>
+                </NavMenuLink>
               </div>
             );
           }
@@ -277,12 +299,10 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
           onMouseEnter={() => setLeaderboardHover(true)}
           onMouseLeave={() => setLeaderboardHover(false)}
         >
-          <button
-            type="button"
-            onClick={() => {
-              if (isRailView) openFullSidebar();
-              else go(LEADERBOARD_ROUTE);
-            }}
+          <NavMenuLink
+            to={LEADERBOARD_ROUTE}
+            active={leaderboardActive}
+            onNavigate={closeMobileMenu}
             className={`flex w-full items-center justify-center gap-2 rounded-xl border py-2.5 transition ${
               leaderboardActive
                 ? 'border-amber-200/40 bg-amber-400/10 text-amber-100'
@@ -292,7 +312,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
           >
             <Crown size={isRailView ? 20 : 18} className="shrink-0" strokeWidth={1.75} />
             {!isRailView && <span className="text-sm font-medium tracking-wide">Leadership board</span>}
-          </button>
+          </NavMenuLink>
           {isRailView && leaderboardHover && !isMobile && (
             <div className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1d1b31] px-3 py-1.5 text-xs font-medium text-white shadow-xl">
               Leadership board
@@ -302,12 +322,10 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
       )}
 
       <div className={`mt-auto shrink-0 border-t border-white/10 ${isRailView ? 'p-2' : 'p-3'}`}>
-        <button
-          type="button"
-          onClick={() => {
-            if (isRailView) openFullSidebar();
-            else go('/account');
-          }}
+        <NavMenuLink
+          to="/account"
+          active={pathname === '/account'}
+          onNavigate={closeMobileMenu}
           className={`flex w-full items-center gap-3 rounded-xl p-2 transition hover:bg-white/10 ${
             isRailView ? 'justify-center' : ''
           }`}
@@ -325,7 +343,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
               <p className="truncate text-[11px] text-slate-400">{roleLabel}</p>
             </div>
           )}
-        </button>
+        </NavMenuLink>
         {!isRailView && (
           <button
             type="button"

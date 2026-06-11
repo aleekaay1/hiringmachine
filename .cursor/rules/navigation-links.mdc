@@ -1,0 +1,14 @@
+---
+description: Navigation must use real links (open in new tab, copy link, middle-click).
+globs: components/**/*.tsx,pages/**/*.tsx
+alwaysApply: false
+---
+
+# Navigation links
+
+Any UI that navigates to an in-app route must render a real anchor via React Router `Link` (or `NavMenuLink` in `components/navigation/NavMenuLink.tsx`).
+
+Do **not** use `<button onClick={() => navigate(...)}>` for menu items, sidebar entries, or dashboard quick links.
+
+- Enables right-click → Open in new tab, middle-click, and copy link address.
+- Reserve `<button>` for actions that do not change the URL (toggle, logout, submit).
