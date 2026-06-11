@@ -32,6 +32,12 @@ import {
   parseDurationSecondsFromText,
   resolveRecruiterUserIds,
 } from '../_shared/threecxCallMatch.ts';
+import {
+  readTranscriptFromCallMetadata,
+  transcribeRecordingAudio,
+  transcriptForMetadataStorage,
+  type CallRecordingTranscript,
+} from '../_shared/callRecordingTranscribe.ts';
 
 const MATCH_BEFORE_MS = 30_000;
 const MATCH_AFTER_MS = 30 * 60_000;
@@ -950,6 +956,48 @@ async function recordingUrlForCallRecord(
   return url;
 }
 
+async function transcribeRecordingForCallRecord(
+  admin: ReturnType<typeof createClient>,
+  callRecordId: string,
+): Promise<{ transcript: CallRecordingTranscript; cached: boolean }> {
+  const { data: record, error } = await admin
+    .from('pipeline_call_records')
+    .select('threecx_metadata')
+    .eq('id', callRecordId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!record) throw new Error('Call record not found');
+
+  const existingMeta = record.threecx_metadata && typeof record.threecx_metadata === 'object'
+    ? record.threecx_metadata as Record<string, unknown>
+    : {};
+  const cached = readTranscriptFromCallMetadata(existingMeta);
+  if (cached?.text) {
+    return { transcript: cached, cached: true };
+  }
+
+  const recordingUrl = await recordingUrlForCallRecord(admin, callRecordId);
+  const audioRes = await fetch(recordingUrl);
+  if (!audioRes.ok) {
+    throw new Error(`3CX recording fetch failed (${audioRes.status})`);
+  }
+
+  const contentType = audioRes.headers.get('Content-Type') || 'audio/mpeg';
+  const audioBytes = await audioRes.arrayBuffer();
+  if (!audioBytes.byteLength) throw new Error('Recording file was empty.');
+
+  const transcript = await transcribeRecordingAudio(audioBytes, contentType);
+  const { error: upErr } = await admin.from('pipeline_call_records').update({
+    threecx_metadata: {
+      ...existingMeta,
+      recording_transcript: transcriptForMetadataStorage(transcript),
+    },
+  }).eq('id', callRecordId);
+  if (upErr) throw upErr;
+
+  return { transcript, cached: false };
+}
+
 async function streamRecordingResponse(
   admin: ReturnType<typeof createClient>,
   callRecordId: string,
@@ -1051,6 +1099,12 @@ Deno.serve(async (req) => {
       if (!callRecordId) return json(400, { error: 'callRecordId is required' });
       const result = await fetchRecordingForCallRecord(admin, callRecordId);
       return json(200, { ok: true, ...result });
+    }
+    if (action === 'transcribe-recording') {
+      const callRecordId = String(body.callRecordId || '').trim();
+      if (!callRecordId) return json(400, { error: 'callRecordId is required' });
+      const result = await transcribeRecordingForCallRecord(admin, callRecordId);
+      return json(200, { ok: true, callRecordId, cached: result.cached, transcript: result.transcript });
     }
 
     return json(400, { error: `Unknown action: ${action}` });

@@ -1,11 +1,37 @@
 .call-recording-player {
   width: 100%;
   min-width: 0;
-  max-width: 720px;
   padding: 8px 10px;
   border-radius: 10px;
   border: 1px solid #dbe8f6;
   background: linear-gradient(180deg, #fbfdff 0%, #f4f9ff 100%);
+}
+
+.call-recording-player--with-transcript {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(220px, 360px);
+  gap: 12px;
+  align-items: stretch;
+  max-width: 100%;
+}
+
+@media (max-width: 900px) {
+  .call-recording-player--with-transcript {
+    grid-template-columns: 1fr;
+  }
+}
+
+.call-recording-player__main {
+  min-width: 0;
+}
+
+.call-recording-player__controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
 }
 
 .call-recording-player--loading,
@@ -80,4 +106,139 @@
 
 .call-recording-player__speed:hover {
   border-color: #7eb3e7;
+}
+
+.call-recording-player__transcript-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  color: #005eb8;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.call-recording-player__transcript-toggle:hover {
+  text-decoration: underline;
+}
+
+.call-recording-transcript {
+  min-width: 0;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 8px;
+  border: 1px solid #dbe8f6;
+  background: #fff;
+  padding: 10px;
+}
+
+.call-recording-transcript--loading,
+.call-recording-transcript--error,
+.call-recording-transcript--empty {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-height: none;
+}
+
+.call-recording-transcript__track {
+  margin-top: 8px;
+  height: 4px;
+  border-radius: 999px;
+  background: #dbe8f6;
+  overflow: hidden;
+}
+
+.call-recording-transcript__bar {
+  height: 100%;
+  width: 40%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #005eb8, #4d9ae8, #005eb8);
+  background-size: 200% 100%;
+  animation: call-recording-load-slide 1.1s ease-in-out infinite;
+}
+
+.call-recording-transcript__segments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.call-recording-transcript__segment {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #334155;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.call-recording-transcript__segment:hover {
+  background: #f4f9ff;
+}
+
+.call-recording-transcript__segment.is-active {
+  background: #e8f3ff;
+  border-color: #9bc4e8;
+  color: #0b1b34;
+}
+
+.call-recording-transcript__time {
+  display: inline-block;
+  min-width: 2.5rem;
+  margin-right: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #6b84a8;
+}
+
+.call-recording-transcript__plain {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #334155;
+  white-space: pre-wrap;
+}
+
+@keyframes call-recording-load-slide {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+.call-recording-load-btn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.call-recording-load-track {
+  width: 100%;
+  max-width: 128px;
+  height: 3px;
+  border-radius: 999px;
+  background: #dbe8f6;
+  overflow: hidden;
+}
+
+.call-recording-load-bar {
+  height: 100%;
+  width: 40%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #005eb8, #4d9ae8, #005eb8);
+  background-size: 200% 100%;
+  animation: call-recording-load-slide 1.1s ease-in-out infinite;
 }

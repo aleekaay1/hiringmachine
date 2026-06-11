@@ -132,6 +132,31 @@ export async function fetchCallRecordingForDisposition(callRecordId: string): Pr
 }
 
 /** Proxy 3CX audio through our edge function (3CX blocks browser CORS). */
+export type RecordingTranscriptSegment = {
+  start: number;
+  end: number;
+  text: string;
+};
+
+export type RecordingTranscript = {
+  text: string;
+  segments: RecordingTranscriptSegment[];
+  model: string;
+  transcribedAt: string;
+  language: string;
+};
+
+export async function fetchCallRecordingTranscript(callRecordId: string): Promise<{
+  transcript: RecordingTranscript;
+  cached: boolean;
+}> {
+  const data = await invokeThreeCxCallAdmin<{
+    transcript: RecordingTranscript;
+    cached?: boolean;
+  }>('transcribe-recording', { callRecordId });
+  return { transcript: data.transcript, cached: data.cached === true };
+}
+
 export async function fetchCallRecordingStreamUrl(callRecordId: string): Promise<string> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;

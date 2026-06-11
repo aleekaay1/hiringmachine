@@ -9,6 +9,7 @@ import {
   type UserProfile,
 } from '../services/accessControl';
 import CallRecordingPlayer from '../components/callLog/CallRecordingPlayer';
+import '../components/callLog/call-recording-player.css';
 import {
   listPipelineCallRecords,
   listPipelineCandidatesForCallLog,
