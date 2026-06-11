@@ -197,7 +197,22 @@ export const OPS_CONSOLE_EMAIL = 'ali@globelife-paz.com';
 export const HR_LEAD_DISTRIBUTION_EMAILS = new Set([
   OPS_CONSOLE_EMAIL,
   'hr.licensing@globelife-paz.com',
+  'reginald_bentajado@globelife-paz.com',
 ]);
+
+/** Team reports + per-caller analytics (directors / ops). */
+export const REPORTS_VIEWER_EMAILS = new Set([
+  OPS_CONSOLE_EMAIL,
+  'alex@globelife-paz.com',
+  'reginald_bentajado@globelife-paz.com',
+  'herlyn_desingano@globelife-paz.com',
+]);
+
+export function canAccessReports(role: AppRole | null, email?: string | null): boolean {
+  if (role === 'admin' || role === 'leadership') return true;
+  const normalized = String(email || '').trim().toLowerCase();
+  return normalized.length > 0 && REPORTS_VIEWER_EMAILS.has(normalized);
+}
 
 export function isHrLeadDistributorEmail(email: string | null | undefined): boolean {
   const normalized = String(email || '').trim().toLowerCase();
@@ -207,8 +222,10 @@ export function isHrLeadDistributorEmail(email: string | null | undefined): bool
 export function canAccessHrLeadDistribution(
   role: AppRole | null,
   email: string | null | undefined,
+  fullName?: string | null,
 ): boolean {
   if (isHrLeadDistributorEmail(email)) return true;
+  if (isDirectorHrStaff(email, fullName)) return true;
   return role === 'hr';
 }
 
@@ -232,6 +249,7 @@ export function canAccessCallLog(
   if (isOpsConsoleEmail(email)) return true;
   const normalized = String(email || '').trim().toLowerCase();
   if (normalized === 'hr.licensing@globelife-paz.com') return true;
+  if (normalized === 'reginald_bentajado@globelife-paz.com') return true;
   return role === 'admin';
 }
 
@@ -251,7 +269,10 @@ export async function canAccessOpsConsole(): Promise<boolean> {
 }
 
 /** Admins who also need call + email workspace (same nav as leadership recruiters). */
-const ADMIN_PIPELINE_OPERATIONAL_EMAILS = new Set(['hr.licensing@globelife-paz.com']);
+const ADMIN_PIPELINE_OPERATIONAL_EMAILS = new Set([
+  'hr.licensing@globelife-paz.com',
+  'reginald_bentajado@globelife-paz.com',
+]);
 
 export function adminHasPipelineOperationalAccess(
   role: AppRole | null,
@@ -266,22 +287,21 @@ export function canAccessSection(
   role: AppRole | null,
   section: AppSection,
   email?: string | null,
+  fullName?: string | null,
 ): boolean {
   if (section === 'ops-console') return isOpsConsoleEmail(email);
   if (section === 'call-log') return canAccessCallLog(role, email);
   if (section === 'staff-directory') return canAccessStaffDirectory(role);
-  if (section === 'pipeline-hr-leads') return canAccessHrLeadDistribution(role, email);
+  if (section === 'pipeline-hr-leads') return canAccessHrLeadDistribution(role, email, fullName);
   if (section === 'pipeline-uploads') return canAccessResumeUploads(role, email);
+  if (section === 'reports') return canAccessReports(role, email);
   if (section === 'account') return Boolean(role);
   if (section === 'support') return Boolean(role);
   if (!role) return section === 'overview' || section === 'home';
   if (role === 'admin') {
     if (ADMIN_DATA_SECTIONS.includes(section)) return true;
-    if (canAccessHrLeadDistribution(role, email) && section === 'pipeline-hr-leads') return true;
-    if (
-      (adminHasPipelineOperationalAccess(role, email) || isOpsConsoleEmail(email) || isHrLeadDistributorEmail(email))
-      && PIPELINE_OPERATIONAL_SECTIONS.includes(section)
-    ) {
+    if (canAccessHrLeadDistribution(role, email, fullName) && section === 'pipeline-hr-leads') return true;
+    if (adminHasDirectorOperationalAccess(role, email, fullName) && PIPELINE_OPERATIONAL_SECTIONS.includes(section)) {
       return true;
     }
     return false;
@@ -290,7 +310,7 @@ export function canAccessSection(
     return (
       ADMIN_DATA_SECTIONS.includes(section) ||
       PIPELINE_OPERATIONAL_SECTIONS.includes(section) ||
-      (canAccessHrLeadDistribution(role, email) && section === 'pipeline-hr-leads') ||
+      (canAccessHrLeadDistribution(role, email, fullName) && section === 'pipeline-hr-leads') ||
       section === 'support'
     );
   }
@@ -302,13 +322,12 @@ export function canAccessSection(
       section === 'account' ||
       section === 'support' ||
       PIPELINE_OPERATIONAL_SECTIONS.includes(section) ||
-      section === 'calls-analytics' ||
       section === 'webinar-geek' ||
       section === 'leaderboard'
     );
   }
   if (role === 'webinar') {
-    return section === 'home' || section === 'overview' || section === 'webinar-geek' || section === 'pipeline-webinar-verify' || section === 'calls-analytics' || section === 'leaderboard' || section === 'support';
+    return section === 'home' || section === 'overview' || section === 'webinar-geek' || section === 'pipeline-webinar-verify' || section === 'leaderboard' || section === 'support';
   }
   if (role === 'hr') {
     return (
@@ -330,6 +349,92 @@ export function canAccessSection(
 /** Post-login landing: role-based workspace at /home (not legacy CRM overview). */
 export function defaultRouteForRole(_role: AppRole | null): string {
   return '/home';
+}
+
+export const STAFF_ROLE_LABEL_BY_EMAIL: Record<string, string> = {
+  'reginald_bentajado@globelife-paz.com': 'Director HR',
+};
+
+export function isDirectorHrStaff(
+  email: string | null | undefined,
+  fullName?: string | null,
+): boolean {
+  const normalized = String(email || '').trim().toLowerCase();
+  if (normalized && STAFF_ROLE_LABEL_BY_EMAIL[normalized]) return true;
+  const name = String(fullName || '').trim().toLowerCase();
+  return name.includes('bentajado') || name.includes('reg bentajado');
+}
+
+/** Sidebar / profile / dashboard label — overrides default role capitalization when set. */
+export function getStaffRoleLabel(
+  role: AppRole | null,
+  email?: string | null,
+  fullName?: string | null,
+): string {
+  const normalized = String(email || '').trim().toLowerCase();
+  const custom = normalized ? STAFF_ROLE_LABEL_BY_EMAIL[normalized] : undefined;
+  if (custom) return custom;
+  if (isDirectorHrStaff(email, fullName)) return 'Director HR';
+  if (!role) return 'Staff';
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
+/** Admin directors (e.g. Reg) — workstation + HR lead tools like leadership recruiters. */
+export function adminHasDirectorOperationalAccess(
+  role: AppRole | null,
+  email: string | null | undefined,
+  fullName?: string | null,
+): boolean {
+  if (role !== 'admin') return false;
+  return (
+    adminHasPipelineOperationalAccess(role, email)
+    || isOpsConsoleEmail(email)
+    || isHrLeadDistributorEmail(email)
+    || canAccessReports(role, email)
+    || isDirectorHrStaff(email, fullName)
+  );
+}
+
+/** Hiring CRM (`/dashboard`) — admin, leadership, and HR only. */
+export function canAccessCandidatesCrm(
+  role: AppRole | null,
+  email?: string | null,
+): boolean {
+  return canAccessSection(role, 'candidates', email);
+}
+
+export function resolveAppSectionFromLocation(pathname: string, search: string): AppSection {
+  if (pathname === '/home') return 'home';
+  if (pathname === '/account') return 'account';
+  if (pathname === '/pipeline') return 'pipeline';
+  if (pathname === '/pipeline/lead-manager' || pathname.startsWith('/pipeline/lead-manager/')) {
+    return 'pipeline-lead-manager';
+  }
+  if (pathname === '/pipeline/call') return 'pipeline-call';
+  if (pathname === '/pipeline/performance') return 'pipeline-performance';
+  if (pathname === '/pipeline/email') return 'pipeline-email';
+  if (pathname === '/pipeline/webinar-verify') return 'pipeline-webinar-verify';
+  if (pathname === '/pipeline/uploads') return 'pipeline-uploads';
+  if (pathname === '/pipeline-settings') return 'pipeline-settings';
+  if (pathname === '/calls-analytics') return 'calls-analytics';
+  if (pathname === '/calls-analytics/leaderboard' || pathname === '/leaderboard') return 'leaderboard';
+  if (pathname === '/webinar-geek') return 'webinar-geek';
+  if (pathname === '/live-sessions') return 'live-sessions';
+  if (pathname === '/hr-dashboard') return 'hr-dashboard';
+  if (pathname === '/hr/lead-distribution' || pathname === '/hr/leads') return 'pipeline-hr-leads';
+  if (pathname === '/qr') return 'qr';
+  if (pathname === '/email-log') return 'email-log';
+  if (pathname === '/call-log') return 'call-log';
+  if (pathname === '/reports' || pathname.startsWith('/reports/')) return 'reports';
+  if (pathname === '/admin/staff') return 'staff-directory';
+  if (pathname === '/support') return 'support';
+  if (pathname === '/ops-console') return 'ops-console';
+  if (pathname === '/dashboard' || pathname === '/admin') {
+    const view = new URLSearchParams(search).get('view');
+    if (view === 'settings') return 'settings';
+    return 'candidates';
+  }
+  return 'candidates';
 }
 
 export async function listAllUserProfiles(): Promise<UserProfile[]> {

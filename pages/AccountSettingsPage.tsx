@@ -2,7 +2,7 @@ import React from 'react';
 import { Camera, Hash, Mail, Phone, Save, User } from 'lucide-react';
 import { Button } from '../components/UI';
 import RecruiterCallSettingsPanel from '../components/account/RecruiterCallSettingsPanel';
-import { canAccessSection, getCurrentUserProfile, type AppRole } from '../services/accessControl';
+import { canAccessSection, getCurrentUserProfile, getStaffRoleLabel, type AppRole } from '../services/accessControl';
 import { removeProfileAvatar, uploadProfileAvatar } from '../services/profileAvatarService';
 import { updateUserProfileDetails } from '../services/profileService';
 
@@ -53,7 +53,7 @@ const AccountSettingsPage: React.FC = () => {
     .map((part) => part[0]?.toUpperCase() || '')
     .join('') || 'U';
 
-  const roleLabel = role ? role.charAt(0).toUpperCase() + role.slice(1) : 'Staff';
+  const roleLabel = getStaffRoleLabel(role || null, email, fullName);
 
   const onSaveProfile = async () => {
     setSaving(true);

@@ -75,12 +75,16 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
   const leaderboardActive =
     pathname === '/calls-analytics/leaderboard' || pathname === '/leaderboard';
 
+  const menuName = displayName || sessionSnapshot.displayName;
+
   const visibleGroups = React.useMemo(() => {
     return NAV_GROUPS.map((group) => ({
       ...group,
-      items: group.items.filter((item) => canAccessSection(menuRole, item.section, menuEmail)),
+      items: group.items.filter((item) =>
+        canAccessSection(menuRole, item.section, menuEmail, menuName),
+      ),
     })).filter((group) => group.items.length > 0);
-  }, [menuRole, menuEmail]);
+  }, [menuRole, menuEmail, menuName]);
 
   React.useEffect(() => {
     const active = visibleGroups.find((group) => isGroupActive(group, pathname, search));

@@ -33,12 +33,14 @@ import {
 } from './liveSessionBookedOutcomes';
 import {
   listPipelineCallRecords,
+  listPipelineCandidatesByIds,
   listPipelineEmailSendLogsByCandidates,
   listPipelineIncomingEmailLogsByCandidates,
   type PipelineCallRecord,
 } from './pipelineService';
 import { loadRecruiterCoinBalanceMap } from './recruiterCoinService';
 import { refreshLiveSessionsAndMatchOutcomes } from './liveSessionOutcomeService';
+import { buildRecruiterCallAnalytics, type RecruiterCallAnalytics } from './recruiterCallAnalytics';
 import { supabase } from './supabaseClient';
 
 type AnyRow = Record<string, unknown>;
@@ -123,6 +125,7 @@ export type RecruiterReportBundle = {
     webinarFromCache: boolean;
     webinarFetchedAt: string | null;
   };
+  callAnalytics: RecruiterCallAnalytics;
 };
 
 export type StaffReportCard = {
@@ -584,6 +587,10 @@ export async function loadRecruiterReport(
   ].sort((a, b) => b.at.localeCompare(a.at));
 
   const callStats = summarizeCalls(callRecords);
+  const packCandidates = candidateIds.length
+    ? await listPipelineCandidatesByIds(candidateIds)
+    : [];
+  const callAnalytics = buildRecruiterCallAnalytics(callRecords, range, packCandidates, webinarsBooked);
 
   return {
     profile,
@@ -609,6 +616,7 @@ export async function loadRecruiterReport(
       webinarFromCache: webinarAll.length > 0,
       webinarFetchedAt: fetchedAt,
     },
+    callAnalytics,
   };
 }
 

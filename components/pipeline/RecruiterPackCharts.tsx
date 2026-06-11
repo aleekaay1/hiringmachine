@@ -180,6 +180,78 @@ export function HourlyPickupChart({
   );
 }
 
+export function SourcePerformanceChart({
+  bars,
+  tone,
+  emptyLabel = 'No activity in this range yet.',
+}: {
+  bars: Array<{
+    key: string;
+    label: string;
+    subtitle?: string;
+    totalCalls: number;
+    pickups: number;
+    booked: number;
+    pickupRate: number;
+    bookRate: number;
+  }>;
+  tone: Tone;
+  emptyLabel?: string;
+}) {
+  if (!bars.length) {
+    return <p className={`text-xs ${tone.panelMuted}`}>{emptyLabel}</p>;
+  }
+
+  const max = Math.max(...bars.map((bar) => bar.totalCalls), 1);
+
+  return (
+    <div className="overflow-x-auto pb-1">
+      <div className="flex min-w-full items-end gap-2" style={{ minHeight: 180 }}>
+        {bars.slice(0, 12).map((bar) => (
+          <div key={bar.key} className="flex min-w-[4.5rem] max-w-[6rem] flex-1 flex-col items-center gap-1">
+            <span className={`text-[9px] font-semibold ${tone.panelTitle}`}>{bar.booked} bk</span>
+            <div className="relative flex h-32 w-full items-end justify-center gap-0.5">
+              <div
+                className="w-[30%] rounded-t bg-[#c5ddf5]"
+                style={{ height: `${Math.max(8, Math.round((bar.totalCalls / max) * 100))}%` }}
+                title={`${bar.label}: ${bar.totalCalls} calls`}
+              />
+              <div
+                className="w-[30%] rounded-t bg-emerald-500"
+                style={{ height: `${Math.max(4, Math.round((bar.pickups / max) * 100))}%` }}
+                title={`${bar.label}: ${bar.pickups} pickups`}
+              />
+              <div
+                className="w-[30%] rounded-t bg-violet-500"
+                style={{ height: `${Math.max(4, Math.round((bar.booked / max) * 100))}%` }}
+                title={`${bar.label}: ${bar.booked} booked`}
+              />
+            </div>
+            <span className={`text-center text-[9px] leading-tight ${tone.panelLabel}`} title={bar.subtitle}>
+              {bar.label}
+            </span>
+            <span className={`text-[8px] ${tone.panelMuted}`}>{bar.pickupRate}% pickup</span>
+          </div>
+        ))}
+      </div>
+      <div className={`mt-2 flex flex-wrap gap-3 text-[10px] ${tone.panelMuted}`}>
+        <span className="inline-flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-sm bg-[#c5ddf5]" />
+          Calls
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-sm bg-emerald-500" />
+          Pickups
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="inline-block h-2 w-2 rounded-sm bg-violet-500" />
+          Booked
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function PackInsightCard({
   title,
   body,

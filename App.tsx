@@ -15,7 +15,6 @@ import AssessmentRoomForm from './pages/AssessmentRoomForm';
 import CheckStatus from './pages/CheckStatus';
 import LiveSessionsDashboard from './pages/LiveSessionsDashboard';
 import WebinarGeekDashboard from './pages/WebinarGeekDashboard';
-import CallsAnalytics from './pages/CallsAnalytics';
 import LeadershipLeaderboard from './pages/LeadershipLeaderboard';
 import HRDashboard from './pages/HRDashboard';
 import EmailLog from './pages/EmailLog';
@@ -61,7 +60,7 @@ const App: React.FC = () => {
           <Route path="/admin" element={<Navigate to="/home" replace />} />
           <Route path="/live-sessions" element={<LiveSessionsDashboard />} />
           <Route path="/webinar-geek" element={<WebinarGeekDashboard />} />
-          <Route path="/calls-analytics" element={<CallsAnalytics />} />
+          <Route path="/calls-analytics" element={<Navigate to="/reports" replace />} />
           <Route path="/calls-analytics/leaderboard" element={<LeadershipLeaderboard />} />
           <Route path="/leaderboard" element={<Navigate to="/calls-analytics/leaderboard" replace />} />
           <Route path="/hr-dashboard" element={<HRDashboard />} />

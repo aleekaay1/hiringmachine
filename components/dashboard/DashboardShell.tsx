@@ -1,17 +1,9 @@
 import React from 'react';
 import PipelineAuthShell from '../PipelineAuthShell';
 import CoinWalletBadge from './CoinWalletBadge';
-import type { AppRole, UserProfile } from '../../services/accessControl';
+import type { UserProfile } from '../../services/accessControl';
+import { getStaffRoleLabel } from '../../services/accessControl';
 import { HomeRefreshButton } from './EmptyHomePrompt';
-
-const ROLE_LABELS: Record<AppRole, string> = {
-  admin: 'Administrator',
-  leadership: 'Leadership',
-  recruiter: 'Recruiter',
-  webinar: 'Webinar team',
-  hr: 'Human resources',
-  viewer: 'Viewer',
-};
 
 function LiveClock() {
   const [now, setNow] = React.useState(() => new Date());
@@ -106,7 +98,9 @@ const DashboardShell: React.FC<DashboardShellProps> = ({
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <p className="text-[11px] uppercase tracking-[0.26em] text-[#4e79a9]">
-                  {profile ? ROLE_LABELS[profile.role] : 'Workspace'}
+                  {profile
+                    ? getStaffRoleLabel(profile.role, profile.email, profile.full_name)
+                    : 'Workspace'}
                 </p>
                 <h1
                   className="text-2xl font-semibold tracking-tight text-[#0B1B34] md:text-3xl"

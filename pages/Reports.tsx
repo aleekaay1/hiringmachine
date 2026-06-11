@@ -156,7 +156,7 @@ const Reports: React.FC = () => {
               Reports
             </h1>
             <p className="mt-1 max-w-2xl text-sm text-[#5c7594]">
-              WebinarGeek API data (bookings & shows). Snapshots are saved in the database per date range.
+              Per-caller bookings, shows, and call insights (pickup times, lead packs, file tags). Open a team member for charts and detail tables.
             </p>
           </div>
           <div className="flex flex-col items-end gap-0.5">

@@ -40,7 +40,7 @@ const LeadershipDashboardView: React.FC<Props> = ({ profile, payload }) => {
       <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
         <div className="grid gap-3 sm:grid-cols-2">
           <QuickLinkCard title="Leadership board" description="Full rankings, badges, and filters." to="/calls-analytics/leaderboard" accent="border-[#f0ce8f] bg-[#fff8ea] hover:bg-[#fff5df]" />
-          <QuickLinkCard title="Calls analytics" description="Booking and attendance analytics." to="/calls-analytics" />
+          <QuickLinkCard title="Team reports" description="Per-caller bookings, pickups, and file performance." to="/reports" />
           <QuickLinkCard title="Webinar overview" description="Organization-wide webinar data." to="/webinar-geek" />
           <QuickLinkCard title="Search leads" description="Find any assigned lead by name, email, or phone." to="/pipeline/lead-manager/leads" accent="border-[#9bc8f6] bg-[#eef6ff] hover:bg-[#e7f4ff]" />
           <QuickLinkCard title="Lead packs" description="Review packs and dial." to="/pipeline/lead-manager" />

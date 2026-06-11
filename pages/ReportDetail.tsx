@@ -26,6 +26,7 @@ import {
   type RecruiterReportBundle,
   type ReportDatePreset,
 } from '../services/reportsService';
+import RecruiterReportAnalytics from '../components/reports/RecruiterReportAnalytics';
 import { exportRecruiterReportCsv, exportRecruiterReportPdf } from '../services/reportsExport';
 import {
   loadUserReportSnapshot,
@@ -100,9 +101,11 @@ const ReportDetail: React.FC = () => {
           const cached = await loadUserReportSnapshot(userId, range);
           if (!cached.tableMissing && cached.payload) {
             const bundle = cached.payload as RecruiterReportBundle;
-            setReport(bundle);
-            setLastUpdated(cached.fetchedAt);
-            return;
+            if (bundle.callAnalytics) {
+              setReport(bundle);
+              setLastUpdated(cached.fetchedAt);
+              return;
+            }
           }
         }
 
@@ -256,6 +259,13 @@ const ReportDetail: React.FC = () => {
                   })}
                 </div>
               </div>
+
+              {report.callAnalytics && (
+                <RecruiterReportAnalytics
+                  analytics={report.callAnalytics}
+                  rangeLabel={report.range.label}
+                />
+              )}
 
               <div className="space-y-3">
                 <ReportExpandableSection

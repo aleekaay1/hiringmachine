@@ -17,6 +17,7 @@ const corsHeaders = {
 const HR_DISTRIBUTOR_EMAILS = new Set([
   'ali@globelife-paz.com',
   'hr.licensing@globelife-paz.com',
+  'reginald_bentajado@globelife-paz.com',
 ]);
 
 type ImportRow = {

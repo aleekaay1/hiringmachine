@@ -31,10 +31,10 @@ import {
   type PipelineStage,
   type AdminData,
 } from '../types';
-import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare, ChevronDown, ChevronUp, Linkedin } from 'lucide-react';
+import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare, ChevronDown, ChevronUp, Linkedin, Loader2 } from 'lucide-react';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
-import type { AppRole } from '../services/accessControl';
+import { canAccessCandidatesCrm, type AppRole } from '../services/accessControl';
 import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { hasResumeOrLinkedInMaterial } from '../services/linkedinUrl';
 import { listSourceCandidateIdsInPipeline, sendCandidatesToPipelineFromAdmin } from '../services/pipelineService';
@@ -160,10 +160,17 @@ const AdminDashboard: React.FC = () => {
   const [showEvaluationModal, setShowEvaluationModal] = useState(false);
   const [liveNow, setLiveNow] = useState(new Date());
   const [role, setRole] = useState<AppRole | null>(null);
+  const [roleResolved, setRoleResolved] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
 
   useEffect(() => {
+    if (!roleResolved || canAccessCandidatesCrm(role)) return;
+    navigate('/home', { replace: true });
+  }, [roleResolved, role, navigate]);
+
+  useEffect(() => {
+    if (!roleResolved || !canAccessCandidatesCrm(role)) return;
     const q = new URLSearchParams(location.search).get('view');
     if (q === 'settings') {
       navigate('/account', { replace: true });
@@ -172,7 +179,7 @@ const AdminDashboard: React.FC = () => {
     if (!q || q === 'overview' || q === 'analytics') {
       navigate('/dashboard?view=candidates', { replace: true });
     }
-  }, [location.search, navigate]);
+  }, [location.search, navigate, role, roleResolved]);
 
   useEffect(() => {
     if (selectedCandidate) setNextStepEdit(getAdminData(selectedCandidate).nextStep);
@@ -315,12 +322,15 @@ const AdminDashboard: React.FC = () => {
 
   useEffect(() => {
     if (!isAuthenticated) return;
-    void resolveStaffSession().then((snapshot) => setRole(snapshot.role));
+    void resolveStaffSession().then((snapshot) => {
+      setRole(snapshot.role);
+      setRoleResolved(snapshot.resolved);
+    });
   }, [isAuthenticated]);
 
   useEffect(() => {
-    if (isAuthenticated) {
-      const load = async () => {
+    if (!isAuthenticated || !roleResolved || !canAccessCandidatesCrm(role)) return;
+    const load = async () => {
         try {
           setLoading(true);
           setError(null);
@@ -337,9 +347,8 @@ const AdminDashboard: React.FC = () => {
           setLoading(false);
         }
       };
-      load();
-    }
-  }, [isAuthenticated]);
+    void load();
+  }, [isAuthenticated, roleResolved, role]);
 
   /** List rows are lean (no assessment JSON); load full row when opening detail. Stale fetch guard avoids wrong candidate after fast clicks. */
   const selectCandidate = (c: Candidate) => {
@@ -1052,6 +1061,14 @@ const AdminDashboard: React.FC = () => {
     selectedCandidate != null &&
     PIPELINE_STAGES.indexOf(getAdminData(selectedCandidate).pipelineStage) >=
       PIPELINE_STAGES.indexOf('Leadership form submitted, awaiting evaluation');
+
+  if (!roleResolved || !canAccessCandidatesCrm(role)) {
+    return (
+      <div className="flex flex-1 items-center justify-center p-10">
+        <Loader2 size={28} className="animate-spin text-[#005EB8]" aria-label="Loading" />
+      </div>
+    );
+  }
 
   return (
       <div

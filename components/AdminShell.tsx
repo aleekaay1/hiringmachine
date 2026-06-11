@@ -1,9 +1,14 @@
 import React from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import Layout from './Layout';
 import StaffLoginPage from './StaffLoginPage';
 import { signInWithGoogle } from '../services/googleAuth';
 import { supabase } from '../services/supabaseClient';
+import {
+  canAccessSection,
+  defaultRouteForRole,
+  resolveAppSectionFromLocation,
+} from '../services/accessControl';
 import {
   ensureStaffAuth,
   getStaffAuthState,
@@ -12,8 +17,24 @@ import {
   subscribeStaffAuth,
 } from '../services/staffSessionCache';
 
+async function redirectAfterStaffLogin(
+  navigate: ReturnType<typeof useNavigate>,
+  pathname: string,
+  search: string,
+): Promise<void> {
+  const snapshot = await resolveStaffSession();
+  const currentPath = `${pathname}${search}`;
+  const section = resolveAppSectionFromLocation(pathname, search);
+  if (canAccessSection(snapshot.role, section, snapshot.userEmail, snapshot.displayName)) return;
+  const fallback = defaultRouteForRole(snapshot.role);
+  if (fallback !== currentPath) {
+    navigate(fallback, { replace: true });
+  }
+}
+
 const AdminShell: React.FC = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const initialAuth = React.useMemo(() => getStaffAuthState(), []);
   const initialSession = React.useMemo(() => getStaffSessionSnapshot(), []);
   const [authReady, setAuthReady] = React.useState(initialAuth.authReady);
@@ -80,6 +101,7 @@ const AdminShell: React.FC = () => {
             return;
           }
           syncAuth();
+          await redirectAfterStaffLogin(navigate, location.pathname, location.search);
         }}
         onGoogleSignIn={async () => {
           setAuthError(null);

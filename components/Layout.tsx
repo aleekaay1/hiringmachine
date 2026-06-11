@@ -5,6 +5,8 @@ import { supabase } from '../services/supabaseClient';
 import {
   canAccessSection,
   defaultRouteForRole,
+  getStaffRoleLabel,
+  resolveAppSectionFromLocation,
   type AppRole,
   type AppSection,
 } from '../services/accessControl';
@@ -41,41 +43,11 @@ const Layout: React.FC<LayoutProps> = ({
   const [avatarUrl, setAvatarUrl] = React.useState<string | null>(cachedSession.avatarUrl);
   const [roleResolved, setRoleResolved] = React.useState(cachedSession.resolved);
   const [userId, setUserId] = React.useState<string | null>(cachedSession.userId);
-  const accessCheckedRef = React.useRef<string | null>(null);
 
-  const currentSection = React.useMemo<AppSection>(() => {
-    if (location.pathname === '/home') return 'home';
-    if (location.pathname === '/account') return 'account';
-    if (location.pathname === '/pipeline') return 'pipeline';
-    if (location.pathname === '/pipeline/lead-manager' || location.pathname.startsWith('/pipeline/lead-manager/')) {
-      return 'pipeline-lead-manager';
-    }
-    if (location.pathname === '/pipeline/call') return 'pipeline-call';
-    if (location.pathname === '/pipeline/performance') return 'pipeline-performance';
-    if (location.pathname === '/pipeline/email') return 'pipeline-email';
-    if (location.pathname === '/pipeline/webinar-verify') return 'pipeline-webinar-verify';
-    if (location.pathname === '/pipeline/uploads') return 'pipeline-uploads';
-    if (location.pathname === '/pipeline-settings') return 'pipeline-settings';
-    if (location.pathname === '/calls-analytics') return 'calls-analytics';
-    if (location.pathname === '/calls-analytics/leaderboard' || location.pathname === '/leaderboard') return 'leaderboard';
-    if (location.pathname === '/webinar-geek') return 'webinar-geek';
-    if (location.pathname === '/live-sessions') return 'live-sessions';
-    if (location.pathname === '/hr-dashboard') return 'hr-dashboard';
-    if (location.pathname === '/hr/lead-distribution' || location.pathname === '/hr/leads') return 'pipeline-hr-leads';
-    if (location.pathname === '/qr') return 'qr';
-    if (location.pathname === '/email-log') return 'email-log';
-    if (location.pathname === '/call-log') return 'call-log';
-    if (location.pathname === '/reports' || location.pathname.startsWith('/reports/')) return 'reports';
-    if (location.pathname === '/admin/staff') return 'staff-directory';
-    if (location.pathname === '/support') return 'support';
-    if (location.pathname === '/ops-console') return 'ops-console';
-    if (location.pathname === '/dashboard' || location.pathname === '/admin') {
-      const view = new URLSearchParams(location.search).get('view');
-      if (view === 'settings') return 'settings';
-      return 'candidates';
-    }
-    return 'candidates';
-  }, [location.pathname, location.search]);
+  const currentSection = React.useMemo<AppSection>(
+    () => resolveAppSectionFromLocation(location.pathname, location.search),
+    [location.pathname, location.search],
+  );
 
   const applySessionSnapshot = React.useCallback((snapshot: ReturnType<typeof getStaffSessionSnapshot>) => {
     setUserId(snapshot.userId);
@@ -111,22 +83,12 @@ const Layout: React.FC<LayoutProps> = ({
   React.useEffect(() => {
     if (!isAdmin || !roleResolved) return;
     const currentPath = `${location.pathname}${location.search}`;
-    if (canAccessSection(role, currentSection, userEmail)) {
-      accessCheckedRef.current = currentPath;
-      return;
+    if (canAccessSection(role, currentSection, userEmail, displayName)) return;
+    const fallback = defaultRouteForRole(role);
+    if (fallback !== currentPath) {
+      navigate(fallback, { replace: true });
     }
-    if (accessCheckedRef.current === currentPath) return;
-    const timer = window.setTimeout(() => {
-      if (!canAccessSection(role, currentSection, userEmail)) {
-        accessCheckedRef.current = currentPath;
-        const fallback = defaultRouteForRole(role);
-        if (fallback !== currentPath) {
-          navigate(fallback, { replace: true });
-        }
-      }
-    }, 120);
-    return () => window.clearTimeout(timer);
-  }, [isAdmin, roleResolved, role, userEmail, currentSection, location.pathname, location.search, navigate]);
+  }, [isAdmin, roleResolved, role, userEmail, displayName, currentSection, location.pathname, location.search, navigate]);
 
   const handleLogout = React.useCallback(async () => {
     try {
@@ -157,7 +119,7 @@ const Layout: React.FC<LayoutProps> = ({
     }
   }, [navigate]);
 
-  const roleLabel = role ? role.charAt(0).toUpperCase() + role.slice(1) : 'Staff';
+  const roleLabel = getStaffRoleLabel(role, userEmail, displayName);
 
   return (
     <div

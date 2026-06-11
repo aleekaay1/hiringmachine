@@ -33,7 +33,7 @@ const WebinarStaffDashboardView: React.FC<Props> = ({ profile, payload }) => {
       <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
         <div className="grid gap-3 sm:grid-cols-2">
           <QuickLinkCard title="Webinar dashboard" description="Full subscription and attendance views." to="/webinar-geek" accent="border-[#9bc8f6] bg-[#eef6ff] hover:bg-[#e7f4ff]" />
-          <QuickLinkCard title="Calls analytics" description="Recruiter booking analytics." to="/calls-analytics" />
+          <QuickLinkCard title="Team reports" description="Per-caller booking and call insights." to="/reports" />
           <QuickLinkCard title="Leaderboard" description="Team recognition board." to="/calls-analytics/leaderboard" />
         </div>
         <DayNotesPanel userId={profile.user_id} />

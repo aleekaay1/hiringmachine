@@ -54,7 +54,11 @@ const corsHeaders = {
   'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
 };
 
-const CALL_LOG_EMAILS = new Set(['ali@globelife-paz.com', 'hr.licensing@globelife-paz.com']);
+const CALL_LOG_EMAILS = new Set([
+  'ali@globelife-paz.com',
+  'hr.licensing@globelife-paz.com',
+  'reginald_bentajado@globelife-paz.com',
+]);
 
 function json(status: number, body: Record<string, unknown>) {
   return new Response(JSON.stringify(body), {
