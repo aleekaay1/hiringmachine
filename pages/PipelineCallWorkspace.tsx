@@ -88,6 +88,8 @@ function webinarVerifyHref(
     if (parts.length > 1) params.set('last', parts.slice(1).join(' '));
   }
   if (candidate.id) params.set('candidateId', candidate.id);
+  const phone = sanitizeWebinarQueryValue(candidate.phone ?? '');
+  if (phone) params.set('phone', phone);
   const query = params.toString();
   return `${WEBINAR_VERIFY_PATH}${query ? `?${query}` : ''}`;
 }

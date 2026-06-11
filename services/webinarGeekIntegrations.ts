@@ -32,6 +32,7 @@ export type WebinarGeekVerifySubscription = {
   email: string | null;
   firstname: string | null;
   surname: string | null;
+  phone: string | null;
   email_verified: boolean;
   watched: boolean;
   custom_field: string | null;
@@ -208,6 +209,7 @@ export async function bookWebinarGeekBroadcast(
     email: string;
     firstname: string;
     surname?: string;
+    phone?: string;
     broadcastId: string;
     webinarId?: string;
     customField: string;
@@ -215,12 +217,14 @@ export async function bookWebinarGeekBroadcast(
   },
 ) {
   const params = new URLSearchParams({ mode: 'book' });
+  const phone = payload.phone?.trim();
   return callWebinarGeek(accessToken, `?${params.toString()}`, {
     method: 'POST',
     body: JSON.stringify({
       email: payload.email.trim().toLowerCase(),
       firstname: payload.firstname.trim(),
       surname: payload.surname?.trim() || undefined,
+      phone: phone || undefined,
       broadcast_id: payload.broadcastId,
       webinar_id: payload.webinarId || undefined,
       custom_field: payload.customField.trim(),

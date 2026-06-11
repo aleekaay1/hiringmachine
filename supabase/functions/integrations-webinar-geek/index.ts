@@ -192,6 +192,7 @@ function buildSubscriptionPayload(input: {
   email: string;
   firstname: string;
   surname: string;
+  phone?: string | null;
   customField?: string | null;
   registrationFields?: RegistrationFieldRow[];
 }): Record<string, unknown> {
@@ -201,6 +202,8 @@ function buildSubscriptionPayload(input: {
     firstname: input.firstname,
     surname: effectiveSurname,
   };
+  const phone = String(input.phone || '').trim();
+  if (phone) payload.phone = phone;
   if (input.customField) payload.custom_field = input.customField;
 
   const extraFields: Record<string, string> = {};
@@ -461,6 +464,7 @@ function simplifySubscriptionRow(row: Record<string, unknown>) {
     email: row.email ?? null,
     firstname: row.firstname ?? null,
     surname: row.surname ?? null,
+    phone: row.phone ?? row.telephone ?? row.mobile ?? null,
     email_verified: row.email_verified === true,
     watched: row.watched === true,
     custom_field: row.custom_field ?? null,
@@ -1224,6 +1228,7 @@ Deno.serve(async (req) => {
         email?: string;
         firstname?: string;
         surname?: string;
+        phone?: string;
         broadcast_id?: string | number;
         webinar_id?: string | number;
         custom_field?: string;
@@ -1232,6 +1237,7 @@ Deno.serve(async (req) => {
       const email = normalizeLookupEmail(body.email || '');
       const firstname = String(body.firstname || '').trim();
       const surname = String(body.surname || '').trim();
+      const phone = String(body.phone || '').trim();
       const broadcastId = String(body.broadcast_id || '').trim();
       const webinarId = String(body.webinar_id || '').trim();
       const customField = String(body.custom_field || '').trim();
@@ -1317,6 +1323,7 @@ Deno.serve(async (req) => {
         email,
         firstname,
         surname,
+        phone,
         customField: effectiveCustomField,
         registrationFields: broadcastContext.registrationFields,
       });
@@ -1342,6 +1349,7 @@ Deno.serve(async (req) => {
           email,
           firstname,
           surname: '.',
+          phone,
           customField: droppedCustomField ? null : effectiveCustomField,
           registrationFields: broadcastContext.registrationFields,
         });

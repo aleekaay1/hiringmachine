@@ -59,6 +59,7 @@ const WebinarVerifyPage: React.FC = () => {
   const [email, setEmail] = React.useState(searchParams.get('email') || '');
   const [firstname, setFirstname] = React.useState(searchParams.get('first') || '');
   const [surname, setSurname] = React.useState(searchParams.get('last') || '');
+  const [phone, setPhone] = React.useState(searchParams.get('phone') || '');
   const candidateId = searchParams.get('candidateId') || '';
 
   const [checking, setChecking] = React.useState(false);
@@ -245,6 +246,10 @@ const WebinarVerifyPage: React.FC = () => {
       setError('Choose a Cooper/RMS registration link to book as.');
       return;
     }
+    if (!phone.trim()) {
+      setError('Phone number is required for WebinarGeek registration.');
+      return;
+    }
     setBooking(true);
     setError(null);
     setBookSuccess(null);
@@ -256,6 +261,7 @@ const WebinarVerifyPage: React.FC = () => {
         email: normalized,
         firstname: firstname.trim(),
         surname: surname.trim() || undefined,
+        phone: phone.trim(),
         broadcastId: selectedBroadcastId,
         webinarId: selected?.webinar_id != null ? String(selected.webinar_id) : undefined,
         customField: selectedLinkTag.trim(),
@@ -351,6 +357,7 @@ const WebinarVerifyPage: React.FC = () => {
                         {[row.firstname, row.surname].filter(Boolean).join(' ') || row.email || 'Subscriber'}
                       </p>
                       <p className="mt-1">{row.email}</p>
+                      {row.phone && <p className="mt-1">{row.phone}</p>}
                       <p className="mt-1">
                         {row.webinar_title || 'Webinar'} · {formatBroadcastDate(row.broadcast_date)}
                       </p>
@@ -453,6 +460,17 @@ const WebinarVerifyPage: React.FC = () => {
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="text-xs font-medium text-[#365274] sm:col-span-2">
+                  Phone
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="(555) 555-5555"
+                    required
                     className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
                   />
                 </label>
