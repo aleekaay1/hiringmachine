@@ -202,6 +202,25 @@ export function candidateDisplayNameFromRow(row: AnyRow): string {
   return fileTagNameFromRow(row) === '—' ? '' : fileTagNameFromRow(row);
 }
 
+const PHONE_FIELD_NAME_RE = /phone|mobile|cell|tel/i;
+
+function phoneFromExtraFields(extra: unknown): string {
+  if (!extra || typeof extra !== 'object') return '';
+  for (const [key, value] of Object.entries(extra as Record<string, unknown>)) {
+    if (!PHONE_FIELD_NAME_RE.test(key)) continue;
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+/** Phone from WebinarGeek row (`phone`, `telephone`, `mobile`, or phone-like `extra_fields`). */
+export function phoneDisplayFromRow(row: AnyRow): string {
+  const direct = String(row.phone ?? row.telephone ?? row.mobile ?? '').trim();
+  if (direct) return direct;
+  return phoneFromExtraFields(row.extra_fields);
+}
+
 /** Alias for file-tag search / filters (not the registrant). */
 export function inviteeLabelFromRow(row: AnyRow): string {
   return fileTagNameFromRow(row);

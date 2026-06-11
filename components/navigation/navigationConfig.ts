@@ -5,7 +5,6 @@ import {
   FileText,
   FileUp,
   Home,
-  LayoutDashboard,
   LifeBuoy,
   Mail,
   MonitorPlay,
@@ -51,7 +50,6 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: Users,
     tourId: 'nav-hiring',
     items: [
-      { name: 'Overview', route: '/dashboard?view=overview', icon: LayoutDashboard, section: 'overview' },
       { name: 'Candidates', route: '/dashboard?view=candidates', icon: Users, section: 'candidates' },
       { name: 'QR Codes', route: '/qr', icon: QrCode, section: 'qr' },
       { name: 'Reports', route: '/reports', icon: FileText, section: 'reports' },

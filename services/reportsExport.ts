@@ -99,12 +99,13 @@ export function exportRecruiterReportCsv(report: RecruiterReportBundle): void {
     '',
     tableSectionCsv(
       'Webinars booked',
-      ['Scheduled on', 'Session', 'Candidate', 'Email', 'Team', 'Watched', 'Showed', 'Tag'],
+      ['Scheduled on', 'Session', 'Candidate', 'Email', 'Phone', 'Team', 'Watched', 'Showed', 'Tag'],
       report.webinarsBooked.map((r: ReportWebinarRow) => [
         r.scheduledOnYmd,
         r.sessionYmd,
         r.candidateName,
         r.email,
+        r.phone,
         r.team,
         r.watched ? 'yes' : 'no',
         r.showed ? 'yes' : 'no',
@@ -114,12 +115,13 @@ export function exportRecruiterReportCsv(report: RecruiterReportBundle): void {
     '',
     tableSectionCsv(
       'Webinar shows',
-      ['Session', 'Scheduled on', 'Candidate', 'Email', 'Minutes', 'Tag'],
+      ['Session', 'Scheduled on', 'Candidate', 'Email', 'Phone', 'Minutes', 'Tag'],
       report.webinarShows.map((r: ReportWebinarRow) => [
         r.sessionYmd,
         r.scheduledOnYmd,
         r.candidateName,
         r.email,
+        r.phone,
         String(r.watchMinutes),
         r.customField,
       ]),
@@ -127,10 +129,11 @@ export function exportRecruiterReportCsv(report: RecruiterReportBundle): void {
     '',
     tableSectionCsv(
       'Live sessions',
-      ['Disposed at', 'Candidate email', 'Session date', 'Attended'],
+      ['Disposed at', 'Candidate email', 'Phone', 'Session date', 'Attended'],
       report.liveSessions.map((r: ReportLiveSessionRow) => [
         r.disposedAt,
         r.candidateEmail,
+        r.candidatePhone,
         r.sessionDate,
         r.attended ? 'yes' : 'no',
       ]),
@@ -216,15 +219,20 @@ export function exportRecruiterReportPdf(report: RecruiterReportBundle): void {
   );
   section(
     'Webinars booked',
-    report.webinarsBooked.map((r) => [r.scheduledOnYmd, r.candidateName, r.email, r.team]),
+    report.webinarsBooked.map((r) => [r.scheduledOnYmd, r.candidateName, r.email, r.phone || '—', r.team]),
   );
   section(
     'Webinar shows',
-    report.webinarShows.map((r) => [r.sessionYmd, r.candidateName, `${r.watchMinutes} min`]),
+    report.webinarShows.map((r) => [r.sessionYmd, r.candidateName, r.email, r.phone || '—', `${r.watchMinutes} min`]),
   );
   section(
     'Live sessions',
-    report.liveSessions.map((r) => [r.sessionDate, r.candidateEmail, r.attended ? 'attended' : 'no show']),
+    report.liveSessions.map((r) => [
+      r.sessionDate,
+      r.candidateEmail,
+      r.candidatePhone || '—',
+      r.attended ? 'attended' : 'no show',
+    ]),
   );
 
   const filename = `recruiter-report-${(report.profile.full_name || 'staff').replace(/[^a-z0-9_-]+/gi, '_')}.pdf`;

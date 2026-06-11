@@ -262,6 +262,60 @@ export async function loadCandidateEmailsById(candidateIds: string[]): Promise<M
   return map;
 }
 
+/** candidate email (normalized) → pipeline_candidates.phone */
+export async function loadCandidatePhonesByEmail(emails: string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(emails.map(normalizeLiveSessionEmail).filter(Boolean))];
+  if (!unique.length) return new Map();
+
+  const map = new Map<string, string>();
+  const chunk = 80;
+  for (let i = 0; i < unique.length; i += chunk) {
+    const slice = unique.slice(i, i + chunk);
+    const { data, error } = await supabase
+      .from('pipeline_candidates')
+      .select('email, phone')
+      .in('email', slice);
+    if (error) {
+      if (/relation|does not exist|schema cache/i.test(error.message)) return map;
+      throw error;
+    }
+    for (const row of (data || []) as Array<{ email?: string | null; phone?: string | null }>) {
+      const email = normalizeLiveSessionEmail(row.email);
+      const phone = String(row.phone || '').trim();
+      if (email && phone && !map.has(email)) map.set(email, phone);
+    }
+  }
+  return map;
+}
+
+/** Portal verify/book form submissions: email → phone from booking audit metadata. */
+export async function loadPortalBookingPhonesByEmail(): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const { data, error } = await supabase
+    .from('webinar_geek_portal_bookings')
+    .select('candidate_email, metadata')
+    .eq('status', 'booked')
+    .order('created_at', { ascending: false })
+    .limit(8000);
+  if (error) {
+    if (/relation|does not exist|schema cache|permission denied/i.test(error.message)) return map;
+    throw error;
+  }
+  for (const row of (data || []) as Array<{ candidate_email?: string | null; metadata?: unknown }>) {
+    const email = normalizeLiveSessionEmail(row.candidate_email);
+    if (!email || map.has(email)) continue;
+    const meta = row.metadata && typeof row.metadata === 'object'
+      ? (row.metadata as Record<string, unknown>)
+      : null;
+    const payload = meta?.attempted_payload && typeof meta.attempted_payload === 'object'
+      ? (meta.attempted_payload as Record<string, unknown>)
+      : null;
+    const phone = String(payload?.phone ?? meta?.phone ?? '').trim();
+    if (phone) map.set(email, phone);
+  }
+  return map;
+}
+
 /** pipeline_call_records.candidate_id → pipeline_candidates.phone */
 export async function loadCandidatePhonesById(candidateIds: string[]): Promise<Map<string, string>> {
   const unique = [...new Set(candidateIds.filter(Boolean))];

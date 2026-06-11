@@ -10,6 +10,7 @@ import {
   buildRecruiterFilterProfiles,
   candidateDisplayNameFromRow,
   fileTagNameFromRow,
+  phoneDisplayFromRow,
   getInviterAttributionFromRow,
   hrScheduledMsFromRow,
   inviteeLabelFromRow,
@@ -279,8 +280,7 @@ function normalizeBroadcastSchedules(data: DashboardData | null): BroadcastSched
 }
 
 function getPhoneDisplay(row: AnyRow): string {
-  const phone = String(row.phone ?? row.telephone ?? row.mobile ?? '').trim();
-  return phone || '0';
+  return phoneDisplayFromRow(row) || '0';
 }
 
 function subscriptionKey(row: AnyRow): string {

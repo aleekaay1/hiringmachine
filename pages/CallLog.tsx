@@ -448,15 +448,22 @@ const CallLog: React.FC = () => {
                             {showPlayer ? 'Hide' : 'Play'}
                           </button>
                         ) : (
-                          <button
-                            type="button"
-                            onClick={() => void handleLoadRecording(row)}
-                            disabled={isFetching}
-                            className="inline-flex items-center gap-1 rounded-md border border-[#cfe3f9] bg-white px-2 py-1 text-[11px] font-medium text-[#005EB8] hover:bg-[#f4f9ff] disabled:opacity-60"
-                          >
-                            <Headphones size={12} />
-                            {isFetching ? 'Loading…' : 'Load recording'}
-                          </button>
+                          <div className="call-recording-load-btn">
+                            <button
+                              type="button"
+                              onClick={() => void handleLoadRecording(row)}
+                              disabled={isFetching}
+                              className="inline-flex items-center gap-1 rounded-md border border-[#cfe3f9] bg-white px-2 py-1 text-[11px] font-medium text-[#005EB8] hover:bg-[#f4f9ff] disabled:opacity-80"
+                            >
+                              <Headphones size={12} className={isFetching ? 'animate-pulse' : ''} />
+                              {isFetching ? 'Loading…' : 'Load recording'}
+                            </button>
+                            {isFetching && (
+                              <div className="call-recording-load-track" aria-hidden>
+                                <div className="call-recording-load-bar" />
+                              </div>
+                            )}
+                          </div>
                         )}
                         {fetchError && (
                           <p className="mt-1 text-[10px] text-red-700 max-w-[160px]">{fetchError}</p>

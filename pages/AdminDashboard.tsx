@@ -34,10 +34,7 @@ import {
 import { Search, Download, Eye, User, Mail, FileText, Star, Calendar, Tag, MessageSquare, ChevronDown, ChevronUp, Linkedin } from 'lucide-react';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
-import {
-  canAccessSection,
-  type AppRole,
-} from '../services/accessControl';
+import type { AppRole } from '../services/accessControl';
 import { formatDateCanadaEastern, formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { hasResumeOrLinkedInMaterial } from '../services/linkedinUrl';
 import { listSourceCandidateIdsInPipeline, sendCandidatesToPipelineFromAdmin } from '../services/pipelineService';
@@ -170,21 +167,12 @@ const AdminDashboard: React.FC = () => {
     const q = new URLSearchParams(location.search).get('view');
     if (q === 'settings') {
       navigate('/account', { replace: true });
+      return;
+    }
+    if (!q || q === 'overview' || q === 'analytics') {
+      navigate('/dashboard?view=candidates', { replace: true });
     }
   }, [location.search, navigate]);
-
-  const adminView = useMemo<'overview' | 'candidates'>(() => {
-    const q = new URLSearchParams(location.search).get('view');
-    if (q === 'analytics' || q === 'settings') return 'overview';
-    if (q === 'overview' || q === 'candidates') return q;
-    return 'overview';
-  }, [location.search]);
-
-  const effectiveAdminView = useMemo<'overview' | 'candidates'>(() => {
-    if (canAccessSection(role, adminView)) return adminView;
-    if (canAccessSection(role, 'candidates')) return 'candidates';
-    return 'overview';
-  }, [adminView, role]);
 
   useEffect(() => {
     if (selectedCandidate) setNextStepEdit(getAdminData(selectedCandidate).nextStep);
@@ -1065,46 +1053,17 @@ const AdminDashboard: React.FC = () => {
     PIPELINE_STAGES.indexOf(getAdminData(selectedCandidate).pipelineStage) >=
       PIPELINE_STAGES.indexOf('Leadership form submitted, awaiting evaluation');
 
-  const stageDistribution = useMemo(() => {
-    const max = Math.max(1, ...PIPELINE_STAGES.map((s) => dashboard.stageCounts[s] ?? 0));
-    return PIPELINE_STAGES.map((s) => ({
-      stage: s,
-      count: dashboard.stageCounts[s] ?? 0,
-      width: `${Math.max(6, Math.round(((dashboard.stageCounts[s] ?? 0) / max) * 100))}%`,
-    }));
-  }, [dashboard.stageCounts]);
-
-  const monthGrid = useMemo(() => {
-    const now = liveNow;
-    const first = new Date(now.getFullYear(), now.getMonth(), 1);
-    const start = new Date(first);
-    start.setDate(first.getDate() - first.getDay());
-    return Array.from({ length: 42 }, (_, i) => {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
-      return {
-        key: d.toISOString(),
-        date: d.getDate(),
-        isCurrentMonth: d.getMonth() === now.getMonth(),
-        isToday:
-          d.getFullYear() === now.getFullYear() &&
-          d.getMonth() === now.getMonth() &&
-          d.getDate() === now.getDate(),
-      };
-    });
-  }, [liveNow]);
-
   return (
       <div
         className={`w-full p-5 lg:p-6 flex flex-col flex-1 min-h-0 ${
-          effectiveAdminView === 'candidates' && !selectedCandidate ? 'gap-4' : 'space-y-5'
+          !selectedCandidate ? 'gap-4' : 'space-y-5'
         }`}
       >
-        {!(effectiveAdminView === 'candidates' && selectedCandidate) && (
+        {!selectedCandidate && (
         <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm px-5 py-3 flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-[#0b1f3a]">
-              {effectiveAdminView === 'overview' ? 'Overview' : 'Candidates'}
+              Candidates
             </h1>
             <p className="text-xs text-gray-500">
               {dashboard.total} applicants · {dashboard.activePipeline} active
@@ -1119,71 +1078,6 @@ const AdminDashboard: React.FC = () => {
         </div>
         )}
 
-        {effectiveAdminView === 'overview' && (
-          <div className="grid grid-cols-1 xl:grid-cols-[320px_minmax(0,1fr)] gap-5">
-            <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-4">
-              <p className="text-sm font-semibold text-[#0b1f3a] mb-3">
-                {liveNow.toLocaleString('en-CA', { month: 'long', year: 'numeric', timeZone: 'America/Toronto' })}
-              </p>
-              <div className="grid grid-cols-7 gap-1 text-[11px] text-center text-gray-500 mb-2">
-                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => <div key={d}>{d}</div>)}
-              </div>
-              <div className="grid grid-cols-7 gap-1">
-                {monthGrid.map((d) => (
-                  <div
-                    key={d.key}
-                    className={`h-9 rounded-md border text-xs flex items-center justify-center ${
-                      d.isToday
-                        ? 'bg-[#0b1f3a] text-white border-[#0b1f3a]'
-                        : d.isCurrentMonth
-                          ? 'bg-white border-gray-200 text-gray-700'
-                          : 'bg-gray-50 border-gray-100 text-gray-400'
-                    }`}
-                  >
-                    {d.date}
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-5">
-              <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-5">
-                <p className="text-sm font-semibold text-[#0b1f3a] mb-3">Pipeline Velocity</p>
-                <div className="space-y-2">
-                  {stageDistribution.map((row) => (
-                    <div key={row.stage} className="flex items-center gap-2 text-xs">
-                      <span className="w-28 truncate text-gray-600">{TIMELINE_SHORT_LABELS[row.stage]}</span>
-                      <div className="h-2 flex-1 rounded-full bg-gray-100 overflow-hidden">
-                        <div className="h-full bg-[#005EB8]" style={{ width: row.width }} />
-                      </div>
-                      <span className="w-6 text-right text-gray-800">{row.count}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-5">
-                  <p className="text-sm font-semibold text-[#0b1f3a] mb-3">Candidate Status Breakdown</p>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex items-center justify-between rounded-lg bg-green-50 border border-green-100 px-3 py-2"><span>High fit</span><span className="font-semibold text-green-700">{dashboard.highFit}</span></div>
-                    <div className="flex items-center justify-between rounded-lg bg-amber-50 border border-amber-100 px-3 py-2"><span>Review</span><span className="font-semibold text-amber-700">{dashboard.review}</span></div>
-                    <div className="flex items-center justify-between rounded-lg bg-red-50 border border-red-100 px-3 py-2"><span>Not aligned</span><span className="font-semibold text-red-700">{dashboard.notAligned}</span></div>
-                  </div>
-                </div>
-                <div className="rounded-2xl border border-[#d6deea] bg-white shadow-sm p-5">
-                  <p className="text-sm font-semibold text-[#0b1f3a] mb-3">Operational Queue</p>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between"><span>High fit</span><span className="font-semibold">{dashboard.highFit}</span></div>
-                    <div className="flex justify-between"><span>Review</span><span className="font-semibold">{dashboard.review}</span></div>
-                    <div className="flex justify-between"><span>Not aligned</span><span className="font-semibold">{dashboard.notAligned}</span></div>
-                    <div className="flex justify-between"><span>Resume / LinkedIn pending review</span><span className="font-semibold">{dashboard.resumesPendingReview}</span></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {effectiveAdminView === 'candidates' && (
         <div data-tour="hiring-candidates">
         {!selectedCandidate && leadershipPendingQueue.length > 0 && (
           <div className="rounded-2xl border border-amber-300 bg-amber-50 shadow-sm p-4">
@@ -2436,7 +2330,6 @@ const AdminDashboard: React.FC = () => {
           </div>
         </div>
         </div>
-        )}
 
         {showEvaluationModal && selectedCandidate && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => !evaluationSaving && setShowEvaluationModal(false)}>

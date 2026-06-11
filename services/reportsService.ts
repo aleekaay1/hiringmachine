@@ -4,6 +4,7 @@ import { filterRowsForRecruiterOwnership } from './recruiterDataScope';
 import {
   candidateDisplayNameFromRow,
   fileTagNameFromRow,
+  phoneDisplayFromRow,
   recruiterTeamFromRow,
 } from './webinarGeekInviters';
 import { fetchWebinarGeekDashboard } from './webinarGeekIntegrations';
@@ -23,8 +24,11 @@ import {
   buildLiveSessionRowsByPhone,
   liveSessionAttendedFromRegistrant,
   loadCandidateEmailsById,
+  loadCandidatePhonesByEmail,
   loadCandidatePhonesById,
   loadLiveSessionRegistrantsForMatching,
+  loadPortalBookingPhonesByEmail,
+  normalizeLiveSessionEmail,
   pickRegistrantForCallDisposition,
 } from './liveSessionBookedOutcomes';
 import {
@@ -65,6 +69,7 @@ export type ReportWebinarRow = {
   id: string;
   candidateName: string;
   email: string;
+  phone: string;
   team: string;
   scheduledOnYmd: string;
   sessionYmd: string;
@@ -77,6 +82,7 @@ export type ReportWebinarRow = {
 export type ReportLiveSessionRow = {
   callRecordId: string;
   candidateEmail: string;
+  candidatePhone: string;
   sessionDate: string;
   attended: boolean;
   disposedAt: string;
@@ -302,6 +308,7 @@ function mapWebinarRow(row: AnyRow): ReportWebinarRow {
     id: String(row.id ?? row.subscription_id ?? ''),
     candidateName: candidateDisplayNameFromRow(row) || fileTagNameFromRow(row),
     email: String(row.email || ''),
+    phone: phoneDisplayFromRow(row),
     team: recruiterTeamFromRow(row),
     scheduledOnYmd: fmtHrScheduledDateKey(row),
     sessionYmd: fmtWebinarSessionDateKey(row),
@@ -310,6 +317,30 @@ function mapWebinarRow(row: AnyRow): ReportWebinarRow {
     watchMinutes,
     customField: String(row.custom_field || ''),
   };
+}
+
+async function loadWebinarPhoneFallbacks(emails: string[]): Promise<{
+  portalPhones: Map<string, string>;
+  pipelinePhones: Map<string, string>;
+}> {
+  const [portalPhones, pipelinePhones] = await Promise.all([
+    loadPortalBookingPhonesByEmail().catch(() => new Map<string, string>()),
+    loadCandidatePhonesByEmail(emails).catch(() => new Map<string, string>()),
+  ]);
+  return { portalPhones, pipelinePhones };
+}
+
+function applyWebinarPhoneFallbacks(
+  rows: ReportWebinarRow[],
+  portalPhones: Map<string, string>,
+  pipelinePhones: Map<string, string>,
+): ReportWebinarRow[] {
+  return rows.map((row) => {
+    if (row.phone) return row;
+    const key = normalizeLiveSessionEmail(row.email);
+    const phone = portalPhones.get(key) || pipelinePhones.get(key) || '';
+    return phone ? { ...row, phone } : row;
+  });
 }
 
 function summarizeCalls(calls: PipelineCallRecord[]): Pick<RecruiterReportSummary, 'totalCalls' | 'bookedCalls'> {
@@ -350,6 +381,8 @@ function buildLiveSessionsForRecruiter(
     rows.push({
       callRecordId: record.id,
       candidateEmail: candidateEmailById.get(record.candidate_id) || match?.email || '',
+      candidatePhone:
+        candidatePhoneById.get(record.candidate_id) || match?.phone || record.dialed_number || '',
       sessionDate: match?.session_date || '—',
       attended,
       disposedAt: record.disposed_at || record.created_at,
@@ -460,11 +493,11 @@ export async function loadRecruiterReport(
     profile.full_name ?? null,
   );
 
-  const webinarsBooked = filterWebinarsBookedInRange(scopedWebinar, range.sinceYmd, range.untilYmd)
+  const webinarsBookedMapped = filterWebinarsBookedInRange(scopedWebinar, range.sinceYmd, range.untilYmd)
     .map(mapWebinarRow)
     .sort((a, b) => b.scheduledOnYmd.localeCompare(a.scheduledOnYmd));
 
-  const webinarShows = scopedWebinar
+  const webinarShowsMapped = scopedWebinar
     .filter((row) => webinarShowedFromRow(row))
     .filter((row) => {
       const showYmd = row.watched === true ? fmtWebinarSessionDateKey(row) : fmtHrScheduledDateKey(row);
@@ -472,6 +505,23 @@ export async function loadRecruiterReport(
     })
     .map(mapWebinarRow)
     .sort((a, b) => b.sessionYmd.localeCompare(a.sessionYmd));
+
+  const webinarEmails = [
+    ...new Set(
+      [...webinarsBookedMapped, ...webinarShowsMapped].map((row) => row.email).filter(Boolean),
+    ),
+  ];
+  const webinarPhoneFallbacks = await loadWebinarPhoneFallbacks(webinarEmails);
+  const webinarsBooked = applyWebinarPhoneFallbacks(
+    webinarsBookedMapped,
+    webinarPhoneFallbacks.portalPhones,
+    webinarPhoneFallbacks.pipelinePhones,
+  );
+  const webinarShows = applyWebinarPhoneFallbacks(
+    webinarShowsMapped,
+    webinarPhoneFallbacks.portalPhones,
+    webinarPhoneFallbacks.pipelinePhones,
+  );
 
   const calls: ReportCallRow[] = callRecords.map((row) => ({
     id: row.id,

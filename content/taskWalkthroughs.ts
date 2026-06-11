@@ -454,7 +454,7 @@ export const TASK_WALKTHROUGHS: Record<string, TaskWalkthrough> = {
       {
         id: 'nav',
         title: 'Hiring menu',
-        body: 'Expand Hiring in the sidebar to see overview, candidates, QR codes, and reports.',
+        body: 'Expand Hiring in the sidebar to see candidates, QR codes, and reports.',
         target: '[data-tour="nav-hiring"]',
       },
       {
@@ -522,7 +522,7 @@ export const WALKTHROUGH_CATALOG: WalkthroughCatalogSection[] = [
   },
   {
     page: 'Hiring',
-    description: 'Candidate records and hiring overview.',
+    description: 'Candidate records and hiring tools.',
     guides: [{ id: 'hiring-view-candidates', title: 'Browse candidates', summary: 'Open the candidates list.' }],
   },
   {

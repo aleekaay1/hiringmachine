@@ -299,6 +299,7 @@ const ReportDetail: React.FC = () => {
                       { key: 'sessionYmd', label: 'Session' },
                       { key: 'candidateName', label: 'Candidate' },
                       { key: 'email', label: 'Email' },
+                      { key: 'phone', label: 'Phone' },
                       { key: 'team', label: 'Team' },
                       { key: 'watched', label: 'Watched' },
                       { key: 'customField', label: 'File tag' },
@@ -309,6 +310,7 @@ const ReportDetail: React.FC = () => {
                       sessionYmd: r.sessionYmd,
                       candidateName: r.candidateName,
                       email: r.email,
+                      phone: r.phone || '—',
                       team: r.team,
                       watched: r.watched ? 'Yes' : 'No',
                       customField: r.customField,
@@ -329,6 +331,7 @@ const ReportDetail: React.FC = () => {
                       { key: 'scheduledOnYmd', label: 'Booked on' },
                       { key: 'candidateName', label: 'Candidate' },
                       { key: 'email', label: 'Email' },
+                      { key: 'phone', label: 'Phone' },
                       { key: 'watchMinutes', label: 'Minutes' },
                       { key: 'customField', label: 'File tag' },
                     ]}
@@ -338,6 +341,7 @@ const ReportDetail: React.FC = () => {
                       scheduledOnYmd: r.scheduledOnYmd,
                       candidateName: r.candidateName,
                       email: r.email,
+                      phone: r.phone || '—',
                       watchMinutes: String(r.watchMinutes),
                       customField: r.customField,
                     }))}
@@ -355,6 +359,7 @@ const ReportDetail: React.FC = () => {
                     columns={[
                       { key: 'disposedAt', label: 'Booked at' },
                       { key: 'candidateEmail', label: 'Candidate email' },
+                      { key: 'candidatePhone', label: 'Phone' },
                       { key: 'sessionDate', label: 'Session date' },
                       { key: 'attended', label: 'Attended' },
                     ]}
@@ -362,6 +367,7 @@ const ReportDetail: React.FC = () => {
                       id: r.callRecordId,
                       disposedAt: formatIso(r.disposedAt),
                       candidateEmail: r.candidateEmail,
+                      candidatePhone: r.candidatePhone || '—',
                       sessionDate: r.sessionDate,
                       attended: r.attended ? 'Yes' : 'No',
                     }))}

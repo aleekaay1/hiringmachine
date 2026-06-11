@@ -71,11 +71,10 @@ const Layout: React.FC<LayoutProps> = ({
     if (location.pathname === '/ops-console') return 'ops-console';
     if (location.pathname === '/dashboard' || location.pathname === '/admin') {
       const view = new URLSearchParams(location.search).get('view');
-      if (view === 'candidates') return 'candidates';
       if (view === 'settings') return 'settings';
-      return 'overview';
+      return 'candidates';
     }
-    return 'overview';
+    return 'candidates';
   }, [location.pathname, location.search]);
 
   const applySessionSnapshot = React.useCallback((snapshot: ReturnType<typeof getStaffSessionSnapshot>) => {
