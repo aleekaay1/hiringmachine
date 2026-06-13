@@ -3,7 +3,10 @@ import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Mail, Phone, Search, X } from 'lucide-react';
 import { formatDateTimeCanadaEastern } from '../../services/dateDisplay';
+import { liveSessionStatusLabel } from '../../services/candidateActivityStats';
 import { matchesCallHistorySearch, type CallHistoryRow } from '../../services/callHistoryRows';
+import type { LiveSessionRegistrantRow } from '../../services/liveSessionBookedOutcomes';
+import type { PipelineCandidate } from '../../services/pipelineService';
 
 export type CallHistorySheetTone = {
   glassPanel: string;
@@ -19,6 +22,8 @@ export type CallHistorySheetTone = {
 type CallHistorySheetProps = {
   open: boolean;
   rows: CallHistoryRow[];
+  registrants: LiveSessionRegistrantRow[];
+  candidates: PipelineCandidate[];
   onClose: () => void;
   onCallLead: (candidateId: string) => void;
   onEmailLead: (candidateId: string) => void;
@@ -28,11 +33,17 @@ type CallHistorySheetProps = {
 const CallHistorySheet: React.FC<CallHistorySheetProps> = ({
   open,
   rows,
+  registrants,
+  candidates,
   onClose,
   onCallLead,
   onEmailLead,
   tone,
 }) => {
+  const candidateById = React.useMemo(
+    () => new Map(candidates.map((c) => [c.id, c])),
+    [candidates],
+  );
   const [query, setQuery] = React.useState('');
 
   React.useEffect(() => {
@@ -113,6 +124,7 @@ const CallHistorySheet: React.FC<CallHistorySheetProps> = ({
                         <th className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Email</th>
                         <th className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Role</th>
                         <th className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Disposition</th>
+                        <th className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Live session</th>
                         <th className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Last call</th>
                         <th className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Batch</th>
                         <th className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Calls</th>
@@ -137,6 +149,13 @@ const CallHistorySheet: React.FC<CallHistorySheetProps> = ({
                             <span className="inline-flex rounded-full bg-[#edf5ff] px-2 py-0.5 text-xs font-medium text-[#285082]">
                               {row.disposition}
                             </span>
+                          </td>
+                          <td className={`px-3 py-2.5 text-xs ${tone.panelMuted}`}>
+                            {liveSessionStatusLabel(
+                              row.latestRecord,
+                              row.candidate ?? candidateById.get(row.candidateId) ?? null,
+                              registrants,
+                            )}
                           </td>
                           <td className={`whitespace-nowrap px-3 py-2.5 text-xs ${tone.panelMuted}`}>
                             {formatDateTimeCanadaEastern(row.disposedAt)}

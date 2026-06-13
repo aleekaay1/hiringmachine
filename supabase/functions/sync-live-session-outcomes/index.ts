@@ -65,22 +65,26 @@ Deno.serve(async (req) => {
       .select('role, email')
       .eq('user_id', auth.user.id)
       .maybeSingle();
-    const role = String(profile?.role || '');
+    const role = String(profile?.role || '').trim().toLowerCase();
     const email = String(profile?.email || '').trim().toLowerCase();
-    const allowed = role === 'admin' || role === 'leadership'
-      || email === 'ali@globelife-paz.com' || email === 'hr.licensing@globelife-paz.com';
+    const staffRoles = new Set(['admin', 'leadership', 'recruiter', 'hr', 'webinar']);
+    const allowed = staffRoles.has(role)
+      || email === 'ali@globelife-paz.com'
+      || email === 'hr.licensing@globelife-paz.com';
     if (!allowed) return json(403, { error: 'Forbidden' });
 
     const body = (await req.json().catch(() => ({}))) as { syncCoins?: boolean; daysBack?: number };
     const daysBack = Number(body.daysBack) > 0 ? Math.min(Number(body.daysBack), 120) : 90;
     const sinceIso = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+    const canSyncCoins = role === 'admin' || role === 'leadership'
+      || email === 'ali@globelife-paz.com';
 
     const admin = createClient(supabaseUrl, serviceRole, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
     const [{ data: registrants, error: regErr }, { data: records, error: recErr }] = await Promise.all([
-      admin.from('live_session_registrants').select('session_date, email, phone, attended_zoom, calendly_no_show, zoom_join_at'),
+      admin.from('live_session_registrants').select('session_date, email, phone, name, attended_zoom, calendly_no_show, zoom_join_at'),
       admin.from('pipeline_call_records')
         .select('id, candidate_id, recruiter_user_id, disposition, dialed_number, disposed_at, created_at, threecx_metadata')
         .gte('disposed_at', sinceIso)
@@ -97,12 +101,13 @@ Deno.serve(async (req) => {
 
     const emailById = new Map<string, string>();
     const phoneById = new Map<string, string>();
+    const nameById = new Map<string, string>();
     const chunk = 150;
     for (let i = 0; i < candidateIds.length; i += chunk) {
       const slice = candidateIds.slice(i, i + chunk);
       const { data: candidates } = await admin
         .from('pipeline_candidates')
-        .select('id, email, phone')
+        .select('id, email, phone, full_name')
         .in('id', slice);
       for (const c of candidates || []) {
         const id = String(c.id || '');
@@ -110,6 +115,7 @@ Deno.serve(async (req) => {
         const ph = String(c.phone || '').trim();
         if (id && em) emailById.set(id, em);
         if (id && ph) phoneById.set(id, ph);
+        if (id && c.full_name) nameById.set(id, String(c.full_name));
       }
     }
 
@@ -125,6 +131,7 @@ Deno.serve(async (req) => {
       const outcome = matchLiveSessionForCallDisposition({
         email: emailById.get(record.candidate_id) || null,
         candidatePhone: phoneById.get(record.candidate_id) || null,
+        candidateName: nameById.get(record.candidate_id) || null,
         dialedNumber: record.dialed_number,
         disposedAtMs: Number.isFinite(disposedMs) ? disposedMs : Date.now(),
         registrants: liveRows,
@@ -156,7 +163,7 @@ Deno.serve(async (req) => {
 
     let coinsSynced = 0;
     let coinsError: string | null = null;
-    if (body.syncCoins !== false) {
+    if (body.syncCoins !== false && canSyncCoins) {
       try {
         const coinResult = await syncAllEligibleRecruiterCoins(admin);
         coinsSynced = coinResult.usersSynced || 0;

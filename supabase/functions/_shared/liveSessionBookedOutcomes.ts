@@ -3,6 +3,7 @@
 export type LiveSessionRegistrantRow = {
   session_date: string;
   email: string;
+  name?: string | null;
   phone: string | null;
   attended_zoom: boolean;
   calendly_no_show: boolean | null;
@@ -14,7 +15,7 @@ export type LiveSessionOutcomeStatus = 'pending' | 'scheduled' | 'attended' | 'n
 export type LiveSessionMatchResult = {
   status: LiveSessionOutcomeStatus;
   sessionDate: string | null;
-  matchMethod: 'email' | 'phone' | null;
+  matchMethod: 'email' | 'phone' | 'name' | null;
   registrant: LiveSessionRegistrantRow | null;
 };
 
@@ -26,6 +27,30 @@ export function normalizeLiveSessionPhone(value: string | null | undefined): str
   const digits = String(value || '').replace(/\D/g, '');
   if (digits.length >= 10) return digits.slice(-10);
   return digits;
+}
+
+export function normalizeLiveSessionName(value: string | null | undefined): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function liveSessionNamesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  const na = normalizeLiveSessionName(a);
+  const nb = normalizeLiveSessionName(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const partsA = na.split(' ').filter(Boolean);
+  const partsB = nb.split(' ').filter(Boolean);
+  if (partsA.length >= 2 && partsB.length >= 2) {
+    const lastA = partsA[partsA.length - 1];
+    const lastB = partsB[partsB.length - 1];
+    if (lastA === lastB && partsA[0][0] === partsB[0][0]) return true;
+  }
+  return false;
 }
 
 export function torontoYmdFromDate(d: Date): string {
@@ -75,11 +100,13 @@ export function pickRegistrantForDisposition(rows: LiveSessionRegistrantRow[], d
 export function pickRegistrantForCallDisposition(input: {
   email?: string | null;
   candidatePhone?: string | null;
+  candidateName?: string | null;
   dialedNumber?: string | null;
   disposedAtMs: number;
   byEmail: Map<string, LiveSessionRegistrantRow[]>;
   byPhone: Map<string, LiveSessionRegistrantRow[]>;
-}): { registrant: LiveSessionRegistrantRow | null; matchMethod: 'email' | 'phone' | null } {
+  allRegistrants?: LiveSessionRegistrantRow[];
+}): { registrant: LiveSessionRegistrantRow | null; matchMethod: 'email' | 'phone' | 'name' | null } {
   const email = normalizeLiveSessionEmail(input.email);
   if (email) {
     const match = pickRegistrantForDisposition(input.byEmail.get(email) || [], input.disposedAtMs);
@@ -90,6 +117,12 @@ export function pickRegistrantForCallDisposition(input: {
     if (!key || key.length < 10) continue;
     const match = pickRegistrantForDisposition(input.byPhone.get(key) || [], input.disposedAtMs);
     if (match) return { registrant: match, matchMethod: 'phone' };
+  }
+  const candidateName = normalizeLiveSessionName(input.candidateName);
+  if (candidateName && input.allRegistrants?.length) {
+    const nameMatches = input.allRegistrants.filter((row) => liveSessionNamesMatch(row.name, candidateName));
+    const match = pickRegistrantForDisposition(nameMatches, input.disposedAtMs);
+    if (match) return { registrant: match, matchMethod: 'name' };
   }
   return { registrant: null, matchMethod: null };
 }
@@ -113,6 +146,7 @@ export function resolveLiveSessionOutcome(registrant: LiveSessionRegistrantRow |
 export function matchLiveSessionForCallDisposition(input: {
   email?: string | null;
   candidatePhone?: string | null;
+  candidateName?: string | null;
   dialedNumber?: string | null;
   disposedAtMs: number;
   registrants: LiveSessionRegistrantRow[];
@@ -123,10 +157,12 @@ export function matchLiveSessionForCallDisposition(input: {
   const { registrant, matchMethod } = pickRegistrantForCallDisposition({
     email: input.email,
     candidatePhone: input.candidatePhone,
+    candidateName: input.candidateName,
     dialedNumber: input.dialedNumber,
     disposedAtMs: input.disposedAtMs,
     byEmail,
     byPhone,
+    allRegistrants: input.registrants,
   });
   const outcome = resolveLiveSessionOutcome(registrant, input.now);
   return { ...outcome, matchMethod: matchMethod || outcome.matchMethod };

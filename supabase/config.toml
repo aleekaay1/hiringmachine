@@ -418,7 +418,7 @@ verify_jwt = false
 verify_jwt = true
 
 [functions.sync-live-session-outcomes]
-verify_jwt = true
+verify_jwt = false
 
 [analytics]
 enabled = true

@@ -42,6 +42,8 @@ $functions = @(
   "threecx-call-webhook",
   "threecx-call-admin",
   "sync-live-session-outcomes",
+  "pipeline-candidate-emails",
+  "sync-recruiter-coins",
   "pipeline-convert-resume",
   "pipeline-hr-leads"
 )

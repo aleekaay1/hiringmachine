@@ -38,6 +38,8 @@ jobs:
             threecx-call-webhook
             threecx-call-admin
             sync-live-session-outcomes
+            pipeline-candidate-emails
+            sync-recruiter-coins
             live-session-auto-assessment
             pipeline-convert-resume
           )

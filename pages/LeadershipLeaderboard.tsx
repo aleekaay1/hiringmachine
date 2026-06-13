@@ -37,6 +37,7 @@ import {
   buildLiveSessionRowsByEmail,
   buildLiveSessionRowsByPhone,
   loadCandidateEmailsById,
+  loadCandidateNamesById,
   loadCandidatePhonesById,
   loadLiveSessionRegistrantsForMatching,
 } from '../services/liveSessionBookedOutcomes';
@@ -246,6 +247,7 @@ const LeadershipLeaderboard: React.FC = () => {
   const [refreshing, setRefreshing] = React.useState(false);
   const [refreshProgress, setRefreshProgress] = React.useState<LeaderboardProgressState | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [syncNotice, setSyncNotice] = React.useState<string | null>(null);
   const [period, setPeriod] = React.useState<LeaderboardPeriod>('last7');
   const [customRange, setCustomRange] = React.useState<LeaderboardCustomRange>(() => defaultLeaderboardCustomRange());
   const [rows, setRows] = React.useState<RecruiterLeaderboardRow[]>([]);
@@ -396,10 +398,15 @@ const LeadershipLeaderboard: React.FC = () => {
       }));
       if (!liveSyncResult.ok && liveSyncResult.error) {
         console.warn('[leaderboard] Live session sync:', liveSyncResult.error);
+        setSyncNotice(`Live session sync: ${liveSyncResult.error}. Rankings use cached Calendly/Zoom data.`);
+      } else if (liveSyncResult.ok && liveSyncResult.message) {
+        setSyncNotice(liveSyncResult.message);
+      } else {
+        setSyncNotice(null);
       }
 
       setRefreshProgress({ pct: 38, label: 'Loading webinar & live session data…' });
-      const [scopedWebinarRows, profiles, liveRegistrants, candidateEmailById, candidatePhoneById] =
+      const [scopedWebinarRows, profiles, liveRegistrants, candidateEmailById, candidatePhoneById, candidateNameById] =
         await Promise.all([
           loadScopedWebinarRowsForViewer({
             role: 'admin',
@@ -410,6 +417,7 @@ const LeadershipLeaderboard: React.FC = () => {
           loadLiveSessionRegistrantsForMatching().catch(() => []),
           loadCandidateEmailsById(candidateIds).catch(() => new Map<string, string>()),
           loadCandidatePhonesById(candidateIds).catch(() => new Map<string, string>()),
+          loadCandidateNamesById(candidateIds).catch(() => new Map<string, string>()),
         ]);
       const liveSessionByEmail = buildLiveSessionRowsByEmail(liveRegistrants);
       const liveSessionByPhone = buildLiveSessionRowsByPhone(liveRegistrants);
@@ -431,8 +439,10 @@ const LeadershipLeaderboard: React.FC = () => {
         recruiterSeeds,
         candidateEmailById,
         candidatePhoneById,
+        candidateNameById,
         liveSessionByEmail,
         liveSessionByPhone,
+        liveSessionRegistrants: liveRegistrants,
         excludedUserIds,
       });
       const previousComputed = buildCompositeLeaderboard({
@@ -448,8 +458,10 @@ const LeadershipLeaderboard: React.FC = () => {
         recruiterSeeds,
         candidateEmailById,
         candidatePhoneById,
+        candidateNameById,
         liveSessionByEmail,
         liveSessionByPhone,
+        liveSessionRegistrants: liveRegistrants,
         excludedUserIds,
       });
 
@@ -633,6 +645,11 @@ const LeadershipLeaderboard: React.FC = () => {
                 <p className="text-[10px] text-[#6a839f]">Last updated: {formatRefreshedAt(lastUpdated)}</p>
               </div>
             </div>
+            {syncNotice && (
+              <p className="mt-3 rounded-xl border border-[#cfe0f5] bg-[#f0f7ff] px-3 py-2 text-xs text-[#365274]">
+                {syncNotice}
+              </p>
+            )}
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {PERIODS.map((item) => (
                 <button

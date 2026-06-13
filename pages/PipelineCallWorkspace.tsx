@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import CallHistorySheet from '../components/pipeline/CallHistorySheet';
 import CandidateResumeDetailsCard from '../components/pipeline/CandidateResumeDetailsCard';
+import CandidateActivityStatsPanel from '../components/pipeline/CandidateActivityStatsPanel';
 import PostDispositionEmailModal from '../components/pipeline/PostDispositionEmailModal';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
@@ -27,6 +28,7 @@ import {
   logPipelineCallAction,
   normalizeDialDestination,
   readCallRecordMeta,
+  readCallRecordLiveSessionOutcome,
   readPipelineCandidateEmail,
   readPipelineCandidatePhone,
   savePipelineCallDisposition,
@@ -50,7 +52,9 @@ import { getCurrentUserProfile } from '../services/accessControl';
 import {
   buildLiveSessionRowsByEmail,
   loadLiveSessionRegistrantsForMatching,
+  type LiveSessionRegistrantRow,
 } from '../services/liveSessionBookedOutcomes';
+import { matchAndPersistLiveSessionForRecord } from '../services/liveSessionOutcomeService';
 import {
   buildWebinarRowsByEmail,
   classifyBookedOutcome,
@@ -188,6 +192,7 @@ const PipelineCallWorkspace: React.FC = () => {
   const [records, setRecords] = React.useState<PipelineCallRecord[]>([]);
   const [todaysCallCount, setTodaysCallCount] = React.useState(0);
   const [bookedOutcomeByCandidate, setBookedOutcomeByCandidate] = React.useState<CandidateBookedOutcomeMap>(new Map());
+  const [liveRegistrants, setLiveRegistrants] = React.useState<LiveSessionRegistrantRow[]>([]);
   const [currentUserId, setCurrentUserId] = React.useState<string | null>(null);
   const [selfLeadName, setSelfLeadName] = React.useState('');
   const [selfLeadEmail, setSelfLeadEmail] = React.useState('');
@@ -248,9 +253,9 @@ const PipelineCallWorkspace: React.FC = () => {
         viewerEmail: auth.user?.email ?? profile?.email ?? null,
         viewerFullName: profile?.full_name ?? null,
       }).catch(() => null);
-      const liveRegistrantsPromise = loadLiveSessionRegistrantsForMatching().catch(() => []);
+      const liveRegistrantsPromise = loadLiveSessionRegistrantsForMatching().catch(() => [] as LiveSessionRegistrantRow[]);
 
-      const [resumeRows, callRecordRows, todayRows, webinarRows, liveRegistrants] = await Promise.all([
+      const [resumeRows, callRecordRows, todayRows, webinarRows, liveRegRows] = await Promise.all([
         listPipelineResumesForCandidates(candidateIds),
         listPipelineCallRecords({ candidateIds, limit: 5000 }),
         uid
@@ -272,9 +277,10 @@ const PipelineCallWorkspace: React.FC = () => {
       }
       setResumesByCandidate(nextMap);
       setRecords(callRecordRows);
+      setLiveRegistrants(liveRegRows);
       setTodaysCallCount(todayRows.length);
       const rowsByEmail = webinarRows ? buildWebinarRowsByEmail(webinarRows) : new Map();
-      const liveSessionByEmail = buildLiveSessionRowsByEmail(liveRegistrants);
+      const liveSessionByEmail = buildLiveSessionRowsByEmail(liveRegRows);
       const latest = latestRecordByCandidate(callRecordRows);
       const bookedMap = new Map<string, BookedOutcomeBucket>();
       for (const candidate of sortedCandidates) {
@@ -1001,6 +1007,35 @@ const PipelineCallWorkspace: React.FC = () => {
         setPostEmailTo(savedEmail);
         setPostEmailDisposition(savedDisposition);
       }
+      if (savedDisposition === 'Booked' && bookedSubtype === 'Live Session') {
+        void matchAndPersistLiveSessionForRecord({
+          record: latestSaved,
+          candidate: savedCandidate,
+          emailOverride: savedEmail,
+          registrants: liveRegistrants,
+        }).then((outcome) => {
+          if (!outcome || outcome.status === 'pending') return;
+          setRecords((prev) =>
+            prev.map((row) =>
+              row.id === latestSaved.id
+                ? {
+                    ...row,
+                    threecx_metadata: {
+                      ...(row.threecx_metadata && typeof row.threecx_metadata === 'object'
+                        ? (row.threecx_metadata as Record<string, unknown>)
+                        : {}),
+                      live_session_outcome: outcome.status,
+                      live_session_date: outcome.sessionDate,
+                      live_session_match_method: outcome.matchMethod,
+                      live_session_matched_at: new Date().toISOString(),
+                      live_session_attended_zoom: outcome.status === 'attended',
+                    },
+                  }
+                : row,
+            ),
+          );
+        });
+      }
     } catch (e) {
       setError(stringifySupabaseError(e));
     } finally {
@@ -1276,6 +1311,36 @@ const PipelineCallWorkspace: React.FC = () => {
 
                   <CandidateResumeDetailsCard candidate={currentCandidate} resumes={selectedResumes} tone={tone} />
 
+                  <CandidateActivityStatsPanel
+                    candidate={currentCandidate}
+                    records={records}
+                    registrants={liveRegistrants}
+                    tone={tone}
+                  />
+
+                  {latestByCandidate.get(currentCandidate.id) && (
+                    (() => {
+                      const latest = latestByCandidate.get(currentCandidate.id)!;
+                      const liveOutcome = readCallRecordLiveSessionOutcome(latest);
+                      if (!liveOutcome.isLiveSessionBooked) return null;
+                      const statusLabel =
+                        liveOutcome.status === 'attended'
+                          ? 'Live session show'
+                          : liveOutcome.status === 'scheduled'
+                            ? 'Live session booked'
+                            : liveOutcome.status === 'no_show'
+                              ? 'Live session no-show'
+                              : 'Matching live session…';
+                      return (
+                        <p className={`rounded-xl border px-3 py-2 text-xs ${tone.subtle} ${tone.panelMuted}`}>
+                          {statusLabel}
+                          {liveOutcome.sessionDate ? ` · ${liveOutcome.sessionDate}` : ''}
+                          {liveOutcome.matchMethod ? ` · matched by ${liveOutcome.matchMethod}` : ''}
+                        </p>
+                      );
+                    })()
+                  )}
+
                   <div className="grid gap-3 md:grid-cols-2">
                     <div className={`rounded-2xl border p-4 ${tone.subtle}`} data-tour="call-phone-field">
                       <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Phone</p>
@@ -1373,6 +1438,8 @@ const PipelineCallWorkspace: React.FC = () => {
         <CallHistorySheet
           open={showCallHistory}
           rows={callHistoryRows}
+          registrants={liveRegistrants}
+          candidates={candidates}
           onClose={() => setShowCallHistory(false)}
           onCallLead={openLeadFromHistory}
           onEmailLead={openEmailForLead}

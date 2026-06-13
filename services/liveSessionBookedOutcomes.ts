@@ -13,6 +13,7 @@ import { torontoYmdFromDate } from './webinarGeekDates';
 export type LiveSessionRegistrantRow = {
   session_date: string;
   email: string;
+  name?: string | null;
   phone: string | null;
   attended_zoom: boolean;
   calendly_no_show: boolean | null;
@@ -24,7 +25,7 @@ export type LiveSessionOutcomeStatus = 'pending' | 'scheduled' | 'attended' | 'n
 export type LiveSessionMatchResult = {
   status: LiveSessionOutcomeStatus;
   sessionDate: string | null;
-  matchMethod: 'email' | 'phone' | null;
+  matchMethod: 'email' | 'phone' | 'name' | null;
   registrant: LiveSessionRegistrantRow | null;
 };
 
@@ -45,10 +46,34 @@ export function liveSessionPhonesMatch(a: string | null | undefined, b: string |
   return da === db;
 }
 
+export function normalizeLiveSessionName(value: string | null | undefined): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function liveSessionNamesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  const na = normalizeLiveSessionName(a);
+  const nb = normalizeLiveSessionName(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const partsA = na.split(' ').filter(Boolean);
+  const partsB = nb.split(' ').filter(Boolean);
+  if (partsA.length >= 2 && partsB.length >= 2) {
+    const lastA = partsA[partsA.length - 1];
+    const lastB = partsB[partsB.length - 1];
+    if (lastA === lastB && partsA[0][0] === partsB[0][0]) return true;
+  }
+  return false;
+}
+
 export async function loadLiveSessionRegistrantsForMatching(): Promise<LiveSessionRegistrantRow[]> {
   const { data, error } = await supabase
     .from('live_session_registrants')
-    .select('session_date, email, phone, attended_zoom, calendly_no_show, zoom_join_at');
+    .select('session_date, email, name, phone, attended_zoom, calendly_no_show, zoom_join_at');
   if (error) {
     if (/relation|does not exist|schema cache/i.test(error.message)) return [];
     throw error;
@@ -105,11 +130,13 @@ export function pickRegistrantForDisposition(
 export function pickRegistrantForCallDisposition(input: {
   email?: string | null;
   candidatePhone?: string | null;
+  candidateName?: string | null;
   dialedNumber?: string | null;
   disposedAtMs: number;
   byEmail: Map<string, LiveSessionRegistrantRow[]>;
   byPhone: Map<string, LiveSessionRegistrantRow[]>;
-}): { registrant: LiveSessionRegistrantRow | null; matchMethod: 'email' | 'phone' | null } {
+  allRegistrants?: LiveSessionRegistrantRow[];
+}): { registrant: LiveSessionRegistrantRow | null; matchMethod: 'email' | 'phone' | 'name' | null } {
   const email = normalizeLiveSessionEmail(input.email);
   if (email) {
     const match = pickRegistrantForDisposition(input.byEmail.get(email) || [], input.disposedAtMs);
@@ -121,6 +148,13 @@ export function pickRegistrantForCallDisposition(input: {
     if (!key || key.length < 10) continue;
     const match = pickRegistrantForDisposition(input.byPhone.get(key) || [], input.disposedAtMs);
     if (match) return { registrant: match, matchMethod: 'phone' };
+  }
+
+  const candidateName = normalizeLiveSessionName(input.candidateName);
+  if (candidateName && input.allRegistrants?.length) {
+    const nameMatches = input.allRegistrants.filter((row) => liveSessionNamesMatch(row.name, candidateName));
+    const match = pickRegistrantForDisposition(nameMatches, input.disposedAtMs);
+    if (match) return { registrant: match, matchMethod: 'name' };
   }
 
   return { registrant: null, matchMethod: null };
@@ -165,6 +199,7 @@ export function resolveLiveSessionOutcome(
 export function matchLiveSessionForCallDisposition(input: {
   email?: string | null;
   candidatePhone?: string | null;
+  candidateName?: string | null;
   dialedNumber?: string | null;
   disposedAtMs: number;
   registrants: LiveSessionRegistrantRow[];
@@ -175,10 +210,12 @@ export function matchLiveSessionForCallDisposition(input: {
   const { registrant, matchMethod } = pickRegistrantForCallDisposition({
     email: input.email,
     candidatePhone: input.candidatePhone,
+    candidateName: input.candidateName,
     dialedNumber: input.dialedNumber,
     disposedAtMs: input.disposedAtMs,
     byEmail,
     byPhone,
+    allRegistrants: input.registrants,
   });
   const outcome = resolveLiveSessionOutcome(registrant, input.now);
   return { ...outcome, matchMethod: matchMethod || outcome.matchMethod };
@@ -338,5 +375,31 @@ export async function loadCandidatePhonesById(candidateIds: string[]): Promise<M
   return map;
 }
 
+/** pipeline_call_records.candidate_id → pipeline_candidates.full_name */
+export async function loadCandidateNamesById(candidateIds: string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(candidateIds.filter(Boolean))];
+  if (!unique.length) return new Map();
+
+  const map = new Map<string, string>();
+  const chunk = 150;
+  for (let i = 0; i < unique.length; i += chunk) {
+    const slice = unique.slice(i, i + chunk);
+    const { data, error } = await supabase
+      .from('pipeline_candidates')
+      .select('id, full_name')
+      .in('id', slice);
+    if (error) {
+      if (/relation|does not exist|schema cache/i.test(error.message)) return map;
+      throw error;
+    }
+    for (const row of (data || []) as Array<{ id?: string; full_name?: string | null }>) {
+      const id = String(row.id || '').trim();
+      const name = String(row.full_name || '').trim();
+      if (id && name) map.set(id, name);
+    }
+  }
+  return map;
+}
+
 export const LIVE_SESSION_BOOKED_OUTCOME_RULE_LABEL =
-  'Booked (Live Session) matched by candidate email or phone to Calendly/Zoom: registered => scheduled; Zoom join (attended_zoom) => showed (+15 Paz Coins); past session without join => no show.';
+  'Booked (Live Session) matched by candidate email, phone, or name to Calendly/Zoom: registered => scheduled; Zoom join (attended_zoom) => showed (+15 Paz Coins); past session without join => no show.';
