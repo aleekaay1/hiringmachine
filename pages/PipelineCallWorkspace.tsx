@@ -1,9 +1,20 @@
 import React from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { CheckCircle2, ExternalLink, Phone, RefreshCw, Search, Settings, Video } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  History,
+  Mail,
+  Phone,
+  RefreshCw,
+  Settings,
+  Video,
+} from 'lucide-react';
+import CallHistorySheet from '../components/pipeline/CallHistorySheet';
 import CandidateResumeDetailsCard from '../components/pipeline/CandidateResumeDetailsCard';
-import LeadBatchAccordion from '../components/pipeline/LeadBatchAccordion';
+import PostDispositionEmailModal from '../components/pipeline/PostDispositionEmailModal';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import {
@@ -47,7 +58,6 @@ import {
   type BookedOutcomeBucket,
 } from '../services/pipelineBookedOutcomes';
 import {
-  defaultExpandedGroupKeys,
   groupPipelineCandidatesByBatch,
 } from '../services/pipelineLeadGrouping';
 import {
@@ -57,6 +67,7 @@ import {
   applyDialQueueStartMode,
 } from '../services/pipelineDialQueue';
 import { consumeDialQueueIntent } from '../services/recruiterLeadPackAnalytics';
+import { buildCallHistoryRows } from '../services/callHistoryRows';
 
 type QueueFilter = 'all' | 'callbacks' | 'not_interested' | 'booked' | 'booked_no_show' | 'booked_didnt_watch';
 
@@ -122,28 +133,6 @@ function normalizeDispositionLabel(value: string | null | undefined): string {
   return String(value || '').trim().toLowerCase();
 }
 
-function matchesDoneLaneSearch(
-  candidate: PipelineCandidate,
-  disposition: string,
-  query: string,
-): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  const qDigits = q.replace(/\D/g, '');
-  const { effectivePhone } = readPipelineCandidatePhone(candidate);
-  const phoneDigits = effectivePhone.replace(/\D/g, '');
-  const name = String(candidate.full_name || '').toLowerCase();
-  const disp = disposition.toLowerCase();
-  const email = String(candidate.email || '').toLowerCase();
-  return (
-    name.includes(q) ||
-    disp.includes(q) ||
-    email.includes(q) ||
-    effectivePhone.toLowerCase().includes(q) ||
-    (qDigits.length >= 3 && phoneDigits.includes(qDigits))
-  );
-}
-
 function dispositionIsRetry(label: string): boolean {
   return Object.prototype.hasOwnProperty.call(RETRY_PRIORITY_ORDER, label);
 }
@@ -166,8 +155,11 @@ function latestRecordByCandidate(records: PipelineCallRecord[]): Map<string, Pip
   return map;
 }
 
+const SKIP_EMAIL_DISPOSITIONS = new Set(['not interested', 'do not call', 'wrong number']);
+
 const PipelineCallWorkspace: React.FC = () => {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [initialLoading, setInitialLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [savingDisposition, setSavingDisposition] = React.useState(false);
@@ -208,9 +200,11 @@ const PipelineCallWorkspace: React.FC = () => {
   const [selectedLoadBatchKey, setSelectedLoadBatchKey] = React.useState('');
   const [dialStartMode, setDialStartMode] = React.useState<DialQueueStartMode>('first');
   const [loadedDialQueue, setLoadedDialQueue] = React.useState<LoadedDialQueue | null>(null);
-  const [expandedQueueBatchKeys, setExpandedQueueBatchKeys] = React.useState<Set<string>>(() => new Set());
-  const [expandedDoneBatchKeys, setExpandedDoneBatchKeys] = React.useState<Set<string>>(() => new Set());
-  const [doneSearch, setDoneSearch] = React.useState('');
+  const [showCallHistory, setShowCallHistory] = React.useState(false);
+  const [showQueueSetup, setShowQueueSetup] = React.useState(false);
+  const [postEmailCandidate, setPostEmailCandidate] = React.useState<PipelineCandidate | null>(null);
+  const [postEmailTo, setPostEmailTo] = React.useState('');
+  const [postEmailDisposition, setPostEmailDisposition] = React.useState('');
   const selectedCandidateIdRef = React.useRef<string | null>(null);
   const appliedDialIntentRef = React.useRef(false);
   /** When Place call opens 3CX — used as dial_started_at (not disposition save time). */
@@ -455,40 +449,90 @@ const PipelineCallWorkspace: React.FC = () => {
     [candidates, isCandidateNew],
   );
 
-  const queueBatchGroups = React.useMemo(
-    () =>
-      groupPipelineCandidatesByBatch(queueList, {
-        isNew: isCandidateNew,
-        isInProgress: (candidate) => !isCandidateNew(candidate),
-      }),
-    [queueList, isCandidateNew],
+  const focusNavigationList = React.useMemo(() => {
+    const scope = loadedDialQueue ? dialScopeCandidates : filteredCandidates;
+    const ordered = [...scope].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+    );
+    if (loadedDialQueue && ordered.length) {
+      return applyDialQueueStartMode(ordered, ordered, loadedDialQueue.startMode, latestByCandidate);
+    }
+    const seen = new Set<string>();
+    const merged: PipelineCandidate[] = [];
+    for (const candidate of [...queueList, ...doneList]) {
+      if (seen.has(candidate.id)) continue;
+      seen.add(candidate.id);
+      merged.push(candidate);
+    }
+    return merged.length ? merged : ordered;
+  }, [
+    loadedDialQueue,
+    dialScopeCandidates,
+    filteredCandidates,
+    queueList,
+    doneList,
+    latestByCandidate,
+  ]);
+
+  const currentFocusIndex = React.useMemo(() => {
+    if (!selectedCandidateId) return -1;
+    return focusNavigationList.findIndex((c) => c.id === selectedCandidateId);
+  }, [focusNavigationList, selectedCandidateId]);
+
+  const goToFocusIndex = React.useCallback(
+    (index: number) => {
+      const target = focusNavigationList[index];
+      if (target) setSelectedCandidateId(target.id);
+    },
+    [focusNavigationList],
   );
 
-  const filteredDoneList = React.useMemo(() => {
-    if (!doneSearch.trim()) return doneList;
-    return doneList.filter((candidate) => {
-      const latest = latestByCandidate.get(candidate.id);
-      const disposition = latest?.disposition || 'Disposed';
-      return matchesDoneLaneSearch(candidate, disposition, doneSearch);
-    });
-  }, [doneList, doneSearch, latestByCandidate]);
+  const goToPreviousLead = React.useCallback(() => {
+    if (currentFocusIndex > 0) goToFocusIndex(currentFocusIndex - 1);
+  }, [currentFocusIndex, goToFocusIndex]);
 
-  const doneBatchGroups = React.useMemo(
+  const goToNextLead = React.useCallback(() => {
+    if (currentFocusIndex >= 0 && currentFocusIndex < focusNavigationList.length - 1) {
+      goToFocusIndex(currentFocusIndex + 1);
+    }
+  }, [currentFocusIndex, focusNavigationList.length, goToFocusIndex]);
+
+  const batchTitleByKey = React.useMemo(() => {
+    const map = new Map<string, string>();
+    for (const group of loadableBatchGroups) {
+      map.set(group.key, group.title);
+    }
+    return map;
+  }, [loadableBatchGroups]);
+
+  const callHistoryRows = React.useMemo(
     () =>
-      groupPipelineCandidatesByBatch(filteredDoneList, {
-        isDone: () => true,
+      buildCallHistoryRows({
+        records,
+        candidates,
+        resumesByCandidate,
+        batchTitleByKey,
       }),
-    [filteredDoneList],
+    [records, candidates, resumesByCandidate, batchTitleByKey],
   );
 
-  const visibleQueueBatchGroups = React.useMemo(() => {
-    if (activeBatchKey === 'all') return queueBatchGroups;
-    return queueBatchGroups.filter((group) => group.key === activeBatchKey);
-  }, [queueBatchGroups, activeBatchKey]);
+  const openLeadFromHistory = React.useCallback(
+    (candidateId: string) => {
+      setSelectedCandidateId(candidateId);
+      setShowCallHistory(false);
+    },
+    [],
+  );
+
+  const openEmailForLead = React.useCallback(
+    (candidateId: string) => {
+      navigate(`/pipeline/email?candidateId=${encodeURIComponent(candidateId)}`);
+    },
+    [navigate],
+  );
 
   React.useEffect(() => {
-    if (!queueBatchGroups.length) return;
-    setExpandedQueueBatchKeys((prev) => (prev.size ? prev : defaultExpandedGroupKeys(queueBatchGroups)));
+    if (!loadableBatchGroups.length) return;
     if (!selectedLoadBatchKey && loadableBatchGroups[0]) {
       setSelectedLoadBatchKey(loadableBatchGroups[0].key);
     }
@@ -544,25 +588,6 @@ const PipelineCallWorkspace: React.FC = () => {
     );
   }, [initialLoading, loadableBatchGroups, searchParams]);
 
-  React.useEffect(() => {
-    if (!doneBatchGroups.length) return;
-    setExpandedDoneBatchKeys((prev) => {
-      if (prev.size) return prev;
-      const keys = defaultExpandedGroupKeys(doneBatchGroups);
-      if (doneBatchGroups.length > 2) keys.clear();
-      return keys;
-    });
-  }, [doneBatchGroups]);
-
-  const toggleQueueBatch = (key: string) => {
-    setExpandedQueueBatchKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
   const loadDialQueue = () => {
     const group = loadableBatchGroups.find((row) => row.key === selectedLoadBatchKey);
     if (!group) {
@@ -576,6 +601,7 @@ const PipelineCallWorkspace: React.FC = () => {
       startMode: dialStartMode,
     });
     setActiveBatchKey(group.key);
+    setShowQueueSetup(false);
     setActionMsg(`Loaded ${group.title} into the dial queue.`);
   };
 
@@ -583,15 +609,6 @@ const PipelineCallWorkspace: React.FC = () => {
     setLoadedDialQueue(null);
     setActiveBatchKey('all');
     setActionMsg('Dial queue reset — showing all batches again.');
-  };
-
-  const toggleDoneBatch = (key: string) => {
-    setExpandedDoneBatchKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
   };
 
   const emptyQueueGuidance = React.useMemo(() => {
@@ -629,6 +646,11 @@ const PipelineCallWorkspace: React.FC = () => {
     if (!displayList.length) return null;
     return queueList[0] || displayList[0];
   }, [candidates, selectedCandidateId, displayList, queueList]);
+
+  const openEmailForCurrentLead = React.useCallback(() => {
+    if (!currentCandidate) return;
+    navigate(`/pipeline/email?candidateId=${encodeURIComponent(currentCandidate.id)}`);
+  }, [currentCandidate, navigate]);
 
   const currentPhoneInfo = React.useMemo(
     () => (currentCandidate ? readPipelineCandidatePhone(currentCandidate) : null),
@@ -736,67 +758,6 @@ const PipelineCallWorkspace: React.FC = () => {
     }),
     [isDark],
   );
-
-  const batchAccordionTone = React.useMemo(
-    () => ({
-      header: tone.panelTitle,
-      headerMuted: tone.panelMuted,
-      panel: tone.subtle,
-      badgeNew: 'bg-[#edf5ff] text-[#285082]',
-      badgeMuted: isDark ? 'bg-white/10 text-slate-300' : 'bg-slate-100 text-slate-600',
-    }),
-    [tone, isDark],
-  );
-
-  const renderQueueCandidate = (candidate: PipelineCandidate, indexInGroup: number) => {
-    const isSelected = candidate.id === currentCandidate?.id;
-    const latest = latestByCandidate.get(candidate.id);
-    const dispositionLabel = normalizeDispositionLabel(latest?.disposition);
-    const phoneInfo = readPipelineCandidatePhone(candidate);
-    const callbackAt = callbackAtByCandidate.get(candidate.id);
-    const isCallbackDue = callbackAt && new Date(callbackAt).getTime() <= Date.now();
-    return (
-      <button
-        key={candidate.id}
-        type="button"
-        onClick={() => setSelectedCandidateId(candidate.id)}
-        className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
-          isSelected
-            ? 'border-[#7eb3e7] bg-white shadow-[0_8px_24px_-16px_rgba(38,95,165,0.45)]'
-            : tone.doneCard
-        }`}
-      >
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className={`truncate text-sm font-semibold ${tone.panelTitle}`}>
-              {indexInGroup + 1}. {candidate.full_name || 'Unknown Candidate'}
-            </p>
-            <p className={`mt-0.5 truncate text-xs ${tone.panelMuted}`}>
-              {phoneInfo.effectivePhone || 'No phone'}
-            </p>
-            {candidate.email && (
-              <p className={`truncate text-[11px] ${tone.panelLabel}`}>{candidate.email}</p>
-            )}
-          </div>
-          {dispositionLabel === 'callback requested' && (
-            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${isCallbackDue ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-600'}`}>
-              {isCallbackDue ? 'Due' : 'Callback'}
-            </span>
-          )}
-          {!latest && (
-            <span className="shrink-0 rounded-full bg-[#edf5ff] px-2 py-0.5 text-[10px] font-semibold text-[#285082]">
-              New
-            </span>
-          )}
-          {latest && dispositionIsRetry(dispositionLabel) && dispositionLabel !== 'callback requested' && (
-            <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600">
-              Retry
-            </span>
-          )}
-        </div>
-      </button>
-    );
-  };
 
   const placeCall = async (candidate: PipelineCandidate, destinationRaw?: string) => {
     const destination = normalizeDialDestination(destinationRaw || candidate.phone || '');
@@ -948,6 +909,9 @@ const PipelineCallWorkspace: React.FC = () => {
     }
     setSavingDisposition(true);
     setError(null);
+    const savedDisposition = disposition;
+    const savedCandidate = currentCandidate;
+    const savedEmail = emailInput.trim() || currentEmailInfo?.effectiveEmail || '';
     try {
       const nowIso = new Date().toISOString();
       const dialStartedAt = callPlacedAtRef.current || nowIso;
@@ -992,21 +956,19 @@ const PipelineCallWorkspace: React.FC = () => {
       };
       setRecords((prev) => [latestSaved, ...prev.filter((row) => row.id !== latestSaved.id)]);
       setCandidates((prev) =>
-        prev
-          .map((row) => {
-            if (row.id !== currentCandidate.id) return row;
-            const nextStatus =
-              disposition === 'Not interested' || disposition === 'Do not call'
-                ? 'closed'
-                : 'in_progress';
-            return {
-              ...row,
-              journey_stage: journeyStageForCallDisposition(disposition),
-              status: nextStatus,
-              updated_at: nowIso,
-            };
-          })
-          .filter((row) => String(row.status || '').toLowerCase() !== 'closed'),
+        prev.map((row) => {
+          if (row.id !== currentCandidate.id) return row;
+          const nextStatus =
+            disposition === 'Not interested' || disposition === 'Do not call'
+              ? 'closed'
+              : 'in_progress';
+          return {
+            ...row,
+            journey_stage: journeyStageForCallDisposition(disposition),
+            status: nextStatus,
+            updated_at: nowIso,
+          };
+        }),
       );
       if (disposition === 'Booked') {
         setBookedOutcomeByCandidate((prev) => new Map(prev).set(currentCandidate.id, 'booked'));
@@ -1028,8 +990,16 @@ const PipelineCallWorkspace: React.FC = () => {
         if (idx >= 0 && idx < queueList.length - 1) {
           setSelectedCandidateId(queueList[idx + 1].id);
         } else {
-          setSelectedCandidateId(queueList.find((c) => c.id !== currentCandidate.id)?.id ?? null);
+          goToNextLead();
         }
+      }
+      if (
+        dispositionModalMode === 'call' &&
+        !SKIP_EMAIL_DISPOSITIONS.has(normalizeDispositionLabel(savedDisposition))
+      ) {
+        setPostEmailCandidate(savedCandidate);
+        setPostEmailTo(savedEmail);
+        setPostEmailDisposition(savedDisposition);
       }
     } catch (e) {
       setError(stringifySupabaseError(e));
@@ -1059,9 +1029,23 @@ const PipelineCallWorkspace: React.FC = () => {
             <div>
               <p className={`text-[10px] uppercase tracking-[0.22em] ${tone.panelLabel}`}>Call workspace</p>
               <h1 className={`text-xl font-semibold ${tone.panelTitle}`}>Recruiter Call Workspace</h1>
-              <p className={`text-xs ${tone.panelMuted}`}>Pick a candidate, place the call, log the outcome.</p>
+              <p className={`text-xs ${tone.panelMuted}`}>One lead at a time — place call, save disposition, move to next.</p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                data-tour="call-history-button"
+                onClick={() => setShowCallHistory(true)}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold ${tone.actionButton}`}
+              >
+                <History size={14} />
+                Call history
+                {callHistoryRows.length > 0 && (
+                  <span className="rounded-full bg-[#e8f3ff] px-1.5 py-0.5 text-[10px] tabular-nums text-[#285082]">
+                    {callHistoryRows.length}
+                  </span>
+                )}
+              </button>
               <Link
                 to="/account#recruiter-call-settings"
                 data-tour="call-settings-link"
@@ -1134,39 +1118,47 @@ const PipelineCallWorkspace: React.FC = () => {
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.45, delay: 0.1 }}
-          className="grid gap-4 lg:grid-cols-[minmax(280px,340px)_1fr]"
+          className="space-y-4"
         >
-          <aside className={`rounded-2xl border p-4 ${tone.glassPanel}`} data-tour="call-queue">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div>
-                <p className={`text-sm font-semibold ${tone.panelTitle}`}>To call</p>
+          <div className={`rounded-2xl border px-4 py-3 ${tone.glassPanel}`} data-tour="call-queue">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className={`text-sm font-semibold ${tone.panelTitle}`}>
+                  {loadedDialQueue ? loadedDialQueue.batchTitle : 'Dial queue'}
+                </p>
                 <p className={`text-xs ${tone.panelMuted}`}>
-                  {queueList.length} in queue · {queueBatchGroups.length} batch{queueBatchGroups.length === 1 ? '' : 'es'}
+                  {queueList.length} to call · {doneList.length} done
+                  {currentFocusIndex >= 0 && focusNavigationList.length > 0
+                    ? ` · lead ${currentFocusIndex + 1} of ${focusNavigationList.length}`
+                    : ''}
                 </p>
               </div>
-            </div>
-            {loadableBatchGroups.length > 0 && (
-              <div className={`mb-3 rounded-xl border p-3 ${tone.subtle}`} data-tour="call-dial-queue-loader">
-                <p className={`text-xs font-semibold ${tone.panelTitle}`}>Auto-dial queue</p>
+              <div className="flex flex-wrap items-center gap-2">
                 {loadedDialQueue ? (
-                  <div className="mt-2 space-y-2">
-                    <p className={`text-[11px] ${tone.panelMuted}`}>
-                      Loaded <span className="font-semibold text-[#285082]">{loadedDialQueue.batchTitle}</span>
-                      {' · '}
-                      {queueList.length} lead{queueList.length === 1 ? '' : 's'}
-                      {' · '}
-                      {loadedDialQueue.startMode === 'resume' ? 'Resuming after last disposed' : 'Starting from first'}
-                    </p>
-                    <Button variant="outline" className="!min-h-0 h-8 w-full text-xs" onClick={resetDialQueue}>
-                      Reset queue
-                    </Button>
-                  </div>
+                  <Button variant="outline" className="!min-h-0 h-8 px-3 text-xs" onClick={resetDialQueue}>
+                    Reset queue
+                  </Button>
                 ) : (
-                  <div className="mt-2 space-y-2">
+                  <Button
+                    variant="outline"
+                    className="!min-h-0 h-8 px-3 text-xs"
+                    onClick={() => setShowQueueSetup((v) => !v)}
+                  >
+                    {showQueueSetup ? 'Hide setup' : 'Load batch'}
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {showQueueSetup && !loadedDialQueue && loadableBatchGroups.length > 0 && (
+              <div className={`mt-3 rounded-xl border p-3 ${tone.subtle}`} data-tour="call-dial-queue-loader">
+                <div className="grid gap-2 md:grid-cols-[1fr_auto_auto] md:items-end">
+                  <div>
+                    <label className={`text-[11px] font-semibold ${tone.panelLabel}`}>Batch</label>
                     <select
                       value={selectedLoadBatchKey}
                       onChange={(e) => setSelectedLoadBatchKey(e.target.value)}
-                      className={`w-full rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}
+                      className={`mt-1 w-full rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}
                     >
                       <option value="">Select batch…</option>
                       {loadableBatchGroups.map((group) => (
@@ -1175,317 +1167,227 @@ const PipelineCallWorkspace: React.FC = () => {
                         </option>
                       ))}
                     </select>
-                    <div className="grid grid-cols-1 gap-1.5">
-                      <label className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 text-[11px] ${dialStartMode === 'first' ? 'border-[#7eb3e7] bg-[#e8f3ff]' : tone.input}`}>
-                        <input
-                          type="radio"
-                          name="dial-start-mode"
-                          checked={dialStartMode === 'first'}
-                          onChange={() => setDialStartMode('first')}
-                        />
-                        Start from first lead
-                      </label>
-                      <label className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 text-[11px] ${dialStartMode === 'resume' ? 'border-[#7eb3e7] bg-[#e8f3ff]' : tone.input}`}>
-                        <input
-                          type="radio"
-                          name="dial-start-mode"
-                          checked={dialStartMode === 'resume'}
-                          onChange={() => setDialStartMode('resume')}
-                        />
-                        Resume after last disposed
-                      </label>
-                    </div>
-                    <Button className="!min-h-0 h-8 w-full text-xs" onClick={loadDialQueue} disabled={!selectedLoadBatchKey}>
-                      Load queue
-                    </Button>
                   </div>
-                )}
+                  <div className="flex gap-2">
+                    <label className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-[11px] ${dialStartMode === 'first' ? 'border-[#7eb3e7] bg-[#e8f3ff]' : tone.input}`}>
+                      <input type="radio" name="dial-start-mode" checked={dialStartMode === 'first'} onChange={() => setDialStartMode('first')} />
+                      First
+                    </label>
+                    <label className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-[11px] ${dialStartMode === 'resume' ? 'border-[#7eb3e7] bg-[#e8f3ff]' : tone.input}`}>
+                      <input type="radio" name="dial-start-mode" checked={dialStartMode === 'resume'} onChange={() => setDialStartMode('resume')} />
+                      Resume
+                    </label>
+                  </div>
+                  <Button className="!min-h-0 h-9 px-4 text-xs" onClick={loadDialQueue} disabled={!selectedLoadBatchKey}>
+                    Load queue
+                  </Button>
+                </div>
               </div>
             )}
-            {queueBatchGroups.length > 1 && (
-              <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1">
-                <button
-                  type="button"
-                  onClick={() => setActiveBatchKey('all')}
-                  className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${
-                    activeBatchKey === 'all' ? 'border-[#7eb3e7] bg-[#e8f3ff] text-[#285082]' : tone.actionButton
-                  }`}
-                >
-                  All batches
-                </button>
-                {queueBatchGroups.map((group) => (
-                  <button
-                    key={group.key}
-                    type="button"
-                    onClick={() => setActiveBatchKey(group.key)}
-                    className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold ${
-                      activeBatchKey === group.key ? 'border-[#7eb3e7] bg-[#e8f3ff] text-[#285082]' : tone.actionButton
-                    }`}
-                  >
-                    {group.batchNumber ? `#${group.batchNumber}` : group.title}
-                    {group.newCount > 0 ? ` · ${group.newCount} new` : ''}
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="max-h-[min(70vh,640px)] overflow-y-auto pr-1">
-              <LeadBatchAccordion
-                groups={visibleQueueBatchGroups}
-                expandedKeys={expandedQueueBatchKeys}
-                onToggle={toggleQueueBatch}
-                renderItem={renderQueueCandidate}
-                emptyMessage={emptyQueueGuidance}
-                tone={batchAccordionTone}
-              />
-            </div>
+          </div>
 
-            <div className={`mt-4 rounded-xl border p-3 ${tone.subtle}`}>
-              <p className={`text-xs font-semibold ${tone.panelTitle}`}>Add your own lead</p>
-              <p className={`mt-0.5 text-[11px] ${tone.panelMuted}`}>LinkedIn, referral, or any candidate you found yourself.</p>
-              <div className="mt-2 space-y-2">
-                <input
-                  value={selfLeadName}
-                  onChange={(e) => setSelfLeadName(e.target.value)}
-                  placeholder="Full name *"
-                  className={`w-full rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}
-                />
-                <input
-                  value={selfLeadEmail}
-                  onChange={(e) => setSelfLeadEmail(e.target.value)}
-                  placeholder="Email"
-                  className={`w-full rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}
-                />
-                <input
-                  value={selfLeadPhone}
-                  onChange={(e) => setSelfLeadPhone(e.target.value)}
-                  placeholder="Phone"
-                  className={`w-full rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}
-                />
-                <select
-                  value={selfLeadSource}
-                  onChange={(e) => setSelfLeadSource(e.target.value)}
-                  className={`w-full rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}
-                >
-                  <option value="LinkedIn">LinkedIn</option>
-                  <option value="Referral">Referral</option>
-                  <option value="Indeed">Indeed</option>
-                  <option value="Other">Other</option>
-                </select>
-                <textarea
-                  value={selfLeadNotes}
-                  onChange={(e) => setSelfLeadNotes(e.target.value)}
-                  placeholder="Notes (optional)"
-                  rows={2}
-                  className={`w-full rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}
-                />
-                <Button
-                  variant="outline"
-                  className="!min-h-0 h-8 w-full text-xs"
-                  onClick={() => void submitSelfLead()}
-                  disabled={savingSelfLead || !selfLeadName.trim()}
-                >
-                  {savingSelfLead ? 'Adding...' : 'Add to my queue'}
-                </Button>
-                {selfLeadMsg && (
-                  <p className={`text-[11px] ${selfLeadMsg.includes('Added') ? 'text-emerald-700' : 'text-red-600'}`}>
-                    {selfLeadMsg}
-                  </p>
-                )}
-              </div>
-            </div>
-          </aside>
+          <div className="flex items-stretch gap-2 md:gap-3">
+            <button
+              type="button"
+              onClick={goToPreviousLead}
+              disabled={currentFocusIndex <= 0}
+              className={`hidden shrink-0 self-center rounded-2xl border p-3 transition sm:inline-flex sm:flex-col sm:items-center sm:justify-center sm:min-h-[120px] ${
+                currentFocusIndex <= 0 ? 'cursor-not-allowed opacity-40' : tone.actionButton
+              }`}
+              aria-label="Previous lead"
+            >
+              <ChevronLeft size={28} />
+              <span className="mt-1 text-[10px] font-semibold uppercase tracking-wide">Prev</span>
+            </button>
 
-          <section className="space-y-4">
-            <div className={`rounded-2xl border p-5 md:p-6 ${tone.glassPanel}`}>
+            <div className={`min-w-0 flex-1 rounded-2xl border p-5 md:p-6 ${tone.glassPanel}`}>
               {currentCandidate ? (
                 <div className="space-y-5">
-                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0">
-                      <p className={`text-[10px] uppercase tracking-[0.2em] ${tone.panelLabel}`}>Now calling</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className={`text-[10px] uppercase tracking-[0.2em] ${tone.panelLabel}`}>Current lead</p>
+                        {currentFocusIndex >= 0 && (
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tone.subtle}`}>
+                            {currentFocusIndex + 1} / {focusNavigationList.length}
+                          </span>
+                        )}
+                        {latestByCandidate.get(currentCandidate.id) && (
+                          <button
+                            type="button"
+                            onClick={() => openEditDispositionModal(currentCandidate)}
+                            className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tone.actionButton}`}
+                          >
+                            Edit disposition
+                          </button>
+                        )}
+                      </div>
                       <h2 className={`mt-1 text-2xl font-semibold ${tone.panelTitle}`}>
                         {currentCandidate.full_name || 'Unknown Candidate'}
                       </h2>
                       {currentCandidate.journey_stage && (
                         <p className={`mt-1 text-xs ${tone.panelLabel}`}>Stage: {currentCandidate.journey_stage}</p>
                       )}
+                      {latestByCandidate.get(currentCandidate.id) && (
+                        <p className={`mt-1 text-xs ${tone.panelMuted}`}>
+                          Last: {latestByCandidate.get(currentCandidate.id)?.disposition}
+                        </p>
+                      )}
                     </div>
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <div className="flex flex-wrap gap-2">
                       <Button
-                        className="!min-h-0 h-12 shrink-0 px-6 text-base"
+                        className="!min-h-0 h-11 px-5"
                         data-tour="call-place-button"
                         onClick={() => void placeCall(currentCandidate, phoneInput)}
                       >
-                        <Phone size={18} className="mr-2" />
+                        <Phone size={17} className="mr-2" />
                         Place call
                       </Button>
+                      <button
+                        type="button"
+                        onClick={openEmailForCurrentLead}
+                        className={`inline-flex h-11 items-center gap-2 rounded-xl border px-4 text-sm font-semibold ${tone.actionButton}`}
+                        title="Open email workspace"
+                      >
+                        <Mail size={16} />
+                        Email
+                      </button>
                       <a
-                        href={webinarVerifyHref(currentCandidate)}
+                        href={webinarVerifyHref(currentCandidate, { email: emailInput, fullName: currentCandidate.full_name || '' })}
                         target="_blank"
                         rel="noreferrer"
-                        className={`inline-flex h-12 items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold ${tone.actionButton}`}
+                        className={`inline-flex h-11 items-center gap-2 rounded-xl border px-4 text-sm font-semibold ${tone.actionButton}`}
                       >
                         <Video size={16} />
-                        Webinar verify
-                        <ExternalLink size={13} className="opacity-70" />
+                        Webinar
+                        <ExternalLink size={12} className="opacity-70" />
                       </a>
                     </div>
                   </div>
 
-                  <CandidateResumeDetailsCard
-                    candidate={currentCandidate}
-                    resumes={selectedResumes}
-                    tone={tone}
-                  />
-
-                  <div className={`rounded-2xl border p-4 ${tone.subtle}`} data-tour="call-phone-field">
-                    <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Phone number</p>
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                      <input
-                        value={phoneInput}
-                        onChange={(e) => {
-                          setPhoneInput(e.target.value);
-                          setPhoneMsg(null);
-                        }}
-                        placeholder="e.g. +1 (555) 123-4567"
-                        className={`min-w-0 flex-1 rounded-xl border px-3 py-2.5 text-sm ${tone.input}`}
-                      />
-                      <Button
-                        variant="outline"
-                        className="!min-h-0 h-10 shrink-0 px-4 text-sm"
-                        onClick={() => void saveCandidatePhoneOverride()}
-                        disabled={savingPhone || !currentCandidate}
-                      >
-                        {savingPhone ? 'Saving...' : 'Save number'}
-                      </Button>
-                    </div>
-                    <p className={`mt-2 text-[11px] ${tone.panelLabel}`}>
-                      Dial preview: {normalizeDialDestination(phoneInput) || '—'}
-                    </p>
-                    {currentPhoneInfo?.originalExtractedPhone && (
-                      <p className={`mt-1 text-[11px] ${tone.panelLabel}`}>
-                        OCR extracted phone: {currentPhoneInfo.originalExtractedPhone}
-                      </p>
-                    )}
-                    {phoneMsg && <p className="mt-1 text-xs text-emerald-700">{phoneMsg}</p>}
+                  <div className="flex gap-2 sm:hidden">
+                    <button type="button" onClick={goToPreviousLead} disabled={currentFocusIndex <= 0} className={`flex-1 rounded-xl border py-2 text-xs font-semibold ${tone.actionButton} ${currentFocusIndex <= 0 ? 'opacity-40' : ''}`}>
+                      ← Previous
+                    </button>
+                    <button type="button" onClick={goToNextLead} disabled={currentFocusIndex >= focusNavigationList.length - 1} className={`flex-1 rounded-xl border py-2 text-xs font-semibold ${tone.actionButton} ${currentFocusIndex >= focusNavigationList.length - 1 ? 'opacity-40' : ''}`}>
+                      Next →
+                    </button>
                   </div>
 
-                  <div className={`rounded-2xl border p-4 ${tone.subtle}`}>
-                    <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Email address</p>
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                      <input
-                        value={emailInput}
-                        onChange={(e) => {
-                          setEmailInput(e.target.value);
-                          setEmailMsg(null);
-                        }}
-                        placeholder="candidate@example.com"
-                        className={`min-w-0 flex-1 rounded-xl border px-3 py-2.5 text-sm ${tone.input}`}
-                      />
-                      <Button
-                        variant="outline"
-                        className="!min-h-0 h-10 shrink-0 px-4 text-sm"
-                        onClick={() => void saveCandidateEmailOverride()}
-                        disabled={savingEmail || !currentCandidate}
-                      >
-                        {savingEmail ? 'Saving...' : 'Save email'}
-                      </Button>
+                  <CandidateResumeDetailsCard candidate={currentCandidate} resumes={selectedResumes} tone={tone} />
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className={`rounded-2xl border p-4 ${tone.subtle}`} data-tour="call-phone-field">
+                      <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Phone</p>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <input
+                          value={phoneInput}
+                          onChange={(e) => {
+                            setPhoneInput(e.target.value);
+                            setPhoneMsg(null);
+                          }}
+                          placeholder="e.g. +1 (555) 123-4567"
+                          className={`min-w-0 flex-1 rounded-xl border px-3 py-2.5 text-sm ${tone.input}`}
+                        />
+                        <Button variant="outline" className="!min-h-0 h-10 shrink-0 px-4 text-sm" onClick={() => void saveCandidatePhoneOverride()} disabled={savingPhone}>
+                          {savingPhone ? 'Saving…' : 'Save'}
+                        </Button>
+                      </div>
+                      <p className={`mt-2 text-[11px] ${tone.panelLabel}`}>Dial: {normalizeDialDestination(phoneInput) || '—'}</p>
+                      {phoneMsg && <p className="mt-1 text-xs text-emerald-700">{phoneMsg}</p>}
                     </div>
-                    {currentEmailInfo?.originalExtractedEmail && (
-                      <p className={`mt-2 text-[11px] ${tone.panelLabel}`}>
-                        OCR extracted email: {currentEmailInfo.originalExtractedEmail}
-                      </p>
-                    )}
-                    <p className={`mt-1 text-[11px] ${tone.panelLabel}`}>
-                      Used for inbox matching and outbound email to this resume.
-                    </p>
-                    {emailMsg && (
-                      <p className={`mt-1 text-xs ${emailMsg.startsWith('Corrected') ? 'text-emerald-700' : 'text-red-600'}`}>
-                        {emailMsg}
-                      </p>
-                    )}
+
+                    <div className={`rounded-2xl border p-4 ${tone.subtle}`}>
+                      <p className={`mb-2 text-xs font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Email</p>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <input
+                          value={emailInput}
+                          onChange={(e) => {
+                            setEmailInput(e.target.value);
+                            setEmailMsg(null);
+                          }}
+                          placeholder="candidate@example.com"
+                          className={`min-w-0 flex-1 rounded-xl border px-3 py-2.5 text-sm ${tone.input}`}
+                        />
+                        <Button variant="outline" className="!min-h-0 h-10 shrink-0 px-4 text-sm" onClick={() => void saveCandidateEmailOverride()} disabled={savingEmail}>
+                          {savingEmail ? 'Saving…' : 'Save'}
+                        </Button>
+                      </div>
+                      {emailMsg && <p className={`mt-1 text-xs ${emailMsg.startsWith('Corrected') ? 'text-emerald-700' : 'text-red-600'}`}>{emailMsg}</p>}
+                    </div>
                   </div>
                 </div>
               ) : (
-                <p className={`text-sm ${tone.panelMuted}`}>{emptyQueueGuidance}</p>
+                <div className="py-8 text-center">
+                  <p className={`text-sm ${tone.panelMuted}`}>{emptyQueueGuidance}</p>
+                  {loadableBatchGroups.length > 0 && !loadedDialQueue && (
+                    <Button className="mt-4" onClick={() => setShowQueueSetup(true)}>
+                      Load a batch to start
+                    </Button>
+                  )}
+                </div>
               )}
             </div>
 
-            <div className={`rounded-2xl border p-4 ${tone.glassPanel}`} data-tour="call-done-panel">
-              <div className="mb-3 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <p className={`text-sm font-semibold ${tone.panelTitle}`}>Done</p>
-                    <p className={`text-xs ${tone.panelMuted}`}>
-                      {doneSearch.trim()
-                        ? `${filteredDoneList.length} of ${doneList.length} completed`
-                        : `${doneList.length} completed`}
-                    </p>
-                  </div>
-                </div>
-                <div className="relative">
-                  <Search size={13} className={`absolute left-2.5 top-1/2 -translate-y-1/2 ${tone.panelLabel}`} />
-                  <input
-                    value={doneSearch}
-                    onChange={(e) => setDoneSearch(e.target.value)}
-                    placeholder="Search name, phone, or disposition"
-                    className={`w-full rounded-lg border py-2 pl-8 pr-2 text-xs ${tone.input}`}
-                  />
-                </div>
+            <button
+              type="button"
+              onClick={goToNextLead}
+              disabled={currentFocusIndex < 0 || currentFocusIndex >= focusNavigationList.length - 1}
+              className={`hidden shrink-0 self-center rounded-2xl border p-3 transition sm:inline-flex sm:flex-col sm:items-center sm:justify-center sm:min-h-[120px] ${
+                currentFocusIndex < 0 || currentFocusIndex >= focusNavigationList.length - 1
+                  ? 'cursor-not-allowed opacity-40'
+                  : tone.actionButton
+              }`}
+              aria-label="Next lead"
+            >
+              <ChevronRight size={28} />
+              <span className="mt-1 text-[10px] font-semibold uppercase tracking-wide">Next</span>
+            </button>
+          </div>
+
+          <details className={`rounded-2xl border ${tone.glassPanel}`}>
+            <summary className={`cursor-pointer list-none px-4 py-3 text-sm font-semibold ${tone.panelTitle}`}>
+              Add your own lead
+            </summary>
+            <div className={`border-t px-4 py-3 ${tone.subtle}`}>
+              <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+                <input value={selfLeadName} onChange={(e) => setSelfLeadName(e.target.value)} placeholder="Full name *" className={`rounded-lg border px-2.5 py-2 text-xs ${tone.input}`} />
+                <input value={selfLeadEmail} onChange={(e) => setSelfLeadEmail(e.target.value)} placeholder="Email" className={`rounded-lg border px-2.5 py-2 text-xs ${tone.input}`} />
+                <input value={selfLeadPhone} onChange={(e) => setSelfLeadPhone(e.target.value)} placeholder="Phone" className={`rounded-lg border px-2.5 py-2 text-xs ${tone.input}`} />
+                <select value={selfLeadSource} onChange={(e) => setSelfLeadSource(e.target.value)} className={`rounded-lg border px-2.5 py-2 text-xs ${tone.input}`}>
+                  <option value="LinkedIn">LinkedIn</option>
+                  <option value="Referral">Referral</option>
+                  <option value="Indeed">Indeed</option>
+                  <option value="Other">Other</option>
+                </select>
+                <textarea value={selfLeadNotes} onChange={(e) => setSelfLeadNotes(e.target.value)} placeholder="Notes" rows={1} className={`rounded-lg border px-2.5 py-2 text-xs md:col-span-2 ${tone.input}`} />
+                <Button variant="outline" className="!min-h-0 h-9 text-xs" onClick={() => void submitSelfLead()} disabled={savingSelfLead || !selfLeadName.trim()}>
+                  {savingSelfLead ? 'Adding…' : 'Add to queue'}
+                </Button>
               </div>
-              <LeadBatchAccordion
-                groups={doneBatchGroups}
-                expandedKeys={expandedDoneBatchKeys}
-                onToggle={toggleDoneBatch}
-                compact
-                emptyMessage={
-                  doneSearch.trim()
-                    ? 'No done leads match your search.'
-                    : 'Disposed candidates will appear here grouped by batch.'
-                }
-                tone={batchAccordionTone}
-                renderItem={(candidate) => {
-                  const latest = latestByCandidate.get(candidate.id);
-                  const disposition = latest?.disposition || 'Disposed';
-                  const phone = readPipelineCandidatePhone(candidate).effectivePhone || '—';
-                  const isSelected = candidate.id === currentCandidate?.id;
-                  return (
-                    <div
-                      key={candidate.id}
-                      className={`flex items-center gap-1.5 rounded-xl border px-2 py-1.5 transition ${
-                        isSelected ? 'border-[#9dc6ef] bg-[#e8f3ff]' : tone.doneCard
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setSelectedCandidateId(candidate.id)}
-                        className="min-w-0 flex-1 px-1 py-1 text-left"
-                      >
-                        <p className={`truncate text-xs font-semibold ${tone.panelTitle}`}>
-                          {candidate.full_name || 'Unknown Candidate'}
-                          <span className={`ml-1.5 font-normal ${tone.panelMuted}`}>{phone}</span>
-                        </p>
-                        <p className={`truncate text-[10px] ${tone.panelMuted}`}>{disposition}</p>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openEditDispositionModal(candidate)}
-                        className={`shrink-0 rounded-lg border px-2 py-1 text-[10px] font-semibold ${tone.actionButton}`}
-                        title="Edit disposition"
-                      >
-                        Edit
-                      </button>
-                      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                        <CheckCircle2 size={11} />
-                        Done
-                      </span>
-                    </div>
-                  );
-                }}
-              />
+              {selfLeadMsg && <p className={`mt-2 text-[11px] ${selfLeadMsg.includes('Added') ? 'text-emerald-700' : 'text-red-600'}`}>{selfLeadMsg}</p>}
             </div>
-          </section>
+          </details>
         </motion.div>
 
+        <CallHistorySheet
+          open={showCallHistory}
+          rows={callHistoryRows}
+          onClose={() => setShowCallHistory(false)}
+          onCallLead={openLeadFromHistory}
+          onEmailLead={openEmailForLead}
+          tone={tone}
+        />
+
+        {postEmailCandidate && (
+          <PostDispositionEmailModal
+            open={Boolean(postEmailCandidate)}
+            candidate={postEmailCandidate}
+            toEmail={postEmailTo}
+            disposition={postEmailDisposition}
+            onClose={() => setPostEmailCandidate(null)}
+          />
+        )}
 
         <AnimatePresence>
           {showLoadingOverlay && (

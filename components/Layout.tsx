@@ -14,6 +14,7 @@ import AppSidebar from './navigation/AppSidebar';
 import PortalTour from './tour/PortalTour';
 import TaskWalkthrough from './tour/TaskWalkthrough';
 import PageHintBulb from './tour/PageHintBulb';
+import WeekWinnerAnnouncement from './WeekWinnerAnnouncement';
 import {
   clearStaffSessionCache,
   getStaffSessionSnapshot,
@@ -128,6 +129,7 @@ const Layout: React.FC<LayoutProps> = ({
     >
       {isAdmin && <PortalTour userId={userId} enabled={roleResolved} />}
       {isAdmin && <TaskWalkthrough />}
+      {isAdmin && roleResolved && userId && <WeekWinnerAnnouncement userId={userId} />}
       {isAdmin && (
         <AppSidebar
           role={role}

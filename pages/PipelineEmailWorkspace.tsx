@@ -1,4 +1,5 @@
 import React from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Moon, Sun, Trash2 } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
@@ -57,6 +58,7 @@ function readSendLogBody(log: PipelineEmailSendLog): { html: string | null; text
 }
 
 const PipelineEmailWorkspace: React.FC = () => {
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [candidates, setCandidates] = React.useState<PipelineCandidate[]>([]);
@@ -169,7 +171,11 @@ const PipelineEmailWorkspace: React.FC = () => {
   }, [loadCandidateMailLogs]);
 
   React.useEffect(() => {
-    void loadWorkspace({ syncInbox: true });
+    const candidateId = searchParams.get('candidateId') || searchParams.get('candidate') || '';
+    void loadWorkspace({
+      syncInbox: !candidateId,
+      candidateId: candidateId.trim() || undefined,
+    });
     // Mount-only inbox sync + candidate list load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
