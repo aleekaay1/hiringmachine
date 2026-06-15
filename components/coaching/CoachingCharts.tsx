@@ -429,12 +429,14 @@ export const ImprovementLadderChart: React.FC<{
   const padY = 36;
   const innerW = width - padX * 2;
   const innerH = height - padY * 2;
+  const colWidth = points.length > 0 ? innerW / points.length : innerW;
   const coords = points.map((p, i) => {
     const paceValue = p.bookingsPacePct ?? p.combinedPacePct ?? 0;
-    const x = padX + (points.length === 1 ? innerW / 2 : (i / (points.length - 1)) * innerW);
+    const x = padX + colWidth * i + colWidth / 2;
     const pct = Math.min(100, Math.max(0, paceValue));
     const y = padY + innerH - (pct / 100) * innerH;
-    return { x, y, ...p, index: i, displayPace: paceValue };
+    const dayLabel = p.shortLabel || p.weekLabel || '';
+    return { x, y, ...p, index: i, displayPace: paceValue, dayLabel };
   });
 
   const linePath = smoothPath(coords);
@@ -447,6 +449,29 @@ export const ImprovementLadderChart: React.FC<{
         Bookings pace · day over day ({dailyBookingTarget}/day target)
       </p>
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full min-w-[320px]" style={{ maxHeight: height }}>
+        {points.map((_, i) => (
+          <rect
+            key={`day-band-${i}`}
+            x={padX + colWidth * i}
+            y={padY}
+            width={colWidth}
+            height={innerH}
+            fill={i % 2 === 0 ? '#eef4fb' : '#ffffff'}
+          />
+        ))}
+        {points.map((_, i) =>
+          i > 0 ? (
+            <line
+              key={`day-divider-${i}`}
+              x1={padX + colWidth * i}
+              y1={padY}
+              x2={padX + colWidth * i}
+              y2={padY + innerH}
+              stroke="#d4e4f7"
+              strokeWidth="1"
+            />
+          ) : null,
+        )}
         {[0.25, 0.5, 0.75, 1].map((t) => (
           <line
             key={t}
@@ -488,7 +513,7 @@ export const ImprovementLadderChart: React.FC<{
               fontSize="9"
               fontFamily="ui-monospace, monospace"
             >
-              {(c.shortLabel || c.weekLabel).slice(0, 8)}
+              {c.dayLabel}
             </text>
             )}
           </g>
@@ -496,7 +521,7 @@ export const ImprovementLadderChart: React.FC<{
       </svg>
       {hover !== null && coords[hover] && (
         <div className="pointer-events-none absolute left-1/2 top-6 z-10 -translate-x-1/2 rounded-lg border border-[#d4e4f7] bg-white px-3 py-2 font-mono text-[11px] shadow-lg">
-          <p className="font-semibold text-[#0B1B34]">{coords[hover].weekLabel}</p>
+          <p className="font-semibold text-[#0B1B34]">{coords[hover].dayLabel}</p>
           <p className="text-[#5c7594]">Bookings pace: {coords[hover].displayPace ?? '—'}%</p>
           {coords[hover].actualCalls !== undefined && (
             <p className="text-[#5c7594]">

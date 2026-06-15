@@ -113,6 +113,16 @@ export function ymdToShortLabel(ymd: string): string {
   });
 }
 
+/** Day + month only (no year) — used on dense daily ladder charts. */
+export function ymdToDayMonthLabel(ymd: string): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return ymd;
+  return new Date(y, m - 1, d).toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+  });
+}
+
 export function shortCalendarDayLabel(viewYear: number, viewMonth0: number, day: number): string {
   return new Date(viewYear, viewMonth0, day).toLocaleDateString('en-GB', {
     day: 'numeric',

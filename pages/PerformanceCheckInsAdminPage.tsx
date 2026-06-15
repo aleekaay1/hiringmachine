@@ -48,7 +48,7 @@ import {
   fridayWeekBoundsFromYmd,
   shiftYmdDays,
   torontoMonthStartToday,
-  ymdToShortLabel,
+  ymdToDayMonthLabel,
 } from '../services/webinarGeekDates';
 
 function hintStyles(tone: CoachingBoardPerson['hint']['tone']): string {
@@ -284,7 +284,7 @@ function PersonCard({
                 <ImprovementLadderChart
                   points={ladderPoints.map((p) => ({
                     weekLabel: p.weekLabel,
-                    shortLabel: ymdToShortLabel(p.weekSince),
+                    shortLabel: ymdToDayMonthLabel(p.weekSince),
                     combinedPacePct: p.combinedPacePct,
                     bookingsPacePct: p.bookingsPacePct,
                     belowThreshold: p.belowThreshold,
@@ -302,7 +302,7 @@ function PersonCard({
                         pt.belowThreshold ? 'border-rose-200 bg-rose-50/50' : 'border-[#e8f0fa] bg-white'
                       }`}
                     >
-                      <p className="font-medium text-[#0B1B34]">{ymdToShortLabel(pt.weekSince)}</p>
+                      <p className="font-medium text-[#0B1B34]">{ymdToDayMonthLabel(pt.weekSince)}</p>
                       <p
                         className="text-lg font-bold tabular-nums"
                         style={{ color: (pt.bookingsPacePct ?? pt.combinedPacePct) !== null && (pt.bookingsPacePct ?? pt.combinedPacePct ?? 0) < 50 ? '#e11d48' : '#059669' }}

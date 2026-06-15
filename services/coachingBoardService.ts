@@ -53,6 +53,7 @@ import {
   torontoMonthStartToday,
   torontoYmdFromDate,
   ymdToShortLabel,
+  ymdToDayMonthLabel,
 } from './webinarGeekDates';
 
 export type CoachingDailyPoint = {
@@ -459,7 +460,7 @@ export function listRecentDays(count = 60, now = new Date()): Array<{ ymd: strin
   const days: Array<{ ymd: string; label: string }> = [];
   for (let i = count - 1; i >= 0; i -= 1) {
     const ymd = shiftYmdDays(today, -i);
-    days.push({ ymd, label: ymdToShortLabel(ymd) });
+    days.push({ ymd, label: ymdToDayMonthLabel(ymd) });
   }
   return days;
 }
@@ -481,7 +482,7 @@ export function buildLadderPointsForUser(
       return {
         weekSince: day.ymd,
         weekUntil: day.ymd,
-        weekLabel: day.label || ymdToShortLabel(day.ymd),
+        weekLabel: ymdToDayMonthLabel(day.ymd),
         callsPacePct: pace.callsPacePct,
         bookingsPacePct: pace.bookingsPacePct,
         combinedPacePct: combinedCoachingPace(pace.callsPacePct, pace.bookingsPacePct),
