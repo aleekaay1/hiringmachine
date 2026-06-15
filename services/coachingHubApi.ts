@@ -112,7 +112,8 @@ export async function fetchCoachingLadderViaFunction(
 export type CoachingCallActivity = {
   userId: string;
   totalCalls: number;
-  days: Array<{ ymd: string; label: string; calls: number; booked: number }>;
+  days?: Array<{ ymd: string; label: string; calls: number; booked: number }>;
+  weeks?: Array<{ ymd: string; label: string; calls: number; booked: number; weekSince: string }>;
 };
 
 export type CoachingFullBoardPayload = {
@@ -165,8 +166,11 @@ export async function fetchCoachingFullBoardViaFunction(input: {
   toIso: string;
   historySince: string;
   emailLimit?: number;
+  viewMode?: 'week' | 'month';
+  monthFirstYmd?: string;
+  monthWeekSinces?: string[];
 }): Promise<{ ok: true; data: CoachingFullBoardPayload } | { ok: false; error: string }> {
-  const result = await coachingHubGet<CoachingFullBoardPayload>({
+  const params: Record<string, string> = {
     action: 'fullBoard',
     weekSince: input.weekSince,
     weekUntil: input.weekUntil,
@@ -174,7 +178,11 @@ export async function fetchCoachingFullBoardViaFunction(input: {
     toIso: input.toIso,
     historySince: input.historySince,
     emailLimit: String(input.emailLimit ?? 30),
-  });
+    viewMode: input.viewMode ?? 'week',
+  };
+  if (input.monthFirstYmd) params.monthFirstYmd = input.monthFirstYmd;
+  if (input.monthWeekSinces?.length) params.monthWeekSinces = input.monthWeekSinces.join(',');
+  const result = await coachingHubGet<CoachingFullBoardPayload>(params);
   if (!result.ok) return result;
   return {
     ok: true,

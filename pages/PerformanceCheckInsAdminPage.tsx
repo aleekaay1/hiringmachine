@@ -16,6 +16,8 @@ import {
   DailyWeekBars,
   ImprovementLadderChart,
   MetricsBarChart,
+  MonthActivityStrip,
+  MonthlyWeekBars,
   PaceGauge,
   PaceRing,
   TeamPaceChart,
@@ -27,8 +29,10 @@ import { getCurrentUserProfile } from '../services/accessControl';
 import {
   loadFullCoachingHub,
   listRecentFridayWeeks,
+  listRecentMonths,
   type CoachingBoardPerson,
   type CoachingEmailLogRow,
+  type CoachingHubViewMode,
 } from '../services/coachingBoardService';
 import {
   canAccessPerformanceCheckInAdmin,
@@ -39,8 +43,13 @@ import {
   labelForTroubleArea,
   PERFORMANCE_CHECKIN_AUTOMATION_ENABLED,
 } from '../services/performanceCheckInService';
-import { COACHING_WEEKLY_BOOKING_TARGET } from '../services/coachingPace';
-import { fridayWeekBoundsFromYmd, ymdToShortLabel } from '../services/webinarGeekDates';
+import { COACHING_WEEKLY_BOOKING_TARGET, monthlyBookingTarget } from '../services/coachingPace';
+import {
+  fridayWeekBoundsFromYmd,
+  shiftYmdDays,
+  torontoMonthStartToday,
+  ymdToShortLabel,
+} from '../services/webinarGeekDates';
 
 function hintStyles(tone: CoachingBoardPerson['hint']['tone']): string {
   if (tone === 'positive') return 'border-emerald-200 bg-emerald-50 text-emerald-900';
@@ -72,6 +81,7 @@ function PersonCard({
   onToggle,
   onSelectForm,
   elapsedDays,
+  viewMode,
 }: {
   person: CoachingBoardPerson;
   expanded: boolean;
@@ -79,6 +89,7 @@ function PersonCard({
   onToggle: () => void;
   onSelectForm: (checked: boolean) => void;
   elapsedDays: number;
+  viewMode: CoachingHubViewMode;
 }) {
   const formId = person.form?.id;
 
@@ -185,7 +196,15 @@ function PersonCard({
               </div>
             </div>
 
-            <DailyWeekBars days={person.daily} highlightThroughDay={elapsedDays - 1} tall />
+            {viewMode === 'week' ? (
+            <DailyWeekBars
+              days={person.daily}
+              highlightThroughDay={elapsedDays - 1}
+              tall
+            />
+            ) : (
+            <MonthlyWeekBars weeks={person.monthlyWeeks} tall />
+            )}
 
             <div className="flex flex-wrap gap-2">
               <StatChip label="Calls" value={person.actualCalls} />
@@ -210,18 +229,31 @@ function PersonCard({
                 value={person.leaderboardScore !== null ? Math.round(person.leaderboardScore) : '—'}
               />
               <span className="self-center rounded-full bg-[#eef6ff] px-2 py-1 text-[10px] font-medium text-[#4e79a9]">
-                Target {COACHING_WEEKLY_BOOKING_TARGET} bookings/wk
+                Target{' '}
+                {viewMode === 'month'
+                  ? `${monthlyBookingTarget(person.monthlyWeeks.length)} bookings/mo`
+                  : `${COACHING_WEEKLY_BOOKING_TARGET} bookings/wk`}
               </span>
             </div>
 
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-4">
-                <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">Week activity</p>
-                <WeekActivityStrip
-                  days={person.daily}
-                  totalCalls={person.actualCalls}
-                  totalBooked={person.actualBooked}
-                />
+                <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">
+                  {viewMode === 'month' ? 'Month activity' : 'Week activity'}
+                </p>
+                {viewMode === 'month' ? (
+                  <MonthActivityStrip
+                    weeks={person.monthlyWeeks}
+                    totalCalls={person.actualCalls}
+                    totalBooked={person.actualBooked}
+                  />
+                ) : (
+                  <WeekActivityStrip
+                    days={person.daily}
+                    totalCalls={person.actualCalls}
+                    totalBooked={person.actualBooked}
+                  />
+                )}
               </div>
               <div className="rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-4">
                 <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">Outcomes</p>
@@ -238,7 +270,7 @@ function PersonCard({
             {person.ladder.length > 0 && (
               <div className="rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-4">
                 <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">
-                  Improvement ladder · week-over-week
+                  {viewMode === 'month' ? 'Bookings pace · this month' : 'Improvement ladder · week-over-week'}
                 </p>
                 <ImprovementLadderChart
                   points={person.ladder.map((p) => ({
@@ -313,7 +345,10 @@ function PersonCard({
 
 const PerformanceCheckInsAdminPage: React.FC = () => {
   const defaultWeek = currentFridayWeekBounds().since;
+  const [viewMode, setViewMode] = React.useState<CoachingHubViewMode>('week');
   const [weekSince, setWeekSince] = React.useState(defaultWeek);
+  const [monthFirstYmd, setMonthFirstYmd] = React.useState(torontoMonthStartToday());
+  const [agentFilter, setAgentFilter] = React.useState<string>('all');
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [accessDenied, setAccessDenied] = React.useState(false);
@@ -325,7 +360,8 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
   const [filter, setFilter] = React.useState<'all' | 'below' | 'forms'>('all');
   const [deleting, setDeleting] = React.useState(false);
 
-  const weekOptions = React.useMemo(() => listRecentFridayWeeks(16), []);
+  const weekOptions = React.useMemo(() => listRecentFridayWeeks(26), []);
+  const monthOptions = React.useMemo(() => listRecentMonths(12), []);
 
   const loadBoard = React.useCallback(async () => {
     setLoading(true);
@@ -336,7 +372,14 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
         setAccessDenied(true);
         return;
       }
-      const hub = await loadFullCoachingHub(weekSince);
+      const hub = await loadFullCoachingHub(
+        viewMode === 'week' ? weekSince : monthFirstYmd,
+        new Date(),
+        {
+          mode: viewMode,
+          monthFirstYmd: viewMode === 'month' ? monthFirstYmd : undefined,
+        },
+      );
       setPeople(hub.people);
       setSummary(hub.summary);
       setEmailLogs(hub.emailLogs);
@@ -346,34 +389,45 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [weekSince]);
+  }, [weekSince, monthFirstYmd, viewMode]);
+
+  React.useEffect(() => {
+    setExpandedId(agentFilter !== 'all' ? agentFilter : null);
+  }, [agentFilter]);
 
   React.useEffect(() => {
     void loadBoard();
   }, [loadBoard]);
 
   const filteredPeople = React.useMemo(() => {
-    if (filter === 'below') return people.filter((p) => p.belowThreshold);
-    if (filter === 'forms') return people.filter((p) => p.form);
-    return people;
-  }, [people, filter]);
+    let rows = people;
+    if (filter === 'below') rows = rows.filter((p) => p.belowThreshold);
+    if (filter === 'forms') rows = rows.filter((p) => p.form);
+    if (agentFilter !== 'all') rows = rows.filter((p) => p.userId === agentFilter);
+    return rows;
+  }, [people, filter, agentFilter]);
+
+  const chartPeople = React.useMemo(() => {
+    if (agentFilter === 'all') return people;
+    return people.filter((p) => p.userId === agentFilter);
+  }, [people, agentFilter]);
 
   const teamPaceRows = React.useMemo(
     () =>
-      people.map((p) => ({
-          userId: p.userId,
-          name: p.displayName,
-          pacePct: p.bookingsPacePct,
-          belowThreshold: p.belowThreshold,
-          calls: p.actualCalls,
-          booked: p.actualBooked,
+      chartPeople.map((p) => ({
+        userId: p.userId,
+        name: p.displayName,
+        pacePct: p.bookingsPacePct,
+        belowThreshold: p.belowThreshold,
+        calls: p.actualCalls,
+        booked: p.actualBooked,
       })),
-    [people],
+    [chartPeople],
   );
 
   const teamTotals = React.useMemo(
     () =>
-      people.reduce(
+      chartPeople.reduce(
         (acc, p) => ({
           calls: acc.calls + p.actualCalls,
           webinarBooked: acc.webinarBooked + p.webinarBooked,
@@ -383,7 +437,7 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
         }),
         { calls: 0, webinarBooked: 0, webinarShowed: 0, liveBooked: 0, liveShowed: 0 },
       ),
-    [people],
+    [chartPeople],
   );
 
   const shiftWeek = (delta: number) => {
@@ -435,6 +489,11 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
   }
 
   const weekBounds = fridayWeekBoundsFromYmd(weekSince);
+  const periodLabel =
+    summary?.weekLabel ??
+    (viewMode === 'month'
+      ? monthOptions.find((m) => m.firstYmd === monthFirstYmd)?.label
+      : weekBounds.title);
 
   return (
     <PipelineAuthShell title="Coaching hub" subtitle="Mid-week performance & improvement" redirectPath="/performance-check-ins">
@@ -472,6 +531,26 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
 
         <div className="overflow-x-auto rounded-2xl border border-[#d4e4f7] bg-white p-3">
           <div className="flex min-w-max flex-wrap items-center gap-2">
+            <div className="flex rounded-xl border border-[#d4e4f7] p-0.5">
+              {(['week', 'month'] as const).map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => {
+                    setViewMode(id);
+                    setExpandedId(null);
+                    setSelectedFormIds(new Set());
+                  }}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                    viewMode === id ? 'bg-[#0B1B34] text-white' : 'text-[#5c7594] hover:bg-[#f8fbff]'
+                  }`}
+                >
+                  {id === 'week' ? 'Week' : 'Month'}
+                </button>
+              ))}
+            </div>
+
+            {viewMode === 'week' ? (
             <div className="flex items-center gap-1">
               <button type="button" onClick={() => shiftWeek(1)} className="rounded-lg p-2 hover:bg-[#f0f6ff]" aria-label="Previous week">
                 <ChevronLeft size={18} />
@@ -479,7 +558,11 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
               <select
                 className="rounded-xl border border-[#c9d9ee] px-3 py-2 text-sm"
                 value={weekSince}
-                onChange={(e) => setWeekSince(e.target.value)}
+                onChange={(e) => {
+                  setWeekSince(e.target.value);
+                  setSelectedFormIds(new Set());
+                  setExpandedId(null);
+                }}
               >
                 {weekOptions.map((w) => (
                   <option key={w.since} value={w.since}>
@@ -491,6 +574,39 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
                 <ChevronRight size={18} />
               </button>
             </div>
+            ) : (
+            <select
+              className="rounded-xl border border-[#c9d9ee] px-3 py-2 text-sm"
+              value={monthFirstYmd}
+              onChange={(e) => {
+                setMonthFirstYmd(e.target.value);
+                setSelectedFormIds(new Set());
+                setExpandedId(null);
+              }}
+            >
+              {monthOptions.map((m) => (
+                <option key={m.firstYmd} value={m.firstYmd}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+            )}
+
+            <select
+              className="max-w-[220px] rounded-xl border border-[#c9d9ee] px-3 py-2 text-sm"
+              value={agentFilter}
+              onChange={(e) => {
+                setAgentFilter(e.target.value);
+                setExpandedId(e.target.value === 'all' ? null : e.target.value);
+              }}
+            >
+              <option value="all">All agents</option>
+              {people.map((p) => (
+                <option key={p.userId} value={p.userId}>
+                  {p.displayName}
+                </option>
+              ))}
+            </select>
 
             <div className="flex rounded-xl border border-[#d4e4f7] p-0.5">
               {(['all', 'below', 'forms'] as const).map((id) => (
@@ -540,19 +656,35 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
             <section className="rounded-2xl border border-[#d4e4f7] bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center gap-2">
                 <BarChart3 size={18} className="text-[#4e9ae8]" />
-                <h2 className="text-sm font-semibold text-[#0B1B34]">Team pace · this week</h2>
+                <h2 className="text-sm font-semibold text-[#0B1B34]">
+                  {agentFilter === 'all'
+                    ? viewMode === 'month'
+                      ? 'Team pace · this month'
+                      : 'Team pace · this week'
+                    : `${chartPeople[0]?.displayName ?? 'Agent'} pace`}
+                </h2>
               </div>
               <p className="mb-3 text-xs text-[#5c7594]">
-                {ymdToShortLabel(weekBounds.since)} → {ymdToShortLabel(weekBounds.until)} · click a row to expand caller
+                {summary?.weekLabel ?? periodLabel}
+                {agentFilter === 'all' ? ' · click a row to expand caller' : ' · single-agent view'}
               </p>
-              <TeamPaceChart rows={teamPaceRows} onSelect={scrollToPerson} />
+              <TeamPaceChart rows={teamPaceRows} onSelect={agentFilter === 'all' ? scrollToPerson : undefined} />
             </section>
 
             <section className="rounded-2xl border border-[#d4e4f7] bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center gap-2">
                 <TrendingUp size={18} className="text-[#4e9ae8]" />
-                <h2 className="text-sm font-semibold text-[#0B1B34]">Team activity</h2>
+                <h2 className="text-sm font-semibold text-[#0B1B34]">
+                  {agentFilter === 'all' ? 'Team activity' : 'Agent outcomes'}
+                </h2>
               </div>
+              {viewMode === 'month' && agentFilter !== 'all' && chartPeople[0] ? (
+                <MonthActivityStrip
+                  weeks={chartPeople[0].monthlyWeeks}
+                  totalCalls={chartPeople[0].actualCalls}
+                  totalBooked={chartPeople[0].actualBooked}
+                />
+              ) : (
               <MetricsBarChart
                 calls={teamTotals.calls}
                 webinarBooked={teamTotals.webinarBooked}
@@ -560,6 +692,7 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
                 liveBooked={teamTotals.liveBooked}
                 liveShowed={teamTotals.liveShowed}
               />
+              )}
             </section>
           </div>
         )}
@@ -583,6 +716,7 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
                   expanded={expandedId === person.userId}
                   selected={Boolean(person.form && selectedFormIds.has(person.form.id))}
                   elapsedDays={summary?.elapsedDays ?? 7}
+                  viewMode={viewMode}
                   onToggle={() => setExpandedId((id) => (id === person.userId ? null : person.userId))}
                   onSelectForm={(checked) => {
                     if (person.form) toggleFormSelect(person.form.id, checked);

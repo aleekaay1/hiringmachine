@@ -45,3 +45,21 @@ export function combinedCoachingPace(calls: number | null, bookings: number | nu
   if (!values.length) return null;
   return Math.round((values.reduce((s, v) => s + v, 0) / values.length) * 100) / 100;
 }
+
+/** Pace for a multi-week period (e.g. calendar month of Friday weeks). */
+export function computeCoachingPeriodPace(input: {
+  actualCalls: number;
+  actualBooked: number;
+  /** Equivalent elapsed days across full + partial weeks (max 7 per week). */
+  equivalentDays: number;
+}): CoachingPaceSnapshot {
+  return computeCoachingWeeklyPace({
+    actualCalls: input.actualCalls,
+    actualBooked: input.actualBooked,
+    elapsedDays: Math.max(1, input.equivalentDays),
+  });
+}
+
+export function monthlyBookingTarget(weekCount: number): number {
+  return COACHING_WEEKLY_BOOKING_TARGET * Math.max(1, weekCount);
+}

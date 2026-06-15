@@ -66,6 +66,53 @@ function addDaysYmd(ymd: string, days: number): string {
 
 const FRIDAY_WEEK_LABELS = ['Fri', 'Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu'];
 
+function ymdToShortLabel(ymd: string): string {
+  const [y, m, d] = ymd.split('-').map((v) => Number(v));
+  const dt = new Date(y, (m || 1) - 1, d || 1);
+  return dt.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
+}
+
+function aggregateCallActivityMultiWeek(
+  weeks: Array<{ since: string; until: string }>,
+  rows: Array<{ recruiter_user_id?: string | null; disposed_at?: string | null; disposition?: string | null }>,
+): Array<{
+  userId: string;
+  totalCalls: number;
+  weeks: Array<{ ymd: string; label: string; calls: number; booked: number; weekSince: string }>;
+}> {
+  const weekDefs = weeks.map((w) => ({
+    weekSince: w.since,
+    ymd: w.since,
+    label: ymdToShortLabel(w.since),
+    calls: 0,
+    booked: 0,
+  }));
+  const byUser = new Map<string, typeof weekDefs>();
+
+  for (const row of rows) {
+    const userId = String(row.recruiter_user_id || '').trim();
+    const iso = row.disposed_at;
+    if (!userId || !iso) continue;
+    const ymd = torontoYmdFromIso(iso);
+    const idx = weeks.findIndex((w) => ymd >= w.since && ymd <= w.until);
+    if (idx < 0) continue;
+    if (!byUser.has(userId)) {
+      byUser.set(userId, weekDefs.map((d) => ({ ...d })));
+    }
+    const bucket = byUser.get(userId)!;
+    bucket[idx].calls += 1;
+    if (String(row.disposition || '').trim().toLowerCase() === 'booked') {
+      bucket[idx].booked += 1;
+    }
+  }
+
+  return [...byUser.entries()].map(([userId, bucket]) => ({
+    userId,
+    totalCalls: bucket.reduce((s, w) => s + w.calls, 0),
+    weeks: bucket,
+  }));
+}
+
 function aggregateCallActivityByUser(
   weekSince: string,
   rows: Array<{ recruiter_user_id?: string | null; disposed_at?: string | null; disposition?: string | null }>,
@@ -412,6 +459,12 @@ Deno.serve(async (req) => {
       const historySince = (url.searchParams.get('historySince') || '').trim();
       const fromIso = (url.searchParams.get('fromIso') || '').trim();
       const toIso = (url.searchParams.get('toIso') || '').trim();
+      const viewMode = (url.searchParams.get('viewMode') || 'week').trim();
+      const monthFirstYmd = (url.searchParams.get('monthFirstYmd') || '').trim();
+      const monthWeekSinces = (url.searchParams.get('monthWeekSinces') || '')
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean);
       const emailLimit = Math.min(120, Math.max(1, Number(url.searchParams.get('emailLimit') || '30') || 30));
 
       let weekInvitesQuery = admin
@@ -502,14 +555,23 @@ Deno.serve(async (req) => {
 
       const callActivityByUser =
         weekSince && !callRecordsRes.error
-          ? aggregateCallActivityByUser(
-            weekSince,
-            (callRecordsRes.data || []) as Array<{
-              recruiter_user_id?: string | null;
-              disposed_at?: string | null;
-              disposition?: string | null;
-            }>,
-          )
+          ? viewMode === 'month' && monthWeekSinces.length
+            ? aggregateCallActivityMultiWeek(
+              monthWeekSinces.map((since) => ({ since, until: addDaysYmd(since, 6) })),
+              (callRecordsRes.data || []) as Array<{
+                recruiter_user_id?: string | null;
+                disposed_at?: string | null;
+                disposition?: string | null;
+              }>,
+            )
+            : aggregateCallActivityByUser(
+              weekSince,
+              (callRecordsRes.data || []) as Array<{
+                recruiter_user_id?: string | null;
+                disposed_at?: string | null;
+                disposition?: string | null;
+              }>,
+            )
           : [];
 
       return new Response(

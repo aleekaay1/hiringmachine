@@ -1,6 +1,6 @@
 import React from 'react';
-import type { CoachingDailyPoint } from '../../services/coachingBoardService';
-import { COACHING_WEEKLY_BOOKING_TARGET } from '../../services/coachingPace';
+import type { CoachingDailyPoint, CoachingMonthWeekPoint } from '../../services/coachingBoardService';
+import { COACHING_WEEKLY_BOOKING_TARGET, monthlyBookingTarget } from '../../services/coachingPace';
 
 export function paceColor(pct: number | null): string {
   if (pct === null) return '#94a3b8';
@@ -153,6 +153,127 @@ export const DailyWeekBars: React.FC<DailyWeekBarsProps> = ({ days, highlightThr
             <span className="font-mono text-[10px] font-semibold tabular-nums text-[#0B1B34]">{day.calls}</span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+};
+
+type MonthlyWeekBarsProps = {
+  weeks: CoachingMonthWeekPoint[];
+  tall?: boolean;
+};
+
+export const MonthlyWeekBars: React.FC<MonthlyWeekBarsProps> = ({ weeks, tall }) => {
+  const chartH = tall ? 104 : 80;
+  const maxCalls = Math.max(1, ...weeks.map((w) => w.calls));
+  const targetLine = COACHING_WEEKLY_BOOKING_TARGET;
+
+  return (
+    <div>
+      <div className="mb-3 flex items-end justify-between gap-2">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">Weekly timeline · month</p>
+        <p className="font-mono text-[9px] text-[#5c7594]">
+          {COACHING_WEEKLY_BOOKING_TARGET} bookings / wk target
+        </p>
+      </div>
+      <div className="relative border-b border-[#c9d9ee] pb-1">
+        <div className="absolute inset-x-0 top-0 flex flex-col justify-between" style={{ height: chartH }}>
+          {[0.25, 0.5, 0.75].map((t) => (
+            <div key={t} className="border-t border-dashed border-[#e8eef6]" />
+          ))}
+        </div>
+        <div className="relative flex items-end justify-center gap-3 px-1" style={{ height: chartH }}>
+          {weeks.map((week) => {
+            const callH = Math.round((week.calls / maxCalls) * 100);
+            const bookedH = week.calls > 0 ? Math.round((week.booked / week.calls) * callH) : 0;
+            const onTarget = week.booked >= targetLine;
+            return (
+              <div
+                key={week.weekSince}
+                className="group flex min-w-[52px] flex-1 max-w-[88px] flex-col items-center gap-1.5"
+                title={`${week.label}: ${week.calls} calls, ${week.booked} booked`}
+              >
+                <div
+                  className="relative flex w-[18px] flex-col justify-end rounded-[2px] bg-[#edf2f8] ring-1 ring-[#d4e4f7]"
+                  style={{ height: chartH }}
+                >
+                  <div
+                    className="w-full rounded-[2px] bg-[#1e40af] transition-all duration-500"
+                    style={{ height: `${Math.max(week.calls > 0 ? 8 : 2, callH)}%` }}
+                  />
+                  {bookedH > 0 && (
+                    <div
+                      className="absolute bottom-0 w-full rounded-[2px] bg-[#059669]"
+                      style={{ height: `${bookedH}%`, opacity: 0.92 }}
+                    />
+                  )}
+                </div>
+                <span
+                  className={`rounded px-1 font-mono text-[9px] font-semibold tabular-nums ${
+                    onTarget ? 'text-emerald-700' : 'text-[#5c7594]'
+                  }`}
+                >
+                  {week.booked}b
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div className="mt-2 flex justify-center gap-3 px-1">
+        {weeks.map((week) => (
+          <div key={`${week.weekSince}-label`} className="flex min-w-[52px] flex-1 max-w-[88px] flex-col items-center gap-0.5">
+            <span className="text-[9px] font-semibold uppercase tracking-wide text-[#5c7594]">{week.label}</span>
+            <span className="font-mono text-[10px] font-semibold tabular-nums text-[#0B1B34]">{week.calls}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+/** Month strip: one segment per Friday week + total vs monthly booking target */
+export const MonthActivityStrip: React.FC<{
+  weeks: CoachingMonthWeekPoint[];
+  totalCalls: number;
+  totalBooked: number;
+}> = ({ weeks, totalCalls, totalBooked }) => {
+  const maxWeek = Math.max(1, ...weeks.map((w) => w.calls));
+  const monthTarget = monthlyBookingTarget(weeks.length);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-end gap-1 overflow-hidden rounded-sm border border-[#d4e4f7] bg-[#f8fafc] p-2">
+        {weeks.map((week) => {
+          const h = Math.max(4, Math.round((week.calls / maxWeek) * 44));
+          return (
+            <div key={week.weekSince} className="flex min-w-0 flex-1 flex-col items-center gap-1">
+              <div
+                className="w-[12px] rounded-[2px] bg-[#1e40af] transition-all"
+                style={{ height: h }}
+                title={`${week.label}: ${week.calls} calls, ${week.booked} booked`}
+              />
+              <span className="text-[8px] font-semibold uppercase text-[#5c7594]">{week.label}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="space-y-1">
+        <div className="flex justify-between font-mono text-[10px] text-[#5c7594]">
+          <span>Month total</span>
+          <span>
+            {totalCalls} calls · {totalBooked} / {monthTarget} bookings
+          </span>
+        </div>
+        <div className="relative h-2 overflow-hidden rounded-sm bg-[#e8eef6] ring-1 ring-[#d4e4f7]">
+          <div
+            className="h-full rounded-sm bg-[#059669] transition-all duration-700"
+            style={{
+              width: `${Math.min(100, Math.round((totalBooked / monthTarget) * 100) || 0)}%`,
+            }}
+          />
+          <div className="pointer-events-none absolute inset-y-0 left-1/2 w-px bg-rose-400/70" />
+        </div>
       </div>
     </div>
   );

@@ -33,6 +33,7 @@ import {
   COACHING_WEEKLY_BOOKING_TARGET,
   COACHING_WEEKLY_CALL_TARGET,
   combinedCoachingPace,
+  computeCoachingPeriodPace,
   computeCoachingWeeklyPace,
 } from './coachingPace';
 import {
@@ -45,7 +46,10 @@ import {
 import { supabase } from './supabaseClient';
 import {
   fridayWeekBoundsFromYmd,
+  monthBoundsFromFirstYmd,
+  shiftMonthFirstYmd,
   shiftYmdDays,
+  torontoMonthStartToday,
   torontoYmdFromDate,
   ymdToShortLabel,
 } from './webinarGeekDates';
@@ -56,6 +60,10 @@ export type CoachingDailyPoint = {
   calls: number;
   booked: number;
 };
+
+export type CoachingMonthWeekPoint = CoachingDailyPoint & { weekSince: string };
+
+export type CoachingHubViewMode = 'week' | 'month';
 
 export type CoachingWeekPoint = {
   weekSince: string;
@@ -104,6 +112,9 @@ export type CoachingBoardPerson = {
   belowThreshold: boolean;
   rankScore: number;
   daily: CoachingDailyPoint[];
+  monthlyWeeks: CoachingMonthWeekPoint[];
+  periodMode: CoachingHubViewMode;
+  periodLabel: string;
   invite: PerformanceCheckInInvite | null;
   form: PerformanceCheckInRow | null;
   emailSent: boolean;
@@ -366,6 +377,79 @@ export function listRecentFridayWeeks(count = 12, now = new Date()): Array<{ sin
   return weeks;
 }
 
+/** Friday weeks whose start (Friday) falls inside the calendar month. */
+export function listFridayWeeksInMonth(monthFirstYmd: string): Array<{ since: string; until: string; label: string }> {
+  const month = monthBoundsFromFirstYmd(monthFirstYmd);
+  const weeks: Array<{ since: string; until: string; label: string }> = [];
+  let since = fridayWeekBoundsFromYmd(month.since).since;
+  if (since < month.since) since = shiftYmdDays(since, 7);
+  while (since <= month.until) {
+    const bounds = fridayWeekBoundsFromYmd(since);
+    if (bounds.since.slice(0, 7) === monthFirstYmd.slice(0, 7)) {
+      weeks.push({
+        since: bounds.since,
+        until: bounds.until,
+        label: `${ymdToShortLabel(bounds.since)} → ${ymdToShortLabel(bounds.until)}`,
+      });
+    }
+    since = shiftYmdDays(since, 7);
+  }
+  return weeks;
+}
+
+export function listRecentMonths(count = 12, now = new Date()): Array<{ firstYmd: string; label: string }> {
+  const months: Array<{ firstYmd: string; label: string }> = [];
+  let firstYmd = torontoMonthStartToday();
+  const todayMonth = torontoYmdFromDate(now).slice(0, 7);
+  if (firstYmd.slice(0, 7) !== todayMonth) {
+    firstYmd = `${todayMonth}-01`;
+  }
+  for (let i = 0; i < count; i += 1) {
+    months.push({ firstYmd, label: monthBoundsFromFirstYmd(firstYmd).title });
+    firstYmd = shiftMonthFirstYmd(firstYmd, -1);
+  }
+  return months;
+}
+
+function equivalentDaysForMonthWeeks(
+  weeks: Array<{ since: string; until: string }>,
+  now = new Date(),
+): number {
+  const todayYmd = torontoYmdFromDate(now);
+  let days = 0;
+  for (const week of weeks) {
+    if (todayYmd < week.since) continue;
+    if (todayYmd > week.until) {
+      days += 7;
+      continue;
+    }
+    days += elapsedDaysInFridayWeek(week.since, now);
+  }
+  return Math.max(1, days);
+}
+
+function monthWeekPointsFromActivity(
+  weeks: Array<{ since: string; until: string; label: string }>,
+  activityWeeks: CoachingMonthWeekPoint[] | undefined,
+): CoachingMonthWeekPoint[] {
+  const byWeek = new Map((activityWeeks || []).map((w) => [w.weekSince, w]));
+  return weeks.map((week) => {
+    const hit = byWeek.get(week.since);
+    return {
+      weekSince: week.since,
+      ymd: week.since,
+      label: ymdToShortLabel(week.since),
+      calls: hit?.calls ?? 0,
+      booked: hit?.booked ?? 0,
+    };
+  });
+}
+
+export type CoachingHubLoadOptions = {
+  mode?: CoachingHubViewMode;
+  monthFirstYmd?: string;
+};
+
 export function buildLadderPointsForUser(
   userId: string,
   allForms: PerformanceCheckInRow[],
@@ -435,24 +519,39 @@ export function buildAllLaddersFromHistory(
 
 const COACHING_HISTORY_WEEKS = 12;
 
-export async function loadFullCoachingHub(weekSince: string, now = new Date()): Promise<{
+export async function loadFullCoachingHub(
+  anchorYmd: string,
+  now = new Date(),
+  options: CoachingHubLoadOptions = {},
+): Promise<{
   summary: CoachingBoardSummary;
   people: CoachingBoardPerson[];
   emailLogs: CoachingEmailLogRow[];
 }> {
+  const mode = options.mode ?? 'week';
+  const monthFirstYmd = options.monthFirstYmd ?? torontoMonthStartToday();
+  const monthWeeks = mode === 'month' ? listFridayWeeksInMonth(monthFirstYmd) : [];
+  const weekSince = mode === 'month' ? (monthWeeks[0]?.since ?? anchorYmd) : anchorYmd;
+  const weekUntil =
+    mode === 'month'
+      ? (monthWeeks[monthWeeks.length - 1]?.until ?? fridayWeekBoundsFromYmd(weekSince).until)
+      : fridayWeekBoundsFromYmd(weekSince).until;
+
   const historySince =
     listRecentFridayWeeks(COACHING_HISTORY_WEEKS).at(-1)?.since ?? shiftYmdDays(weekSince, -70);
   const previousWeekSince = shiftYmdDays(weekSince, -7);
-  const week = fridayWeekBoundsFromYmd(weekSince);
-  const windows = buildLeaderboardWindows('custom', now, { sinceYmd: week.since, untilYmd: week.until });
+  const windows = buildLeaderboardWindows('custom', now, { sinceYmd: weekSince, untilYmd: weekUntil });
 
   const bulk = await fetchCoachingFullBoardViaFunction({
-    weekSince: week.since,
-    weekUntil: week.until,
+    weekSince,
+    weekUntil,
     fromIso: windows.current.fromIso,
     toIso: windows.current.toIso,
     historySince,
     emailLimit: 30,
+    viewMode: mode,
+    monthFirstYmd: mode === 'month' ? monthFirstYmd : undefined,
+    monthWeekSinces: mode === 'month' ? monthWeeks.map((w) => w.since) : undefined,
   });
 
   let weekInvites = bulk.ok ? bulk.data.weekInvites : [];
@@ -504,12 +603,23 @@ export async function loadFullCoachingHub(weekSince: string, now = new Date()): 
     COACHING_HISTORY_WEEKS,
   );
 
+  const monthSinceSet = new Set(monthWeeks.map((w) => w.since));
+  const scopedWeekInvites =
+    mode === 'month' ? weekInvites.filter((i) => monthSinceSet.has(i.week_since)) : weekInvites;
+  const scopedWeekForms =
+    mode === 'month'
+      ? historyForms.filter((f) => monthSinceSet.has(f.week_since))
+      : weekForms;
+
   const board = await loadCoachingBoard(weekSince, now, {
-    invites: weekInvites,
-    forms: weekForms,
+    invites: scopedWeekInvites,
+    forms: scopedWeekForms,
     previousForms,
     laddersByUser,
     callActivityByUser,
+    mode,
+    monthFirstYmd: mode === 'month' ? monthFirstYmd : undefined,
+    monthWeeks: mode === 'month' ? monthWeeks : undefined,
   });
 
   return { ...board, emailLogs };
@@ -524,14 +634,33 @@ export async function loadCoachingBoard(
     previousForms: PerformanceCheckInRow[];
     laddersByUser?: Map<string, CoachingWeekPoint[]>;
     callActivityByUser?: Map<string, CoachingCallActivity>;
+    mode?: CoachingHubViewMode;
+    monthFirstYmd?: string;
+    monthWeeks?: Array<{ since: string; until: string; label: string }>;
   },
 ): Promise<{
   summary: CoachingBoardSummary;
   people: CoachingBoardPerson[];
 }> {
+  const mode = prefetched?.mode ?? 'week';
+  const monthWeeks = prefetched?.monthWeeks ?? [];
+  const monthFirstYmd = prefetched?.monthFirstYmd ?? torontoMonthStartToday();
   const week = fridayWeekBoundsFromYmd(weekSince);
-  const elapsedDays = elapsedDaysInFridayWeek(week.since, now);
+  const rangeUntil =
+    mode === 'month' && monthWeeks.length
+      ? monthWeeks[monthWeeks.length - 1].until
+      : week.until;
+  const elapsedDays =
+    mode === 'month'
+      ? equivalentDaysForMonthWeeks(monthWeeks, now)
+      : elapsedDaysInFridayWeek(week.since, now);
   const isCurrentWeek = week.since === fridayWeekBoundsFromYmd(torontoYmdFromDate(now)).since;
+  const isCurrentMonth =
+    mode === 'month' && monthFirstYmd.slice(0, 7) === torontoYmdFromDate(now).slice(0, 7);
+  const periodLabel =
+    mode === 'month'
+      ? monthBoundsFromFirstYmd(monthFirstYmd).title
+      : `${ymdToShortLabel(week.since)} → ${ymdToShortLabel(week.until)}`;
 
   const invitesPromise = prefetched
     ? Promise.resolve(prefetched.invites)
@@ -549,7 +678,7 @@ export async function loadCoachingBoard(
     listAllUserProfiles(),
     invitesPromise,
     formsPromise,
-    loadLeaderboardRowsForWeek(week.since, week.until, { allowSnapshot: true, skipClientCallRecords }),
+    loadLeaderboardRowsForWeek(week.since, rangeUntil, { allowSnapshot: mode === 'week', skipClientCallRecords }),
     previousFormsPromise,
   ]);
 
@@ -561,7 +690,11 @@ export async function loadCoachingBoard(
   );
 
   const inviteByUser = new Map(invites.map((i) => [i.user_id, i]));
-  const formByUser = new Map(forms.map((f) => [f.user_id, f]));
+  const formsByUser = new Map<string, PerformanceCheckInRow>();
+  for (const row of forms) {
+    const existing = formsByUser.get(row.user_id);
+    if (!existing || row.submitted_at > existing.submitted_at) formsByUser.set(row.user_id, row);
+  }
   const lbByUser = new Map(
     leaderboardRows.filter((r) => r.recruiterUserId).map((r) => [r.recruiterUserId as string, r]),
   );
@@ -581,7 +714,7 @@ export async function loadCoachingBoard(
 
   for (const profile of participants) {
     const invite = inviteByUser.get(profile.user_id) ?? null;
-    const form = formByUser.get(profile.user_id) ?? null;
+    const form = formsByUser.get(profile.user_id) ?? null;
     const callActivity = callActivityByUser.get(profile.user_id);
     const lb = leaderboardRowForProfile(profile, lbByUser, leaderboardRows);
     const webinarBooked = lb?.webinarBooked ?? 0;
@@ -589,23 +722,45 @@ export async function loadCoachingBoard(
     const liveSessionBooked = lb?.liveSessionBooked ?? 0;
     const liveSessionShowed = lb?.liveSessionShowed ?? 0;
     const totalShowed = webinarShowed + liveSessionShowed;
-    const bookedFromActivity = callActivity?.days.reduce((sum, day) => sum + day.booked, 0) ?? 0;
+    const monthlyWeeks = monthWeekPointsFromActivity(monthWeeks, callActivity?.weeks);
+    const bookedFromActivity =
+      mode === 'month'
+        ? monthlyWeeks.reduce((sum, week) => sum + week.booked, 0)
+        : (callActivity?.days?.reduce((sum, day) => sum + day.booked, 0) ?? 0);
     const webinarLiveBooked = lb ? (lb.webinarBooked ?? 0) + (lb.liveSessionBooked ?? 0) : 0;
-    const actualCalls = Math.max(callActivity?.totalCalls ?? 0, lb?.calls ?? 0);
+    const actualCalls =
+      mode === 'month'
+        ? Math.max(callActivity?.totalCalls ?? 0, monthlyWeeks.reduce((sum, week) => sum + week.calls, 0), lb?.calls ?? 0)
+        : Math.max(callActivity?.totalCalls ?? 0, lb?.calls ?? 0);
     const actualBooked = Math.max(webinarLiveBooked, bookedFromActivity);
     const totalBooked = webinarBooked + liveSessionBooked;
     const showRatePct =
       totalBooked > 0 ? Math.round((100 * totalShowed) / totalBooked) : lb ? Math.round(lb.showRatio * 100) : null;
 
-    const elapsed = isCurrentWeek ? elapsedDays : 7;
-    const pace = computeCoachingWeeklyPace({ actualCalls, actualBooked, elapsedDays: elapsed });
+    const elapsed =
+      mode === 'month'
+        ? isCurrentMonth
+          ? elapsedDays
+          : monthWeeks.length * 7
+        : isCurrentWeek
+          ? elapsedDays
+          : 7;
+    const pace =
+      mode === 'month'
+        ? computeCoachingPeriodPace({ actualCalls, actualBooked, equivalentDays: elapsed })
+        : computeCoachingWeeklyPace({ actualCalls, actualBooked, elapsedDays: elapsed });
     const combined = combinedCoachingPace(pace.callsPacePct, pace.bookingsPacePct);
     const prevCombined = prevPaceByUser.get(profile.user_id) ?? null;
     const belowThreshold = pace.belowThreshold;
     const daily =
-      callActivity?.days?.length
+      mode === 'week' && callActivity?.days?.length
         ? callActivity.days
         : buildDailyBreakdown([], week.since);
+    const ladderRaw = prefetched?.laddersByUser?.get(profile.user_id) ?? [];
+    const ladder =
+      mode === 'month' && monthSinceSet.size
+        ? ladderRaw.filter((pt) => monthSinceSet.has(pt.weekSince))
+        : ladderRaw;
 
     people.push({
       userId: profile.user_id,
@@ -639,6 +794,9 @@ export async function loadCoachingBoard(
         leaderboardScore: lb?.score ?? null,
       }),
       daily,
+      monthlyWeeks,
+      periodMode: mode,
+      periodLabel,
       invite,
       form: form ?? null,
       emailSent: Boolean(invite?.email_sent_at),
@@ -651,7 +809,7 @@ export async function loadCoachingBoard(
         currentCombinedPace: combined,
         hasForm: Boolean(form),
       }),
-      ladder: prefetched?.laddersByUser?.get(profile.user_id) ?? [],
+      ladder,
     });
   }
 
@@ -660,12 +818,15 @@ export async function loadCoachingBoard(
     return a.displayName.localeCompare(b.displayName);
   });
 
+  const summaryWeekUntil = mode === 'month' ? rangeUntil : week.until;
+  const summaryWeekSince = mode === 'month' ? (monthWeeks[0]?.since ?? week.since) : week.since;
+
   return {
     summary: {
-      weekSince: week.since,
-      weekUntil: week.until,
-      weekLabel: `${ymdToShortLabel(week.since)} → ${ymdToShortLabel(week.until)}`,
-      elapsedDays: isCurrentWeek ? elapsedDays : 7,
+      weekSince: summaryWeekSince,
+      weekUntil: summaryWeekUntil,
+      weekLabel: periodLabel,
+      elapsedDays: mode === 'month' ? (isCurrentMonth ? elapsedDays : monthWeeks.length * 7) : isCurrentWeek ? elapsedDays : 7,
       teamCount: people.length,
       belowCount: people.filter((p) => p.belowThreshold).length,
       formCount: people.filter((p) => p.form).length,
