@@ -915,7 +915,7 @@ const LeadershipLeaderboard: React.FC = () => {
               <Target size={13} aria-hidden /> How to read this board
             </p>
             <p className="mt-1">
-              Rankings are scored from webinar bookings, attendance, and show rate only. Data updates when you press Refresh.
+              Rankings combine webinar and live session bookings, shows, and show rate. Live shows earn +15 Paz Coins each. Data updates when you press Refresh.
             </p>
           </div>
         </div>

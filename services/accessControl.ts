@@ -435,7 +435,7 @@ export function resolveAppSectionFromLocation(pathname: string, search: string):
   if (pathname === '/calls-analytics') return 'calls-analytics';
   if (pathname === '/calls-analytics/leaderboard' || pathname === '/leaderboard') return 'leaderboard';
   if (pathname === '/webinar-geek') return 'webinar-geek';
-  if (pathname === '/live-sessions') return 'live-sessions';
+  if (pathname.startsWith('/live-sessions')) return 'live-sessions';
   if (pathname === '/hr-dashboard') return 'hr-dashboard';
   if (pathname === '/hr/lead-distribution' || pathname === '/hr/leads') return 'pipeline-hr-leads';
   if (pathname === '/qr') return 'qr';

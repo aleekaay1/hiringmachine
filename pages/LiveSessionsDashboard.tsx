@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import {
@@ -324,6 +325,12 @@ const LiveSessionsDashboard: React.FC = () => {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            <Link
+              to="/live-sessions/analytics"
+              className="text-xs font-semibold text-[#2f6ea8] hover:underline inline-flex items-center gap-1 px-2"
+            >
+              Caller performance stats
+            </Link>
             <Button type="button" variant="outline" className="text-sm" onClick={() => void load(true)} disabled={loading}>
               <RefreshCw size={15} className={`mr-1.5 inline ${loading ? 'animate-spin' : ''}`} />
               Refresh from Zoom + Calendly
