@@ -44,7 +44,7 @@ export interface EmailTemplate {
 
 /**
  * Manual stage emails (admin buttons). Check-in is also sent automatically on form submit (Edge Function).
- * Vimeo embeds: `emailVideoEmbeds.ts`, `candidateEmailVimeoPlan.ts`.
+ * Vimeo watch links: `emailVideoEmbeds.ts`, `candidateEmailVimeoPlan.ts`.
  */
 export const EMAIL_TEMPLATES: EmailTemplate[] = [
   {

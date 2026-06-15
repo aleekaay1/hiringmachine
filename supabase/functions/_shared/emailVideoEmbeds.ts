@@ -1,5 +1,5 @@
 /**
- * Vimeo privacy links → email-safe embeds (sync with services/emailVideoEmbeds.ts).
+ * Vimeo privacy links → email-safe watch button (sync with services/emailVideoEmbeds.ts).
  */
 
 export type VimeoPrivacySpec = {
@@ -9,10 +9,6 @@ export type VimeoPrivacySpec = {
 
 export function vimeoWatchPageUrl(spec: VimeoPrivacySpec): string {
   return `https://vimeo.com/${spec.videoId}/${spec.hash}`;
-}
-
-export function vimeoPlayerSrc(spec: VimeoPrivacySpec): string {
-  return `https://player.vimeo.com/video/${spec.videoId}?h=${spec.hash}`;
 }
 
 export const VIMEO_CHECKIN_LIVE_SESSION_INVITE: VimeoPrivacySpec = {
@@ -40,31 +36,23 @@ export const VIMEO_POST_ASSESSMENT_SUBMIT_PLANNED: VimeoPrivacySpec = {
   hash: 'ede5e12aeb',
 };
 
-export function vimeoEmailEmbedTable(spec: VimeoPrivacySpec, title: string): string {
-  const src = vimeoPlayerSrc(spec);
+export function vimeoEmailWatchButton(spec: VimeoPrivacySpec, label = 'Watch video'): string {
   const page = vimeoWatchPageUrl(spec);
+  const safeLabel = label.replace(/"/g, '&quot;');
   return `
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:560px;margin:20px 0;font-family:Arial,Helvetica,sans-serif;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:16px 0;font-family:Arial,Helvetica,sans-serif;">
   <tr>
-    <td style="padding:0;border-radius:8px;overflow:hidden;background:#000;">
-      <div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;">
-        <iframe title="${title.replace(/"/g, '&quot;')}" src="${src}"
-          style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;"
-          allow="autoplay; fullscreen; picture-in-picture"
-          allowfullscreen></iframe>
-      </div>
-    </td>
-  </tr>
-  <tr>
-    <td style="padding:8px 0 0;font-size:12px;color:#4b5563;line-height:1.5;">
-      If the video does not appear, <a href="${page}" target="_blank" rel="noopener noreferrer" style="color:#005EB8;">open it on Vimeo</a>.
+    <td>
+      <a href="${page}" target="_blank" rel="noopener noreferrer"
+        style="display:inline-block;padding:12px 20px;background-color:#005EB8;color:#ffffff;text-decoration:none;border-radius:6px;font-size:14px;font-weight:bold;">
+        ${safeLabel}
+      </a>
     </td>
   </tr>
 </table>
   `.trim();
 }
 
-/** One value-add sentence plus embed (keeps existing copy unchanged around it). */
-export function vimeoEmailValueAdd(spec: VimeoPrivacySpec, oneLiner: string, title: string): string {
-  return `<p>${oneLiner}</p>\n${vimeoEmailEmbedTable(spec, title)}`;
+export function vimeoEmailValueAdd(spec: VimeoPrivacySpec, oneLiner: string, _title?: string): string {
+  return `<p>${oneLiner}</p>\n${vimeoEmailWatchButton(spec)}`;
 }

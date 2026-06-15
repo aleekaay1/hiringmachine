@@ -1,5 +1,5 @@
 /**
- * Vimeo → candidate email mapping (live in templates).
+ * Vimeo → candidate email mapping (live in templates). Each includes a “Watch video” button linking to Vimeo.
  *
  * | When | Vimeo | Template / automation |
  * |------|-------|------------------------|
