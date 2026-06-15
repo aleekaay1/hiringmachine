@@ -28,7 +28,6 @@ import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { getCurrentUserProfile } from '../services/accessControl';
 import {
   loadFullCoachingHub,
-  listRecentDays,
   listRecentFridayWeeks,
   listRecentMonths,
   type CoachingBoardPerson,
@@ -83,7 +82,7 @@ function PersonCard({
   onSelectForm,
   elapsedDays,
   viewMode,
-  ladderDayFilter,
+  ladderDayCount,
 }: {
   person: CoachingBoardPerson;
   expanded: boolean;
@@ -92,13 +91,17 @@ function PersonCard({
   onSelectForm: (checked: boolean) => void;
   elapsedDays: number;
   viewMode: CoachingHubViewMode;
-  ladderDayFilter: Set<string>;
+  ladderDayCount: number;
 }) {
   const formId = person.form?.id;
-  const ladderPoints = React.useMemo(() => {
-    if (!ladderDayFilter.size) return person.ladder;
-    return person.ladder.filter((pt) => ladderDayFilter.has(pt.weekSince));
-  }, [person.ladder, ladderDayFilter]);
+  const ladderPoints = React.useMemo(
+    () => person.ladder.slice(-Math.max(1, ladderDayCount)),
+    [person.ladder, ladderDayCount],
+  );
+  const ladderHighlights = React.useMemo(
+    () => ladderPoints.filter((pt) => pt.actualCalls > 0 || pt.actualBooked > 0).slice(-6),
+    [ladderPoints],
+  );
 
   return (
     <article
@@ -290,10 +293,9 @@ function PersonCard({
                     actualBooked: p.actualBooked,
                   }))}
                 />
-                {ladderPoints.length > 0 && (
-                <div className="mt-4 max-h-56 overflow-y-auto">
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                  {ladderPoints.map((pt) => (
+                {ladderHighlights.length > 0 && (
+                <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {ladderHighlights.map((pt) => (
                     <div
                       key={pt.weekSince}
                       className={`rounded-xl border p-3 text-sm ${
@@ -313,7 +315,6 @@ function PersonCard({
                       </p>
                     </div>
                   ))}
-                </div>
                 </div>
                 )}
             </div>
@@ -371,19 +372,8 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
 
   const weekOptions = React.useMemo(() => listRecentFridayWeeks(26), []);
   const monthOptions = React.useMemo(() => listRecentMonths(12), []);
-  const dayOptions = React.useMemo(() => listRecentDays(60), []);
-  const defaultLadderDays = React.useMemo(
-    () => dayOptions.slice(-14).map((d) => d.ymd),
-    [dayOptions],
-  );
-  const [selectedLadderDays, setSelectedLadderDays] = React.useState<string[]>(defaultLadderDays);
-  const ladderDayFilter = React.useMemo(() => new Set(selectedLadderDays), [selectedLadderDays]);
-
-  React.useEffect(() => {
-    if (!selectedLadderDays.length && defaultLadderDays.length) {
-      setSelectedLadderDays(defaultLadderDays);
-    }
-  }, [defaultLadderDays, selectedLadderDays.length]);
+  const LADDER_DAY_PRESETS = [7, 14, 21, 30, 42, 60] as const;
+  const [ladderDayCount, setLadderDayCount] = React.useState<number>(14);
 
   const loadBoard = React.useCallback(async () => {
     setLoading(true);
@@ -631,44 +621,18 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
               ))}
             </select>
 
-            <details className="relative">
-              <summary className="cursor-pointer list-none rounded-xl border border-[#c9d9ee] px-3 py-2 text-sm text-[#0B1B34] marker:content-none">
-                Ladder days ({selectedLadderDays.length})
-              </summary>
-              <div className="absolute left-0 z-20 mt-1 max-h-64 w-64 overflow-y-auto rounded-xl border border-[#d4e4f7] bg-white p-3 shadow-lg">
-                <div className="mb-2 flex flex-wrap gap-1">
-                  {[7, 14, 21, 30, 42, 60].map((n) => (
-                    <button
-                      key={n}
-                      type="button"
-                      onClick={() => setSelectedLadderDays(dayOptions.slice(-n).map((d) => d.ymd))}
-                      className="rounded-lg border border-[#d4e4f7] px-2 py-1 text-[10px] font-medium text-[#4e79a9] hover:bg-[#f8fbff]"
-                    >
-                      Last {n}
-                    </button>
-                  ))}
-                </div>
-                {dayOptions.map((d) => {
-                  const checked = selectedLadderDays.includes(d.ymd);
-                  return (
-                    <label key={d.ymd} className="flex cursor-pointer items-center gap-2 rounded-lg px-1 py-1 text-xs hover:bg-[#f8fbff]">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(e) => {
-                          setSelectedLadderDays((prev) =>
-                            e.target.checked
-                              ? [...new Set([...prev, d.ymd])].sort((a, b) => a.localeCompare(b))
-                              : prev.filter((v) => v !== d.ymd),
-                          );
-                        }}
-                      />
-                      <span>{d.label}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            </details>
+            <select
+              className="rounded-xl border border-[#c9d9ee] px-3 py-2 text-sm"
+              value={ladderDayCount}
+              onChange={(e) => setLadderDayCount(Number(e.target.value))}
+              aria-label="Ladder day range"
+            >
+              {LADDER_DAY_PRESETS.map((n) => (
+                <option key={n} value={n}>
+                  Ladder: last {n} days
+                </option>
+              ))}
+            </select>
 
             <div className="flex rounded-xl border border-[#d4e4f7] p-0.5">
               {(['all', 'below', 'forms'] as const).map((id) => (
@@ -779,7 +743,7 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
                   selected={Boolean(person.form && selectedFormIds.has(person.form.id))}
                   elapsedDays={summary?.elapsedDays ?? 7}
                   viewMode={viewMode}
-                  ladderDayFilter={ladderDayFilter}
+                  ladderDayCount={ladderDayCount}
                   onToggle={() => setExpandedId((id) => (id === person.userId ? null : person.userId))}
                   onSelectForm={(checked) => {
                     if (person.form) toggleFormSelect(person.form.id, checked);
