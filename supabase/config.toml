@@ -423,6 +423,9 @@ verify_jwt = false
 [functions.performance-check-in-reminder]
 verify_jwt = false
 
+[functions.live-session-registrants]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

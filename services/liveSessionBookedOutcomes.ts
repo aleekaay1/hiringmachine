@@ -4,11 +4,12 @@
  */
 
 import {
+  fetchLiveSessionRegistrantsViaFunction,
   fetchPipelineCandidateEmailsViaFunction,
   isSupabaseNetworkError,
 } from './dashboardTeamMetricsService';
 import { supabase } from './supabaseClient';
-import { torontoYmdFromDate } from './webinarGeekDates';
+import { shiftYmdDays, torontoYmdFromDate } from './webinarGeekDates';
 
 export type LiveSessionRegistrantRow = {
   session_date: string;
@@ -70,15 +71,74 @@ export function liveSessionNamesMatch(a: string | null | undefined, b: string | 
   return false;
 }
 
-export async function loadLiveSessionRegistrantsForMatching(): Promise<LiveSessionRegistrantRow[]> {
-  const { data, error } = await supabase
-    .from('live_session_registrants')
-    .select('session_date, email, name, phone, attended_zoom, calendly_no_show, zoom_join_at');
-  if (error) {
-    if (/relation|does not exist|schema cache/i.test(error.message)) return [];
-    throw error;
+const REGISTRANTS_CACHE_TTL_MS = 60_000;
+let registrantsCache: { key: string; expires: number; rows: LiveSessionRegistrantRow[] } | null = null;
+
+export async function loadLiveSessionRegistrantsForMatching(options?: {
+  sinceYmd?: string;
+  untilYmd?: string;
+}): Promise<LiveSessionRegistrantRow[]> {
+  const sinceYmd = options?.sinceYmd ?? shiftYmdDays(torontoYmdFromDate(), -120);
+  const untilYmd = options?.untilYmd;
+  const cacheKey = `${sinceYmd}|${untilYmd ?? ''}`;
+  const now = Date.now();
+  if (registrantsCache && registrantsCache.key === cacheKey && registrantsCache.expires > now) {
+    return registrantsCache.rows;
   }
-  return (data || []) as LiveSessionRegistrantRow[];
+
+  let rows: LiveSessionRegistrantRow[];
+  try {
+    rows = await loadLiveSessionRegistrantsFromRest(sinceYmd, untilYmd);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/relation|does not exist|schema cache/i.test(msg)) {
+      rows = [];
+    } else if (isSupabaseNetworkError(msg)) {
+      const viaFn = await fetchLiveSessionRegistrantsViaFunction({ sinceYmd, untilYmd });
+      rows = viaFn.ok ? viaFn.registrants : [];
+    } else {
+      throw e;
+    }
+  }
+
+  registrantsCache = { key: cacheKey, expires: now + REGISTRANTS_CACHE_TTL_MS, rows };
+  return rows;
+}
+
+async function loadLiveSessionRegistrantsFromRest(
+  sinceYmd: string,
+  untilYmd?: string,
+): Promise<LiveSessionRegistrantRow[]> {
+  const all: LiveSessionRegistrantRow[] = [];
+  const pageSize = 1000;
+  let from = 0;
+
+  while (from < 25_000) {
+    let query = supabase
+      .from('live_session_registrants')
+      .select('session_date, email, name, phone, attended_zoom, calendly_no_show, zoom_join_at')
+      .gte('session_date', sinceYmd)
+      .order('session_date', { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (untilYmd) query = query.lte('session_date', untilYmd);
+
+    const { data, error } = await query;
+    if (error) {
+      if (/relation|does not exist|schema cache/i.test(error.message)) return [];
+      if (isSupabaseNetworkError(error.message)) {
+        const viaFn = await fetchLiveSessionRegistrantsViaFunction({ sinceYmd, untilYmd });
+        if (viaFn.ok) return viaFn.registrants;
+      }
+      throw error;
+    }
+
+    const batch = (data || []) as LiveSessionRegistrantRow[];
+    all.push(...batch);
+    if (batch.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return all;
 }
 
 export function buildLiveSessionRowsByEmail(

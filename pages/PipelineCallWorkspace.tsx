@@ -9,10 +9,13 @@ import {
   Mail,
   Phone,
   RefreshCw,
+  ScrollText,
   Settings,
   Video,
 } from 'lucide-react';
 import CallHistorySheet from '../components/pipeline/CallHistorySheet';
+import CallScriptsDrawer from '../components/pipeline/CallScriptsDrawer';
+import CallScriptViewerModal from '../components/pipeline/CallScriptViewerModal';
 import CandidateResumeDetailsCard from '../components/pipeline/CandidateResumeDetailsCard';
 import CandidateActivityStatsPanel from '../components/pipeline/CandidateActivityStatsPanel';
 import PostDispositionEmailModal from '../components/pipeline/PostDispositionEmailModal';
@@ -72,6 +75,12 @@ import {
 } from '../services/pipelineDialQueue';
 import { consumeDialQueueIntent } from '../services/recruiterLeadPackAnalytics';
 import { buildCallHistoryRows } from '../services/callHistoryRows';
+import {
+  listPipelineCallScripts,
+  pickActiveCallScript,
+  saveLastUsedCallScriptId,
+  type PipelineCallScript,
+} from '../services/pipelineCallScripts';
 
 type QueueFilter = 'all' | 'callbacks' | 'not_interested' | 'booked' | 'booked_no_show' | 'booked_didnt_watch';
 
@@ -206,6 +215,11 @@ const PipelineCallWorkspace: React.FC = () => {
   const [dialStartMode, setDialStartMode] = React.useState<DialQueueStartMode>('first');
   const [loadedDialQueue, setLoadedDialQueue] = React.useState<LoadedDialQueue | null>(null);
   const [showCallHistory, setShowCallHistory] = React.useState(false);
+  const [showCallScriptsDrawer, setShowCallScriptsDrawer] = React.useState(false);
+  const [showCallScriptViewer, setShowCallScriptViewer] = React.useState(false);
+  const [callScripts, setCallScripts] = React.useState<PipelineCallScript[]>([]);
+  const [callScriptsTableMissing, setCallScriptsTableMissing] = React.useState(false);
+  const [selectedCallScriptId, setSelectedCallScriptId] = React.useState<string | null>(null);
   const [showQueueSetup, setShowQueueSetup] = React.useState(false);
   const [postEmailCandidate, setPostEmailCandidate] = React.useState<PipelineCandidate | null>(null);
   const [postEmailTo, setPostEmailTo] = React.useState('');
@@ -218,6 +232,41 @@ const PipelineCallWorkspace: React.FC = () => {
   React.useEffect(() => {
     selectedCandidateIdRef.current = selectedCandidateId;
   }, [selectedCandidateId]);
+
+  React.useEffect(() => {
+    if (!currentUserId) return;
+    let cancelled = false;
+    void listPipelineCallScripts(currentUserId)
+      .then(({ scripts, tableMissing }) => {
+        if (cancelled) return;
+        setCallScripts(scripts);
+        setCallScriptsTableMissing(tableMissing);
+        const active = pickActiveCallScript(scripts, currentUserId);
+        setSelectedCallScriptId(active?.id ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCallScripts([]);
+          setSelectedCallScriptId(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUserId]);
+
+  const openCallScriptViewer = React.useCallback(() => {
+    if (!callScripts.length) {
+      setShowCallScriptsDrawer(true);
+      return;
+    }
+    const active = pickActiveCallScript(callScripts, currentUserId || '') ?? callScripts[0];
+    if (active) {
+      setSelectedCallScriptId(active.id);
+      saveLastUsedCallScriptId(currentUserId || '', active.id);
+    }
+    setShowCallScriptViewer(true);
+  }, [callScripts, currentUserId]);
 
   const loadWorkspace = React.useCallback(async (mode: 'initial' | 'refresh' | 'silent' = 'silent') => {
     if (mode === 'initial') setInitialLoading(true);
@@ -1069,6 +1118,20 @@ const PipelineCallWorkspace: React.FC = () => {
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
+                data-tour="call-scripts-button"
+                onClick={() => setShowCallScriptsDrawer(true)}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold ${tone.actionButton}`}
+              >
+                <ScrollText size={14} />
+                Scripts
+                {callScripts.length > 0 && (
+                  <span className="rounded-full bg-[#e8f3ff] px-1.5 py-0.5 text-[10px] tabular-nums text-[#285082]">
+                    {callScripts.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
                 data-tour="call-history-button"
                 onClick={() => setShowCallHistory(true)}
                 className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold ${tone.actionButton}`}
@@ -1101,6 +1164,16 @@ const PipelineCallWorkspace: React.FC = () => {
             </div>
           </div>
         </motion.div>
+
+        <button
+          type="button"
+          onClick={() => setShowCallScriptsDrawer(true)}
+          className={`fixed right-0 top-[42%] z-20 hidden -translate-y-1/2 flex-col items-center gap-1 rounded-l-2xl border border-r-0 px-2 py-3 text-[10px] font-semibold uppercase tracking-[0.12em] shadow-lg sm:flex ${tone.actionButton}`}
+          aria-label="Open call scripts"
+        >
+          <ScrollText size={16} />
+          Script
+        </button>
 
         <p
           data-tour="call-disposition-guide"
@@ -1446,6 +1519,34 @@ const PipelineCallWorkspace: React.FC = () => {
           tone={tone}
         />
 
+        {currentUserId && (
+          <CallScriptsDrawer
+            open={showCallScriptsDrawer}
+            userId={currentUserId}
+            scripts={callScripts}
+            selectedScriptId={selectedCallScriptId}
+            tableMissing={callScriptsTableMissing}
+            onClose={() => setShowCallScriptsDrawer(false)}
+            onScriptsChange={(scripts, selectedId) => {
+              setCallScripts(scripts);
+              setSelectedCallScriptId(selectedId);
+            }}
+            tone={tone}
+          />
+        )}
+
+        <CallScriptViewerModal
+          open={showCallScriptViewer}
+          scripts={callScripts}
+          activeScriptId={selectedCallScriptId}
+          onSelectScript={(scriptId) => {
+            setSelectedCallScriptId(scriptId);
+            if (currentUserId) saveLastUsedCallScriptId(currentUserId, scriptId);
+          }}
+          onClose={() => setShowCallScriptViewer(false)}
+          tone={tone}
+        />
+
         {postEmailCandidate && (
           <PostDispositionEmailModal
             open={Boolean(postEmailCandidate)}
@@ -1509,16 +1610,28 @@ const PipelineCallWorkspace: React.FC = () => {
                   </h3>
                   <p className={`text-[11px] ${tone.panelLabel}`}>Dialed number: {dialNumberPreview || 'No dialable number'}</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSubmitAttempted(false);
-                    setShowDispositionModal(false);
-                  }}
-                  className={`rounded-lg border px-2 py-1 text-xs ${tone.actionButton}`}
-                >
-                  Close
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    data-tour="call-disposition-script"
+                    onClick={openCallScriptViewer}
+                    title="Open your call script"
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold ${tone.actionButton}`}
+                  >
+                    <ScrollText size={14} />
+                    Script
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSubmitAttempted(false);
+                      setShowDispositionModal(false);
+                    }}
+                    className={`rounded-lg border px-2 py-1 text-xs ${tone.actionButton}`}
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
 
               <label className={`block text-xs ${tone.panelMuted}`}>

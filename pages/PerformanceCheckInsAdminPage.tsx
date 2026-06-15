@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import {
+  BarChart3,
   ChevronLeft,
   ChevronRight,
   ClipboardList,
@@ -10,7 +11,15 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
-import { DailyWeekBars, ImprovementLadderChart, PaceGauge } from '../components/coaching/CoachingCharts';
+import {
+  DailyWeekBars,
+  ImprovementLadderChart,
+  MetricsBarChart,
+  PaceGauge,
+  PaceRing,
+  TeamPaceChart,
+  WeekActivityStrip,
+} from '../components/coaching/CoachingCharts';
 import { Button } from '../components/UI';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { getCurrentUserProfile } from '../services/accessControl';
@@ -34,8 +43,6 @@ import {
 } from '../services/performanceCheckInService';
 import { fridayWeekBoundsFromYmd, shiftYmdDays, ymdToShortLabel } from '../services/webinarGeekDates';
 
-type TabId = 'board' | 'ladder';
-
 function hintStyles(tone: CoachingBoardPerson['hint']['tone']): string {
   if (tone === 'positive') return 'border-emerald-200 bg-emerald-50 text-emerald-900';
   if (tone === 'critical') return 'border-rose-200 bg-rose-50 text-rose-900';
@@ -45,7 +52,7 @@ function hintStyles(tone: CoachingBoardPerson['hint']['tone']): string {
 
 function StatChip({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
   return (
-    <div className="rounded-lg border border-[#e8f0fa] bg-[#f8fbff] px-2.5 py-1.5 text-center min-w-[4.5rem]">
+    <div className="min-w-[4.5rem] rounded-lg border border-[#e8f0fa] bg-[#f8fbff] px-2.5 py-1.5 text-center">
       <p className="text-[9px] font-semibold uppercase tracking-wide text-[#5c7594]">{label}</p>
       <p className={`text-sm font-semibold tabular-nums ${accent || 'text-[#0B1B34]'}`}>{value}</p>
     </div>
@@ -122,22 +129,29 @@ function PersonCard({
           </div>
         </div>
 
-        <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_1fr_1.2fr]">
-          <PaceGauge
-            label="Calls pace"
-            pct={person.callsPacePct}
-            actual={person.actualCalls}
-            expected={person.expectedCalls}
-            compact
-          />
-          <PaceGauge
-            label="Bookings pace"
-            pct={person.bookingsPacePct}
-            actual={person.actualBooked}
-            expected={person.expectedBookings}
-            compact
-          />
-          <DailyWeekBars days={person.daily} highlightThroughDay={elapsedDays - 1} />
+        <div className="mt-4 flex flex-wrap items-center gap-6">
+          <PaceRing pct={person.callsPacePct} label="Calls" />
+          <PaceRing pct={person.bookingsPacePct} label="Bookings" />
+          <div className="min-w-[200px] flex-1 space-y-3">
+            <PaceGauge
+              label="Calls pace"
+              pct={person.callsPacePct}
+              actual={person.actualCalls}
+              expected={person.expectedCalls}
+              compact
+            />
+            <PaceGauge
+              label="Bookings pace"
+              pct={person.bookingsPacePct}
+              actual={person.actualBooked}
+              expected={person.expectedBookings}
+              compact
+            />
+          </div>
+        </div>
+
+        <div className="mt-4">
+          <DailyWeekBars days={person.daily} highlightThroughDay={elapsedDays - 1} tall />
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">
@@ -167,34 +181,56 @@ function PersonCard({
         </div>
       </button>
 
-      {expanded && person.form && (
-        <div className="border-t border-[#e8f0fa] px-4 pb-4 pt-3 animate-in fade-in duration-300">
-          <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">Coaching form</p>
-          <div className="grid gap-3 rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-3 text-sm sm:grid-cols-2">
-            <p>
-              <span className="text-[#5c7594]">Blocker:</span> {labelForBlocker(person.form.blocker_category)}
-            </p>
-            <p>
-              <span className="text-[#5c7594]">Help:</span> {labelForHelp(person.form.help_needed)}
-            </p>
-            <p className="sm:col-span-2">
-              <span className="text-[#5c7594]">Struggling with:</span>{' '}
-              {(person.form.trouble_areas || []).map(labelForTroubleArea).join(', ') || '—'}
-            </p>
-            <p className="sm:col-span-2 whitespace-pre-wrap">
-              <span className="text-[#5c7594]">Notes:</span> {person.form.comments || '—'}
-            </p>
-            <p className="text-xs text-[#5c7594]">
-              Submitted {formatDateTimeCanadaEastern(person.form.submitted_at)}
-              {person.form.needs_coaching ? ' · wants follow-up' : ''}
-              {person.form.status === 'reviewed' ? ' · reviewed' : ''}
-            </p>
+      {expanded && (
+        <div className="space-y-4 border-t border-[#e8f0fa] px-4 pb-4 pt-3 animate-in fade-in duration-300">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-4">
+              <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">Week activity</p>
+              <WeekActivityStrip
+                days={person.daily}
+                totalCalls={person.actualCalls}
+                totalBooked={person.actualBooked}
+              />
+            </div>
+            <div className="rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-4">
+              <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">Outcomes</p>
+              <MetricsBarChart
+                calls={person.actualCalls}
+                webinarBooked={person.webinarBooked}
+                webinarShowed={person.webinarShowed}
+                liveBooked={person.liveSessionBooked}
+                liveShowed={person.liveSessionShowed}
+              />
+            </div>
           </div>
-        </div>
-      )}
-      {expanded && !person.form && person.belowThreshold && (
-        <div className="border-t border-[#e8f0fa] px-4 pb-4 pt-3 text-sm text-[#5c7594]">
-          No form submitted yet for this week.
+
+          {person.form ? (
+            <>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">Coaching form</p>
+              <div className="grid gap-3 rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-3 text-sm sm:grid-cols-2">
+                <p>
+                  <span className="text-[#5c7594]">Blocker:</span> {labelForBlocker(person.form.blocker_category)}
+                </p>
+                <p>
+                  <span className="text-[#5c7594]">Help:</span> {labelForHelp(person.form.help_needed)}
+                </p>
+                <p className="sm:col-span-2">
+                  <span className="text-[#5c7594]">Struggling with:</span>{' '}
+                  {(person.form.trouble_areas || []).map(labelForTroubleArea).join(', ') || '—'}
+                </p>
+                <p className="whitespace-pre-wrap sm:col-span-2">
+                  <span className="text-[#5c7594]">Notes:</span> {person.form.comments || '—'}
+                </p>
+                <p className="text-xs text-[#5c7594]">
+                  Submitted {formatDateTimeCanadaEastern(person.form.submitted_at)}
+                  {person.form.needs_coaching ? ' · wants follow-up' : ''}
+                  {person.form.status === 'reviewed' ? ' · reviewed' : ''}
+                </p>
+              </div>
+            </>
+          ) : person.belowThreshold ? (
+            <p className="text-sm text-[#5c7594]">No form submitted yet for this week.</p>
+          ) : null}
         </div>
       )}
     </article>
@@ -203,7 +239,6 @@ function PersonCard({
 
 const PerformanceCheckInsAdminPage: React.FC = () => {
   const defaultWeek = currentFridayWeekBounds().since;
-  const [tab, setTab] = React.useState<TabId>('board');
   const [weekSince, setWeekSince] = React.useState(defaultWeek);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
@@ -253,7 +288,7 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
     if (!ladderUserId) return;
     let cancelled = false;
     setLadderLoading(true);
-    void loadUserImprovementLadder(ladderUserId, 12)
+    void loadUserImprovementLadder(ladderUserId, 10)
       .then((pts) => {
         if (!cancelled) setLadderPoints(pts);
       })
@@ -274,6 +309,36 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
     if (filter === 'forms') return people.filter((p) => p.form);
     return people;
   }, [people, filter]);
+
+  const teamPaceRows = React.useMemo(
+    () =>
+      people
+        .filter((p) => p.hasTargets)
+        .map((p) => ({
+          userId: p.userId,
+          name: p.displayName,
+          pacePct: p.combinedPacePct,
+          belowThreshold: p.belowThreshold,
+          calls: p.actualCalls,
+          booked: p.actualBooked,
+        })),
+    [people],
+  );
+
+  const teamTotals = React.useMemo(
+    () =>
+      people.reduce(
+        (acc, p) => ({
+          calls: acc.calls + p.actualCalls,
+          webinarBooked: acc.webinarBooked + p.webinarBooked,
+          webinarShowed: acc.webinarShowed + p.webinarShowed,
+          liveBooked: acc.liveBooked + p.liveSessionBooked,
+          liveShowed: acc.liveShowed + p.liveSessionShowed,
+        }),
+        { calls: 0, webinarBooked: 0, webinarShowed: 0, liveBooked: 0, liveShowed: 0 },
+      ),
+    [people],
+  );
 
   const shiftWeek = (delta: number) => {
     setWeekSince(shiftYmdDays(weekSince, delta * 7));
@@ -306,6 +371,12 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
     }
   };
 
+  const scrollToPerson = (userId: string) => {
+    setLadderUserId(userId);
+    setExpandedId(userId);
+    document.getElementById(`coaching-person-${userId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
   if (accessDenied) {
     return (
       <PipelineAuthShell title="Coaching" subtitle="Admin access required" redirectPath="/performance-check-ins">
@@ -327,8 +398,8 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
               <p className="text-[10px] uppercase tracking-[0.28em] text-[#9ec5ea]">Leadership coaching</p>
               <h1 className="text-2xl font-semibold">Mid-week coaching hub</h1>
               <p className="mt-1 max-w-2xl text-sm text-[#c5daf0]">
-                Below-50% callers only get the automated email. Review live stats, forms, and week-over-week improvement
-                in one place.
+                Below-50% callers get the automated email. Charts, forms, and week-over-week improvement — all on one
+                screen.
               </p>
             </div>
             <ClipboardList className="text-[#7ec0ff]" size={32} />
@@ -354,93 +425,194 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
 
         <div className="overflow-x-auto rounded-2xl border border-[#d4e4f7] bg-white p-3">
           <div className="flex min-w-max flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1">
-            <button type="button" onClick={() => shiftWeek(1)} className="rounded-lg p-2 hover:bg-[#f0f6ff]" aria-label="Previous week">
-              <ChevronLeft size={18} />
-            </button>
-            <select
-              className="rounded-xl border border-[#c9d9ee] px-3 py-2 text-sm"
-              value={weekSince}
-              onChange={(e) => setWeekSince(e.target.value)}
-            >
-              {weekOptions.map((w) => (
-                <option key={w.since} value={w.since}>
-                  {w.label}
-                </option>
+            <div className="flex items-center gap-1">
+              <button type="button" onClick={() => shiftWeek(1)} className="rounded-lg p-2 hover:bg-[#f0f6ff]" aria-label="Previous week">
+                <ChevronLeft size={18} />
+              </button>
+              <select
+                className="rounded-xl border border-[#c9d9ee] px-3 py-2 text-sm"
+                value={weekSince}
+                onChange={(e) => setWeekSince(e.target.value)}
+              >
+                {weekOptions.map((w) => (
+                  <option key={w.since} value={w.since}>
+                    {w.label}
+                  </option>
+                ))}
+              </select>
+              <button type="button" onClick={() => shiftWeek(-1)} className="rounded-lg p-2 hover:bg-[#f0f6ff]" aria-label="Next week">
+                <ChevronRight size={18} />
+              </button>
+            </div>
+
+            <div className="flex rounded-xl border border-[#d4e4f7] p-0.5">
+              {(['all', 'below', 'forms'] as const).map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setFilter(id)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                    filter === id ? 'bg-[#0B1B34] text-white' : 'text-[#5c7594] hover:bg-[#f8fbff]'
+                  }`}
+                >
+                  {id === 'all' ? 'Everyone' : id === 'below' ? 'Below 50%' : 'Has form'}
+                </button>
               ))}
-            </select>
-            <button type="button" onClick={() => shiftWeek(-1)} className="rounded-lg p-2 hover:bg-[#f0f6ff]" aria-label="Next week">
-              <ChevronRight size={18} />
-            </button>
-          </div>
+            </div>
 
-          <div className="flex rounded-xl border border-[#d4e4f7] p-0.5">
-            {(['board', 'ladder'] as TabId[]).map((id) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setTab(id)}
-                className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
-                  tab === id ? 'bg-[#0B1B34] text-white' : 'text-[#5c7594] hover:bg-[#f8fbff]'
-                }`}
-              >
-                {id === 'board' ? 'This week' : 'Improvement ladder'}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex rounded-xl border border-[#d4e4f7] p-0.5">
-            {(['all', 'below', 'forms'] as const).map((id) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => setFilter(id)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-                  filter === id ? 'bg-[#eef6ff] text-[#0B1B34]' : 'text-[#5c7594]'
-                }`}
-              >
-                {id === 'all' ? 'Everyone' : id === 'below' ? 'Below 50%' : 'Has form'}
-              </button>
-            ))}
-          </div>
-
-          <Button variant="secondary" onClick={() => void loadBoard()} disabled={loading}>
-            <RefreshCw size={14} className={`mr-2 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
-
-          {selectedFormIds.size > 0 && (
-            <Button variant="secondary" onClick={() => void deleteSelected()} disabled={deleting}>
-              <Trash2 size={14} className="mr-2" />
-              Delete {selectedFormIds.size}
+            <Button variant="secondary" onClick={() => void loadBoard()} disabled={loading}>
+              <RefreshCw size={14} className={`mr-2 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
             </Button>
-          )}
 
-          {!PERFORMANCE_CHECKIN_AUTOMATION_ENABLED && (
-            <span className="shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
-              Email automation off (testing)
-            </span>
-          )}
+            {selectedFormIds.size > 0 && (
+              <Button variant="secondary" onClick={() => void deleteSelected()} disabled={deleting}>
+                <Trash2 size={14} className="mr-2" />
+                Delete {selectedFormIds.size}
+              </Button>
+            )}
+
+            {!PERFORMANCE_CHECKIN_AUTOMATION_ENABLED && (
+              <span className="shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
+                Email automation off (testing)
+              </span>
+            )}
           </div>
         </div>
 
         {error && <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</div>}
 
-        {tab === 'board' && (
-          <div className="space-y-3">
-            <p className="text-xs text-[#5c7594]">
-              Week {ymdToShortLabel(weekBounds.since)} → {ymdToShortLabel(weekBounds.until)} · {filteredPeople.length}{' '}
-              caller{filteredPeople.length === 1 ? '' : 's'} · sorted by leaderboard rank
-            </p>
-            {loading && <div className="rounded-2xl border border-[#d4e4f7] bg-white p-8 text-center text-sm text-[#5c7594]">Loading coaching data…</div>}
-            {!loading && filteredPeople.length === 0 && (
-              <div className="rounded-2xl border border-[#d4e4f7] bg-white p-8 text-center text-sm text-[#5c7594]">
-                No callers match this filter.
+        {!loading && people.length > 0 && (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <section className="rounded-2xl border border-[#d4e4f7] bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center gap-2">
+                <BarChart3 size={18} className="text-[#4e9ae8]" />
+                <h2 className="text-sm font-semibold text-[#0B1B34]">Team pace · this week</h2>
               </div>
-            )}
-            {filteredPeople.map((person) => (
+              <p className="mb-3 text-xs text-[#5c7594]">
+                {ymdToShortLabel(weekBounds.since)} → {ymdToShortLabel(weekBounds.until)} · click a row to jump to caller
+              </p>
+              <TeamPaceChart rows={teamPaceRows} onSelect={scrollToPerson} />
+            </section>
+
+            <section className="rounded-2xl border border-[#d4e4f7] bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center gap-2">
+                <TrendingUp size={18} className="text-[#4e9ae8]" />
+                <h2 className="text-sm font-semibold text-[#0B1B34]">Team activity</h2>
+              </div>
+              <MetricsBarChart
+                calls={teamTotals.calls}
+                webinarBooked={teamTotals.webinarBooked}
+                webinarShowed={teamTotals.webinarShowed}
+                liveBooked={teamTotals.liveBooked}
+                liveShowed={teamTotals.liveShowed}
+              />
+            </section>
+          </div>
+        )}
+
+        <section className="rounded-2xl border border-[#d4e4f7] bg-gradient-to-br from-white to-[#f0f7ff] p-5 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#4e79a9]">Improvement ladder</p>
+              <h2 className="text-lg font-semibold text-[#0B1B34]">Week-over-week pace</h2>
+              <p className="text-xs text-[#5c7594]">Smooth curve · hover dots · blue dot = form submitted</p>
+            </div>
+            <div className="min-w-[220px]">
+              <label className="mb-1 block text-xs font-medium text-[#5c7594]">Caller</label>
+              <select
+                className="w-full rounded-xl border border-[#c9d9ee] bg-white px-3 py-2 text-sm"
+                value={ladderUserId}
+                onChange={(e) => setLadderUserId(e.target.value)}
+              >
+                {people.map((p) => (
+                  <option key={p.userId} value={p.userId}>
+                    {p.displayName}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {ladderPerson && (
+            <div className="mb-4 flex flex-wrap gap-2 text-xs">
+              <span className="rounded-full bg-white px-3 py-1 font-medium text-[#0B1B34] shadow-sm">
+                Calls {ladderPerson.callsPacePct ?? '—'}%
+              </span>
+              <span className="rounded-full bg-white px-3 py-1 font-medium text-[#0B1B34] shadow-sm">
+                Bookings {ladderPerson.bookingsPacePct ?? '—'}%
+              </span>
+              <span className="rounded-full bg-white px-3 py-1 font-medium text-[#0B1B34] shadow-sm">
+                Webinar {ladderPerson.webinarBooked}/{ladderPerson.webinarShowed}
+              </span>
+              <span className="rounded-full bg-white px-3 py-1 font-medium text-[#0B1B34] shadow-sm">
+                Live {ladderPerson.liveSessionBooked}/{ladderPerson.liveSessionShowed}
+              </span>
+            </div>
+          )}
+
+          {ladderLoading ? (
+            <p className="text-sm text-[#5c7594]">Loading history…</p>
+          ) : (
+            <>
+              <ImprovementLadderChart
+                points={ladderPoints.map((p) => ({
+                  weekLabel: p.weekLabel,
+                  shortLabel: ymdToShortLabel(p.weekSince),
+                  combinedPacePct: p.combinedPacePct,
+                  belowThreshold: p.belowThreshold,
+                  hasForm: p.hasForm,
+                  actualCalls: p.actualCalls,
+                  actualBooked: p.actualBooked,
+                }))}
+              />
+              {ladderPerson && (
+                <div className="mt-4 rounded-xl border border-[#d4e4f7] bg-white p-4">
+                  <DailyWeekBars days={ladderPerson.daily} highlightThroughDay={(summary?.elapsedDays ?? 7) - 1} tall />
+                </div>
+              )}
+              {ladderPoints.length > 0 && (
+                <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  {ladderPoints.map((pt) => (
+                    <div
+                      key={pt.weekSince}
+                      className={`rounded-xl border p-3 text-sm ${
+                        pt.belowThreshold ? 'border-rose-200 bg-rose-50/50' : 'border-[#e8f0fa] bg-white'
+                      }`}
+                    >
+                      <p className="font-medium text-[#0B1B34]">{ymdToShortLabel(pt.weekSince)}</p>
+                      <p className="text-lg font-bold tabular-nums" style={{ color: pt.combinedPacePct !== null && pt.combinedPacePct < 50 ? '#e11d48' : '#059669' }}>
+                        {pt.combinedPacePct ?? '—'}%
+                      </p>
+                      <p className="text-xs text-[#5c7594]">
+                        {pt.actualCalls} calls · {pt.actualBooked} booked
+                        {pt.hasForm ? ' · form ✓' : ''}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </section>
+
+        <div className="space-y-3">
+          <p className="text-xs text-[#5c7594]">
+            {filteredPeople.length} caller{filteredPeople.length === 1 ? '' : 's'} · expand a card for week strip + outcomes
+          </p>
+          {loading && (
+            <div className="rounded-2xl border border-[#d4e4f7] bg-white p-8 text-center text-sm text-[#5c7594]">
+              Loading coaching data…
+            </div>
+          )}
+          {!loading && filteredPeople.length === 0 && (
+            <div className="rounded-2xl border border-[#d4e4f7] bg-white p-8 text-center text-sm text-[#5c7594]">
+              No callers match this filter.
+            </div>
+          )}
+          {filteredPeople.map((person) => (
+            <div key={person.userId} id={`coaching-person-${person.userId}`}>
               <PersonCard
-                key={person.userId}
                 person={person}
                 expanded={expandedId === person.userId}
                 selected={Boolean(person.form && selectedFormIds.has(person.form.id))}
@@ -450,76 +622,9 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
                   if (person.form) toggleFormSelect(person.form.id, checked);
                 }}
               />
-            ))}
-          </div>
-        )}
-
-        {tab === 'ladder' && (
-          <div className="space-y-4 rounded-2xl border border-[#d4e4f7] bg-white p-5 shadow-sm">
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="min-w-[220px] flex-1">
-                <label className="mb-1 block text-xs font-medium text-[#5c7594]">Caller</label>
-                <select
-                  className="w-full rounded-xl border border-[#c9d9ee] px-3 py-2 text-sm"
-                  value={ladderUserId}
-                  onChange={(e) => setLadderUserId(e.target.value)}
-                >
-                  {people.map((p) => (
-                    <option key={p.userId} value={p.userId}>
-                      {p.displayName}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {ladderPerson && (
-                <div className="flex flex-wrap gap-2 text-xs">
-                  <span className="rounded-full bg-[#eef6ff] px-2 py-1 text-[#0B1B34]">
-                    Calls {ladderPerson.callsPacePct ?? '—'}%
-                  </span>
-                  <span className="rounded-full bg-[#eef6ff] px-2 py-1 text-[#0B1B34]">
-                    Bookings {ladderPerson.bookingsPacePct ?? '—'}%
-                  </span>
-                  <span className="rounded-full bg-[#eef6ff] px-2 py-1 text-[#0B1B34]">
-                    Webinar {ladderPerson.webinarBooked}/{ladderPerson.webinarShowed}
-                  </span>
-                  <span className="rounded-full bg-[#eef6ff] px-2 py-1 text-[#0B1B34]">
-                    Live {ladderPerson.liveSessionBooked}/{ladderPerson.liveSessionShowed}
-                  </span>
-                </div>
-              )}
             </div>
-
-            {ladderLoading ? (
-              <p className="text-sm text-[#5c7594]">Loading history…</p>
-            ) : (
-              <>
-                <ImprovementLadderChart
-                  points={ladderPoints.map((p) => ({
-                    weekLabel: p.weekLabel,
-                    combinedPacePct: p.combinedPacePct,
-                    belowThreshold: p.belowThreshold,
-                    hasForm: p.hasForm,
-                  }))}
-                />
-                {ladderPerson && (
-                  <DailyWeekBars days={ladderPerson.daily} highlightThroughDay={(summary?.elapsedDays ?? 7) - 1} />
-                )}
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  {ladderPoints.map((pt) => (
-                    <div key={pt.weekSince} className="rounded-xl border border-[#e8f0fa] p-3 text-sm">
-                      <p className="font-medium text-[#0B1B34]">{pt.weekLabel}</p>
-                      <p className="text-[#5c7594]">Pace {pt.combinedPacePct ?? '—'}%</p>
-                      <p className="text-xs text-[#5c7594]">
-                        {pt.actualCalls} calls · {pt.actualBooked} booked
-                        {pt.hasForm ? ' · form ✓' : ''}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        )}
+          ))}
+        </div>
 
         <div className="rounded-2xl border border-[#d4e4f7] bg-white p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

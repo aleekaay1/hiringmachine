@@ -1,5 +1,6 @@
 import { supabase } from './supabaseClient';
 import type { UserProfile } from './accessControl';
+import type { LiveSessionRegistrantRow } from './liveSessionBookedOutcomes';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -46,6 +47,42 @@ export async function fetchPipelineCandidateEmailsViaFunction(candidateIds: stri
       if (id && normalized) emails.set(id, normalized);
     }
     return { ok: true, emails };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export async function fetchLiveSessionRegistrantsViaFunction(input?: {
+  sinceYmd?: string;
+  untilYmd?: string;
+}): Promise<{ ok: true; registrants: LiveSessionRegistrantRow[] } | { ok: false; error: string }> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return { ok: false, error: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY' };
+  }
+
+  const token = await getAccessToken();
+  if (!token) return { ok: false, error: 'Not signed in' };
+
+  const params = new URLSearchParams();
+  if (input?.sinceYmd) params.set('sinceYmd', input.sinceYmd);
+  if (input?.untilYmd) params.set('untilYmd', input.untilYmd);
+  const qs = params.toString();
+  const url = `${SUPABASE_URL}/functions/v1/live-session-registrants${qs ? `?${qs}` : ''}`;
+
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: SUPABASE_ANON_KEY,
+      },
+    });
+    const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok) {
+      return { ok: false, error: (json.error as string) || res.statusText || 'Request failed' };
+    }
+    const registrants = Array.isArray(json.registrants) ? (json.registrants as LiveSessionRegistrantRow[]) : [];
+    return { ok: true, registrants };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }

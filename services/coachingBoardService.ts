@@ -19,6 +19,7 @@ import {
   loadCandidateEmailsById,
   loadCandidatePhonesById,
   loadLiveSessionRegistrantsForMatching,
+  type LiveSessionRegistrantRow,
 } from './liveSessionBookedOutcomes';
 import { loadLeaderboardSnapshot } from './pipelineLeaderboardCache';
 import { listPipelineCallRecords, type PipelineCallRecord } from './pipelineService';
@@ -288,10 +289,17 @@ function leaderboardRowForProfile(
   return lbRows.find((row) => recruiterOwnsNameKey(row.displayName, tokens));
 }
 
+function liveRegistrantWindowForWeek(weekSince: string, weekUntil: string): { sinceYmd: string; untilYmd: string } {
+  return {
+    sinceYmd: shiftYmdDays(weekSince, -21),
+    untilYmd: shiftYmdDays(weekUntil, 60),
+  };
+}
+
 async function loadLeaderboardRowsForWeek(
   weekSince: string,
   weekUntil: string,
-  options?: { allowSnapshot?: boolean },
+  options?: { allowSnapshot?: boolean; liveRegistrants?: LiveSessionRegistrantRow[] },
 ): Promise<{ rows: RecruiterLeaderboardRow[]; recordsByUser: Map<string, PipelineCallRecord[]> }> {
   const allowSnapshot = options?.allowSnapshot !== false;
   const currentWeek = fridayWeekBoundsFromYmd(torontoYmdFromDate());
@@ -304,6 +312,10 @@ async function loadLeaderboardRowsForWeek(
 
   const custom = { sinceYmd: weekSince, untilYmd: weekUntil };
   const windows = buildLeaderboardWindows('custom', new Date(), custom);
+  const registrantWindow = liveRegistrantWindowForWeek(weekSince, weekUntil);
+  const liveRegistrantsPromise = options?.liveRegistrants
+    ? Promise.resolve(options.liveRegistrants)
+    : loadLiveSessionRegistrantsForMatching(registrantWindow).catch(() => [] as LiveSessionRegistrantRow[]);
   const [currentRecords, profiles, scopedWebinarRows, liveRegistrants] = await Promise.all([
     listPipelineCallRecords({
       fromIso: windows.current.fromIso,
@@ -312,7 +324,7 @@ async function loadLeaderboardRowsForWeek(
     }).catch(() => [] as PipelineCallRecord[]),
     listAllUserProfiles().catch(() => []),
     loadScopedWebinarRowsForViewer({ role: 'admin', viewerEmail: null, viewerFullName: null }).catch(() => []),
-    loadLiveSessionRegistrantsForMatching().catch(() => []),
+    liveRegistrantsPromise,
   ]);
 
   const candidateIds = [...new Set(currentRecords.map((r) => r.candidate_id).filter(Boolean))];
@@ -593,27 +605,69 @@ export async function loadUserImprovementLadder(userId: string, maxWeeks = 10): 
     });
   }
 
-  const currentWeek = fridayWeekBoundsFromYmd(torontoYmdFromDate());
-  if (!weekMap.has(currentWeek.since)) {
-    const profiles = await listAllUserProfiles();
-    const profile = profiles.find((p) => p.user_id === userId);
-    if (profile) {
-      const board = await loadCoachingBoard(currentWeek.since);
-      const live = board.people.find((p) => p.userId === userId);
-      if (live) {
-        weekMap.set(currentWeek.since, {
-          weekSince: currentWeek.since,
-          weekUntil: currentWeek.until,
-          weekLabel: `${ymdToShortLabel(currentWeek.since)} → ${ymdToShortLabel(currentWeek.until)}`,
-          callsPacePct: live.callsPacePct,
-          bookingsPacePct: live.bookingsPacePct,
-          combinedPacePct: live.combinedPacePct,
-          actualCalls: live.actualCalls,
-          actualBooked: live.actualBooked,
-          belowThreshold: live.belowThreshold,
-          hasForm: Boolean(live.form),
-          source: 'live',
-        });
+  const profiles = await listAllUserProfiles();
+  const profile = profiles.find((p) => p.user_id === userId);
+  const settingsMap = await loadAllCallSettings();
+  const recentWeeks = listRecentFridayWeeks(maxWeeks).map((w) => w.since);
+  const missingWeeks = recentWeeks.filter((since) => !weekMap.has(since));
+
+  if (profile && missingWeeks.length) {
+    const weekList = listRecentFridayWeeks(maxWeeks);
+    const oldestSince = weekList[weekList.length - 1]?.since ?? shiftYmdDays(torontoYmdFromDate(), -70);
+    const sharedRegistrants = await loadLiveSessionRegistrantsForMatching({
+      sinceYmd: shiftYmdDays(oldestSince, -21),
+    }).catch(() => [] as LiveSessionRegistrantRow[]);
+
+    const chunks: string[][] = [];
+    for (let i = 0; i < missingWeeks.length; i += 3) {
+      chunks.push(missingWeeks.slice(i, i + 3));
+    }
+    for (const chunk of chunks) {
+      const weekPoints = await Promise.all(
+        chunk.map(async (weekSince) => {
+          const week = fridayWeekBoundsFromYmd(weekSince);
+          const { rows } = await loadLeaderboardRowsForWeek(week.since, week.until, {
+            allowSnapshot: false,
+            liveRegistrants: sharedRegistrants,
+          });
+          const lbByUser = new Map(
+            rows.filter((r) => r.recruiterUserId).map((r) => [r.recruiterUserId as string, r]),
+          );
+          const lb = leaderboardRowForProfile(profile, lbByUser, rows);
+          if (!lb) return null;
+
+          const settings = settingsMap.get(userId);
+          const dailyCallTarget = settings?.daily_upload_target ?? null;
+          const dailyBookingTarget = settings?.daily_webinar_booking_target ?? null;
+          const hasTargets = Boolean(dailyCallTarget || dailyBookingTarget);
+          const actualCalls = lb.calls ?? 0;
+          const actualBooked = lb.webinarBooked + (lb.liveSessionBooked ?? 0);
+          const pace = computePaceSnapshot({
+            dailyCallTarget: hasTargets ? dailyCallTarget : null,
+            dailyBookingTarget: hasTargets ? dailyBookingTarget : null,
+            actualCalls,
+            actualBooked,
+            elapsedDays: 7,
+          });
+          const combined = combinedPace(pace.callsPacePct, pace.bookingsPacePct);
+
+          return {
+            weekSince: week.since,
+            weekUntil: week.until,
+            weekLabel: `${ymdToShortLabel(week.since)} → ${ymdToShortLabel(week.until)}`,
+            callsPacePct: pace.callsPacePct,
+            bookingsPacePct: pace.bookingsPacePct,
+            combinedPacePct: combined,
+            actualCalls,
+            actualBooked,
+            belowThreshold: hasTargets && pace.belowThreshold,
+            hasForm: false,
+            source: 'live' as const,
+          };
+        }),
+      );
+      for (const point of weekPoints) {
+        if (point) weekMap.set(point.weekSince, point);
       }
     }
   }
