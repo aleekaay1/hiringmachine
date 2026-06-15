@@ -414,6 +414,18 @@ export function readPipelineCandidateEmail(candidate: Pick<PipelineCandidate, 'e
   };
 }
 
+/** All known emails for inbox/outbox log matching (effective + override + OCR original). */
+export function collectPipelineCandidateEmails(
+  candidate: Pick<PipelineCandidate, 'email' | 'metadata'>,
+): string[] {
+  const info = readPipelineCandidateEmail(candidate);
+  return [...new Set(
+    [info.effectiveEmail, info.overrideEmail, info.originalExtractedEmail]
+      .map((v) => String(v || '').trim().toLowerCase())
+      .filter(Boolean),
+  )];
+}
+
 export function readPipelineCandidatePhone(candidate: Pick<PipelineCandidate, 'phone' | 'metadata'>): {
   effectivePhone: string;
   overridePhone: string | null;
@@ -2372,15 +2384,17 @@ async function listPipelineIncomingEmailLogsMerged(
     queries.push(byId);
   }
   if (emails.length) {
-    let byEmail = supabase
-      .from('email_inbox_logs')
-      .select('*')
-      .in('from_email', emails)
-      .order('received_at', { ascending: false })
-      .limit(limit);
-    if (input?.fromIso) byEmail = byEmail.gte('received_at', input.fromIso);
-    if (input?.toIso) byEmail = byEmail.lte('received_at', input.toIso);
-    queries.push(byEmail);
+    for (const email of emails) {
+      let byEmail = supabase
+        .from('email_inbox_logs')
+        .select('*')
+        .ilike('from_email', email)
+        .order('received_at', { ascending: false })
+        .limit(limit);
+      if (input?.fromIso) byEmail = byEmail.gte('received_at', input.fromIso);
+      if (input?.toIso) byEmail = byEmail.lte('received_at', input.toIso);
+      queries.push(byEmail);
+    }
   }
   const results = await Promise.all(queries.map((query) => query));
   const firstError = results.find((result) => result.error)?.error;
@@ -2411,15 +2425,17 @@ async function listPipelineEmailSendLogsMerged(
     queries.push(byId);
   }
   if (emails.length) {
-    let byEmail = supabase
-      .from('email_send_logs')
-      .select(PIPELINE_EMAIL_SEND_LOG_SELECT)
-      .in('to_email', emails)
-      .order('created_at', { ascending: false })
-      .limit(limit);
-    if (input?.fromIso) byEmail = byEmail.gte('created_at', input.fromIso);
-    if (input?.toIso) byEmail = byEmail.lte('created_at', input.toIso);
-    queries.push(byEmail);
+    for (const email of emails) {
+      let byEmail = supabase
+        .from('email_send_logs')
+        .select(PIPELINE_EMAIL_SEND_LOG_SELECT)
+        .ilike('to_email', email)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (input?.fromIso) byEmail = byEmail.gte('created_at', input.fromIso);
+      if (input?.toIso) byEmail = byEmail.lte('created_at', input.toIso);
+      queries.push(byEmail);
+    }
   }
   const results = await Promise.all(queries.map((query) => query));
   const firstError = results.find((result) => result.error)?.error;
@@ -2432,18 +2448,26 @@ async function listPipelineEmailSendLogsMerged(
 
 export async function listPipelineIncomingEmailLogs(
   candidateId: string,
-  candidateEmail?: string | null,
+  candidateEmails?: string | string[] | null,
 ): Promise<PipelineIncomingEmailLog[]> {
-  const email = normalizePipelineLogEmail(candidateEmail);
-  return listPipelineIncomingEmailLogsMerged([candidateId], email ? [email] : [], { limit: 200 });
+  const emails = Array.isArray(candidateEmails)
+    ? candidateEmails
+    : candidateEmails
+      ? [candidateEmails]
+      : [];
+  return listPipelineIncomingEmailLogsMerged([candidateId], emails, { limit: 1000 });
 }
 
 export async function listPipelineEmailSendLogs(
   candidateId: string,
-  candidateEmail?: string | null,
+  candidateEmails?: string | string[] | null,
 ): Promise<PipelineEmailSendLog[]> {
-  const email = normalizePipelineLogEmail(candidateEmail);
-  return listPipelineEmailSendLogsMerged([candidateId], email ? [email] : [], { limit: 150 });
+  const emails = Array.isArray(candidateEmails)
+    ? candidateEmails
+    : candidateEmails
+      ? [candidateEmails]
+      : [];
+  return listPipelineEmailSendLogsMerged([candidateId], emails, { limit: 500 });
 }
 
 export async function listPipelineEmailSendLogsByCandidates(
@@ -2652,7 +2676,11 @@ export async function deletePipelineEmailSendLog(logId: string): Promise<void> {
   if (error) throw error;
 }
 
-export async function syncPipelineIncomingEmails(days = 10, limit = 80): Promise<{ synced: number; mapped: number }> {
+export async function syncPipelineIncomingEmails(
+  days = 30,
+  limit = 200,
+  options?: { fullHistory?: boolean },
+): Promise<{ synced: number; mapped: number; remapped?: number }> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
   if (!supabaseUrl || !anonKey) throw new Error('Missing Supabase environment configuration.');
@@ -2666,15 +2694,23 @@ export async function syncPipelineIncomingEmails(days = 10, limit = 80): Promise
       apikey: anonKey,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ days, limit }),
+    body: JSON.stringify({
+      days,
+      limit,
+      fullHistory: options?.fullHistory === true,
+    }),
   });
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
+    if (res.status === 404) {
+      throw new Error('Inbox sync service is not deployed. Ask an admin to deploy the email-inbox-sync edge function.');
+    }
     const err = typeof json.error === 'string' ? json.error : (typeof json.message === 'string' ? json.message : `Sync failed (${res.status})`);
     throw new Error(err);
   }
   return {
     synced: Number(json.synced || 0),
     mapped: Number(json.mapped || 0),
+    remapped: Number(json.remapped || 0),
   };
 }

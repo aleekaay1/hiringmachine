@@ -5,6 +5,7 @@ import { Moon, Sun, Trash2 } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
 import { Button } from '../components/UI';
 import {
+  collectPipelineCandidateEmails,
   deletePipelineEmailSendLog,
   deletePipelineIncomingEmailLog,
   listPipelineEmailSendLogs,
@@ -118,10 +119,10 @@ const PipelineEmailWorkspace: React.FC = () => {
   );
 
   const loadCandidateMailLogs = React.useCallback(async (candidate: PipelineCandidate) => {
-    const emailInfo = readPipelineCandidateEmail(candidate);
+    const emails = collectPipelineCandidateEmails(candidate);
     const [incoming, sends] = await Promise.all([
-      listPipelineIncomingEmailLogs(candidate.id, emailInfo.effectiveEmail),
-      listPipelineEmailSendLogs(candidate.id, emailInfo.effectiveEmail),
+      listPipelineIncomingEmailLogs(candidate.id, emails),
+      listPipelineEmailSendLogs(candidate.id, emails),
     ]);
     setIncomingLogs(incoming);
     setSendLogs(sends);
@@ -134,10 +135,11 @@ const PipelineEmailWorkspace: React.FC = () => {
       if (options?.syncInbox) {
         setSyncingInbox(true);
         try {
-          const result = await syncPipelineIncomingEmails(14, 120);
-          setMessage(`Inbox synced: ${result.synced} checked, ${result.mapped} mapped to candidates.`);
+          const result = await syncPipelineIncomingEmails(90, 500, { fullHistory: true });
+          const remappedNote = result.remapped ? `, ${result.remapped} remapped` : '';
+          setMessage(`Inbox synced: ${result.synced} scanned, ${result.mapped} mapped${remappedNote}.`);
         } catch (syncErr) {
-          setMessage(syncErr instanceof Error ? syncErr.message : String(syncErr));
+          setError(syncErr instanceof Error ? syncErr.message : String(syncErr));
         } finally {
           setSyncingInbox(false);
         }
@@ -173,7 +175,7 @@ const PipelineEmailWorkspace: React.FC = () => {
   React.useEffect(() => {
     const candidateId = searchParams.get('candidateId') || searchParams.get('candidate') || '';
     void loadWorkspace({
-      syncInbox: !candidateId,
+      syncInbox: true,
       candidateId: candidateId.trim() || undefined,
     });
     // Mount-only inbox sync + candidate list load.

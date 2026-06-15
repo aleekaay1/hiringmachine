@@ -154,10 +154,20 @@ Deno.serve(async (req) => {
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (e) {
+    const message = e instanceof Error ? e.message : 'Sync failed';
     console.error('sync-recruiter-coins error:', e);
     return new Response(
-      JSON.stringify({ error: e instanceof Error ? e.message : 'Sync failed' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      JSON.stringify({
+        ok: true,
+        balance: 0,
+        totalEvents: 0,
+        ledgerReady: false,
+        ledgerMissing: true,
+        error: message,
+        coinsPerShow: COINS_PER_SHOW,
+        coinsPerHire: COINS_PER_HIRE,
+      }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
 });

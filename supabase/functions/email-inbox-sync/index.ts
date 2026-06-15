@@ -9,8 +9,7 @@ const corsHeaders = {
 };
 
 function emailFromAddress(addr?: { address?: string | null } | null): string {
-  const out = String(addr?.address || '').trim().toLowerCase();
-  return out;
+  return String(addr?.address || '').trim().toLowerCase();
 }
 
 function toCsv(list?: Array<{ address?: string | null }> | null): string | null {
@@ -65,6 +64,83 @@ async function extractSnippetFromSource(source: Uint8Array | null | undefined): 
   }
 }
 
+function normalizeEmail(value: unknown): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+async function buildPipelineCandidateEmailMap(
+  admin: ReturnType<typeof createClient>,
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const pageSize = 1000;
+  let offset = 0;
+
+  while (true) {
+    const { data, error } = await admin
+      .from('pipeline_candidates')
+      .select('id, email, metadata')
+      .range(offset, offset + pageSize - 1);
+    if (error) throw error;
+    const rows = data || [];
+    if (!rows.length) break;
+
+    for (const row of rows) {
+      const id = String((row as { id?: string }).id || '').trim();
+      if (!id) continue;
+      const record = row as { email?: string | null; metadata?: Record<string, unknown> | null };
+      const metadata = record.metadata && typeof record.metadata === 'object' ? record.metadata : {};
+      const emails = [
+        record.email,
+        metadata.email_override,
+        metadata.email_original_extracted,
+      ];
+      for (const raw of emails) {
+        const email = normalizeEmail(raw);
+        if (email) map.set(email, id);
+      }
+    }
+
+    if (rows.length < pageSize) break;
+    offset += pageSize;
+  }
+
+  return map;
+}
+
+async function remapUnmappedInboxLogs(
+  admin: ReturnType<typeof createClient>,
+  candidateByEmail: Map<string, string>,
+): Promise<number> {
+  let remapped = 0;
+  let cursor = 0;
+  const pageSize = 500;
+
+  while (true) {
+    const { data: unmappedRows, error } = await admin
+      .from('email_inbox_logs')
+      .select('id, from_email')
+      .is('candidate_id', null)
+      .range(cursor, cursor + pageSize - 1);
+    if (error) throw error;
+    if (!unmappedRows?.length) break;
+
+    for (const row of unmappedRows) {
+      const mappedId = candidateByEmail.get(normalizeEmail(row.from_email));
+      if (!mappedId) continue;
+      const { error: updateErr } = await admin
+        .from('email_inbox_logs')
+        .update({ candidate_id: mappedId, updated_at: new Date().toISOString() })
+        .eq('id', row.id);
+      if (!updateErr) remapped += 1;
+    }
+
+    if (unmappedRows.length < pageSize) break;
+    cursor += pageSize;
+  }
+
+  return remapped;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
   if (req.method !== 'POST') {
@@ -109,10 +185,17 @@ Deno.serve(async (req) => {
     }
 
     const admin = createClient(supabaseUrl, serviceRole);
-    const body = (await req.json().catch(() => ({}))) as { days?: number; limit?: number };
-    const days = Math.max(1, Math.min(30, Number(body.days || 10)));
-    const limit = Math.max(10, Math.min(250, Number(body.limit || 80)));
+    const body = (await req.json().catch(() => ({}))) as {
+      days?: number;
+      limit?: number;
+      fullHistory?: boolean;
+    };
+    const fullHistory = body.fullHistory === true;
+    const days = Math.max(1, Math.min(fullHistory ? 540 : 90, Number(body.days || (fullHistory ? 540 : 30))));
+    const limit = Math.max(10, Math.min(fullHistory ? 1000 : 500, Number(body.limit || (fullHistory ? 800 : 200))));
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    const candidateByEmail = await buildPipelineCandidateEmailMap(admin);
 
     const imap = new ImapFlow({
       host: imapHost,
@@ -120,6 +203,8 @@ Deno.serve(async (req) => {
       secure: imapSecure,
       auth: { user: smtpUser, pass: smtpPass },
       logger: false,
+      connectionTimeout: 30000,
+      greetingTimeout: 20000,
     });
 
     await imap.connect();
@@ -127,8 +212,10 @@ Deno.serve(async (req) => {
 
     const rows: Array<Record<string, unknown>> = [];
     try {
-      const uids = await imap.search({ since });
-      const selected = uids.slice(-limit);
+      const uids = fullHistory
+        ? await imap.search({ all: true })
+        : await imap.search({ since });
+      const selected = uids.length > limit ? uids.slice(-limit) : uids;
       for await (const msg of imap.fetch(selected, { uid: true, envelope: true, internalDate: true, source: true })) {
         const env = msg.envelope;
         const fromEmail = emailFromAddress(env?.from?.[0]);
@@ -160,28 +247,16 @@ Deno.serve(async (req) => {
     }
 
     if (rows.length === 0) {
-      return new Response(JSON.stringify({ ok: true, synced: 0, mapped: 0 }), {
+      const remappedOnly = await remapUnmappedInboxLogs(admin, candidateByEmail);
+      return new Response(JSON.stringify({ ok: true, synced: 0, mapped: 0, remapped: remappedOnly }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    const uniqueFrom = [...new Set(rows.map((r) => String(r.from_email || '').trim().toLowerCase()).filter(Boolean))];
-    const { data: candidates } = await admin
-      .from('pipeline_candidates')
-      .select('id,email')
-      .in('email', uniqueFrom);
-
-    const candidateByEmail = new Map<string, string>();
-    for (const c of candidates || []) {
-      const email = String((c as Record<string, unknown>).email || '').trim().toLowerCase();
-      const id = String((c as Record<string, unknown>).id || '');
-      if (email && id) candidateByEmail.set(email, id);
-    }
-
     const withCandidate = rows.map((r) => ({
       ...r,
-      candidate_id: candidateByEmail.get(String(r.from_email || '').toLowerCase()) || null,
+      candidate_id: candidateByEmail.get(normalizeEmail(r.from_email)) || null,
       updated_at: new Date().toISOString(),
     }));
 
@@ -190,45 +265,30 @@ Deno.serve(async (req) => {
       .upsert(withCandidate, { onConflict: 'message_id' });
     if (upErr) throw upErr;
 
-    const { data: unmappedRows } = await admin
-      .from('email_inbox_logs')
-      .select('id, from_email')
-      .is('candidate_id', null)
-      .limit(500);
-    if (unmappedRows?.length) {
-      const fromEmails = [...new Set(unmappedRows.map((r) => String(r.from_email || '').trim().toLowerCase()).filter(Boolean))];
-      if (fromEmails.length) {
-        const { data: extraCandidates } = await admin
-          .from('pipeline_candidates')
-          .select('id,email')
-          .in('email', fromEmails);
-        const extraMap = new Map<string, string>();
-        for (const c of extraCandidates || []) {
-          const email = String((c as Record<string, unknown>).email || '').trim().toLowerCase();
-          const id = String((c as Record<string, unknown>).id || '');
-          if (email && id) extraMap.set(email, id);
-        }
-        for (const row of unmappedRows) {
-          const mappedId = extraMap.get(String(row.from_email || '').trim().toLowerCase());
-          if (!mappedId) continue;
-          await admin
-            .from('email_inbox_logs')
-            .update({ candidate_id: mappedId, updated_at: new Date().toISOString() })
-            .eq('id', row.id);
-        }
-      }
-    }
-
-    const mapped = withCandidate.filter((r) => !!r.candidate_id).length;
-    return new Response(JSON.stringify({ ok: true, synced: withCandidate.length, mapped }), {
-      status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    const remapped = await remapUnmappedInboxLogs(admin, candidateByEmail);
+    const mapped = withCandidate.filter((r) => !!r.candidate_id).length + remapped;
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        synced: withCandidate.length,
+        mapped,
+        remapped,
+        scanned: rows.length,
+        windowDays: days,
+      }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      },
+    );
   } catch (e) {
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }), {
+    const message = e instanceof Error ? e.message : String(e);
+    const imapHint = /auth|invalid credentials|login|credentials/i.test(message)
+      ? ' Check SMTP app password / IMAP access for the mailbox.'
+      : '';
+    return new Response(JSON.stringify({ error: `${message}${imapHint}` }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 });
-
