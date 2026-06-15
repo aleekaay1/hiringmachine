@@ -68,7 +68,10 @@ const Layout: React.FC<LayoutProps> = ({
       if (!cancelled) applySessionSnapshot(snapshot);
     });
     const unsubscribe = subscribeStaffAuth(() => {
-      if (!cancelled) applySessionSnapshot(getStaffSessionSnapshot());
+      if (cancelled) return;
+      void resolveStaffSession().then((snapshot) => {
+        if (!cancelled) applySessionSnapshot(snapshot);
+      });
     });
     const onProfileUpdated = () => {
       void resolveStaffSession(true).then((snapshot) => {
@@ -143,7 +146,7 @@ const Layout: React.FC<LayoutProps> = ({
         />
       )}
       <div className="min-h-screen flex flex-col flex-1 min-w-0">
-        {isAdmin && roleResolved && userId && (
+        {isAdmin && userId && (
           <div className="pointer-events-none fixed inset-x-0 top-0 z-[100] flex justify-end px-3 pt-2 safe-area-top sm:px-4">
             <div className="pointer-events-auto">
               <NotificationBell

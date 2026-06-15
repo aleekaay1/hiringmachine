@@ -113,17 +113,20 @@ export function subscribeStaffAuth(onChange: () => void): () => void {
     primeStaffAuth(session);
     if (!session) {
       profileSnapshot = {
+        userId: null,
         role: null,
         userEmail: null,
         displayName: 'Staff',
         avatarUrl: null,
-        resolved: false,
+        resolved: true,
       };
-    } else {
-      profileSnapshot = { ...profileSnapshot, resolved: false };
-      void resolveStaffSession(true);
+      onChange();
+      return;
     }
-    onChange();
+    // Keep the current snapshot visible while refreshing — avoid UI flashes (e.g. notification bell).
+    void resolveStaffSession(true).then(() => {
+      onChange();
+    });
   });
   return () => data.subscription.unsubscribe();
 }

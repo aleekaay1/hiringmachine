@@ -47,8 +47,8 @@ export function canUseStaffNotifications(role: AppRole | null): boolean {
 }
 
 /** Show bell for any signed-in staff workspace user (notifications may still be role-filtered server-side). */
-export function shouldShowStaffNotificationBell(userId: string | null, roleResolved: boolean): boolean {
-  return Boolean(userId) && roleResolved;
+export function shouldShowStaffNotificationBell(userId: string | null, _roleResolved?: boolean): boolean {
+  return Boolean(userId);
 }
 
 async function getAccessToken(): Promise<string | null> {
