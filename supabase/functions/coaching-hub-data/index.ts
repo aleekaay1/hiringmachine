@@ -197,6 +197,104 @@ Deno.serve(async (req) => {
       );
     }
 
+    if (action === 'fullBoard') {
+      if (!coachingAdmin) {
+        return new Response(JSON.stringify({ error: 'Forbidden' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const weekSince = (url.searchParams.get('weekSince') || '').trim();
+      const historySince = (url.searchParams.get('historySince') || '').trim();
+      const emailLimit = Math.min(120, Math.max(1, Number(url.searchParams.get('emailLimit') || '30') || 30));
+
+      let weekInvitesQuery = admin
+        .from('recruiter_performance_check_in_invites')
+        .select('*')
+        .order('created_at', { ascending: false });
+      let weekFormsQuery = admin
+        .from('recruiter_performance_check_ins')
+        .select('*')
+        .order('submitted_at', { ascending: false });
+      if (weekSince) {
+        weekInvitesQuery = weekInvitesQuery.eq('week_since', weekSince);
+        weekFormsQuery = weekFormsQuery.eq('week_since', weekSince);
+      }
+
+      let historyFormsQuery = admin
+        .from('recruiter_performance_check_ins')
+        .select('*')
+        .order('week_since', { ascending: false })
+        .limit(2000);
+      let historyInvitesQuery = admin
+        .from('recruiter_performance_check_in_invites')
+        .select('*')
+        .order('week_since', { ascending: false })
+        .limit(2000);
+      if (historySince) {
+        historyFormsQuery = historyFormsQuery.gte('week_since', historySince);
+        historyInvitesQuery = historyInvitesQuery.gte('week_since', historySince);
+      }
+
+      const emailLogsPromise = admin
+        .from('email_send_logs')
+        .select('id, created_at, to_email, subject, status, metadata')
+        .eq('trigger_label', 'mid_week_performance_checkin')
+        .order('created_at', { ascending: false })
+        .limit(emailLimit);
+
+      const [weekInvitesRes, weekFormsRes, historyFormsRes, historyInvitesRes, emailRes] = await Promise.all([
+        weekInvitesQuery,
+        weekFormsQuery,
+        historyFormsQuery,
+        historyInvitesQuery,
+        emailLogsPromise,
+      ]);
+
+      for (const res of [weekInvitesRes, weekFormsRes, historyFormsRes, historyInvitesRes]) {
+        if (res.error && !isMissingTableError(res.error.message)) {
+          return new Response(JSON.stringify({ error: res.error.message }), {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+      }
+
+      let logs = emailRes.error ? [] : (emailRes.data || []);
+      if (emailRes.error && !isMissingTableError(emailRes.error.message)) {
+        return new Response(JSON.stringify({ error: emailRes.error.message }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      if (!logs.length) {
+        const fallback = await admin
+          .from('email_send_logs')
+          .select('id, created_at, to_email, subject, status, metadata')
+          .order('created_at', { ascending: false })
+          .limit(Math.min(emailLimit * 3, 120));
+        if (!fallback.error) {
+          logs = ((fallback.data || []) as Array<Record<string, unknown>>).filter((row) => {
+            const meta = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+            return String((meta as Record<string, unknown>).category || '') === 'mid_week_coaching';
+          });
+        }
+      }
+
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          weekInvites: weekInvitesRes.error ? [] : weekInvitesRes.data || [],
+          weekForms: weekFormsRes.error ? [] : weekFormsRes.data || [],
+          historyForms: historyFormsRes.error ? [] : historyFormsRes.data || [],
+          historyInvites: historyInvitesRes.error ? [] : historyInvitesRes.data || [],
+          emailLogs: logs.slice(0, emailLimit),
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+
     if (action === 'emailLogs') {
       if (!coachingAdmin) {
         return new Response(JSON.stringify({ error: 'Forbidden' }), {

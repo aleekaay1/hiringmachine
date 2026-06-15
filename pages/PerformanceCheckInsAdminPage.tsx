@@ -2,6 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import {
   BarChart3,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ClipboardList,
@@ -24,13 +25,10 @@ import { Button } from '../components/UI';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { getCurrentUserProfile } from '../services/accessControl';
 import {
-  loadCoachingBoard,
-  loadCoachingEmailLogs,
-  loadUserImprovementLadder,
+  loadFullCoachingHub,
   listRecentFridayWeeks,
   type CoachingBoardPerson,
   type CoachingEmailLogRow,
-  type CoachingWeekPoint,
 } from '../services/coachingBoardService';
 import {
   canAccessPerformanceCheckInAdmin,
@@ -59,6 +57,13 @@ function StatChip({ label, value, accent }: { label: string; value: string | num
   );
 }
 
+function paceColor(pct: number | null): string {
+  if (pct === null) return 'text-[#5c7594]';
+  if (pct < 50) return 'text-rose-600';
+  if (pct >= 85) return 'text-emerald-700';
+  return 'text-[#0B1B34]';
+}
+
 function PersonCard({
   person,
   expanded,
@@ -75,164 +80,233 @@ function PersonCard({
   elapsedDays: number;
 }) {
   const formId = person.form?.id;
+
   return (
     <article
-      className={`rounded-2xl border transition-all duration-300 ${
+      className={`overflow-hidden rounded-2xl border transition-all duration-200 ${
         person.belowThreshold
           ? 'border-rose-200/80 bg-gradient-to-br from-white to-rose-50/40 shadow-sm'
           : 'border-[#d4e4f7] bg-white'
       }`}
     >
-      <button type="button" onClick={onToggle} className="w-full px-4 py-4 text-left">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            {formId && (
-              <input
-                type="checkbox"
-                checked={selected}
-                onChange={(e) => {
-                  e.stopPropagation();
-                  onSelectForm(e.target.checked);
-                }}
-                onClick={(e) => e.stopPropagation()}
-                className="mt-1 rounded border-[#c9d9ee]"
-              />
-            )}
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-base font-semibold text-[#0B1B34]">{person.displayName}</h3>
-                <span className="rounded-full bg-[#eef6ff] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[#4e79a9]">
-                  {person.role}
-                </span>
-                {person.belowThreshold && (
-                  <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800">
-                    Below 50%
-                  </span>
-                )}
-                {person.emailSent && (
-                  <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-medium text-sky-800">
-                    Emailed
-                  </span>
-                )}
-                {person.form && (
-                  <span className="rounded-full bg-[#dbeafe] px-2 py-0.5 text-[10px] font-medium text-[#1d4ed8]">
-                    Form in
-                  </span>
-                )}
-              </div>
-              <p className="mt-0.5 text-xs text-[#5c7594]">{person.email}</p>
-            </div>
-          </div>
-          <div className={`max-w-xs rounded-xl border px-3 py-2 text-xs ${hintStyles(person.hint.tone)}`}>
-            <p className="font-semibold">{person.hint.title}</p>
-            <p className="mt-0.5 opacity-90">{person.hint.detail}</p>
-          </div>
-        </div>
-
-        <div className="mt-4 flex flex-wrap items-center gap-6">
-          <PaceRing pct={person.callsPacePct} label="Calls" />
-          <PaceRing pct={person.bookingsPacePct} label="Bookings" />
-          <div className="min-w-[200px] flex-1 space-y-3">
-            <PaceGauge
-              label="Calls pace"
-              pct={person.callsPacePct}
-              actual={person.actualCalls}
-              expected={person.expectedCalls}
-              compact
-            />
-            <PaceGauge
-              label="Bookings pace"
-              pct={person.bookingsPacePct}
-              actual={person.actualBooked}
-              expected={person.expectedBookings}
-              compact
-            />
-          </div>
-        </div>
-
-        <div className="mt-4">
-          <DailyWeekBars days={person.daily} highlightThroughDay={elapsedDays - 1} tall />
-        </div>
-
-        <div className="mt-3 flex flex-wrap gap-2">
-          <StatChip label="Calls" value={person.actualCalls} />
-          <StatChip label="Webinar booked" value={person.webinarBooked} />
-          <StatChip label="Webinar showed" value={person.webinarShowed} accent="text-emerald-700" />
-          <StatChip label="Live booked" value={person.liveSessionBooked} />
-          <StatChip label="Live showed" value={person.liveSessionShowed} accent="text-emerald-700" />
-          <StatChip
-            label="Show rate"
-            value={person.showRatePct !== null ? `${person.showRatePct}%` : '—'}
-            accent={
-              person.showRatePct !== null && person.showRatePct < 40
-                ? 'text-rose-600'
-                : person.showRatePct !== null && person.showRatePct >= 60
-                  ? 'text-emerald-700'
-                  : undefined
-            }
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="flex w-full items-start gap-3 px-4 py-3.5 text-left hover:bg-[#f8fbff]/80"
+      >
+        <ChevronDown
+          size={18}
+          className={`mt-0.5 shrink-0 text-[#5c7594] transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}
+        />
+        {formId && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={(e) => {
+              e.stopPropagation();
+              onSelectForm(e.target.checked);
+            }}
+            onClick={(e) => e.stopPropagation()}
+            className="mt-1 rounded border-[#c9d9ee]"
           />
-          <StatChip label="Rank" value={person.leaderboardRank ?? '—'} />
-          <StatChip label="Score" value={person.leaderboardScore !== null ? Math.round(person.leaderboardScore) : '—'} />
-          {!person.hasTargets && (
-            <span className="self-center rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-600">
-              Targets not set
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-base font-semibold text-[#0B1B34]">{person.displayName}</h3>
+            <span className="rounded-full bg-[#eef6ff] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[#4e79a9]">
+              {person.role}
             </span>
+            {person.belowThreshold && (
+              <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800">
+                Below 50%
+              </span>
+            )}
+            {person.emailSent && (
+              <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-medium text-sky-800">Emailed</span>
+            )}
+            {person.form && (
+              <span className="rounded-full bg-[#dbeafe] px-2 py-0.5 text-[10px] font-medium text-[#1d4ed8]">Form in</span>
+            )}
+          </div>
+          <p className="mt-0.5 truncate text-xs text-[#5c7594]">{person.email}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+            <span className={`font-semibold tabular-nums ${paceColor(person.callsPacePct)}`}>
+              Calls {person.callsPacePct ?? '—'}%
+            </span>
+            <span className="text-[#c9d9ee]">·</span>
+            <span className={`font-semibold tabular-nums ${paceColor(person.bookingsPacePct)}`}>
+              Bookings {person.bookingsPacePct ?? '—'}%
+            </span>
+            <span className="text-[#c9d9ee]">·</span>
+            <span className="text-[#5c7594]">
+              {person.actualCalls} calls · {person.actualBooked} booked
+            </span>
+          </div>
+          {!expanded && (
+            <p className={`mt-2 inline-block max-w-full truncate rounded-lg border px-2 py-1 text-[11px] ${hintStyles(person.hint.tone)}`}>
+              {person.hint.title}
+            </p>
           )}
         </div>
       </button>
 
-      {expanded && (
-        <div className="space-y-4 border-t border-[#e8f0fa] px-4 pb-4 pt-3 animate-in fade-in duration-300">
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-4">
-              <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">Week activity</p>
-              <WeekActivityStrip
-                days={person.daily}
-                totalCalls={person.actualCalls}
-                totalBooked={person.actualBooked}
-              />
+      <div
+        className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${
+          expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+        }`}
+      >
+        <div className="overflow-hidden">
+          <div className="space-y-4 border-t border-[#e8f0fa] px-4 pb-5 pt-4">
+            <div className={`rounded-xl border px-3 py-2 text-xs ${hintStyles(person.hint.tone)}`}>
+              <p className="font-semibold">{person.hint.title}</p>
+              <p className="mt-0.5 opacity-90">{person.hint.detail}</p>
             </div>
-            <div className="rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-4">
-              <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">Outcomes</p>
-              <MetricsBarChart
-                calls={person.actualCalls}
-                webinarBooked={person.webinarBooked}
-                webinarShowed={person.webinarShowed}
-                liveBooked={person.liveSessionBooked}
-                liveShowed={person.liveSessionShowed}
-              />
-            </div>
-          </div>
 
-          {person.form ? (
-            <>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">Coaching form</p>
-              <div className="grid gap-3 rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-3 text-sm sm:grid-cols-2">
-                <p>
-                  <span className="text-[#5c7594]">Blocker:</span> {labelForBlocker(person.form.blocker_category)}
-                </p>
-                <p>
-                  <span className="text-[#5c7594]">Help:</span> {labelForHelp(person.form.help_needed)}
-                </p>
-                <p className="sm:col-span-2">
-                  <span className="text-[#5c7594]">Struggling with:</span>{' '}
-                  {(person.form.trouble_areas || []).map(labelForTroubleArea).join(', ') || '—'}
-                </p>
-                <p className="whitespace-pre-wrap sm:col-span-2">
-                  <span className="text-[#5c7594]">Notes:</span> {person.form.comments || '—'}
-                </p>
-                <p className="text-xs text-[#5c7594]">
-                  Submitted {formatDateTimeCanadaEastern(person.form.submitted_at)}
-                  {person.form.needs_coaching ? ' · wants follow-up' : ''}
-                  {person.form.status === 'reviewed' ? ' · reviewed' : ''}
-                </p>
+            <div className="flex flex-wrap items-center gap-6">
+              <PaceRing pct={person.callsPacePct} label="Calls" />
+              <PaceRing pct={person.bookingsPacePct} label="Bookings" />
+              <div className="min-w-[200px] flex-1 space-y-3">
+                <PaceGauge
+                  label="Calls pace"
+                  pct={person.callsPacePct}
+                  actual={person.actualCalls}
+                  expected={person.expectedCalls}
+                  compact
+                />
+                <PaceGauge
+                  label="Bookings pace"
+                  pct={person.bookingsPacePct}
+                  actual={person.actualBooked}
+                  expected={person.expectedBookings}
+                  compact
+                />
               </div>
-            </>
-          ) : person.belowThreshold ? (
-            <p className="text-sm text-[#5c7594]">No form submitted yet for this week.</p>
-          ) : null}
+            </div>
+
+            <DailyWeekBars days={person.daily} highlightThroughDay={elapsedDays - 1} tall />
+
+            <div className="flex flex-wrap gap-2">
+              <StatChip label="Calls" value={person.actualCalls} />
+              <StatChip label="Webinar booked" value={person.webinarBooked} />
+              <StatChip label="Webinar showed" value={person.webinarShowed} accent="text-emerald-700" />
+              <StatChip label="Live booked" value={person.liveSessionBooked} />
+              <StatChip label="Live showed" value={person.liveSessionShowed} accent="text-emerald-700" />
+              <StatChip
+                label="Show rate"
+                value={person.showRatePct !== null ? `${person.showRatePct}%` : '—'}
+                accent={
+                  person.showRatePct !== null && person.showRatePct < 40
+                    ? 'text-rose-600'
+                    : person.showRatePct !== null && person.showRatePct >= 60
+                      ? 'text-emerald-700'
+                      : undefined
+                }
+              />
+              <StatChip label="Rank" value={person.leaderboardRank ?? '—'} />
+              <StatChip
+                label="Score"
+                value={person.leaderboardScore !== null ? Math.round(person.leaderboardScore) : '—'}
+              />
+              {!person.hasTargets && (
+                <span className="self-center rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-600">
+                  Targets not set
+                </span>
+              )}
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <div className="rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-4">
+                <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">Week activity</p>
+                <WeekActivityStrip
+                  days={person.daily}
+                  totalCalls={person.actualCalls}
+                  totalBooked={person.actualBooked}
+                />
+              </div>
+              <div className="rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-4">
+                <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">Outcomes</p>
+                <MetricsBarChart
+                  calls={person.actualCalls}
+                  webinarBooked={person.webinarBooked}
+                  webinarShowed={person.webinarShowed}
+                  liveBooked={person.liveSessionBooked}
+                  liveShowed={person.liveSessionShowed}
+                />
+              </div>
+            </div>
+
+            {person.ladder.length > 0 && (
+              <div className="rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-4">
+                <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">
+                  Improvement ladder · week-over-week
+                </p>
+                <ImprovementLadderChart
+                  points={person.ladder.map((p) => ({
+                    weekLabel: p.weekLabel,
+                    shortLabel: ymdToShortLabel(p.weekSince),
+                    combinedPacePct: p.combinedPacePct,
+                    belowThreshold: p.belowThreshold,
+                    hasForm: p.hasForm,
+                    actualCalls: p.actualCalls,
+                    actualBooked: p.actualBooked,
+                  }))}
+                />
+                <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  {person.ladder.map((pt) => (
+                    <div
+                      key={pt.weekSince}
+                      className={`rounded-xl border p-3 text-sm ${
+                        pt.belowThreshold ? 'border-rose-200 bg-rose-50/50' : 'border-[#e8f0fa] bg-white'
+                      }`}
+                    >
+                      <p className="font-medium text-[#0B1B34]">{ymdToShortLabel(pt.weekSince)}</p>
+                      <p
+                        className="text-lg font-bold tabular-nums"
+                        style={{ color: pt.combinedPacePct !== null && pt.combinedPacePct < 50 ? '#e11d48' : '#059669' }}
+                      >
+                        {pt.combinedPacePct ?? '—'}%
+                      </p>
+                      <p className="text-xs text-[#5c7594]">
+                        {pt.actualCalls} calls · {pt.actualBooked} booked
+                        {pt.hasForm ? ' · form ✓' : ''}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {person.form ? (
+              <>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">Coaching form</p>
+                <div className="grid gap-3 rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-3 text-sm sm:grid-cols-2">
+                  <p>
+                    <span className="text-[#5c7594]">Blocker:</span> {labelForBlocker(person.form.blocker_category)}
+                  </p>
+                  <p>
+                    <span className="text-[#5c7594]">Help:</span> {labelForHelp(person.form.help_needed)}
+                  </p>
+                  <p className="sm:col-span-2">
+                    <span className="text-[#5c7594]">Struggling with:</span>{' '}
+                    {(person.form.trouble_areas || []).map(labelForTroubleArea).join(', ') || '—'}
+                  </p>
+                  <p className="whitespace-pre-wrap sm:col-span-2">
+                    <span className="text-[#5c7594]">Notes:</span> {person.form.comments || '—'}
+                  </p>
+                  <p className="text-xs text-[#5c7594]">
+                    Submitted {formatDateTimeCanadaEastern(person.form.submitted_at)}
+                    {person.form.needs_coaching ? ' · wants follow-up' : ''}
+                    {person.form.status === 'reviewed' ? ' · reviewed' : ''}
+                  </p>
+                </div>
+              </>
+            ) : person.belowThreshold ? (
+              <p className="text-sm text-[#5c7594]">No form submitted yet for this week.</p>
+            ) : null}
+          </div>
         </div>
-      )}
+      </div>
     </article>
   );
 }
@@ -244,17 +318,12 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
   const [error, setError] = React.useState<string | null>(null);
   const [accessDenied, setAccessDenied] = React.useState(false);
   const [people, setPeople] = React.useState<CoachingBoardPerson[]>([]);
-  const [summary, setSummary] = React.useState<Awaited<ReturnType<typeof loadCoachingBoard>>['summary'] | null>(null);
+  const [summary, setSummary] = React.useState<Awaited<ReturnType<typeof loadFullCoachingHub>>['summary'] | null>(null);
   const [emailLogs, setEmailLogs] = React.useState<CoachingEmailLogRow[]>([]);
   const [expandedId, setExpandedId] = React.useState<string | null>(null);
   const [selectedFormIds, setSelectedFormIds] = React.useState<Set<string>>(new Set());
   const [filter, setFilter] = React.useState<'all' | 'below' | 'forms'>('all');
   const [deleting, setDeleting] = React.useState(false);
-
-  const [ladderUserId, setLadderUserId] = React.useState<string>('');
-  const [ladderPoints, setLadderPoints] = React.useState<CoachingWeekPoint[]>([]);
-  const [ladderLoading, setLadderLoading] = React.useState(false);
-  const [ladderPerson, setLadderPerson] = React.useState<CoachingBoardPerson | null>(null);
 
   const weekOptions = React.useMemo(() => listRecentFridayWeeks(16), []);
 
@@ -267,42 +336,21 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
         setAccessDenied(true);
         return;
       }
-      const board = await loadCoachingBoard(weekSince);
-      setPeople(board.people);
-      setSummary(board.summary);
-      if (!ladderUserId && board.people[0]) setLadderUserId(board.people[0].userId);
-      const logs = await loadCoachingEmailLogs(30).catch(() => [] as CoachingEmailLogRow[]);
-      setEmailLogs(logs);
+      const hub = await loadFullCoachingHub(weekSince);
+      setPeople(hub.people);
+      setSummary(hub.summary);
+      setEmailLogs(hub.emailLogs);
+      setExpandedId(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [weekSince, ladderUserId]);
+  }, [weekSince]);
 
   React.useEffect(() => {
     void loadBoard();
   }, [loadBoard]);
-
-  React.useEffect(() => {
-    if (!ladderUserId) return;
-    let cancelled = false;
-    setLadderLoading(true);
-    void loadUserImprovementLadder(ladderUserId, 10)
-      .then((pts) => {
-        if (!cancelled) setLadderPoints(pts);
-      })
-      .catch(() => {
-        if (!cancelled) setLadderPoints([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLadderLoading(false);
-      });
-    setLadderPerson(people.find((p) => p.userId === ladderUserId) ?? null);
-    return () => {
-      cancelled = true;
-    };
-  }, [ladderUserId, people]);
 
   const filteredPeople = React.useMemo(() => {
     if (filter === 'below') return people.filter((p) => p.belowThreshold);
@@ -372,9 +420,10 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
   };
 
   const scrollToPerson = (userId: string) => {
-    setLadderUserId(userId);
     setExpandedId(userId);
-    document.getElementById(`coaching-person-${userId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    requestAnimationFrame(() => {
+      document.getElementById(`coaching-person-${userId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   };
 
   if (accessDenied) {
@@ -398,8 +447,8 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
               <p className="text-[10px] uppercase tracking-[0.28em] text-[#9ec5ea]">Leadership coaching</p>
               <h1 className="text-2xl font-semibold">Mid-week coaching hub</h1>
               <p className="mt-1 max-w-2xl text-sm text-[#c5daf0]">
-                Below-50% callers get the automated email. Charts, forms, and week-over-week improvement — all on one
-                screen.
+                Below-50% callers get the automated email. One refresh loads everyone — click a caller to expand stats &
+                history.
               </p>
             </div>
             <ClipboardList className="text-[#7ec0ff]" size={32} />
@@ -482,6 +531,12 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
 
         {error && <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</div>}
 
+        {loading && (
+          <div className="rounded-2xl border border-[#d4e4f7] bg-white p-10 text-center text-sm text-[#5c7594]">
+            Loading coaching data for the full team…
+          </div>
+        )}
+
         {!loading && people.length > 0 && (
           <div className="grid gap-4 lg:grid-cols-2">
             <section className="rounded-2xl border border-[#d4e4f7] bg-white p-5 shadow-sm">
@@ -490,7 +545,7 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
                 <h2 className="text-sm font-semibold text-[#0B1B34]">Team pace · this week</h2>
               </div>
               <p className="mb-3 text-xs text-[#5c7594]">
-                {ymdToShortLabel(weekBounds.since)} → {ymdToShortLabel(weekBounds.until)} · click a row to jump to caller
+                {ymdToShortLabel(weekBounds.since)} → {ymdToShortLabel(weekBounds.until)} · click a row to expand caller
               </p>
               <TeamPaceChart rows={teamPaceRows} onSelect={scrollToPerson} />
             </section>
@@ -511,119 +566,32 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
           </div>
         )}
 
-        <section className="rounded-2xl border border-[#d4e4f7] bg-gradient-to-br from-white to-[#f0f7ff] p-5 shadow-sm">
-          <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#4e79a9]">Improvement ladder</p>
-              <h2 className="text-lg font-semibold text-[#0B1B34]">Week-over-week pace</h2>
-              <p className="text-xs text-[#5c7594]">Smooth curve · hover dots · blue dot = form submitted</p>
-            </div>
-            <div className="min-w-[220px]">
-              <label className="mb-1 block text-xs font-medium text-[#5c7594]">Caller</label>
-              <select
-                className="w-full rounded-xl border border-[#c9d9ee] bg-white px-3 py-2 text-sm"
-                value={ladderUserId}
-                onChange={(e) => setLadderUserId(e.target.value)}
-              >
-                {people.map((p) => (
-                  <option key={p.userId} value={p.userId}>
-                    {p.displayName}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {ladderPerson && (
-            <div className="mb-4 flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full bg-white px-3 py-1 font-medium text-[#0B1B34] shadow-sm">
-                Calls {ladderPerson.callsPacePct ?? '—'}%
-              </span>
-              <span className="rounded-full bg-white px-3 py-1 font-medium text-[#0B1B34] shadow-sm">
-                Bookings {ladderPerson.bookingsPacePct ?? '—'}%
-              </span>
-              <span className="rounded-full bg-white px-3 py-1 font-medium text-[#0B1B34] shadow-sm">
-                Webinar {ladderPerson.webinarBooked}/{ladderPerson.webinarShowed}
-              </span>
-              <span className="rounded-full bg-white px-3 py-1 font-medium text-[#0B1B34] shadow-sm">
-                Live {ladderPerson.liveSessionBooked}/{ladderPerson.liveSessionShowed}
-              </span>
-            </div>
-          )}
-
-          {ladderLoading ? (
-            <p className="text-sm text-[#5c7594]">Loading history…</p>
-          ) : (
-            <>
-              <ImprovementLadderChart
-                points={ladderPoints.map((p) => ({
-                  weekLabel: p.weekLabel,
-                  shortLabel: ymdToShortLabel(p.weekSince),
-                  combinedPacePct: p.combinedPacePct,
-                  belowThreshold: p.belowThreshold,
-                  hasForm: p.hasForm,
-                  actualCalls: p.actualCalls,
-                  actualBooked: p.actualBooked,
-                }))}
-              />
-              {ladderPerson && (
-                <div className="mt-4 rounded-xl border border-[#d4e4f7] bg-white p-4">
-                  <DailyWeekBars days={ladderPerson.daily} highlightThroughDay={(summary?.elapsedDays ?? 7) - 1} tall />
-                </div>
-              )}
-              {ladderPoints.length > 0 && (
-                <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                  {ladderPoints.map((pt) => (
-                    <div
-                      key={pt.weekSince}
-                      className={`rounded-xl border p-3 text-sm ${
-                        pt.belowThreshold ? 'border-rose-200 bg-rose-50/50' : 'border-[#e8f0fa] bg-white'
-                      }`}
-                    >
-                      <p className="font-medium text-[#0B1B34]">{ymdToShortLabel(pt.weekSince)}</p>
-                      <p className="text-lg font-bold tabular-nums" style={{ color: pt.combinedPacePct !== null && pt.combinedPacePct < 50 ? '#e11d48' : '#059669' }}>
-                        {pt.combinedPacePct ?? '—'}%
-                      </p>
-                      <p className="text-xs text-[#5c7594]">
-                        {pt.actualCalls} calls · {pt.actualBooked} booked
-                        {pt.hasForm ? ' · form ✓' : ''}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </section>
-
-        <div className="space-y-3">
+        <div className="space-y-2">
           <p className="text-xs text-[#5c7594]">
-            {filteredPeople.length} caller{filteredPeople.length === 1 ? '' : 's'} · expand a card for week strip + outcomes
+            {loading
+              ? '…'
+              : `${filteredPeople.length} caller${filteredPeople.length === 1 ? '' : 's'} · all collapsed · click to expand`}
           </p>
-          {loading && (
-            <div className="rounded-2xl border border-[#d4e4f7] bg-white p-8 text-center text-sm text-[#5c7594]">
-              Loading coaching data…
-            </div>
-          )}
           {!loading && filteredPeople.length === 0 && (
             <div className="rounded-2xl border border-[#d4e4f7] bg-white p-8 text-center text-sm text-[#5c7594]">
               No callers match this filter.
             </div>
           )}
-          {filteredPeople.map((person) => (
-            <div key={person.userId} id={`coaching-person-${person.userId}`}>
-              <PersonCard
-                person={person}
-                expanded={expandedId === person.userId}
-                selected={Boolean(person.form && selectedFormIds.has(person.form.id))}
-                elapsedDays={summary?.elapsedDays ?? 7}
-                onToggle={() => setExpandedId((id) => (id === person.userId ? null : person.userId))}
-                onSelectForm={(checked) => {
-                  if (person.form) toggleFormSelect(person.form.id, checked);
-                }}
-              />
-            </div>
-          ))}
+          {!loading &&
+            filteredPeople.map((person) => (
+              <div key={person.userId} id={`coaching-person-${person.userId}`}>
+                <PersonCard
+                  person={person}
+                  expanded={expandedId === person.userId}
+                  selected={Boolean(person.form && selectedFormIds.has(person.form.id))}
+                  elapsedDays={summary?.elapsedDays ?? 7}
+                  onToggle={() => setExpandedId((id) => (id === person.userId ? null : person.userId))}
+                  onSelectForm={(checked) => {
+                    if (person.form) toggleFormSelect(person.form.id, checked);
+                  }}
+                />
+              </div>
+            ))}
         </div>
 
         <div className="rounded-2xl border border-[#d4e4f7] bg-white p-4">

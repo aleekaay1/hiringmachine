@@ -26,6 +26,7 @@ import { listPipelineCallRecords, type PipelineCallRecord } from './pipelineServ
 import {
   fetchCoachingLadderViaFunction,
   fetchCoachingEmailLogsViaFunction,
+  fetchCoachingFullBoardViaFunction,
 } from './coachingHubApi';
 import {
   computePaceSnapshot,
@@ -101,6 +102,7 @@ export type CoachingBoardPerson = {
   form: PerformanceCheckInRow | null;
   emailSent: boolean;
   hint: CoachingHint;
+  ladder: CoachingWeekPoint[];
 };
 
 export type CoachingBoardSummary = {
@@ -373,7 +375,159 @@ export function listRecentFridayWeeks(count = 12, now = new Date()): Array<{ sin
   return weeks;
 }
 
-export async function loadCoachingBoard(weekSince: string, now = new Date()): Promise<{
+export function buildLadderPointsForUser(
+  userId: string,
+  allForms: PerformanceCheckInRow[],
+  allInvites: PerformanceCheckInInvite[],
+  maxWeeks = 10,
+): CoachingWeekPoint[] {
+  const formRows = allForms.filter((f) => f.user_id === userId);
+  const inviteRows = allInvites.filter((i) => i.user_id === userId);
+  const weekMap = new Map<string, CoachingWeekPoint>();
+
+  for (const invite of inviteRows) {
+    const combined = combinedPace(
+      invite.calls_pace_pct !== null ? Number(invite.calls_pace_pct) : null,
+      invite.bookings_pace_pct !== null ? Number(invite.bookings_pace_pct) : null,
+    );
+    weekMap.set(invite.week_since, {
+      weekSince: invite.week_since,
+      weekUntil: invite.week_until,
+      weekLabel: `${ymdToShortLabel(invite.week_since)} → ${ymdToShortLabel(invite.week_until)}`,
+      callsPacePct: invite.calls_pace_pct !== null ? Number(invite.calls_pace_pct) : null,
+      bookingsPacePct: invite.bookings_pace_pct !== null ? Number(invite.bookings_pace_pct) : null,
+      combinedPacePct: combined,
+      actualCalls: (invite as PerformanceCheckInInvite & { actual_calls?: number }).actual_calls ?? 0,
+      actualBooked: (invite as PerformanceCheckInInvite & { actual_booked?: number }).actual_booked ?? 0,
+      belowThreshold: invite.below_threshold,
+      hasForm: false,
+      source: 'invite',
+    });
+  }
+
+  for (const form of formRows) {
+    const combined = combinedPace(
+      form.calls_pace_pct !== null ? Number(form.calls_pace_pct) : null,
+      form.bookings_pace_pct !== null ? Number(form.bookings_pace_pct) : null,
+    );
+    weekMap.set(form.week_since, {
+      weekSince: form.week_since,
+      weekUntil: form.week_until,
+      weekLabel: `${ymdToShortLabel(form.week_since)} → ${ymdToShortLabel(form.week_until)}`,
+      callsPacePct: form.calls_pace_pct !== null ? Number(form.calls_pace_pct) : null,
+      bookingsPacePct: form.bookings_pace_pct !== null ? Number(form.bookings_pace_pct) : null,
+      combinedPacePct: combined,
+      actualCalls: form.actual_calls,
+      actualBooked: form.actual_booked,
+      belowThreshold:
+        (form.calls_pace_pct !== null && Number(form.calls_pace_pct) < 50) ||
+        (form.bookings_pace_pct !== null && Number(form.bookings_pace_pct) < 50),
+      hasForm: true,
+      source: 'form',
+    });
+  }
+
+  return [...weekMap.values()]
+    .sort((a, b) => a.weekSince.localeCompare(b.weekSince))
+    .slice(-maxWeeks);
+}
+
+export function buildAllLaddersFromHistory(
+  userIds: string[],
+  historyForms: PerformanceCheckInRow[],
+  historyInvites: PerformanceCheckInInvite[],
+  maxWeeks = 10,
+): Map<string, CoachingWeekPoint[]> {
+  const map = new Map<string, CoachingWeekPoint[]>();
+  for (const userId of userIds) {
+    map.set(userId, buildLadderPointsForUser(userId, historyForms, historyInvites, maxWeeks));
+  }
+  return map;
+}
+
+const COACHING_HISTORY_WEEKS = 12;
+
+export async function loadFullCoachingHub(weekSince: string, now = new Date()): Promise<{
+  summary: CoachingBoardSummary;
+  people: CoachingBoardPerson[];
+  emailLogs: CoachingEmailLogRow[];
+}> {
+  const historySince =
+    listRecentFridayWeeks(COACHING_HISTORY_WEEKS).at(-1)?.since ?? shiftYmdDays(weekSince, -70);
+  const previousWeekSince = shiftYmdDays(weekSince, -7);
+
+  const bulk = await fetchCoachingFullBoardViaFunction({
+    weekSince,
+    historySince,
+    emailLimit: 30,
+  });
+
+  let weekInvites = bulk.ok ? bulk.data.weekInvites : [];
+  let weekForms = bulk.ok ? bulk.data.weekForms : [];
+  let historyForms = bulk.ok ? bulk.data.historyForms : [];
+  let historyInvites = bulk.ok ? bulk.data.historyInvites : [];
+  let emailLogs = bulk.ok ? (bulk.data.emailLogs as CoachingEmailLogRow[]) : [];
+
+  if (!bulk.ok) {
+    const [invites, forms, logs] = await Promise.all([
+      listPerformanceCheckInInvites(weekSince),
+      listPerformanceCheckIns(weekSince),
+      loadCoachingEmailLogs(30).catch(() => [] as CoachingEmailLogRow[]),
+    ]);
+    weekInvites = invites;
+    weekForms = forms;
+    emailLogs = logs;
+    const historySinceYmd = historySince;
+    const [allForms, allInvites] = await Promise.all([
+      supabase
+        .from('recruiter_performance_check_ins')
+        .select('*')
+        .gte('week_since', historySinceYmd)
+        .order('week_since', { ascending: false })
+        .limit(2000),
+      supabase
+        .from('recruiter_performance_check_in_invites')
+        .select('*')
+        .gte('week_since', historySinceYmd)
+        .order('week_since', { ascending: false })
+        .limit(2000),
+    ]);
+    if (!allForms.error) historyForms = (allForms.data || []) as PerformanceCheckInRow[];
+    if (!allInvites.error) historyInvites = (allInvites.data || []) as PerformanceCheckInInvite[];
+  }
+
+  const previousForms = historyForms.filter((f) => f.week_since === previousWeekSince);
+  const profiles = await listAllUserProfiles();
+  const participants = filterProductionStaffProfiles(profiles).filter(
+    (p) => (p.role === 'recruiter' || p.role === 'leadership' || p.role === 'webinar') && !isDemoStaffProfile(p),
+  );
+  const laddersByUser = buildAllLaddersFromHistory(
+    participants.map((p) => p.user_id),
+    historyForms,
+    historyInvites,
+    COACHING_HISTORY_WEEKS,
+  );
+
+  const board = await loadCoachingBoard(weekSince, now, {
+    invites: weekInvites,
+    forms: weekForms,
+    previousForms,
+    laddersByUser,
+  });
+
+  return { ...board, emailLogs };
+}
+
+export async function loadCoachingBoard(
+  weekSince: string,
+  now = new Date(),
+  prefetched?: {
+    invites: PerformanceCheckInInvite[];
+    forms: PerformanceCheckInRow[];
+    previousForms: PerformanceCheckInRow[];
+    laddersByUser?: Map<string, CoachingWeekPoint[]>;
+  },
+): Promise<{
   summary: CoachingBoardSummary;
   people: CoachingBoardPerson[];
 }> {
@@ -381,12 +535,24 @@ export async function loadCoachingBoard(weekSince: string, now = new Date()): Pr
   const elapsedDays = elapsedDaysInFridayWeek(week.since, now);
   const isCurrentWeek = week.since === fridayWeekBoundsFromYmd(torontoYmdFromDate(now)).since;
 
-  const [profiles, settingsMap, invites, forms, leaderboardBundle] = await Promise.all([
+  const invitesPromise = prefetched
+    ? Promise.resolve(prefetched.invites)
+    : listPerformanceCheckInInvites(week.since);
+  const formsPromise = prefetched
+    ? Promise.resolve(prefetched.forms)
+    : listPerformanceCheckIns(week.since);
+  const previousWeekSince = shiftYmdDays(week.since, -7);
+  const previousFormsPromise = prefetched
+    ? Promise.resolve(prefetched.previousForms)
+    : listPerformanceCheckIns(previousWeekSince);
+
+  const [profiles, settingsMap, invites, forms, leaderboardBundle, previousForms] = await Promise.all([
     listAllUserProfiles(),
     loadAllCallSettings(),
-    listPerformanceCheckInInvites(week.since),
-    listPerformanceCheckIns(week.since),
+    invitesPromise,
+    formsPromise,
     loadLeaderboardRowsForWeek(week.since, week.until, { allowSnapshot: false }),
+    previousFormsPromise,
   ]);
 
   const leaderboardRows = leaderboardBundle.rows;
@@ -412,8 +578,6 @@ export async function loadCoachingBoard(weekSince: string, now = new Date()): Pr
     leaderboardRows.filter((r) => r.recruiterUserId).map((r) => [r.recruiterUserId as string, r]),
   );
 
-  const previousWeekSince = shiftYmdDays(week.since, -7);
-  const previousForms = await listPerformanceCheckIns(previousWeekSince);
   const prevPaceByUser = new Map(
     previousForms.map((f) => [f.user_id, combinedPace(f.calls_pace_pct, f.bookings_pace_pct)]),
   );
@@ -509,6 +673,7 @@ export async function loadCoachingBoard(weekSince: string, now = new Date()): Pr
         currentCombinedPace: combined,
         hasForm: Boolean(form),
       }),
+      ladder: prefetched?.laddersByUser?.get(profile.user_id) ?? [],
     });
   }
 
@@ -536,19 +701,25 @@ export async function loadCoachingBoard(weekSince: string, now = new Date()): Pr
 export async function loadUserImprovementLadder(userId: string, maxWeeks = 10): Promise<CoachingWeekPoint[]> {
   const viaFn = await fetchCoachingLadderViaFunction(userId, maxWeeks);
   let formRows: PerformanceCheckInRow[] = [];
-  let inviteRows: Array<{
-    week_since: string;
-    week_until: string;
-    calls_pace_pct: number | null;
-    bookings_pace_pct: number | null;
-    below_threshold: boolean;
-    actual_calls: number;
-    actual_booked: number;
-  }> = [];
+  let inviteRows: PerformanceCheckInInvite[] = [];
 
   if (viaFn.ok) {
     formRows = viaFn.forms;
-    inviteRows = viaFn.invites;
+    inviteRows = viaFn.invites.map((row) => ({
+      user_id: userId,
+      id: '',
+      submitter_email: '',
+      submitter_name: null,
+      week_since: row.week_since,
+      week_until: row.week_until,
+      invite_token: '',
+      email_sent_at: null,
+      below_threshold: row.below_threshold,
+      calls_pace_pct: row.calls_pace_pct,
+      bookings_pace_pct: row.bookings_pace_pct,
+      actual_calls: row.actual_calls,
+      actual_booked: row.actual_booked,
+    })) as PerformanceCheckInInvite[];
   } else {
     const [allForms, allInvites] = await Promise.all([
       supabase
@@ -559,9 +730,7 @@ export async function loadUserImprovementLadder(userId: string, maxWeeks = 10): 
         .limit(maxWeeks),
       supabase
         .from('recruiter_performance_check_in_invites')
-        .select(
-          'week_since, week_until, calls_pace_pct, bookings_pace_pct, below_threshold, actual_calls, actual_booked',
-        )
+        .select('*')
         .eq('user_id', userId)
         .order('week_since', { ascending: false })
         .limit(maxWeeks),
@@ -570,123 +739,10 @@ export async function loadUserImprovementLadder(userId: string, maxWeeks = 10): 
     if (allForms.error) throw new Error(allForms.error.message);
     if (allInvites.error) throw new Error(allInvites.error.message);
     formRows = (allForms.data || []) as PerformanceCheckInRow[];
-    inviteRows = (allInvites.data || []) as typeof inviteRows;
+    inviteRows = (allInvites.data || []) as PerformanceCheckInInvite[];
   }
 
-  const weekMap = new Map<string, CoachingWeekPoint>();
-
-  for (const invite of inviteRows) {
-    const combined = combinedPace(
-      invite.calls_pace_pct !== null ? Number(invite.calls_pace_pct) : null,
-      invite.bookings_pace_pct !== null ? Number(invite.bookings_pace_pct) : null,
-    );
-    weekMap.set(invite.week_since, {
-      weekSince: invite.week_since,
-      weekUntil: invite.week_until,
-      weekLabel: `${ymdToShortLabel(invite.week_since)} → ${ymdToShortLabel(invite.week_until)}`,
-      callsPacePct: invite.calls_pace_pct !== null ? Number(invite.calls_pace_pct) : null,
-      bookingsPacePct: invite.bookings_pace_pct !== null ? Number(invite.bookings_pace_pct) : null,
-      combinedPacePct: combined,
-      actualCalls: invite.actual_calls,
-      actualBooked: invite.actual_booked,
-      belowThreshold: invite.below_threshold,
-      hasForm: false,
-      source: 'invite',
-    });
-  }
-
-  for (const form of formRows) {
-    const combined = combinedPace(
-      form.calls_pace_pct !== null ? Number(form.calls_pace_pct) : null,
-      form.bookings_pace_pct !== null ? Number(form.bookings_pace_pct) : null,
-    );
-    weekMap.set(form.week_since, {
-      weekSince: form.week_since,
-      weekUntil: form.week_until,
-      weekLabel: `${ymdToShortLabel(form.week_since)} → ${ymdToShortLabel(form.week_until)}`,
-      callsPacePct: form.calls_pace_pct !== null ? Number(form.calls_pace_pct) : null,
-      bookingsPacePct: form.bookings_pace_pct !== null ? Number(form.bookings_pace_pct) : null,
-      combinedPacePct: combined,
-      actualCalls: form.actual_calls,
-      actualBooked: form.actual_booked,
-      belowThreshold:
-        (form.calls_pace_pct !== null && Number(form.calls_pace_pct) < 50) ||
-        (form.bookings_pace_pct !== null && Number(form.bookings_pace_pct) < 50),
-      hasForm: true,
-      source: 'form',
-    });
-  }
-
-  const profiles = await listAllUserProfiles();
-  const profile = profiles.find((p) => p.user_id === userId);
-  const settingsMap = await loadAllCallSettings();
-  const recentWeeks = listRecentFridayWeeks(maxWeeks).map((w) => w.since);
-  const missingWeeks = recentWeeks.filter((since) => !weekMap.has(since));
-
-  if (profile && missingWeeks.length) {
-    const weekList = listRecentFridayWeeks(maxWeeks);
-    const oldestSince = weekList[weekList.length - 1]?.since ?? shiftYmdDays(torontoYmdFromDate(), -70);
-    const sharedRegistrants = await loadLiveSessionRegistrantsForMatching({
-      sinceYmd: shiftYmdDays(oldestSince, -21),
-    }).catch(() => [] as LiveSessionRegistrantRow[]);
-
-    const chunks: string[][] = [];
-    for (let i = 0; i < missingWeeks.length; i += 3) {
-      chunks.push(missingWeeks.slice(i, i + 3));
-    }
-    for (const chunk of chunks) {
-      const weekPoints = await Promise.all(
-        chunk.map(async (weekSince) => {
-          const week = fridayWeekBoundsFromYmd(weekSince);
-          const { rows } = await loadLeaderboardRowsForWeek(week.since, week.until, {
-            allowSnapshot: false,
-            liveRegistrants: sharedRegistrants,
-          });
-          const lbByUser = new Map(
-            rows.filter((r) => r.recruiterUserId).map((r) => [r.recruiterUserId as string, r]),
-          );
-          const lb = leaderboardRowForProfile(profile, lbByUser, rows);
-          if (!lb) return null;
-
-          const settings = settingsMap.get(userId);
-          const dailyCallTarget = settings?.daily_upload_target ?? null;
-          const dailyBookingTarget = settings?.daily_webinar_booking_target ?? null;
-          const hasTargets = Boolean(dailyCallTarget || dailyBookingTarget);
-          const actualCalls = lb.calls ?? 0;
-          const actualBooked = lb.webinarBooked + (lb.liveSessionBooked ?? 0);
-          const pace = computePaceSnapshot({
-            dailyCallTarget: hasTargets ? dailyCallTarget : null,
-            dailyBookingTarget: hasTargets ? dailyBookingTarget : null,
-            actualCalls,
-            actualBooked,
-            elapsedDays: 7,
-          });
-          const combined = combinedPace(pace.callsPacePct, pace.bookingsPacePct);
-
-          return {
-            weekSince: week.since,
-            weekUntil: week.until,
-            weekLabel: `${ymdToShortLabel(week.since)} → ${ymdToShortLabel(week.until)}`,
-            callsPacePct: pace.callsPacePct,
-            bookingsPacePct: pace.bookingsPacePct,
-            combinedPacePct: combined,
-            actualCalls,
-            actualBooked,
-            belowThreshold: hasTargets && pace.belowThreshold,
-            hasForm: false,
-            source: 'live' as const,
-          };
-        }),
-      );
-      for (const point of weekPoints) {
-        if (point) weekMap.set(point.weekSince, point);
-      }
-    }
-  }
-
-  return [...weekMap.values()]
-    .sort((a, b) => a.weekSince.localeCompare(b.weekSince))
-    .slice(-maxWeeks);
+  return buildLadderPointsForUser(userId, formRows, inviteRows, maxWeeks);
 }
 
 export async function loadCoachingEmailLogs(limit = 30): Promise<CoachingEmailLogRow[]> {

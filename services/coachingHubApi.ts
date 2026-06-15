@@ -109,6 +109,38 @@ export async function fetchCoachingLadderViaFunction(
   };
 }
 
+export type CoachingFullBoardPayload = {
+  weekInvites: PerformanceCheckInInvite[];
+  weekForms: PerformanceCheckInRow[];
+  historyForms: PerformanceCheckInRow[];
+  historyInvites: PerformanceCheckInInvite[];
+  emailLogs: CoachingHubEmailLogRow[];
+};
+
+export async function fetchCoachingFullBoardViaFunction(input: {
+  weekSince: string;
+  historySince: string;
+  emailLimit?: number;
+}): Promise<{ ok: true; data: CoachingFullBoardPayload } | { ok: false; error: string }> {
+  const result = await coachingHubGet<CoachingFullBoardPayload>({
+    action: 'fullBoard',
+    weekSince: input.weekSince,
+    historySince: input.historySince,
+    emailLimit: String(input.emailLimit ?? 30),
+  });
+  if (!result.ok) return result;
+  return {
+    ok: true,
+    data: {
+      weekInvites: Array.isArray(result.weekInvites) ? result.weekInvites : [],
+      weekForms: Array.isArray(result.weekForms) ? result.weekForms : [],
+      historyForms: Array.isArray(result.historyForms) ? result.historyForms : [],
+      historyInvites: Array.isArray(result.historyInvites) ? result.historyInvites : [],
+      emailLogs: Array.isArray(result.emailLogs) ? result.emailLogs : [],
+    },
+  };
+}
+
 export async function fetchCoachingEmailLogsViaFunction(limit = 30): Promise<
   | { ok: true; logs: CoachingHubEmailLogRow[] }
   | { ok: false; error: string }
