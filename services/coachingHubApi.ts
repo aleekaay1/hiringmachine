@@ -109,16 +109,16 @@ export async function fetchCoachingLadderViaFunction(
   };
 }
 
-export type CoachingLadderWeek = {
-  weekSince: string;
-  weekUntil?: string;
+export type CoachingLadderDay = {
+  ymd: string;
+  label?: string;
   calls: number;
   booked: number;
 };
 
 export type CoachingLadderActivity = {
   userId: string;
-  weeks: CoachingLadderWeek[];
+  days: CoachingLadderDay[];
 };
 
 export type CoachingCallActivity = {
@@ -178,6 +178,7 @@ export async function fetchCoachingFullBoardViaFunction(input: {
   fromIso: string;
   toIso: string;
   historySince: string;
+  historyUntilYmd?: string;
   historyFromIso: string;
   historyWeekSinces: string[];
   emailLimit?: number;
@@ -192,6 +193,7 @@ export async function fetchCoachingFullBoardViaFunction(input: {
     fromIso: input.fromIso,
     toIso: input.toIso,
     historySince: input.historySince,
+    historyUntilYmd: input.historyUntilYmd || '',
     historyFromIso: input.historyFromIso,
     historyWeekSinces: input.historyWeekSinces.join(','),
     emailLimit: String(input.emailLimit ?? 30),

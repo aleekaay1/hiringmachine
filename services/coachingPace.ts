@@ -13,6 +13,34 @@ export type CoachingPaceSnapshot = {
   hasTargets: true;
 };
 
+/** Single-day pace vs team daily targets (weekly target ÷ 7). */
+export function computeCoachingDailyPace(input: {
+  actualCalls: number;
+  actualBooked: number;
+}): CoachingPaceSnapshot {
+  const dailyCallTarget = COACHING_WEEKLY_CALL_TARGET / 7;
+  const dailyBookingTarget = COACHING_WEEKLY_BOOKING_TARGET / 7;
+  const expectedCalls = Math.round(dailyCallTarget);
+  const expectedBookings = Math.round(dailyBookingTarget * 10) / 10;
+  const callsPacePct =
+    expectedCalls > 0 ? Math.round((input.actualCalls / expectedCalls) * 10000) / 100 : null;
+  const bookingsPacePct =
+    expectedBookings > 0 ? Math.round((input.actualBooked / expectedBookings) * 10000) / 100 : null;
+  const belowThreshold =
+    (bookingsPacePct !== null && bookingsPacePct < 50) || (callsPacePct !== null && callsPacePct < 50);
+
+  return {
+    dailyCallTarget: Math.round(dailyCallTarget * 10) / 10,
+    dailyBookingTarget: Math.round(dailyBookingTarget * 10) / 10,
+    expectedCalls,
+    expectedBookings,
+    callsPacePct,
+    bookingsPacePct,
+    belowThreshold,
+    hasTargets: true,
+  };
+}
+
 export function computeCoachingWeeklyPace(input: {
   actualCalls: number;
   actualBooked: number;

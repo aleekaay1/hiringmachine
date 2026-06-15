@@ -410,12 +410,17 @@ export const ImprovementLadderChart: React.FC<{
   points: LadderPoint[];
   width?: number;
   height?: number;
-}> = ({ points, width = 720, height = 240 }) => {
+}> = ({ points, width: widthProp, height = 240 }) => {
   const [hover, setHover] = React.useState<number | null>(null);
+  const width = widthProp ?? Math.max(720, points.length * 14);
+  const dense = points.length > 20;
+  const labelEvery = dense ? Math.ceil(points.length / 12) : 1;
+  const dailyBookingTarget = Math.round((COACHING_WEEKLY_BOOKING_TARGET / 7) * 10) / 10;
+
   if (!points.length) {
     return (
       <div className="rounded-xl border border-dashed border-[#d4e4f7] bg-[#f8fbff] p-8 text-center text-sm text-[#5c7594]">
-        Weekly pace history appears as check-ins and invites are saved.
+        Daily pace history appears as call activity is recorded.
       </div>
     );
   }
@@ -439,7 +444,7 @@ export const ImprovementLadderChart: React.FC<{
   return (
     <div className="relative w-full overflow-x-auto rounded-xl border border-[#d4e4f7] bg-[#fafcff] p-4">
       <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">
-        Bookings pace · week over week ({COACHING_WEEKLY_BOOKING_TARGET}/wk target)
+        Bookings pace · day over day ({dailyBookingTarget}/day target)
       </p>
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full min-w-[320px]" style={{ maxHeight: height }}>
         {[0.25, 0.5, 0.75, 1].map((t) => (
@@ -460,12 +465,12 @@ export const ImprovementLadderChart: React.FC<{
         <path d={areaPath} fill="#1e40af" fillOpacity="0.08" />
         <path d={linePath} fill="none" stroke="#1e40af" strokeWidth="2.5" strokeLinecap="square" />
         {coords.map((c) => (
-          <g key={c.weekLabel}>
+          <g key={`${c.weekLabel}-${c.index}`}>
             <rect
-              x={c.x - (hover === c.index ? 5 : 4)}
-              y={c.y - (hover === c.index ? 5 : 4)}
-              width={hover === c.index ? 10 : 8}
-              height={hover === c.index ? 10 : 8}
+              x={c.x - (hover === c.index ? (dense ? 3 : 5) : dense ? 2 : 4)}
+              y={c.y - (hover === c.index ? (dense ? 3 : 5) : dense ? 2 : 4)}
+              width={hover === c.index ? (dense ? 6 : 10) : dense ? 4 : 8}
+              height={hover === c.index ? (dense ? 6 : 10) : dense ? 4 : 8}
               fill={c.belowThreshold ? '#e11d48' : '#059669'}
               stroke="#fff"
               strokeWidth="1.5"
@@ -473,7 +478,8 @@ export const ImprovementLadderChart: React.FC<{
               onMouseEnter={() => setHover(c.index)}
               onMouseLeave={() => setHover(null)}
             />
-            {c.hasForm && <circle cx={c.x + 8} cy={c.y - 8} r={3} fill="#4e9ae8" stroke="#fff" strokeWidth="1" />}
+            {c.hasForm && !dense && <circle cx={c.x + 8} cy={c.y - 8} r={3} fill="#4e9ae8" stroke="#fff" strokeWidth="1" />}
+            {(c.index % labelEvery === 0 || c.index === coords.length - 1) && (
             <text
               x={c.x}
               y={height - 6}
@@ -484,6 +490,7 @@ export const ImprovementLadderChart: React.FC<{
             >
               {(c.shortLabel || c.weekLabel).slice(0, 8)}
             </text>
+            )}
           </g>
         ))}
       </svg>

@@ -11,6 +11,7 @@ import {
   type AppSection,
 } from '../services/accessControl';
 import AppSidebar from './navigation/AppSidebar';
+import NotificationBell from './NotificationBell';
 import PortalTour from './tour/PortalTour';
 import TaskWalkthrough from './tour/TaskWalkthrough';
 import PageHintBulb from './tour/PageHintBulb';
@@ -135,15 +136,25 @@ const Layout: React.FC<LayoutProps> = ({
         <AppSidebar
           role={role}
           userEmail={userEmail}
-          userId={userId}
           displayName={displayName}
           roleLabel={roleLabel}
           avatarUrl={avatarUrl}
-          roleResolved={roleResolved}
           onLogout={() => void handleLogout()}
         />
       )}
       <div className="min-h-screen flex flex-col flex-1 min-w-0">
+        {isAdmin && (
+          <header className="sticky top-0 z-[60] flex h-12 shrink-0 items-center justify-end gap-2 border-b border-[#dce6f3] bg-white/95 px-3 backdrop-blur-sm safe-area-top sm:px-4">
+            {roleResolved && userId && (
+              <NotificationBell
+                role={role}
+                userId={userId}
+                roleResolved={roleResolved}
+                variant="topbar"
+              />
+            )}
+          </header>
+        )}
         {!hideHeader && !isAdmin && (
           <header className="bg-white shadow-sm sticky top-0 z-50 safe-area-top">
             <div

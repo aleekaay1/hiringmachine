@@ -72,6 +72,48 @@ function ymdToShortLabel(ymd: string): string {
   return dt.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' });
 }
 
+function listYmdRange(sinceYmd: string, untilYmd: string): string[] {
+  const out: string[] = [];
+  let cur = sinceYmd;
+  while (cur <= untilYmd) {
+    out.push(cur);
+    cur = addDaysYmd(cur, 1);
+  }
+  return out;
+}
+
+function aggregateCallActivityDailyRange(
+  sinceYmd: string,
+  untilYmd: string,
+  rows: Array<{ recruiter_user_id?: string | null; disposed_at?: string | null; disposition?: string | null }>,
+): Array<{ userId: string; days: Array<{ ymd: string; label: string; calls: number; booked: number }> }> {
+  const dayList = listYmdRange(sinceYmd, untilYmd);
+  const byUser = new Map<string, Array<{ ymd: string; label: string; calls: number; booked: number }>>();
+
+  for (const row of rows) {
+    const userId = String(row.recruiter_user_id || '').trim();
+    const iso = row.disposed_at;
+    if (!userId || !iso) continue;
+    const ymd = torontoYmdFromIso(iso);
+    if (ymd < sinceYmd || ymd > untilYmd) continue;
+    if (!byUser.has(userId)) {
+      byUser.set(
+        userId,
+        dayList.map((d) => ({ ymd: d, label: ymdToShortLabel(d), calls: 0, booked: 0 })),
+      );
+    }
+    const bucket = byUser.get(userId)!;
+    const idx = dayList.indexOf(ymd);
+    if (idx < 0) continue;
+    bucket[idx].calls += 1;
+    if (String(row.disposition || '').trim().toLowerCase() === 'booked') {
+      bucket[idx].booked += 1;
+    }
+  }
+
+  return [...byUser.entries()].map(([userId, days]) => ({ userId, days }));
+}
+
 function aggregateCallActivityMultiWeek(
   weeks: Array<{ since: string; until: string }>,
   rows: Array<{ recruiter_user_id?: string | null; disposed_at?: string | null; disposition?: string | null }>,
@@ -457,6 +499,7 @@ Deno.serve(async (req) => {
 
       const weekSince = (url.searchParams.get('weekSince') || '').trim();
       const historySince = (url.searchParams.get('historySince') || '').trim();
+      const historyUntilYmd = (url.searchParams.get('historyUntilYmd') || '').trim();
       const fromIso = (url.searchParams.get('fromIso') || '').trim();
       const toIso = (url.searchParams.get('toIso') || '').trim();
       const viewMode = (url.searchParams.get('viewMode') || 'week').trim();
@@ -574,12 +617,10 @@ Deno.serve(async (req) => {
             : aggregateCallActivityByUser(weekSince, callRows)
           : [];
 
+      const ladderHistoryUntil = historyUntilYmd || torontoYmdFromIso(new Date().toISOString());
       const ladderActivityByUser =
-        historyWeekSinces.length > 0
-          ? aggregateCallActivityMultiWeek(
-            historyWeekSinces.map((since) => ({ since, until: addDaysYmd(since, 6) })),
-            callRows,
-          )
+        historySince && ladderHistoryUntil >= historySince
+          ? aggregateCallActivityDailyRange(historySince, ladderHistoryUntil, callRows)
           : [];
 
       return new Response(

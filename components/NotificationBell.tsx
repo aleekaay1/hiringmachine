@@ -19,6 +19,7 @@ type NotificationBellProps = {
   userId: string | null;
   roleResolved: boolean;
   className?: string;
+  variant?: 'sidebar' | 'topbar';
 };
 
 function categoryIcon(category: StaffNotificationCategory) {
@@ -47,6 +48,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
   userId,
   roleResolved,
   className = '',
+  variant = 'sidebar',
 }) => {
   const navigate = useNavigate();
   const [open, setOpen] = React.useState(false);
@@ -109,6 +111,11 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
     }
   };
 
+  const buttonClass =
+    variant === 'topbar'
+      ? 'relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#d4e4f7] bg-[#f8fbff] text-[#0B1B34] transition hover:border-[#b8d4f0] hover:bg-[#eef6ff]'
+      : 'relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10 hover:text-white';
+
   return (
     <div ref={panelRef} className={`relative ${className}`}>
       <button
@@ -117,7 +124,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
           setOpen((v) => !v);
           if (!open) void refresh(true);
         }}
-        className="relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10 hover:text-white"
+        className={buttonClass}
         aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`}
         title="Notifications"
       >
