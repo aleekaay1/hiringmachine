@@ -9,6 +9,12 @@ import {
 import { loadRecruiterPersonalMetrics } from './dashboardPersonalMetrics';
 import { supabase } from './supabaseClient';
 import {
+  fetchCoachingWeekDataViaFunction,
+  fetchCoachingLadderViaFunction,
+  fetchCoachingEmailLogsViaFunction,
+} from './coachingHubApi';
+import { isSupabaseNetworkError } from './dashboardTeamMetricsService';
+import {
   fridayWeekBoundsFromYmd,
   torontoYmdFromDate,
   ymdToLocalDate,
@@ -313,21 +319,39 @@ export async function submitPerformanceCheckIn(input: {
 }
 
 export async function listPerformanceCheckIns(weekSince?: string | null): Promise<PerformanceCheckInRow[]> {
+  const viaFn = await fetchCoachingWeekDataViaFunction(weekSince);
+  if (viaFn.ok) return viaFn.forms;
+
   let query = supabase
     .from('recruiter_performance_check_ins')
     .select('*')
     .order('submitted_at', { ascending: false });
   if (weekSince) query = query.eq('week_since', weekSince);
   const { data, error } = await query;
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (isSupabaseNetworkError(error.message)) {
+      const retry = await fetchCoachingWeekDataViaFunction(weekSince);
+      if (retry.ok) return retry.forms;
+    }
+    throw new Error(error.message);
+  }
   return (data || []) as PerformanceCheckInRow[];
 }
 
 export async function listPerformanceCheckInInvites(weekSince?: string | null): Promise<PerformanceCheckInInvite[]> {
+  const viaFn = await fetchCoachingWeekDataViaFunction(weekSince);
+  if (viaFn.ok) return viaFn.invites;
+
   let query = supabase.from('recruiter_performance_check_in_invites').select('*').order('created_at', { ascending: false });
   if (weekSince) query = query.eq('week_since', weekSince);
   const { data, error } = await query;
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (isSupabaseNetworkError(error.message)) {
+      const retry = await fetchCoachingWeekDataViaFunction(weekSince);
+      if (retry.ok) return retry.invites;
+    }
+    throw new Error(error.message);
+  }
   return (data || []) as PerformanceCheckInInvite[];
 }
 

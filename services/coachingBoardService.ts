@@ -23,7 +23,10 @@ import {
 } from './liveSessionBookedOutcomes';
 import { loadLeaderboardSnapshot } from './pipelineLeaderboardCache';
 import { listPipelineCallRecords, type PipelineCallRecord } from './pipelineService';
-import { supabase } from './supabaseClient';
+import {
+  fetchCoachingLadderViaFunction,
+  fetchCoachingEmailLogsViaFunction,
+} from './coachingHubApi';
 import {
   computePaceSnapshot,
   elapsedDaysInFridayWeek,
@@ -32,6 +35,7 @@ import {
   type PerformanceCheckInInvite,
   type PerformanceCheckInRow,
 } from './performanceCheckInService';
+import { supabase } from './supabaseClient';
 import {
   fridayWeekBoundsFromYmd,
   shiftYmdDays,
@@ -530,28 +534,9 @@ export async function loadCoachingBoard(weekSince: string, now = new Date()): Pr
 }
 
 export async function loadUserImprovementLadder(userId: string, maxWeeks = 10): Promise<CoachingWeekPoint[]> {
-  const [allForms, allInvites] = await Promise.all([
-    supabase
-      .from('recruiter_performance_check_ins')
-      .select('*')
-      .eq('user_id', userId)
-      .order('week_since', { ascending: false })
-      .limit(maxWeeks),
-    supabase
-      .from('recruiter_performance_check_in_invites')
-      .select(
-        'week_since, week_until, calls_pace_pct, bookings_pace_pct, below_threshold, actual_calls, actual_booked',
-      )
-      .eq('user_id', userId)
-      .order('week_since', { ascending: false })
-      .limit(maxWeeks),
-  ]);
-
-  if (allForms.error) throw new Error(allForms.error.message);
-  if (allInvites.error) throw new Error(allInvites.error.message);
-
-  const formRows = (allForms.data || []) as PerformanceCheckInRow[];
-  const inviteRows = (allInvites.data || []) as Array<{
+  const viaFn = await fetchCoachingLadderViaFunction(userId, maxWeeks);
+  let formRows: PerformanceCheckInRow[] = [];
+  let inviteRows: Array<{
     week_since: string;
     week_until: string;
     calls_pace_pct: number | null;
@@ -559,7 +544,34 @@ export async function loadUserImprovementLadder(userId: string, maxWeeks = 10): 
     below_threshold: boolean;
     actual_calls: number;
     actual_booked: number;
-  }>;
+  }> = [];
+
+  if (viaFn.ok) {
+    formRows = viaFn.forms;
+    inviteRows = viaFn.invites;
+  } else {
+    const [allForms, allInvites] = await Promise.all([
+      supabase
+        .from('recruiter_performance_check_ins')
+        .select('*')
+        .eq('user_id', userId)
+        .order('week_since', { ascending: false })
+        .limit(maxWeeks),
+      supabase
+        .from('recruiter_performance_check_in_invites')
+        .select(
+          'week_since, week_until, calls_pace_pct, bookings_pace_pct, below_threshold, actual_calls, actual_booked',
+        )
+        .eq('user_id', userId)
+        .order('week_since', { ascending: false })
+        .limit(maxWeeks),
+    ]);
+
+    if (allForms.error) throw new Error(allForms.error.message);
+    if (allInvites.error) throw new Error(allInvites.error.message);
+    formRows = (allForms.data || []) as PerformanceCheckInRow[];
+    inviteRows = (allInvites.data || []) as typeof inviteRows;
+  }
 
   const weekMap = new Map<string, CoachingWeekPoint>();
 
@@ -678,6 +690,9 @@ export async function loadUserImprovementLadder(userId: string, maxWeeks = 10): 
 }
 
 export async function loadCoachingEmailLogs(limit = 30): Promise<CoachingEmailLogRow[]> {
+  const viaFn = await fetchCoachingEmailLogsViaFunction(limit);
+  if (viaFn.ok) return viaFn.logs as CoachingEmailLogRow[];
+
   try {
     const { data, error } = await supabase
       .from('email_send_logs')
