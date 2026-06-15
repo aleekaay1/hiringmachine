@@ -17,6 +17,7 @@ import {
   buildLiveSessionRowsByEmail,
   buildLiveSessionRowsByPhone,
   loadCandidateEmailsById,
+  loadCandidateNamesById,
   loadCandidatePhonesById,
   loadLiveSessionRegistrantsForMatching,
   type LiveSessionRegistrantRow,
@@ -133,6 +134,9 @@ export type CoachingBoardSummary = {
   belowCount: number;
   formCount: number;
   emailSentCount: number;
+  teamLiveBooked: number;
+  teamLiveShowed: number;
+  liveRegistrantCount: number;
   refreshedAt: string;
 };
 
@@ -307,13 +311,17 @@ async function loadLeaderboardRowsForWeek(
     /** When true, never fetch pipeline_call_records from the browser (use snapshot or webinar/live only). */
     skipClientCallRecords?: boolean;
   },
-): Promise<{ rows: RecruiterLeaderboardRow[]; recordsByUser: Map<string, PipelineCallRecord[]> }> {
+): Promise<{
+  rows: RecruiterLeaderboardRow[];
+  recordsByUser: Map<string, PipelineCallRecord[]>;
+  liveRegistrantCount: number;
+}> {
   const allowSnapshot = options?.allowSnapshot !== false;
   const currentWeek = fridayWeekBoundsFromYmd(torontoYmdFromDate());
   if (allowSnapshot && weekSince === currentWeek.since) {
     const snapshot = await loadLeaderboardSnapshot('last7');
     if (snapshot.data?.rows?.length) {
-      return { rows: snapshot.data.rows, recordsByUser: new Map() };
+      return { rows: snapshot.data.rows, recordsByUser: new Map(), liveRegistrantCount: 0 };
     }
   }
 
@@ -338,9 +346,10 @@ async function loadLeaderboardRowsForWeek(
   ]);
 
   const candidateIds = [...new Set(currentRecords.map((r) => r.candidate_id).filter(Boolean))];
-  const [candidateEmailById, candidatePhoneById] = await Promise.all([
+  const [candidateEmailById, candidatePhoneById, candidateNameById] = await Promise.all([
     loadCandidateEmailsById(candidateIds).catch(() => new Map<string, string>()),
     loadCandidatePhonesById(candidateIds).catch(() => new Map<string, string>()),
+    loadCandidateNamesById(candidateIds).catch(() => new Map<string, string>()),
   ]);
 
   const recruiterDirectory = new Map(
@@ -357,11 +366,13 @@ async function loadLeaderboardRowsForWeek(
     recruiterSeeds: seedsFromProfiles(profiles),
     candidateEmailById,
     candidatePhoneById,
+    candidateNameById,
     liveSessionByEmail: buildLiveSessionRowsByEmail(liveRegistrants),
     liveSessionByPhone: buildLiveSessionRowsByPhone(liveRegistrants),
+    liveSessionRegistrants: liveRegistrants,
   });
 
-  return { rows, recordsByUser: indexRecordsByUser(currentRecords) };
+  return { rows, recordsByUser: indexRecordsByUser(currentRecords), liveRegistrantCount: liveRegistrants.length };
 }
 
 export function listRecentFridayWeeks(count = 12, now = new Date()): Array<{ since: string; until: string; label: string }> {
@@ -705,16 +716,17 @@ export async function loadCoachingBoard(
     ? Promise.resolve(prefetched.previousForms)
     : listPerformanceCheckIns(previousWeekSince);
 
-  const skipClientCallRecords = prefetched?.callActivityByUser !== undefined;
+  const skipClientCallRecords = false;
   const [profiles, invites, forms, leaderboardBundle, previousForms] = await Promise.all([
     listAllUserProfiles(),
     invitesPromise,
     formsPromise,
-    loadLeaderboardRowsForWeek(week.since, rangeUntil, { allowSnapshot: mode === 'week', skipClientCallRecords }),
+    loadLeaderboardRowsForWeek(week.since, rangeUntil, { allowSnapshot: false, skipClientCallRecords }),
     previousFormsPromise,
   ]);
 
   const leaderboardRows = leaderboardBundle.rows;
+  const liveRegistrantCount = leaderboardBundle.liveRegistrantCount;
   const callActivityByUser = prefetched?.callActivityByUser ?? new Map<string, CoachingCallActivity>();
 
   const participants = filterProductionStaffProfiles(profiles).filter(
@@ -878,6 +890,9 @@ export async function loadCoachingBoard(
       belowCount: people.filter((p) => p.belowThreshold).length,
       formCount: people.filter((p) => p.form).length,
       emailSentCount: people.filter((p) => p.emailSent).length,
+      teamLiveBooked: people.reduce((sum, p) => sum + p.liveSessionBooked, 0),
+      teamLiveShowed: people.reduce((sum, p) => sum + p.liveSessionShowed, 0),
+      liveRegistrantCount,
       refreshedAt: new Date().toISOString(),
     },
     people,

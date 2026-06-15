@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
-import { signInWithGoogle } from '../services/googleAuth';
 import { fetchHrDashboard, hrDashboardAction, runHrAutomation, runHrRollup, type HrDashboardPayload } from '../services/hrDashboardService';
 import { AlertTriangle, BarChart3, CheckCircle2, Clock3, RefreshCw, Sparkles, Users, X } from 'lucide-react';
 
@@ -21,10 +20,6 @@ const STAGE_ORDER: string[] = [...PIPELINE_FLOW];
 
 const HRDashboard: React.FC = () => {
   const isAuthenticated = useStaffAuthenticated();
-  const [email, setEmail] = useState('admin@globelife-paz.com');
-  const [password, setPassword] = useState('');
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [googleLoading, setGoogleLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,38 +57,10 @@ const HRDashboard: React.FC = () => {
   }, [getAccessToken]);
 
   useEffect(() => {
-    void (async () => {
-      const { data: s } = await supabase.auth.getSession();
-      if (s.session) setIsAuthenticated(true);
-    })();
-  }, []);
-
-  useEffect(() => {
     if (!isAuthenticated || hasLoadedOnceRef.current) return;
     hasLoadedOnceRef.current = true;
-    void (async () => {
-      await load();
-    })();
+    void load();
   }, [isAuthenticated, load]);
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError(null);
-    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-    if (signInError) {
-      setAuthError('Invalid email or password.');
-      return;
-    }
-    setIsAuthenticated(true);
-  };
-
-  const handleGoogleLogin = async () => {
-    setAuthError(null);
-    setGoogleLoading(true);
-    const { error } = await signInWithGoogle('/hr-dashboard');
-    if (error) setAuthError(error);
-    setGoogleLoading(false);
-  };
 
   const runPipeline = async () => {
     setError(null);

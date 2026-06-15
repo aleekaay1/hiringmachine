@@ -518,20 +518,26 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
               <h1 className="text-2xl font-semibold">Mid-week coaching hub</h1>
               <p className="mt-1 max-w-2xl text-sm text-[#c5daf0]">
                 Below-50% callers get the automated email. One refresh loads everyone — click a caller to expand stats &
-                history.
+                history. Live session booked/showed counts match pipeline Booked (Live Session) dispositions to Calendly/Zoom
+                registrants.
               </p>
             </div>
             <ClipboardList className="text-[#7ec0ff]" size={32} />
           </div>
 
           {summary && (
-            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
               {[
                 { label: 'Team', value: summary.teamCount, color: 'text-white' },
                 { label: 'Below 50%', value: summary.belowCount, color: 'text-rose-300' },
                 { label: 'Forms in', value: summary.formCount, color: 'text-sky-300' },
-                { label: 'Emails sent', value: summary.emailSentCount, color: 'text-emerald-300' },
-                { label: 'Day of week', value: summary.elapsedDays, color: 'text-amber-300' },
+                { label: 'Live booked', value: summary.teamLiveBooked, color: 'text-violet-200' },
+                { label: 'Live showed', value: summary.teamLiveShowed, color: 'text-emerald-300' },
+                {
+                  label: 'Registrants synced',
+                  value: summary.liveRegistrantCount,
+                  color: summary.liveRegistrantCount > 0 ? 'text-amber-200' : 'text-rose-300',
+                },
               ].map((item) => (
                 <div key={item.label} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 backdrop-blur">
                   <p className="text-[10px] uppercase tracking-[0.2em] text-[#9ec5ea]">{item.label}</p>
@@ -539,6 +545,12 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
                 </div>
               ))}
             </div>
+          )}
+          {summary && summary.liveRegistrantCount === 0 && (
+            <p className="mt-3 text-xs text-amber-200">
+              No live session registrants in sync — open Live Sessions and click Sync so coaching can match booked calls to
+              attendance.
+            </p>
           )}
         </div>
 

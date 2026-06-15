@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import {
@@ -24,7 +23,6 @@ import {
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { listUnmatchedZoomParticipants } from '../services/liveSessionAttendanceMatch';
 import { AlertTriangle, ChevronDown, ChevronRight, Loader2, Mail, RefreshCw, Users, Video, X } from 'lucide-react';
-import { signInWithGoogle } from '../services/googleAuth';
 
 const EM_DASH = '\u2014';
 const MIDDLE_DOT = '\u00B7';
@@ -144,11 +142,6 @@ function unmatchedZoomRowsForSession(row: LiveSessionScheduleRow): InviteeRow[] 
 }
 
 const LiveSessionsDashboard: React.FC = () => {
-  const isAuthenticated = useStaffAuthenticated();
-  const [email, setEmail] = useState('admin@globelife-paz.com');
-  const [password, setPassword] = useState('');
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [googleLoading, setGoogleLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<LiveSessionsDashboardPayload | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -167,12 +160,6 @@ const LiveSessionsDashboard: React.FC = () => {
     const { data: refreshed, error } = await supabase.auth.refreshSession();
     if (error) return null;
     return refreshed.session?.access_token ?? null;
-  }, []);
-
-  useEffect(() => {
-    void supabase.auth.getSession().then(({ data: s }) => {
-      if (s.session) setIsAuthenticated(true);
-    });
   }, []);
 
   const load = useCallback(async (sync: boolean) => {
@@ -213,8 +200,8 @@ const LiveSessionsDashboard: React.FC = () => {
   }, [getFreshAccessToken]);
 
   useEffect(() => {
-    if (isAuthenticated) void load(false);
-  }, [isAuthenticated, load]);
+    void load(false);
+  }, [load]);
 
   const sessions = useMemo(
     () => (data ? buildLiveSessionScheduleRows(data) : []),
@@ -232,25 +219,6 @@ const LiveSessionsDashboard: React.FC = () => {
     const attended = pastSessions.reduce((n, s) => n + (s.attendedCount ?? 0), 0);
     return { scheduled, attended, sessionDates: sessions.length };
   }, [sessions, pastSessions]);
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError(null);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      setAuthError('Invalid email or password.');
-      return;
-    }
-    setIsAuthenticated(true);
-  };
-
-  const handleGoogleLogin = async () => {
-    setAuthError(null);
-    setGoogleLoading(true);
-    const { error } = await signInWithGoogle('/live-sessions');
-    if (error) setAuthError(error);
-    setGoogleLoading(false);
-  };
 
   const handleSyncPipeline = async () => {
     if (!data) return;

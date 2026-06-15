@@ -796,14 +796,6 @@ const WebinarGeekDashboard: React.FC = () => {
   }, [filteredRows]);
 
   useEffect(() => {
-    const check = async () => {
-      const { data: s } = await supabase.auth.getSession();
-      if (s.session) setIsAuthenticated(true);
-    };
-    void check();
-  }, []);
-
-  useEffect(() => {
     if (!isAuthenticated) return;
     let cancelled = false;
     void (async () => {
@@ -861,26 +853,6 @@ const WebinarGeekDashboard: React.FC = () => {
   useEffect(() => {
     setSelectedDayYmd(null);
   }, [monthAnchorYmd]);
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError(null);
-    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-    if (signInError) {
-      setAuthError('Invalid email or password.');
-      return;
-    }
-    setIsAuthenticated(true);
-  };
-
-  const handleGoogleLogin = async () => {
-    setAuthError(null);
-    setGoogleLoading(true);
-    const { error } = await signInWithGoogle('/webinar-geek');
-    if (error) setAuthError(error);
-    setGoogleLoading(false);
-  };
-
 
   return (
       <div className="w-full max-w-6xl mx-auto p-5 space-y-5">
