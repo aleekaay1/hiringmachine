@@ -109,6 +109,18 @@ export async function fetchCoachingLadderViaFunction(
   };
 }
 
+export type CoachingLadderWeek = {
+  weekSince: string;
+  weekUntil?: string;
+  calls: number;
+  booked: number;
+};
+
+export type CoachingLadderActivity = {
+  userId: string;
+  weeks: CoachingLadderWeek[];
+};
+
 export type CoachingCallActivity = {
   userId: string;
   totalCalls: number;
@@ -123,6 +135,7 @@ export type CoachingFullBoardPayload = {
   historyInvites: PerformanceCheckInInvite[];
   emailLogs: CoachingHubEmailLogRow[];
   callActivityByUser: CoachingCallActivity[];
+  ladderActivityByUser: CoachingLadderActivity[];
 };
 
 export type ParticipantFormPayload = {
@@ -165,6 +178,8 @@ export async function fetchCoachingFullBoardViaFunction(input: {
   fromIso: string;
   toIso: string;
   historySince: string;
+  historyFromIso: string;
+  historyWeekSinces: string[];
   emailLimit?: number;
   viewMode?: 'week' | 'month';
   monthFirstYmd?: string;
@@ -177,6 +192,8 @@ export async function fetchCoachingFullBoardViaFunction(input: {
     fromIso: input.fromIso,
     toIso: input.toIso,
     historySince: input.historySince,
+    historyFromIso: input.historyFromIso,
+    historyWeekSinces: input.historyWeekSinces.join(','),
     emailLimit: String(input.emailLimit ?? 30),
     viewMode: input.viewMode ?? 'week',
   };
@@ -193,6 +210,7 @@ export async function fetchCoachingFullBoardViaFunction(input: {
       historyInvites: Array.isArray(result.historyInvites) ? result.historyInvites : [],
       emailLogs: Array.isArray(result.emailLogs) ? result.emailLogs : [],
       callActivityByUser: Array.isArray(result.callActivityByUser) ? result.callActivityByUser : [],
+      ladderActivityByUser: Array.isArray(result.ladderActivityByUser) ? result.ladderActivityByUser : [],
     },
   };
 }

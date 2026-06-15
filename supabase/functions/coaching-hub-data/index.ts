@@ -465,6 +465,11 @@ Deno.serve(async (req) => {
         .split(',')
         .map((v) => v.trim())
         .filter(Boolean);
+      const historyFromIso = (url.searchParams.get('historyFromIso') || fromIso).trim();
+      const historyWeekSinces = (url.searchParams.get('historyWeekSinces') || '')
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean);
       const emailLimit = Math.min(120, Math.max(1, Number(url.searchParams.get('emailLimit') || '30') || 30));
 
       let weekInvitesQuery = admin
@@ -503,14 +508,14 @@ Deno.serve(async (req) => {
         .limit(emailLimit);
 
       const callRecordsPromise =
-        weekSince && fromIso && toIso
+        weekSince && (historyFromIso || fromIso) && toIso
           ? admin
             .from('pipeline_call_records')
             .select('recruiter_user_id, disposed_at, disposition')
-            .gte('disposed_at', fromIso)
+            .gte('disposed_at', historyFromIso || fromIso)
             .lte('disposed_at', toIso)
             .not('recruiter_user_id', 'is', null)
-            .limit(5000)
+            .limit(12000)
           : Promise.resolve({ data: [] as Array<Record<string, unknown>>, error: null });
 
       const [weekInvitesRes, weekFormsRes, historyFormsRes, historyInvitesRes, emailRes, callRecordsRes] =
@@ -553,25 +558,28 @@ Deno.serve(async (req) => {
         }
       }
 
+      const callRows = (callRecordsRes.error ? [] : (callRecordsRes.data || [])) as Array<{
+        recruiter_user_id?: string | null;
+        disposed_at?: string | null;
+        disposition?: string | null;
+      }>;
+
       const callActivityByUser =
-        weekSince && !callRecordsRes.error
+        weekSince
           ? viewMode === 'month' && monthWeekSinces.length
             ? aggregateCallActivityMultiWeek(
               monthWeekSinces.map((since) => ({ since, until: addDaysYmd(since, 6) })),
-              (callRecordsRes.data || []) as Array<{
-                recruiter_user_id?: string | null;
-                disposed_at?: string | null;
-                disposition?: string | null;
-              }>,
+              callRows,
             )
-            : aggregateCallActivityByUser(
-              weekSince,
-              (callRecordsRes.data || []) as Array<{
-                recruiter_user_id?: string | null;
-                disposed_at?: string | null;
-                disposition?: string | null;
-              }>,
-            )
+            : aggregateCallActivityByUser(weekSince, callRows)
+          : [];
+
+      const ladderActivityByUser =
+        historyWeekSinces.length > 0
+          ? aggregateCallActivityMultiWeek(
+            historyWeekSinces.map((since) => ({ since, until: addDaysYmd(since, 6) })),
+            callRows,
+          )
           : [];
 
       return new Response(
@@ -583,6 +591,7 @@ Deno.serve(async (req) => {
           historyInvites: historyInvitesRes.error ? [] : historyInvitesRes.data || [],
           emailLogs: logs.slice(0, emailLimit),
           callActivityByUser,
+          ladderActivityByUser,
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );

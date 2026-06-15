@@ -17,6 +17,7 @@ export const RECRUITER_3CX_EXTENSIONS: Recruiter3cxExtensionRow[] = [
   { name: 'Nicolas Demers', email: 'nicolas_demers@globelife-paz.com', extension: '5522' },
   { name: 'Nita Nath', email: 'nita_nath@globelife-paz.com', extension: '5835' },
   { name: 'Nita Nath', email: 'nita@globelife-paz.com', extension: '5835' },
+  { name: 'Raman Kumar', email: 'raman_kumar@globelife-paz.com', extension: '5908' },
   { name: 'Raman Kumar', email: 'raman@globelife-paz.com', extension: '5908' },
   { name: 'Devanshi Bodiwala', email: 'devanshi@globelife-paz.com', extension: '5912' },
   { name: 'Emilio Reyes', email: 'emilio@globelife-paz.com', extension: '5925' },

@@ -267,8 +267,7 @@ function PersonCard({
               </div>
             </div>
 
-            {person.ladder.length > 0 && (
-              <div className="rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-4">
+            <div className="rounded-xl border border-[#e8f0fa] bg-[#f8fbff] p-4">
                 <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4e79a9]">
                   {viewMode === 'month' ? 'Bookings pace · this month' : 'Improvement ladder · week-over-week'}
                 </p>
@@ -284,6 +283,7 @@ function PersonCard({
                     actualBooked: p.actualBooked,
                   }))}
                 />
+                {person.ladder.length > 0 && (
                 <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                   {person.ladder.map((pt) => (
                     <div
@@ -295,9 +295,9 @@ function PersonCard({
                       <p className="font-medium text-[#0B1B34]">{ymdToShortLabel(pt.weekSince)}</p>
                       <p
                         className="text-lg font-bold tabular-nums"
-                        style={{ color: pt.combinedPacePct !== null && pt.combinedPacePct < 50 ? '#e11d48' : '#059669' }}
+                        style={{ color: (pt.bookingsPacePct ?? pt.combinedPacePct) !== null && (pt.bookingsPacePct ?? pt.combinedPacePct ?? 0) < 50 ? '#e11d48' : '#059669' }}
                       >
-                        {pt.combinedPacePct ?? '—'}%
+                        {pt.bookingsPacePct ?? pt.combinedPacePct ?? '—'}%
                       </p>
                       <p className="text-xs text-[#5c7594]">
                         {pt.actualCalls} calls · {pt.actualBooked} booked
@@ -306,8 +306,8 @@ function PersonCard({
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
+                )}
+            </div>
 
             {person.form ? (
               <>

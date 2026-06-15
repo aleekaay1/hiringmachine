@@ -454,6 +454,7 @@ export function buildLadderPointsForUser(
   userId: string,
   allForms: PerformanceCheckInRow[],
   allInvites: PerformanceCheckInInvite[],
+  weeklyActivity?: Array<{ weekSince: string; weekUntil: string; calls: number; booked: number }>,
   maxWeeks = 10,
 ): CoachingWeekPoint[] {
   const formRows = allForms.filter((f) => f.user_id === userId);
@@ -469,6 +470,7 @@ export function buildLadderPointsForUser(
     source: CoachingWeekPoint['source'],
   ) => {
     const pace = computeCoachingWeeklyPace({ actualCalls, actualBooked, elapsedDays: 7 });
+    const existing = weekMap.get(weekSince);
     weekMap.set(weekSince, {
       weekSince,
       weekUntil,
@@ -479,10 +481,14 @@ export function buildLadderPointsForUser(
       actualCalls,
       actualBooked,
       belowThreshold: pace.belowThreshold,
-      hasForm,
-      source,
+      hasForm: existing?.hasForm || hasForm,
+      source: existing?.source === 'form' ? 'form' : source,
     });
   };
+
+  for (const week of weeklyActivity || []) {
+    pushPoint(week.weekSince, week.weekUntil, week.calls, week.booked, false, 'live');
+  }
 
   for (const invite of inviteRows) {
     pushPoint(
@@ -508,11 +514,21 @@ export function buildAllLaddersFromHistory(
   userIds: string[],
   historyForms: PerformanceCheckInRow[],
   historyInvites: PerformanceCheckInInvite[],
+  ladderActivityByUser: Map<string, Array<{ weekSince: string; weekUntil: string; calls: number; booked: number }>>,
   maxWeeks = 10,
 ): Map<string, CoachingWeekPoint[]> {
   const map = new Map<string, CoachingWeekPoint[]>();
   for (const userId of userIds) {
-    map.set(userId, buildLadderPointsForUser(userId, historyForms, historyInvites, maxWeeks));
+    map.set(
+      userId,
+      buildLadderPointsForUser(
+        userId,
+        historyForms,
+        historyInvites,
+        ladderActivityByUser.get(userId),
+        maxWeeks,
+      ),
+    );
   }
   return map;
 }
@@ -537,10 +553,15 @@ export async function loadFullCoachingHub(
       ? (monthWeeks[monthWeeks.length - 1]?.until ?? fridayWeekBoundsFromYmd(weekSince).until)
       : fridayWeekBoundsFromYmd(weekSince).until;
 
+  const historyWeeks = listRecentFridayWeeks(COACHING_HISTORY_WEEKS);
   const historySince =
-    listRecentFridayWeeks(COACHING_HISTORY_WEEKS).at(-1)?.since ?? shiftYmdDays(weekSince, -70);
+    historyWeeks.at(-1)?.since ?? shiftYmdDays(weekSince, -70);
   const previousWeekSince = shiftYmdDays(weekSince, -7);
   const windows = buildLeaderboardWindows('custom', now, { sinceYmd: weekSince, untilYmd: weekUntil });
+  const historyWindows = buildLeaderboardWindows('custom', now, {
+    sinceYmd: historySince,
+    untilYmd: weekUntil,
+  });
 
   const bulk = await fetchCoachingFullBoardViaFunction({
     weekSince,
@@ -548,6 +569,8 @@ export async function loadFullCoachingHub(
     fromIso: windows.current.fromIso,
     toIso: windows.current.toIso,
     historySince,
+    historyFromIso: historyWindows.current.fromIso,
+    historyWeekSinces: historyWeeks.map((w) => w.since),
     emailLimit: 30,
     viewMode: mode,
     monthFirstYmd: mode === 'month' ? monthFirstYmd : undefined,
@@ -561,6 +584,20 @@ export async function loadFullCoachingHub(
   let emailLogs = bulk.ok ? (bulk.data.emailLogs as CoachingEmailLogRow[]) : [];
   const callActivityByUser = new Map<string, CoachingCallActivity>(
     (bulk.ok ? bulk.data.callActivityByUser : []).map((row) => [row.userId, row]),
+  );
+  const ladderActivityByUser = new Map<
+    string,
+    Array<{ weekSince: string; weekUntil: string; calls: number; booked: number }>
+  >(
+    (bulk.ok ? bulk.data.ladderActivityByUser : []).map((row) => [
+      row.userId,
+      (row.weeks || []).map((week) => ({
+        weekSince: week.weekSince,
+        weekUntil: week.weekUntil || shiftYmdDays(week.weekSince, 6),
+        calls: week.calls,
+        booked: week.booked,
+      })),
+    ]),
   );
 
   if (!bulk.ok) {
@@ -600,6 +637,7 @@ export async function loadFullCoachingHub(
     participants.map((p) => p.user_id),
     historyForms,
     historyInvites,
+    ladderActivityByUser,
     COACHING_HISTORY_WEEKS,
   );
 
@@ -761,6 +799,7 @@ export async function loadCoachingBoard(
       mode === 'month' && monthSinceSet.size
         ? ladderRaw.filter((pt) => monthSinceSet.has(pt.weekSince))
         : ladderRaw;
+    const ladderForChart = ladder.length > 0 ? ladder : ladderRaw;
 
     people.push({
       userId: profile.user_id,
@@ -809,7 +848,7 @@ export async function loadCoachingBoard(
         currentCombinedPace: combined,
         hasForm: Boolean(form),
       }),
-      ladder,
+      ladder: ladderForChart,
     });
   }
 
@@ -881,7 +920,7 @@ export async function loadUserImprovementLadder(userId: string, maxWeeks = 10): 
     inviteRows = (allInvites.data || []) as PerformanceCheckInInvite[];
   }
 
-  return buildLadderPointsForUser(userId, formRows, inviteRows, maxWeeks);
+  return buildLadderPointsForUser(userId, formRows, inviteRows, undefined, maxWeeks);
 }
 
 export async function loadCoachingEmailLogs(limit = 30): Promise<CoachingEmailLogRow[]> {
