@@ -32,6 +32,8 @@ import RoleHome from './pages/RoleHome';
 import Reports from './pages/Reports';
 import ReportDetail from './pages/ReportDetail';
 import SupportPage from './pages/SupportPage';
+import PerformanceCheckInPage from './pages/PerformanceCheckInPage';
+import PerformanceCheckInsAdminPage from './pages/PerformanceCheckInsAdminPage';
 import OpsConsolePage from './pages/OpsConsolePage';
 import HrLeadDistributionPage from './pages/HrLeadDistributionPage';
 import HrAllLeadsPage from './pages/HrAllLeadsPage';
@@ -86,6 +88,8 @@ const App: React.FC = () => {
           <Route path="/reports/:userId" element={<ReportDetail />} />
           <Route path="/admin/staff" element={<StaffDirectoryPage />} />
           <Route path="/support" element={<SupportPage />} />
+          <Route path="/performance-check-in" element={<PerformanceCheckInPage />} />
+          <Route path="/performance-check-ins" element={<PerformanceCheckInsAdminPage />} />
           <Route path="/ops-console" element={<OpsConsolePage />} />
         </Route>
 

@@ -1,6 +1,7 @@
 export type EmailLogCategory =
   | 'leadership_assessment'
   | 'wednesday_live'
+  | 'mid_week_coaching'
   | 'pipeline_crm'
   | 'reminder'
   | 'other';
@@ -24,6 +25,7 @@ const LEADERSHIP_TRIGGERS = new Set([
 ]);
 
 const WEDNESDAY_TRIGGERS = new Set(['manual_wednesday_live_overview']);
+const MID_WEEK_COACHING_TRIGGERS = new Set(['mid_week_performance_checkin']);
 
 export function categorizeEmailLog(row: EmailLogRowLike): {
   category: EmailLogCategory;
@@ -39,7 +41,9 @@ export function categorizeEmailLog(row: EmailLogRowLike): {
   const metaMode = String(meta.send_mode || '').trim().toLowerCase();
 
   let category: EmailLogCategory = 'other';
-  if (metaCategory === 'leadership_assessment' || LEADERSHIP_TRIGGERS.has(trigger)) {
+  if (metaCategory === 'mid_week_coaching' || MID_WEEK_COACHING_TRIGGERS.has(trigger) || source.includes('performance-check-in')) {
+    category = 'mid_week_coaching';
+  } else if (metaCategory === 'leadership_assessment' || LEADERSHIP_TRIGGERS.has(trigger)) {
     category = 'leadership_assessment';
   } else if (WEDNESDAY_TRIGGERS.has(trigger) || /wednesday|live overview|live career/i.test(subject)) {
     category = 'wednesday_live';
@@ -63,7 +67,9 @@ export function categorizeEmailLog(row: EmailLogRowLike): {
   }
 
   const categoryLabel =
-    category === 'leadership_assessment'
+    category === 'mid_week_coaching'
+      ? 'Mid-week coaching'
+      : category === 'leadership_assessment'
       ? 'Leadership assessment'
       : category === 'wednesday_live'
         ? 'Wednesday live session'

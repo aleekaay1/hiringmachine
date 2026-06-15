@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   BarChart3,
+  ClipboardList,
   FileSpreadsheet,
   FileText,
   FileUp,
@@ -53,6 +54,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { name: 'Candidates', route: '/dashboard?view=candidates', icon: Users, section: 'candidates' },
       { name: 'QR Codes', route: '/qr', icon: QrCode, section: 'qr' },
       { name: 'Reports', route: '/reports', icon: FileText, section: 'reports' },
+      { name: 'Coaching hub', route: '/performance-check-ins', icon: ClipboardList, section: 'performance-check-ins' },
       { name: 'Staff directory', route: '/admin/staff', icon: Users, section: 'staff-directory' },
     ],
   },

@@ -27,6 +27,8 @@ export type AppSection =
   | 'call-log'
   | 'reports'
   | 'support'
+  | 'performance-check-in'
+  | 'performance-check-ins'
   | 'ops-console'
   | 'superdashboard'
   | 'pipeline-hr-leads'
@@ -297,6 +299,10 @@ export function canAccessSection(
   if (section === 'reports') return canAccessReports(role, email);
   if (section === 'account') return Boolean(role);
   if (section === 'support') return Boolean(role);
+  if (section === 'performance-check-in') {
+    return role === 'recruiter' || role === 'leadership' || role === 'webinar';
+  }
+  if (section === 'performance-check-ins') return canAccessReports(role, email);
   if (!role) return section === 'overview' || section === 'home';
   if (role === 'admin') {
     if (ADMIN_DATA_SECTIONS.includes(section)) return true;
@@ -311,7 +317,8 @@ export function canAccessSection(
       ADMIN_DATA_SECTIONS.includes(section) ||
       PIPELINE_OPERATIONAL_SECTIONS.includes(section) ||
       (canAccessHrLeadDistribution(role, email, fullName) && section === 'pipeline-hr-leads') ||
-      section === 'support'
+      section === 'support' ||
+      section === 'performance-check-in'
     );
   }
   if (role === 'recruiter') {
@@ -321,13 +328,22 @@ export function canAccessSection(
       section === 'settings' ||
       section === 'account' ||
       section === 'support' ||
+      section === 'performance-check-in' ||
       PIPELINE_OPERATIONAL_SECTIONS.includes(section) ||
       section === 'webinar-geek' ||
       section === 'leaderboard'
     );
   }
   if (role === 'webinar') {
-    return section === 'home' || section === 'overview' || section === 'webinar-geek' || section === 'pipeline-webinar-verify' || section === 'leaderboard' || section === 'support';
+    return (
+      section === 'home' ||
+      section === 'overview' ||
+      section === 'webinar-geek' ||
+      section === 'pipeline-webinar-verify' ||
+      section === 'leaderboard' ||
+      section === 'support' ||
+      section === 'performance-check-in'
+    );
   }
   if (role === 'hr') {
     return (
@@ -428,6 +444,8 @@ export function resolveAppSectionFromLocation(pathname: string, search: string):
   if (pathname === '/reports' || pathname.startsWith('/reports/')) return 'reports';
   if (pathname === '/admin/staff') return 'staff-directory';
   if (pathname === '/support') return 'support';
+  if (pathname === '/performance-check-in') return 'performance-check-in';
+  if (pathname === '/performance-check-ins') return 'performance-check-ins';
   if (pathname === '/ops-console') return 'ops-console';
   if (pathname === '/dashboard' || pathname === '/admin') {
     const view = new URLSearchParams(search).get('view');

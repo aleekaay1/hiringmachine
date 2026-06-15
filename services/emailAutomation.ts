@@ -9,7 +9,14 @@ import { EMAIL_TEMPLATES, POST_ASSESSMENT_SUBMIT_TEMPLATE } from './emailTemplat
 
 export const AUTOMATED_EMAILS_ENABLED = false;
 
-export type AutomationTriggerId = 'postCheckin' | 'postAssessmentSubmit' | 'leadershipReminder24hAfterCheckin';
+export type AutomationTriggerId =
+  | 'postCheckin'
+  | 'postAssessmentSubmit'
+  | 'leadershipReminder24hAfterCheckin'
+  | 'midWeekPerformanceCheckIn';
+
+/** Mid-week recruiter coaching emails — off until PERFORMANCE_CHECKIN_AUTOMATION_ENABLED on Edge. */
+export const PERFORMANCE_CHECKIN_AUTOMATION_ENABLED = false;
 
 export interface AutomationTrigger {
   id: AutomationTriggerId;
@@ -42,5 +49,12 @@ export const AUTOMATION_TRIGGERS: AutomationTrigger[] = [
     template: EMAIL_TEMPLATES.find((t) => t.id === 'stage3_assessment_link_post_overview'),
     hookHint:
       'Implemented: Supabase schedule → POST functions/v1/send-leadership-assessment-reminders with x-cron-secret. Sets adminData.leadershipAssessmentReminder24hSentAt. Uses adminData.checkedInAt (set on check-in) or falls back to candidates.timestamp.',
+  },
+  {
+    id: 'midWeekPerformanceCheckIn',
+    description:
+      'Mon/Tue Toronto: email recruiters & leadership below 50% mid-week pace with internal coaching form link.',
+    hookHint:
+      'Implemented: POST functions/v1/performance-check-in-reminder with x-cron-secret (PERFORMANCE_CHECKIN_CRON_SECRET). Disabled until Edge secret PERFORMANCE_CHECKIN_AUTOMATION_ENABLED=true. Form: /performance-check-in. Admin: /performance-check-ins.',
   },
 ];

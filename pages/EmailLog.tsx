@@ -1001,6 +1001,7 @@ const EmailLog: React.FC = () => {
             >
               <option value="all">All categories</option>
               <option value="leadership_assessment">Leadership assessment</option>
+              <option value="mid_week_coaching">Mid-week coaching</option>
               <option value="wednesday_live">Wednesday live</option>
               <option value="pipeline_crm">CRM / pipeline</option>
               <option value="reminder">Reminders</option>
