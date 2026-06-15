@@ -106,7 +106,7 @@ async function syncPipelineNotifications(
   userId: string,
   role: string,
 ): Promise<number> {
-  if (!['recruiter', 'leadership', 'webinar', 'admin'].includes(role)) return 0;
+  if (!['recruiter', 'leadership', 'webinar', 'admin', 'hr'].includes(role)) return 0;
   let created = 0;
   const now = new Date();
   const todayYmd = torontoYmd(now);

@@ -40,10 +40,15 @@ export const NOTIFICATION_CATEGORY_LABELS: Record<StaffNotificationCategory, str
   support: 'Support',
 };
 
-const STAFF_NOTIFICATION_ROLES = new Set<AppRole>(['recruiter', 'leadership', 'webinar', 'admin']);
+const STAFF_NOTIFICATION_ROLES = new Set<AppRole>(['recruiter', 'leadership', 'webinar', 'admin', 'hr']);
 
 export function canUseStaffNotifications(role: AppRole | null): boolean {
   return Boolean(role && STAFF_NOTIFICATION_ROLES.has(role));
+}
+
+/** Show bell for any signed-in staff workspace user (notifications may still be role-filtered server-side). */
+export function shouldShowStaffNotificationBell(userId: string | null, roleResolved: boolean): boolean {
+  return Boolean(userId) && roleResolved;
 }
 
 async function getAccessToken(): Promise<string | null> {

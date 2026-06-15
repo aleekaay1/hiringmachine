@@ -3,11 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { Bell, CheckCheck, Mail, Phone, PhoneCall, ClipboardList, Megaphone, LifeBuoy, AlertTriangle } from 'lucide-react';
 import type { AppRole } from '../services/accessControl';
 import {
-  canUseStaffNotifications,
   loadStaffNotifications,
   markAllStaffNotificationsRead,
   markStaffNotificationRead,
   NOTIFICATION_CATEGORY_LABELS,
+  shouldShowStaffNotificationBell,
   syncStaffNotifications,
   type StaffNotification,
   type StaffNotificationCategory,
@@ -57,10 +57,11 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
   const [unread, setUnread] = React.useState(0);
   const panelRef = React.useRef<HTMLDivElement>(null);
 
-  const enabled = roleResolved && Boolean(userId) && canUseStaffNotifications(role);
+  const visible = shouldShowStaffNotificationBell(userId, roleResolved);
+  const canFetch = visible;
 
   const refresh = React.useCallback(async (sync = false) => {
-    if (!enabled) return;
+    if (!canFetch) return;
     setLoading(true);
     try {
       const result = sync ? await syncStaffNotifications() : await loadStaffNotifications();
@@ -71,14 +72,14 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [enabled]);
+  }, [canFetch]);
 
   React.useEffect(() => {
-    if (!enabled) return;
+    if (!canFetch) return;
     void refresh(false);
     const timer = window.setInterval(() => void refresh(true), 5 * 60 * 1000);
     return () => window.clearInterval(timer);
-  }, [enabled, refresh]);
+  }, [canFetch, refresh]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -91,7 +92,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
     return () => document.removeEventListener('mousedown', onDoc);
   }, [open]);
 
-  if (!enabled) return null;
+  if (!visible) return null;
 
   const onOpenItem = async (item: StaffNotification) => {
     if (!item.read_at) {
@@ -113,7 +114,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
 
   const buttonClass =
     variant === 'topbar'
-      ? 'relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-[#d4e4f7] bg-[#f8fbff] text-[#0B1B34] transition hover:border-[#b8d4f0] hover:bg-[#eef6ff]'
+      ? 'relative inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#b8d4f0] bg-white text-[#0B1B34] shadow-md ring-1 ring-[#d4e4f7] transition hover:border-[#4e9ae8] hover:bg-[#eef6ff]'
       : 'relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10 hover:text-white';
 
   return (
@@ -128,7 +129,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
         aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`}
         title="Notifications"
       >
-        <Bell size={18} />
+        <Bell size={20} />
         {unread > 0 && (
           <span className="absolute -right-1 -top-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
             {unread > 99 ? '99+' : unread}

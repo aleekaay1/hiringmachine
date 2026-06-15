@@ -143,17 +143,17 @@ const Layout: React.FC<LayoutProps> = ({
         />
       )}
       <div className="min-h-screen flex flex-col flex-1 min-w-0">
-        {isAdmin && (
-          <header className="sticky top-0 z-[60] flex h-12 shrink-0 items-center justify-end gap-2 border-b border-[#dce6f3] bg-white/95 px-3 backdrop-blur-sm safe-area-top sm:px-4">
-            {roleResolved && userId && (
+        {isAdmin && roleResolved && userId && (
+          <div className="pointer-events-none fixed inset-x-0 top-0 z-[100] flex justify-end px-3 pt-2 safe-area-top sm:px-4">
+            <div className="pointer-events-auto">
               <NotificationBell
                 role={role}
                 userId={userId}
                 roleResolved={roleResolved}
                 variant="topbar"
               />
-            )}
-          </header>
+            </div>
+          </div>
         )}
         {!hideHeader && !isAdmin && (
           <header className="bg-white shadow-sm sticky top-0 z-50 safe-area-top">
