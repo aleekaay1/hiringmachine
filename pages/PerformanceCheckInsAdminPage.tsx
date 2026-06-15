@@ -40,6 +40,7 @@ import {
   PERFORMANCE_CHECKIN_AUTOMATION_ENABLED,
 } from '../services/performanceCheckInService';
 import { COACHING_WEEKLY_BOOKING_TARGET } from '../services/coachingPace';
+import { fridayWeekBoundsFromYmd, ymdToShortLabel } from '../services/webinarGeekDates';
 
 function hintStyles(tone: CoachingBoardPerson['hint']['tone']): string {
   if (tone === 'positive') return 'border-emerald-200 bg-emerald-50 text-emerald-900';
