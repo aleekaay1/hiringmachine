@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient';
+import { draftCallScriptFields } from '../content/defaultCallScript';
 
 const TABLE = 'pipeline_call_scripts';
 const LS_PREFIX = 'pohiring_call_scripts_v1';
@@ -25,6 +26,18 @@ function isMissingTableError(error: { code?: string; message?: string; details?:
   const m = `${error.message || ''} ${error.details || ''}`;
   if (/404/.test(m) || /not found/i.test(m)) return true;
   return /pipeline_call_scripts/i.test(m) && /schema cache|does not exist|relation/i.test(m);
+}
+
+function shouldUseLocalScriptFallback(error: { code?: string; message?: string; details?: string } | null): boolean {
+  if (!error) return false;
+  if (isMissingTableError(error)) return true;
+  if (error.code === '22003') return true;
+  const m = `${error.message || ''} ${error.details || ''}`.toLowerCase();
+  return (
+    m.includes('integer out of range') ||
+    m.includes('invalid input') ||
+    (m.includes('pipeline_call_scripts') && m.includes('400'))
+  );
 }
 
 function localKey(userId: string): string {
@@ -102,7 +115,7 @@ export async function listPipelineCallScripts(userId: string): Promise<{
 
 export async function createPipelineCallScript(
   userId: string,
-  input: { title?: string; body?: string; isDefault?: boolean },
+  input: { title?: string; body?: string; isDefault?: boolean; sortOrder?: number },
 ): Promise<{ script: PipelineCallScript; tableMissing: boolean }> {
   const title = String(input.title || 'My script').trim() || 'My script';
   const body = String(input.body || '');
@@ -111,22 +124,23 @@ export async function createPipelineCallScript(
     user_id: userId,
     title,
     body,
-    sort_order: Date.now(),
+    sort_order: typeof input.sortOrder === 'number' ? input.sortOrder : 0,
     is_default: Boolean(input.isDefault),
     updated_at: now,
   };
 
   const { data, error } = await supabase.from(TABLE).insert(row).select('*').single();
   if (error) {
-    if (isMissingTableError(error)) {
+    if (shouldUseLocalScriptFallback(error)) {
       const scripts = readLocalScripts(userId);
       const script = newLocalScript(userId, title, body, scripts.length === 0 || Boolean(input.isDefault));
+      script.sort_order = row.sort_order;
       if (script.is_default) {
         for (const item of scripts) item.is_default = false;
       }
       scripts.unshift(script);
       writeLocalScripts(userId, scripts);
-      return { script, tableMissing: true };
+      return { script, tableMissing: isMissingTableError(error) };
     }
     throw new Error(error.message);
   }
@@ -166,7 +180,7 @@ export async function updatePipelineCallScript(
     .single();
 
   if (error) {
-    if (isMissingTableError(error)) {
+    if (shouldUseLocalScriptFallback(error)) {
       const scripts = readLocalScripts(userId);
       const idx = scripts.findIndex((s) => s.id === scriptId);
       if (idx < 0) throw new Error('Script not found');
@@ -183,7 +197,7 @@ export async function updatePipelineCallScript(
       }
       current.updated_at = new Date().toISOString();
       writeLocalScripts(userId, scripts);
-      return { script: current, tableMissing: true };
+      return { script: current, tableMissing: isMissingTableError(error) };
     }
     throw new Error(error.message);
   }
@@ -201,14 +215,31 @@ export async function deletePipelineCallScript(
 ): Promise<{ ok: boolean; tableMissing: boolean }> {
   const { error } = await supabase.from(TABLE).delete().eq('id', scriptId).eq('user_id', userId);
   if (error) {
-    if (isMissingTableError(error)) {
+    if (shouldUseLocalScriptFallback(error)) {
       const scripts = readLocalScripts(userId).filter((s) => s.id !== scriptId);
       writeLocalScripts(userId, scripts);
-      return { ok: true, tableMissing: true };
+      return { ok: true, tableMissing: isMissingTableError(error) };
     }
     throw new Error(error.message);
   }
   return { ok: true, tableMissing: false };
+}
+
+export async function loadOrSeedPipelineCallScripts(userId: string): Promise<{
+  scripts: PipelineCallScript[];
+  tableMissing: boolean;
+}> {
+  const { scripts, tableMissing } = await listPipelineCallScripts(userId);
+  if (scripts.length > 0 || tableMissing) return { scripts, tableMissing };
+
+  const draft = draftCallScriptFields();
+  const { script, tableMissing: seedTableMissing } = await createPipelineCallScript(userId, {
+    title: draft.title,
+    body: draft.body,
+    isDefault: true,
+    sortOrder: 0,
+  });
+  return { scripts: [script], tableMissing: seedTableMissing };
 }
 
 export function pickActiveCallScript(

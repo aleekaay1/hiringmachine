@@ -77,6 +77,7 @@ import { consumeDialQueueIntent } from '../services/recruiterLeadPackAnalytics';
 import { buildCallHistoryRows } from '../services/callHistoryRows';
 import {
   listPipelineCallScripts,
+  loadOrSeedPipelineCallScripts,
   pickActiveCallScript,
   saveLastUsedCallScriptId,
   type PipelineCallScript,
@@ -236,7 +237,7 @@ const PipelineCallWorkspace: React.FC = () => {
   React.useEffect(() => {
     if (!currentUserId) return;
     let cancelled = false;
-    void listPipelineCallScripts(currentUserId)
+    void loadOrSeedPipelineCallScripts(currentUserId)
       .then(({ scripts, tableMissing }) => {
         if (cancelled) return;
         setCallScripts(scripts);
