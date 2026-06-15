@@ -5,6 +5,11 @@
  * Edge: override date/time via PUBLIC_LIVE_SESSION_DISPLAY_DATE / PUBLIC_LIVE_SESSION_DISPLAY_TIME
  */
 
+import {
+  vimeoEmailValueAdd,
+  VIMEO_CHECKIN_LIVE_SESSION_INVITE,
+} from './emailVideoEmbeds';
+
 export const POST_CHECKIN_EMAIL_SUBJECT =
   "Live Online Career Session – you're invited | Globe Life AIL · Paz Organization";
 
@@ -12,6 +17,11 @@ export const POST_CHECKIN_EMAIL_BODY_HTML = `
 <p>Hi {{firstName}},</p>
 <p>Your check-in form has been received and reviewed.</p>
 <p>You’ve been selected to attend our <strong>Live Online Career Session</strong>.</p>
+${vimeoEmailValueAdd(
+  VIMEO_CHECKIN_LIVE_SESSION_INVITE,
+  'Before your session, watch this short message on what to expect and how to show up prepared:',
+  "You've Been Selected for the Live Career Session",
+)}
 <p><strong>Session Details:</strong><br/>
 📅 {{Date}}<br/>
 ⏰ {{Time}}<br/>

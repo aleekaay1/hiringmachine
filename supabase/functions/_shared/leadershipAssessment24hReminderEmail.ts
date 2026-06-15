@@ -3,8 +3,13 @@
  */
 import { buildEmailSignatureHtml } from './emailSignatureHtml.ts';
 import { ALEX_PAZ_ORG_INTRO_PARAGRAPHS_HTML } from './pazOrganizationIntroEmail.ts';
+import {
+  vimeoEmailValueAdd,
+  VIMEO_STAGE3_ASSESSMENT_POST_OVERVIEW,
+} from './emailVideoEmbeds.ts';
 
-export const LEADERSHIP_ASSESSMENT_REMINDER_24H_SUBJECT = 'Reminder: Complete your Leadership Assessment';
+export const LEADERSHIP_ASSESSMENT_REMINDER_24H_SUBJECT =
+  'Final Reminder: Complete Your Leadership Assessment';
 
 export function buildLeadershipAssessmentReminder24hHtml(
   firstName: string,
@@ -13,8 +18,14 @@ export function buildLeadershipAssessmentReminder24hHtml(
   const sig = buildEmailSignatureHtml();
   const fn = (firstName || 'there').trim();
   const link = `<a href="${assessmentLookupUrl}" target="_blank" rel="noopener noreferrer">${assessmentLookupUrl}</a>`;
+  const video = vimeoEmailValueAdd(
+    VIMEO_STAGE3_ASSESSMENT_POST_OVERVIEW,
+    'If you have not finished your assessment yet, this message explains why completing it promptly matters:',
+    'Final Reminder: Complete Your Leadership Assessment',
+  );
   return `
 <p>Hi ${fn},</p>
+${video}
 ${ALEX_PAZ_ORG_INTRO_PARAGRAPHS_HTML}
 <p>This is a friendly reminder to complete your <strong>Leadership &amp; Career Assessment</strong> if you have not already done so.</p>
 <p>Please use the link below. The same email address you used at check-in is required to access your record:</p>

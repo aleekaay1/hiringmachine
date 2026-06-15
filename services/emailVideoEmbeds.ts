@@ -41,10 +41,7 @@ export const VIMEO_MISSED_LIVE_SESSION_RESCHEDULE: VimeoPrivacySpec = {
   hash: '87db4b2a69',
 };
 
-/**
- * Planned: post–Leadership Assessment submission (candidate thank-you / next steps).
- * Not wired to `send-assessment-email` / `send-candidate-email` yet — see `candidateEmailVimeoPlan.ts`.
- */
+/** Post–Leadership Assessment submission (candidate thank-you / next steps). */
 export const VIMEO_POST_ASSESSMENT_SUBMIT_PLANNED: VimeoPrivacySpec = {
   videoId: '1191971907',
   hash: 'ede5e12aeb',
@@ -75,4 +72,9 @@ export function vimeoEmailEmbedTable(spec: VimeoPrivacySpec, title: string): str
   </tr>
 </table>
   `.trim();
+}
+
+/** One value-add sentence plus embed (keeps existing copy unchanged around it). */
+export function vimeoEmailValueAdd(spec: VimeoPrivacySpec, oneLiner: string, title: string): string {
+  return `<p>${oneLiner}</p>\n${vimeoEmailEmbedTable(spec, title)}`;
 }

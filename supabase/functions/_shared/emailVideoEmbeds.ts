@@ -63,3 +63,8 @@ export function vimeoEmailEmbedTable(spec: VimeoPrivacySpec, title: string): str
 </table>
   `.trim();
 }
+
+/** One value-add sentence plus embed (keeps existing copy unchanged around it). */
+export function vimeoEmailValueAdd(spec: VimeoPrivacySpec, oneLiner: string, title: string): string {
+  return `<p>${oneLiner}</p>\n${vimeoEmailEmbedTable(spec, title)}`;
+}

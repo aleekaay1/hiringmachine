@@ -4,11 +4,21 @@
  * Placeholders: {{candidateName}}, {{emailSignature}}
  */
 
+import {
+  vimeoEmailValueAdd,
+  VIMEO_POST_ASSESSMENT_SUBMIT_PLANNED,
+} from './emailVideoEmbeds.ts';
+
 export const POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT =
-  'Thank you for completing the Leadership & Career Assessment';
+  'Your Assessment Has Been Reviewed — Next Steps';
 
 export const POST_ASSESSMENT_SUBMIT_EMAIL_BODY_HTML = `
 <p>Dear {{candidateName}},</p>
+${vimeoEmailValueAdd(
+  VIMEO_POST_ASSESSMENT_SUBMIT_PLANNED,
+  'While our leadership team reviews your profile, this short message explains what we value and what happens next:',
+  'Your Assessment Has Been Reviewed — Next Steps',
+)}
 <p>Thank you for completing the Leadership &amp; Career Assessment.</p>
 <p>Your responses have been successfully received and recorded. This assessment generates an internal score that serves as one component of the overall evaluation process. Individual scores are not distributed; however, confirmation has been logged that this step has been completed.</p>
 <p>The submitted assessment will be reviewed alongside the rest of your profile by the CEO and members of the Leadership Team. As part of this process, consideration is given to alignment with organizational standards, mindset, and long-term leadership potential.</p>

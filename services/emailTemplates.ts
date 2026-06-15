@@ -8,6 +8,13 @@ import {
 import { ALEX_PAZ_ORG_INTRO_PARAGRAPHS_HTML } from './pazOrganizationIntroEmail';
 import { POST_CHECKIN_EMAIL_SUBJECT, POST_CHECKIN_EMAIL_BODY_HTML } from './postCheckinEmailTemplate';
 import {
+  vimeoEmailValueAdd,
+  VIMEO_MISSED_LIVE_SESSION_RESCHEDULE,
+  VIMEO_POST_ASSESSMENT_SUBMIT_PLANNED,
+  VIMEO_STAGE3_ASSESSMENT_AFTER_ATTENDED,
+  VIMEO_STAGE3_ASSESSMENT_POST_OVERVIEW,
+} from './emailVideoEmbeds';
+import {
   DEFAULT_ASSESSMENT_LOOKUP_URL,
   LIVE_SESSION_RESCHEDULE_CALENDLY_URL,
   ZOOM_MEETING_URL,
@@ -37,7 +44,7 @@ export interface EmailTemplate {
 
 /**
  * Manual stage emails (admin buttons). Check-in is also sent automatically on form submit (Edge Function).
- * Optional Vimeo variants for later: `emailVideoEmbeds.ts`, `candidateEmailVimeoPlan.ts` (not merged into live bodies).
+ * Vimeo embeds: `emailVideoEmbeds.ts`, `candidateEmailVimeoPlan.ts`.
  */
 export const EMAIL_TEMPLATES: EmailTemplate[] = [
   {
@@ -55,6 +62,11 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
     bodyHtml: `
 <p>Hi {{firstName}},</p>
 <p>Thank you for attending today’s Live Online Career Session.</p>
+${vimeoEmailValueAdd(
+  VIMEO_STAGE3_ASSESSMENT_AFTER_ATTENDED,
+  'Here is a quick walkthrough of your next step—the leadership assessment and what we are looking for:',
+  'Your Next Step: Leadership Assessment',
+)}
 <p>The next step in the process is to complete the <strong>Leadership &amp; Career Assessment</strong> using the link below:</p>
 <p><strong>{{Assessment Link}}</strong></p>
 <p>This assessment is designed to help us evaluate overall fit, mindset, professionalism, and leadership potential within our performance-driven environment.</p>
@@ -72,6 +84,11 @@ export const EMAIL_TEMPLATES: EmailTemplate[] = [
     bodyHtml: `
 <p>Hi {{firstName}},</p>
 <p>Thank you for attending our live online career session.</p>
+${vimeoEmailValueAdd(
+  VIMEO_STAGE3_ASSESSMENT_POST_OVERVIEW,
+  'If you have not finished your assessment yet, this message explains why completing it promptly matters:',
+  'Final Reminder: Complete Your Leadership Assessment',
+)}
 ${ALEX_PAZ_ORG_INTRO_PARAGRAPHS_HTML}
 <p>Your next step is to complete the <strong>Leadership &amp; Career Assessment</strong> using the link below:</p>
 <p><strong>{{Assessment Link}}</strong></p>
@@ -89,6 +106,11 @@ ${ALEX_PAZ_ORG_INTRO_PARAGRAPHS_HTML}
     bodyHtml: `
 <p>Hi {{firstName}},</p>
 <p>We noticed you were unable to attend the live career session today.</p>
+${vimeoEmailValueAdd(
+  VIMEO_MISSED_LIVE_SESSION_RESCHEDULE,
+  'Before you reschedule, please watch this one-time message on our expectations and why we are extending another opportunity:',
+  'One-Time Opportunity to Reschedule',
+)}
 <p>Because we saw potential in your initial application, we are extending a one-time opportunity to reschedule your session.</p>
 <p>Please use the link below to select a new session time:</p>
 <p><strong><a href="{{calendlyRescheduleUrl}}" target="_blank" rel="noopener noreferrer">{{calendlyRescheduleUrl}}</a></strong></p>
@@ -209,9 +231,14 @@ export const POST_ASSESSMENT_SUBMIT_TEMPLATE: EmailTemplate = {
   id: 'stage4_assessment_received',
   name: 'Stage 4 – Assessment received (automation)',
   hint: 'Thank you; we received results—no score disclosed.',
-  subject: 'Thank you for completing the Leadership & Career Assessment',
+  subject: 'Your Assessment Has Been Reviewed — Next Steps',
   bodyHtml: `
 <p>Dear {{candidateName}},</p>
+${vimeoEmailValueAdd(
+  VIMEO_POST_ASSESSMENT_SUBMIT_PLANNED,
+  'While our leadership team reviews your profile, this short message explains what we value and what happens next:',
+  'Your Assessment Has Been Reviewed — Next Steps',
+)}
 <p>Thank you for completing the Leadership &amp; Career Assessment.</p>
 <p>Your responses have been successfully received and recorded. This assessment generates an internal score that serves as one component of the overall evaluation process. Individual scores are not distributed; however, confirmation has been logged that this step has been completed.</p>
 <p>The submitted assessment will be reviewed alongside the rest of your profile by the CEO and members of the Leadership Team. As part of this process, consideration is given to alignment with organizational standards, mindset, and long-term leadership potential.</p>

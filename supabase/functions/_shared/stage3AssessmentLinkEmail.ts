@@ -1,5 +1,9 @@
 import { buildEmailSignatureHtml } from './emailSignatureHtml.ts';
 import { DEFAULT_ASSESSMENT_LOOKUP_URL } from './hiringUrls.ts';
+import {
+  vimeoEmailValueAdd,
+  VIMEO_STAGE3_ASSESSMENT_AFTER_ATTENDED,
+} from './emailVideoEmbeds.ts';
 
 export const STAGE3_ASSESSMENT_LINK_SUBJECT = 'Your Leadership Assessment – next step';
 
@@ -8,9 +12,15 @@ export function buildStage3AssessmentLinkHtml(firstName: string, assessmentLooku
   const sig = buildEmailSignatureHtml();
   const fn = (firstName || 'there').trim();
   const link = `<a href="${assessmentLookupUrl}" target="_blank" rel="noopener noreferrer">${assessmentLookupUrl}</a>`;
+  const video = vimeoEmailValueAdd(
+    VIMEO_STAGE3_ASSESSMENT_AFTER_ATTENDED,
+    'Here is a quick walkthrough of your next step—the leadership assessment and what we are looking for:',
+    'Your Next Step: Leadership Assessment',
+  );
   return `
 <p>Hi ${fn},</p>
 <p>Thank you for attending today’s Live Online Career Session.</p>
+${video}
 <p>The next step in the process is to complete the <strong>Leadership &amp; Career Assessment</strong> using the link below:</p>
 <p><strong>${link}</strong></p>
 <p>This assessment is designed to help us evaluate overall fit, mindset, professionalism, and leadership potential within our performance-driven environment.</p>
