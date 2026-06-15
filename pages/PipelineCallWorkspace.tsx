@@ -138,6 +138,8 @@ function openWebinarVerifyTab(
 }
 
 const SKIP_EMAIL_DISPOSITIONS = new Set(['not interested', 'do not call', 'wrong number']);
+
+const RETRY_PRIORITY_ORDER: Record<string, number> = {
   'callback requested': 0,
   'no answer': 1,
   'voicemail left': 2,
@@ -169,8 +171,6 @@ function latestRecordByCandidate(records: PipelineCallRecord[]): Map<string, Pip
   }
   return map;
 }
-
-const SKIP_EMAIL_DISPOSITIONS = new Set(['not interested', 'do not call', 'wrong number']);
 
 const PipelineCallWorkspace: React.FC = () => {
   const [searchParams] = useSearchParams();
