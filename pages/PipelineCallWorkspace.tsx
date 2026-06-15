@@ -14,6 +14,7 @@ import {
   Video,
 } from 'lucide-react';
 import CallHistorySheet from '../components/pipeline/CallHistorySheet';
+import CandidateDispositionHistory from '../components/pipeline/CandidateDispositionHistory';
 import CallScriptsDrawer from '../components/pipeline/CallScriptsDrawer';
 import CallScriptViewerModal from '../components/pipeline/CallScriptViewerModal';
 import CandidateResumeDetailsCard from '../components/pipeline/CandidateResumeDetailsCard';
@@ -561,15 +562,20 @@ const PipelineCallWorkspace: React.FC = () => {
     return map;
   }, [loadableBatchGroups]);
 
+  const myCallRecords = React.useMemo(() => {
+    if (!currentUserId) return records;
+    return records.filter((row) => !row.recruiter_user_id || row.recruiter_user_id === currentUserId);
+  }, [records, currentUserId]);
+
   const callHistoryRows = React.useMemo(
     () =>
       buildCallHistoryRows({
-        records,
+        records: myCallRecords,
         candidates,
         resumesByCandidate,
         batchTitleByKey,
       }),
-    [records, candidates, resumesByCandidate, batchTitleByKey],
+    [myCallRecords, candidates, resumesByCandidate, batchTitleByKey],
   );
 
   const openLeadFromHistory = React.useCallback(
@@ -1337,11 +1343,6 @@ const PipelineCallWorkspace: React.FC = () => {
                       {currentCandidate.journey_stage && (
                         <p className={`mt-1 text-xs ${tone.panelLabel}`}>Stage: {currentCandidate.journey_stage}</p>
                       )}
-                      {latestByCandidate.get(currentCandidate.id) && (
-                        <p className={`mt-1 text-xs ${tone.panelMuted}`}>
-                          Last: {latestByCandidate.get(currentCandidate.id)?.disposition}
-                        </p>
-                      )}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Button
@@ -1389,6 +1390,12 @@ const PipelineCallWorkspace: React.FC = () => {
                     candidate={currentCandidate}
                     records={records}
                     registrants={liveRegistrants}
+                    tone={tone}
+                  />
+
+                  <CandidateDispositionHistory
+                    candidateId={currentCandidate.id}
+                    records={myCallRecords}
                     tone={tone}
                   />
 

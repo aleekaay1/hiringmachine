@@ -11,6 +11,7 @@ export type CallHistoryRow = {
   phone: string;
   email: string;
   disposition: string;
+  latestComment: string | null;
   disposedAt: string;
   batchKey: string;
   batchTitle: string;
@@ -81,6 +82,7 @@ export function buildCallHistoryRows(input: {
       phone: recordPhone(latest, candidate),
       email: recordEmail(latest, candidate),
       disposition: String(latest.disposition || '—').trim(),
+      latestComment: String(latest.comment || '').trim() || null,
       disposedAt: latest.disposed_at || latest.created_at,
       batchKey,
       batchTitle,
@@ -102,9 +104,35 @@ export function matchesCallHistorySearch(row: CallHistoryRow, query: string): bo
     row.displayName.toLowerCase().includes(q) ||
     row.email.toLowerCase().includes(q) ||
     row.disposition.toLowerCase().includes(q) ||
+    (row.latestComment || '').toLowerCase().includes(q) ||
     row.batchTitle.toLowerCase().includes(q) ||
     (row.title || '').toLowerCase().includes(q) ||
     row.phone.toLowerCase().includes(q) ||
     (qDigits.length >= 3 && phoneDigits.includes(qDigits))
   );
+}
+
+export function callRecordsForCandidate(
+  records: PipelineCallRecord[],
+  candidateId: string,
+): PipelineCallRecord[] {
+  return records
+    .filter((r) => String(r.candidate_id || '') === candidateId)
+    .sort(
+      (a, b) =>
+        new Date(b.disposed_at || b.created_at).getTime() - new Date(a.disposed_at || a.created_at).getTime(),
+    );
+}
+
+export function dispositionBadgeClass(disposition: string): string {
+  const d = String(disposition || '').trim().toLowerCase();
+  if (!d || d === 'not contacted') return 'bg-slate-100 text-slate-700';
+  if (d === 'booked') return 'bg-violet-100 text-violet-800';
+  if (d === 'callback requested') return 'bg-sky-100 text-sky-800';
+  if (d === 'no answer' || d === 'voicemail left' || d === 'busy / line busy') return 'bg-amber-100 text-amber-900';
+  if (d === 'not interested' || d === 'do not call' || d === 'wrong number') return 'bg-rose-100 text-rose-800';
+  if (d === 'connected' || d === 'interested – next step' || d === 'scheduled interview') {
+    return 'bg-emerald-100 text-emerald-800';
+  }
+  return 'bg-[#edf5ff] text-[#285082]';
 }

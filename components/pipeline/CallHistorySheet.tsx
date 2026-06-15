@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Mail, Phone, Search, X } from 'lucide-react';
 import { formatDateTimeCanadaEastern } from '../../services/dateDisplay';
 import { liveSessionStatusLabel } from '../../services/candidateActivityStats';
-import { matchesCallHistorySearch, type CallHistoryRow } from '../../services/callHistoryRows';
+import { matchesCallHistorySearch, dispositionBadgeClass, type CallHistoryRow } from '../../services/callHistoryRows';
 import type { LiveSessionRegistrantRow } from '../../services/liveSessionBookedOutcomes';
 import type { PipelineCandidate } from '../../services/pipelineService';
 
@@ -93,7 +93,7 @@ const CallHistorySheet: React.FC<CallHistorySheetProps> = ({
                   <input
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Search name, phone, email, disposition…"
+                    placeholder="Search name, phone, email, disposition, comment…"
                     className={`w-full rounded-xl border py-2 pl-8 pr-3 text-sm ${tone.input}`}
                     autoFocus
                   />
@@ -116,7 +116,7 @@ const CallHistorySheet: React.FC<CallHistorySheetProps> = ({
                 </p>
               ) : (
                 <div className="overflow-x-auto rounded-xl border border-[#d4e4f7]/80">
-                  <table className="w-full min-w-[920px] border-collapse text-left text-sm">
+                  <table className="w-full min-w-[1080px] border-collapse text-left text-sm">
                     <thead className="sticky top-0 z-10 border-b border-[#d4e4f7] bg-[#f0f7ff]/95 backdrop-blur">
                       <tr>
                         <th className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Name</th>
@@ -124,6 +124,7 @@ const CallHistorySheet: React.FC<CallHistorySheetProps> = ({
                         <th className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Email</th>
                         <th className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Role</th>
                         <th className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Disposition</th>
+                        <th className={`min-w-[200px] px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Comment</th>
                         <th className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Live session</th>
                         <th className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Last call</th>
                         <th className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Batch</th>
@@ -146,9 +147,20 @@ const CallHistorySheet: React.FC<CallHistorySheetProps> = ({
                             {row.title || '—'}
                           </td>
                           <td className="px-3 py-2.5">
-                            <span className="inline-flex rounded-full bg-[#edf5ff] px-2 py-0.5 text-xs font-medium text-[#285082]">
+                            <span
+                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${dispositionBadgeClass(row.disposition)}`}
+                            >
                               {row.disposition}
                             </span>
+                          </td>
+                          <td className={`max-w-[280px] px-3 py-2.5 text-xs ${tone.panelMuted}`}>
+                            {row.latestComment ? (
+                              <p className="line-clamp-2 whitespace-pre-wrap text-[#0B1B34]" title={row.latestComment}>
+                                {row.latestComment}
+                              </p>
+                            ) : (
+                              <span className="italic opacity-70">—</span>
+                            )}
                           </td>
                           <td className={`px-3 py-2.5 text-xs ${tone.panelMuted}`}>
                             {liveSessionStatusLabel(
