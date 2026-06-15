@@ -43,6 +43,15 @@ function hintStyles(tone: CoachingBoardPerson['hint']['tone']): string {
   return 'border-[#d4e4f7] bg-[#f8fbff] text-[#0B1B34]';
 }
 
+function StatChip({ label, value, accent }: { label: string; value: string | number; accent?: string }) {
+  return (
+    <div className="rounded-lg border border-[#e8f0fa] bg-[#f8fbff] px-2.5 py-1.5 text-center min-w-[4.5rem]">
+      <p className="text-[9px] font-semibold uppercase tracking-wide text-[#5c7594]">{label}</p>
+      <p className={`text-sm font-semibold tabular-nums ${accent || 'text-[#0B1B34]'}`}>{value}</p>
+    </div>
+  );
+}
+
 function PersonCard({
   person,
   expanded,
@@ -129,6 +138,32 @@ function PersonCard({
             compact
           />
           <DailyWeekBars days={person.daily} highlightThroughDay={elapsedDays - 1} />
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          <StatChip label="Calls" value={person.actualCalls} />
+          <StatChip label="Webinar booked" value={person.webinarBooked} />
+          <StatChip label="Webinar showed" value={person.webinarShowed} accent="text-emerald-700" />
+          <StatChip label="Live booked" value={person.liveSessionBooked} />
+          <StatChip label="Live showed" value={person.liveSessionShowed} accent="text-emerald-700" />
+          <StatChip
+            label="Show rate"
+            value={person.showRatePct !== null ? `${person.showRatePct}%` : '—'}
+            accent={
+              person.showRatePct !== null && person.showRatePct < 40
+                ? 'text-rose-600'
+                : person.showRatePct !== null && person.showRatePct >= 60
+                  ? 'text-emerald-700'
+                  : undefined
+            }
+          />
+          <StatChip label="Rank" value={person.leaderboardRank ?? '—'} />
+          <StatChip label="Score" value={person.leaderboardScore !== null ? Math.round(person.leaderboardScore) : '—'} />
+          {!person.hasTargets && (
+            <span className="self-center rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-600">
+              Targets not set
+            </span>
+          )}
         </div>
       </button>
 
@@ -300,8 +335,9 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
           </div>
 
           {summary && (
-            <div className="mt-5 grid gap-3 sm:grid-cols-4">
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
               {[
+                { label: 'Team', value: summary.teamCount, color: 'text-white' },
                 { label: 'Below 50%', value: summary.belowCount, color: 'text-rose-300' },
                 { label: 'Forms in', value: summary.formCount, color: 'text-sky-300' },
                 { label: 'Emails sent', value: summary.emailSentCount, color: 'text-emerald-300' },
@@ -316,7 +352,8 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-[#d4e4f7] bg-white p-3">
+        <div className="overflow-x-auto rounded-2xl border border-[#d4e4f7] bg-white p-3">
+          <div className="flex min-w-max flex-wrap items-center gap-2">
           <div className="flex items-center gap-1">
             <button type="button" onClick={() => shiftWeek(1)} className="rounded-lg p-2 hover:bg-[#f0f6ff]" aria-label="Previous week">
               <ChevronLeft size={18} />
@@ -380,10 +417,11 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
           )}
 
           {!PERFORMANCE_CHECKIN_AUTOMATION_ENABLED && (
-            <span className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
+            <span className="shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
               Email automation off (testing)
             </span>
           )}
+          </div>
         </div>
 
         {error && <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</div>}
@@ -391,12 +429,13 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
         {tab === 'board' && (
           <div className="space-y-3">
             <p className="text-xs text-[#5c7594]">
-              Week {ymdToShortLabel(weekBounds.since)} → {ymdToShortLabel(weekBounds.until)} · sorted top performers first
+              Week {ymdToShortLabel(weekBounds.since)} → {ymdToShortLabel(weekBounds.until)} · {filteredPeople.length}{' '}
+              caller{filteredPeople.length === 1 ? '' : 's'} · sorted by leaderboard rank
             </p>
             {loading && <div className="rounded-2xl border border-[#d4e4f7] bg-white p-8 text-center text-sm text-[#5c7594]">Loading coaching data…</div>}
             {!loading && filteredPeople.length === 0 && (
               <div className="rounded-2xl border border-[#d4e4f7] bg-white p-8 text-center text-sm text-[#5c7594]">
-                No callers with targets match this filter.
+                No callers match this filter.
               </div>
             )}
             {filteredPeople.map((person) => (
@@ -439,6 +478,12 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
                   </span>
                   <span className="rounded-full bg-[#eef6ff] px-2 py-1 text-[#0B1B34]">
                     Bookings {ladderPerson.bookingsPacePct ?? '—'}%
+                  </span>
+                  <span className="rounded-full bg-[#eef6ff] px-2 py-1 text-[#0B1B34]">
+                    Webinar {ladderPerson.webinarBooked}/{ladderPerson.webinarShowed}
+                  </span>
+                  <span className="rounded-full bg-[#eef6ff] px-2 py-1 text-[#0B1B34]">
+                    Live {ladderPerson.liveSessionBooked}/{ladderPerson.liveSessionShowed}
                   </span>
                 </div>
               )}

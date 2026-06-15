@@ -1,7 +1,9 @@
 import {
+  buildRecruiterScopeTokens,
   filterProductionStaffProfiles,
   isDemoStaffProfile,
   listAllUserProfiles,
+  recruiterOwnsNameKey,
   type UserProfile,
 } from './accessControl';
 import {
@@ -70,9 +72,18 @@ export type CoachingBoardPerson = {
   role: string;
   dailyCallTarget: number | null;
   dailyBookingTarget: number | null;
+  hasTargets: boolean;
   elapsedDays: number;
   actualCalls: number;
   actualBooked: number;
+  webinarBooked: number;
+  webinarShowed: number;
+  liveSessionBooked: number;
+  liveSessionShowed: number;
+  totalShowed: number;
+  showRatePct: number | null;
+  leaderboardRank: number | null;
+  leaderboardScore: number | null;
   expectedCalls: number | null;
   expectedBookings: number | null;
   callsPacePct: number | null;
@@ -92,6 +103,7 @@ export type CoachingBoardSummary = {
   weekUntil: string;
   weekLabel: string;
   elapsedDays: number;
+  teamCount: number;
   belowCount: number;
   formCount: number;
   emailSentCount: number;
@@ -119,20 +131,32 @@ function combinedPace(calls: number | null, bookings: number | null): number | n
   return Math.round((values.reduce((s, v) => s + v, 0) / values.length) * 100) / 100;
 }
 
-function rankScoreFromPace(pace: number | null, below: boolean): number {
-  const base = pace ?? 0;
-  return below ? base : base + 1000;
-}
-
 export function computeCoachingHint(input: {
   belowThreshold: boolean;
+  hasTargets: boolean;
   callsPacePct: number | null;
   bookingsPacePct: number | null;
   previousCombinedPace: number | null;
   currentCombinedPace: number | null;
   hasForm: boolean;
 }): CoachingHint {
-  const { belowThreshold, callsPacePct, bookingsPacePct, previousCombinedPace, currentCombinedPace, hasForm } = input;
+  const {
+    belowThreshold,
+    hasTargets,
+    callsPacePct,
+    bookingsPacePct,
+    previousCombinedPace,
+    currentCombinedPace,
+    hasForm,
+  } = input;
+
+  if (!hasTargets) {
+    return {
+      tone: 'neutral',
+      title: 'No targets set',
+      detail: 'Set daily call & booking targets in Account → call settings for pace tracking.',
+    };
+  }
 
   if (!belowThreshold && (currentCombinedPace ?? 0) >= 85) {
     return { tone: 'positive', title: 'On track', detail: 'Pacing well mid-week — keep the momentum.' };
@@ -242,12 +266,36 @@ async function loadAllCallSettings(): Promise<Map<string, CallSettingsRow>> {
   return map;
 }
 
+function rankScoreFromPerson(input: {
+  combinedPace: number | null;
+  belowThreshold: boolean;
+  leaderboardRank: number | null;
+  leaderboardScore: number | null;
+}): number {
+  if (input.leaderboardRank !== null) return 10000 - input.leaderboardRank;
+  if (input.combinedPace !== null) return input.belowThreshold ? input.combinedPace : input.combinedPace + 1000;
+  return input.leaderboardScore ?? 0;
+}
+
+function leaderboardRowForProfile(
+  profile: UserProfile,
+  lbByUser: Map<string, RecruiterLeaderboardRow>,
+  lbRows: RecruiterLeaderboardRow[],
+): RecruiterLeaderboardRow | undefined {
+  const byId = lbByUser.get(profile.user_id);
+  if (byId) return byId;
+  const tokens = buildRecruiterScopeTokens(profile.email, profile.full_name);
+  return lbRows.find((row) => recruiterOwnsNameKey(row.displayName, tokens));
+}
+
 async function loadLeaderboardRowsForWeek(
   weekSince: string,
   weekUntil: string,
+  options?: { allowSnapshot?: boolean },
 ): Promise<{ rows: RecruiterLeaderboardRow[]; recordsByUser: Map<string, PipelineCallRecord[]> }> {
+  const allowSnapshot = options?.allowSnapshot !== false;
   const currentWeek = fridayWeekBoundsFromYmd(torontoYmdFromDate());
-  if (weekSince === currentWeek.since) {
+  if (allowSnapshot && weekSince === currentWeek.since) {
     const snapshot = await loadLeaderboardSnapshot('last7');
     if (snapshot.data?.rows?.length) {
       return { rows: snapshot.data.rows, recordsByUser: new Map() };
@@ -322,7 +370,7 @@ export async function loadCoachingBoard(weekSince: string, now = new Date()): Pr
     loadAllCallSettings(),
     listPerformanceCheckInInvites(week.since),
     listPerformanceCheckIns(week.since),
-    loadLeaderboardRowsForWeek(week.since, week.until),
+    loadLeaderboardRowsForWeek(week.since, week.until, { allowSnapshot: false }),
   ]);
 
   const leaderboardRows = leaderboardBundle.rows;
@@ -371,19 +419,27 @@ export async function loadCoachingBoard(weekSince: string, now = new Date()): Pr
       form?.daily_booking_target ??
       inviteTargets?.daily_booking_target ??
       null;
-    if (!dailyCallTarget && !dailyBookingTarget) continue;
+    const hasTargets = Boolean(dailyCallTarget || dailyBookingTarget);
 
-    const lb = lbByUser.get(profile.user_id);
+    const lb = leaderboardRowForProfile(profile, lbByUser, leaderboardRows);
     const userRecords = recordsByUser.get(profile.user_id) || [];
+    const webinarBooked = lb?.webinarBooked ?? 0;
+    const webinarShowed = lb?.webinarShowed ?? 0;
+    const liveSessionBooked = lb?.liveSessionBooked ?? 0;
+    const liveSessionShowed = lb?.liveSessionShowed ?? 0;
+    const totalShowed = webinarShowed + liveSessionShowed;
     const actualCalls = lb?.calls ?? userRecords.length;
     const actualBooked = lb ? lb.webinarBooked + (lb.liveSessionBooked ?? 0) : userRecords.filter(
       (r) => String(r.disposition || '').toLowerCase() === 'booked',
     ).length;
+    const totalBooked = webinarBooked + liveSessionBooked;
+    const showRatePct =
+      totalBooked > 0 ? Math.round((100 * totalShowed) / totalBooked) : lb ? Math.round(lb.showRatio * 100) : null;
 
     const elapsed = isCurrentWeek ? elapsedDays : 7;
     const pace = computePaceSnapshot({
-      dailyCallTarget,
-      dailyBookingTarget,
+      dailyCallTarget: hasTargets ? dailyCallTarget : null,
+      dailyBookingTarget: hasTargets ? dailyBookingTarget : null,
       actualCalls,
       actualBooked,
       elapsedDays: elapsed,
@@ -391,6 +447,7 @@ export async function loadCoachingBoard(weekSince: string, now = new Date()): Pr
 
     const combined = combinedPace(pace.callsPacePct, pace.bookingsPacePct);
     const prevCombined = prevPaceByUser.get(profile.user_id) ?? null;
+    const belowThreshold = hasTargets && pace.belowThreshold;
 
     people.push({
       userId: profile.user_id,
@@ -399,22 +456,37 @@ export async function loadCoachingBoard(weekSince: string, now = new Date()): Pr
       role: profile.role,
       dailyCallTarget,
       dailyBookingTarget,
+      hasTargets,
       elapsedDays: elapsed,
       actualCalls,
       actualBooked,
+      webinarBooked,
+      webinarShowed,
+      liveSessionBooked,
+      liveSessionShowed,
+      totalShowed,
+      showRatePct,
+      leaderboardRank: lb?.rank ?? null,
+      leaderboardScore: lb?.score ?? null,
       expectedCalls: pace.expectedCalls,
       expectedBookings: pace.expectedBookings,
       callsPacePct: pace.callsPacePct,
       bookingsPacePct: pace.bookingsPacePct,
       combinedPacePct: combined,
-      belowThreshold: pace.belowThreshold,
-      rankScore: rankScoreFromPace(combined, pace.belowThreshold),
+      belowThreshold,
+      rankScore: rankScoreFromPerson({
+        combinedPace: combined,
+        belowThreshold,
+        leaderboardRank: lb?.rank ?? null,
+        leaderboardScore: lb?.score ?? null,
+      }),
       daily: buildDailyBreakdown(userRecords, week.since),
       invite,
       form: form ?? null,
       emailSent: Boolean(invite?.email_sent_at),
       hint: computeCoachingHint({
-        belowThreshold: pace.belowThreshold,
+        belowThreshold,
+        hasTargets,
         callsPacePct: pace.callsPacePct,
         bookingsPacePct: pace.bookingsPacePct,
         previousCombinedPace: prevCombined,
@@ -435,6 +507,7 @@ export async function loadCoachingBoard(weekSince: string, now = new Date()): Pr
       weekUntil: week.until,
       weekLabel: `${ymdToShortLabel(week.since)} → ${ymdToShortLabel(week.until)}`,
       elapsedDays: isCurrentWeek ? elapsedDays : 7,
+      teamCount: people.length,
       belowCount: people.filter((p) => p.belowThreshold).length,
       formCount: people.filter((p) => p.form).length,
       emailSentCount: people.filter((p) => p.emailSent).length,
