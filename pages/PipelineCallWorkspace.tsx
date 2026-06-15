@@ -978,11 +978,12 @@ const PipelineCallWorkspace: React.FC = () => {
           phone_override_applied: Boolean(currentPhoneInfo?.overridePhone),
         },
       });
-      const persistenceMode = String((saved.threecx_metadata as Record<string, unknown> | null)?.persistence_mode || '');
+      const savedMeta = (saved.threecx_metadata && typeof saved.threecx_metadata === 'object')
+        ? (saved.threecx_metadata as Record<string, unknown>)
+        : {};
+      const patchWarning = String(savedMeta.candidate_patch_warning || '').trim();
       setActionMsg(
-        persistenceMode === 'pipeline_call_logs_fallback'
-          ? 'Disposition saved.'
-          : 'Disposition saved.',
+        patchWarning ? `Disposition saved. ${patchWarning}` : 'Disposition saved.',
       );
       setDisposition('');
       setBookedSubtype('');
@@ -1001,8 +1002,9 @@ const PipelineCallWorkspace: React.FC = () => {
       setCandidates((prev) =>
         prev.map((row) => {
           if (row.id !== currentCandidate.id) return row;
-          const nextStatus =
-            disposition === 'Not interested' || disposition === 'Do not call'
+          const nextStatus = patchWarning
+            ? row.status
+            : disposition === 'Not interested' || disposition === 'Do not call'
               ? 'closed'
               : 'in_progress';
           return {

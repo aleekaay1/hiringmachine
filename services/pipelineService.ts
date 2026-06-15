@@ -522,6 +522,51 @@ export function stringifySupabaseError(error: unknown): string {
   return 'Unexpected error.';
 }
 
+function isPostgresUniqueViolation(error: unknown): boolean {
+  const normalized = normalizeSupabaseError(error);
+  if (!normalized) return false;
+  const code = String(normalized.code || '').trim();
+  if (code === '23505') return true;
+  const combined = `${String(normalized.message || '')} ${String(normalized.details || '')}`.toLowerCase();
+  return combined.includes('duplicate key') || combined.includes('unique constraint');
+}
+
+async function patchPipelineCandidateAfterCallDisposition(input: {
+  candidateId: string;
+  journeyStage: string;
+  status: PipelineStatus | string;
+}): Promise<string | null> {
+  const updatedAt = new Date().toISOString();
+  const { error: fullError } = await supabase
+    .from('pipeline_candidates')
+    .update({
+      journey_stage: input.journeyStage,
+      status: input.status,
+      updated_at: updatedAt,
+    })
+    .eq('id', input.candidateId);
+  if (!fullError) return null;
+
+  if (!isPostgresUniqueViolation(fullError)) {
+    console.warn('[pipeline] candidate patch after disposition failed', fullError);
+    return stringifySupabaseError(fullError);
+  }
+
+  const { error: stageError } = await supabase
+    .from('pipeline_candidates')
+    .update({
+      journey_stage: input.journeyStage,
+      updated_at: updatedAt,
+    })
+    .eq('id', input.candidateId);
+  if (!stageError) {
+    return 'Lead stage updated; status unchanged because another active lead shares this email or phone.';
+  }
+
+  console.warn('[pipeline] candidate patch after disposition failed', stageError);
+  return stringifySupabaseError(stageError);
+}
+
 function isCallRecordInsertFallbackEligible(error: unknown): boolean {
   const normalized = normalizeSupabaseError(error);
   if (!normalized) return false;
@@ -2218,11 +2263,24 @@ export async function savePipelineCallDisposition(input: {
       : 'in_progress';
 
   if (input.updateJourneyStage !== false) {
-    const { error: upErr } = await supabase
-      .from('pipeline_candidates')
-      .update({ journey_stage: journeyStage, status })
-      .eq('id', input.candidateId);
-    if (upErr) throw upErr;
+    const patchWarning = await patchPipelineCandidateAfterCallDisposition({
+      candidateId: input.candidateId,
+      journeyStage,
+      status,
+    });
+    if (patchWarning) {
+      const existingMeta =
+        savedRecord.threecx_metadata && typeof savedRecord.threecx_metadata === 'object'
+          ? (savedRecord.threecx_metadata as Record<string, unknown>)
+          : {};
+      savedRecord = {
+        ...savedRecord,
+        threecx_metadata: {
+          ...existingMeta,
+          candidate_patch_warning: patchWarning,
+        },
+      };
+    }
   }
 
   if (!savedViaFallback) {
