@@ -12,10 +12,12 @@ import {
   type NavGroup,
 } from './navigationConfig';
 import NavMenuLink from './NavMenuLink';
+import NotificationBell from '../NotificationBell';
 
 type AppSidebarProps = {
   role: AppRole | null;
   userEmail: string | null;
+  userId: string | null;
   displayName: string;
   roleLabel: string;
   avatarUrl: string | null;
@@ -40,6 +42,7 @@ function SidebarBrand() {
 const AppSidebar: React.FC<AppSidebarProps> = ({
   role,
   userEmail,
+  userId,
   displayName,
   roleLabel,
   avatarUrl,
@@ -177,16 +180,19 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         }`}
       >
         {!isRailView && <SidebarBrand />}
-        <button
-          type="button"
-          onClick={handleMenuToggle}
-          className={`relative z-10 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-300 hover:bg-white/10 hover:text-white ${
-            isRailView ? 'inline-flex' : 'hidden lg:inline-flex'
-          }`}
-          aria-label={isRailView ? 'Expand menu' : 'Collapse menu'}
-        >
-          <Menu size={20} />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <NotificationBell role={role} userId={userId} roleResolved={roleResolved} />
+          <button
+            type="button"
+            onClick={handleMenuToggle}
+            className={`relative z-10 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-300 hover:bg-white/10 hover:text-white ${
+              isRailView ? 'inline-flex' : 'hidden lg:inline-flex'
+            }`}
+            aria-label={isRailView ? 'Expand menu' : 'Collapse menu'}
+          >
+            <Menu size={20} />
+          </button>
+        </div>
       </div>
 
       <nav className={`shrink-0 py-2 ${isRailView ? 'space-y-0' : 'space-y-0.5'}`} data-tour="sidebar-nav">

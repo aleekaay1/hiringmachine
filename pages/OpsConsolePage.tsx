@@ -20,6 +20,7 @@ import {
   type SupportTicketStatus,
 } from '../services/supportService';
 import { Navigate } from 'react-router-dom';
+import { createStaffNotification } from '../services/notificationService';
 
 function CheckRow({ label, ok, detail }: { label: string; ok?: boolean; detail?: string }) {
   return (
@@ -49,6 +50,10 @@ const OpsConsolePage: React.FC = () => {
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [message, setMessage] = React.useState<string | null>(null);
+  const [broadcastTitle, setBroadcastTitle] = React.useState('');
+  const [broadcastBody, setBroadcastBody] = React.useState('');
+  const [broadcastRoles, setBroadcastRoles] = React.useState<string[]>(['recruiter', 'leadership', 'webinar']);
+  const [broadcasting, setBroadcasting] = React.useState(false);
 
   React.useEffect(() => {
     void canAccessOpsConsole().then(setAllowed);
@@ -103,6 +108,33 @@ const OpsConsolePage: React.FC = () => {
     setResolutionNote(selected.resolution_note || '');
     setStaffMessage('');
   }, [selected?.id, selected?.status, selected?.resolution_note]);
+
+  const sendBroadcast = async () => {
+    if (!broadcastTitle.trim()) {
+      setError('Broadcast title is required.');
+      return;
+    }
+    setBroadcasting(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await createStaffNotification({
+        title: broadcastTitle.trim(),
+        body: broadcastBody.trim() || undefined,
+        category: 'ops',
+        targetRoles: broadcastRoles.length ? broadcastRoles : null,
+        linkRoute: '/home',
+        linkLabel: 'Open dashboard',
+      });
+      setMessage('Broadcast notification sent to staff.');
+      setBroadcastTitle('');
+      setBroadcastBody('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBroadcasting(false);
+    }
+  };
 
   const saveTicketUpdate = async () => {
     if (!selected) return;
@@ -207,6 +239,54 @@ const OpsConsolePage: React.FC = () => {
               </div>
             </div>
           )}
+        </section>
+
+        <section className="rounded-2xl border border-[#d9e5f6] bg-white p-4 shadow-sm">
+          <h2 className="mb-3 text-sm font-semibold text-[#0B1B34]">Staff broadcast notification</h2>
+          <p className="mb-3 text-xs text-[#5c7594]">
+            Pushes to the bell icon for selected roles (email replies, check-ins, and pipeline alerts sync automatically).
+          </p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="block text-sm">
+              <span className="mb-1 block text-xs font-medium text-[#5c7594]">Title</span>
+              <input
+                className="w-full rounded-xl border border-[#c9d9ee] px-3 py-2"
+                value={broadcastTitle}
+                onChange={(e) => setBroadcastTitle(e.target.value)}
+                placeholder="System maintenance tonight"
+              />
+            </label>
+            <label className="block text-sm md:col-span-2">
+              <span className="mb-1 block text-xs font-medium text-[#5c7594]">Message</span>
+              <textarea
+                className="min-h-[80px] w-full rounded-xl border border-[#c9d9ee] px-3 py-2"
+                value={broadcastBody}
+                onChange={(e) => setBroadcastBody(e.target.value)}
+                placeholder="Optional details for recruiters and leadership."
+              />
+            </label>
+            <div className="flex flex-wrap gap-2 md:col-span-2">
+              {['recruiter', 'leadership', 'webinar', 'admin'].map((role) => (
+                <label key={role} className="inline-flex items-center gap-2 rounded-lg border border-[#d4e4f7] px-3 py-1.5 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={broadcastRoles.includes(role)}
+                    onChange={(e) => {
+                      setBroadcastRoles((prev) =>
+                        e.target.checked ? [...prev, role] : prev.filter((r) => r !== role),
+                      );
+                    }}
+                  />
+                  {role}
+                </label>
+              ))}
+            </div>
+            <div className="md:col-span-2">
+              <Button onClick={() => void sendBroadcast()} disabled={broadcasting}>
+                {broadcasting ? 'Sending…' : 'Send broadcast'}
+              </Button>
+            </div>
+          </div>
         </section>
 
         <section className="rounded-2xl border border-[#d9e5f6] bg-white p-4 shadow-sm">

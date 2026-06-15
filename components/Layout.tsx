@@ -135,6 +135,7 @@ const Layout: React.FC<LayoutProps> = ({
         <AppSidebar
           role={role}
           userEmail={userEmail}
+          userId={userId}
           displayName={displayName}
           roleLabel={roleLabel}
           avatarUrl={avatarUrl}

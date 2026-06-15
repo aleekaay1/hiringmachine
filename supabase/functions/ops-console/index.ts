@@ -322,6 +322,26 @@ Deno.serve(async (req) => {
         }
         await admin.from('support_ticket_events').insert(events);
 
+        const ticketUserId = String((ticket as { user_id?: string }).user_id || '');
+        const notifyBody = staffMessage || resolutionNote;
+        if (ticketUserId && notifyBody) {
+          try {
+            await admin.from('staff_notifications').insert({
+              user_id: ticketUserId,
+              category: 'support',
+              title: 'Support ticket update',
+              body: notifyBody.slice(0, 500),
+              link_route: '/support',
+              link_label: 'View support',
+              dedupe_key: `support:${ticketId}:${nowIso}`,
+              metadata: { ticketId, status },
+              created_by_user_id: user.id,
+            });
+          } catch {
+            // notifications table may not be installed yet
+          }
+        }
+
         return new Response(JSON.stringify({ ok: true, ticket }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });

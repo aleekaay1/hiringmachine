@@ -39,6 +39,7 @@ $functions = @(
   "hr-rollup-jobs",
   "hr-automation-runner",
   "email-inbox-sync",
+  "staff-notifications",
   "threecx-call-control",
   "threecx-call-webhook",
   "threecx-call-admin",

@@ -448,6 +448,8 @@ function monthWeekPointsFromActivity(
 export type CoachingHubLoadOptions = {
   mode?: CoachingHubViewMode;
   monthFirstYmd?: string;
+  /** How many Friday weeks of ladder history to load (default 26). */
+  historyWeeks?: number;
 };
 
 export function buildLadderPointsForUser(
@@ -533,7 +535,7 @@ export function buildAllLaddersFromHistory(
   return map;
 }
 
-const COACHING_HISTORY_WEEKS = 12;
+const DEFAULT_COACHING_HISTORY_WEEKS = 26;
 
 export async function loadFullCoachingHub(
   anchorYmd: string,
@@ -553,7 +555,8 @@ export async function loadFullCoachingHub(
       ? (monthWeeks[monthWeeks.length - 1]?.until ?? fridayWeekBoundsFromYmd(weekSince).until)
       : fridayWeekBoundsFromYmd(weekSince).until;
 
-  const historyWeeks = listRecentFridayWeeks(COACHING_HISTORY_WEEKS);
+  const historyWeekCount = Math.max(4, Math.min(26, options.historyWeeks ?? DEFAULT_COACHING_HISTORY_WEEKS));
+  const historyWeeks = listRecentFridayWeeks(historyWeekCount);
   const historySince =
     historyWeeks.at(-1)?.since ?? shiftYmdDays(weekSince, -70);
   const previousWeekSince = shiftYmdDays(weekSince, -7);
@@ -638,7 +641,7 @@ export async function loadFullCoachingHub(
     historyForms,
     historyInvites,
     ladderActivityByUser,
-    COACHING_HISTORY_WEEKS,
+    historyWeekCount,
   );
 
   const monthSinceSet = new Set(monthWeeks.map((w) => w.since));
@@ -682,6 +685,7 @@ export async function loadCoachingBoard(
 }> {
   const mode = prefetched?.mode ?? 'week';
   const monthWeeks = prefetched?.monthWeeks ?? [];
+  const monthSinceSet = new Set(monthWeeks.map((w) => w.since));
   const monthFirstYmd = prefetched?.monthFirstYmd ?? torontoMonthStartToday();
   const week = fridayWeekBoundsFromYmd(weekSince);
   const rangeUntil =

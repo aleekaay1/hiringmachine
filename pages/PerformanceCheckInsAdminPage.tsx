@@ -82,6 +82,7 @@ function PersonCard({
   onSelectForm,
   elapsedDays,
   viewMode,
+  ladderWeekFilter,
 }: {
   person: CoachingBoardPerson;
   expanded: boolean;
@@ -90,8 +91,13 @@ function PersonCard({
   onSelectForm: (checked: boolean) => void;
   elapsedDays: number;
   viewMode: CoachingHubViewMode;
+  ladderWeekFilter: Set<string>;
 }) {
   const formId = person.form?.id;
+  const ladderPoints = React.useMemo(() => {
+    if (!ladderWeekFilter.size) return person.ladder;
+    return person.ladder.filter((pt) => ladderWeekFilter.has(pt.weekSince));
+  }, [person.ladder, ladderWeekFilter]);
 
   return (
     <article
@@ -272,7 +278,7 @@ function PersonCard({
                   {viewMode === 'month' ? 'Bookings pace · this month' : 'Improvement ladder · week-over-week'}
                 </p>
                 <ImprovementLadderChart
-                  points={person.ladder.map((p) => ({
+                  points={ladderPoints.map((p) => ({
                     weekLabel: p.weekLabel,
                     shortLabel: ymdToShortLabel(p.weekSince),
                     combinedPacePct: p.combinedPacePct,
@@ -283,9 +289,9 @@ function PersonCard({
                     actualBooked: p.actualBooked,
                   }))}
                 />
-                {person.ladder.length > 0 && (
+                {ladderPoints.length > 0 && (
                 <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                  {person.ladder.map((pt) => (
+                  {ladderPoints.map((pt) => (
                     <div
                       key={pt.weekSince}
                       className={`rounded-xl border p-3 text-sm ${
@@ -362,6 +368,18 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
 
   const weekOptions = React.useMemo(() => listRecentFridayWeeks(26), []);
   const monthOptions = React.useMemo(() => listRecentMonths(12), []);
+  const defaultLadderWeeks = React.useMemo(
+    () => weekOptions.slice(0, 6).map((w) => w.since),
+    [weekOptions],
+  );
+  const [selectedLadderWeeks, setSelectedLadderWeeks] = React.useState<string[]>(defaultLadderWeeks);
+  const ladderWeekFilter = React.useMemo(() => new Set(selectedLadderWeeks), [selectedLadderWeeks]);
+
+  React.useEffect(() => {
+    if (!selectedLadderWeeks.length && defaultLadderWeeks.length) {
+      setSelectedLadderWeeks(defaultLadderWeeks);
+    }
+  }, [defaultLadderWeeks, selectedLadderWeeks.length]);
 
   const loadBoard = React.useCallback(async () => {
     setLoading(true);
@@ -378,6 +396,7 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
         {
           mode: viewMode,
           monthFirstYmd: viewMode === 'month' ? monthFirstYmd : undefined,
+          historyWeeks: 26,
         },
       );
       setPeople(hub.people);
@@ -608,6 +627,45 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
               ))}
             </select>
 
+            <details className="relative">
+              <summary className="cursor-pointer list-none rounded-xl border border-[#c9d9ee] px-3 py-2 text-sm text-[#0B1B34] marker:content-none">
+                Ladder weeks ({selectedLadderWeeks.length})
+              </summary>
+              <div className="absolute left-0 z-20 mt-1 max-h-64 w-64 overflow-y-auto rounded-xl border border-[#d4e4f7] bg-white p-3 shadow-lg">
+                <div className="mb-2 flex flex-wrap gap-1">
+                  {[3, 4, 6, 8, 10, 12].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setSelectedLadderWeeks(weekOptions.slice(0, n).map((w) => w.since))}
+                      className="rounded-lg border border-[#d4e4f7] px-2 py-1 text-[10px] font-medium text-[#4e79a9] hover:bg-[#f8fbff]"
+                    >
+                      Last {n}
+                    </button>
+                  ))}
+                </div>
+                {weekOptions.map((w) => {
+                  const checked = selectedLadderWeeks.includes(w.since);
+                  return (
+                    <label key={w.since} className="flex cursor-pointer items-center gap-2 rounded-lg px-1 py-1 text-xs hover:bg-[#f8fbff]">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => {
+                          setSelectedLadderWeeks((prev) =>
+                            e.target.checked
+                              ? [...new Set([...prev, w.since])].sort((a, b) => b.localeCompare(a))
+                              : prev.filter((v) => v !== w.since),
+                          );
+                        }}
+                      />
+                      <span>{w.label}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </details>
+
             <div className="flex rounded-xl border border-[#d4e4f7] p-0.5">
               {(['all', 'below', 'forms'] as const).map((id) => (
                 <button
@@ -717,6 +775,7 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
                   selected={Boolean(person.form && selectedFormIds.has(person.form.id))}
                   elapsedDays={summary?.elapsedDays ?? 7}
                   viewMode={viewMode}
+                  ladderWeekFilter={ladderWeekFilter}
                   onToggle={() => setExpandedId((id) => (id === person.userId ? null : person.userId))}
                   onSelectForm={(checked) => {
                     if (person.form) toggleFormSelect(person.form.id, checked);
