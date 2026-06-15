@@ -2350,6 +2350,13 @@ function normalizePipelineLogEmail(value: string | null | undefined): string {
   return String(value || '').trim().toLowerCase();
 }
 
+const PIPELINE_CANDIDATE_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isPipelineCandidateUuid(value: string | null | undefined): boolean {
+  return PIPELINE_CANDIDATE_UUID_RE.test(String(value || '').trim());
+}
+
 function dedupePipelineEmailLogs<T extends { id: string }>(rows: T[]): T[] {
   const seen = new Set<string>();
   const out: T[] = [];
@@ -2369,32 +2376,34 @@ async function listPipelineIncomingEmailLogsMerged(
   emails: string[],
   input?: { fromIso?: string | null; toIso?: string | null; limit?: number },
 ): Promise<PipelineIncomingEmailLog[]> {
-  if (!candidateIds.length && !emails.length) return [];
-  const limit = input?.limit ?? 3000;
+  const validCandidateIds = [...new Set(candidateIds.filter(isPipelineCandidateUuid))];
+  const normalizedEmails = [
+    ...new Set(emails.map(normalizePipelineLogEmail).filter(Boolean)),
+  ];
+  if (!validCandidateIds.length && !normalizedEmails.length) return [];
+  const limit = Math.min(input?.limit ?? 3000, 1000);
   const queries: ReturnType<typeof supabase.from>[] = [];
-  if (candidateIds.length) {
+  if (validCandidateIds.length) {
     let byId = supabase
       .from('email_inbox_logs')
       .select('*')
-      .in('candidate_id', candidateIds)
+      .in('candidate_id', validCandidateIds)
       .order('received_at', { ascending: false })
       .limit(limit);
     if (input?.fromIso) byId = byId.gte('received_at', input.fromIso);
     if (input?.toIso) byId = byId.lte('received_at', input.toIso);
     queries.push(byId);
   }
-  if (emails.length) {
-    for (const email of emails) {
-      let byEmail = supabase
-        .from('email_inbox_logs')
-        .select('*')
-        .ilike('from_email', email)
-        .order('received_at', { ascending: false })
-        .limit(limit);
-      if (input?.fromIso) byEmail = byEmail.gte('received_at', input.fromIso);
-      if (input?.toIso) byEmail = byEmail.lte('received_at', input.toIso);
-      queries.push(byEmail);
-    }
+  if (normalizedEmails.length) {
+    let byEmail = supabase
+      .from('email_inbox_logs')
+      .select('*')
+      .in('from_email', normalizedEmails)
+      .order('received_at', { ascending: false })
+      .limit(limit);
+    if (input?.fromIso) byEmail = byEmail.gte('received_at', input.fromIso);
+    if (input?.toIso) byEmail = byEmail.lte('received_at', input.toIso);
+    queries.push(byEmail);
   }
   const results = await Promise.all(queries.map((query) => query));
   const firstError = results.find((result) => result.error)?.error;
@@ -2410,32 +2419,34 @@ async function listPipelineEmailSendLogsMerged(
   emails: string[],
   input?: { fromIso?: string | null; toIso?: string | null; limit?: number },
 ): Promise<PipelineEmailSendLog[]> {
-  if (!candidateIds.length && !emails.length) return [];
-  const limit = input?.limit ?? 3000;
+  const validCandidateIds = [...new Set(candidateIds.filter(isPipelineCandidateUuid))];
+  const normalizedEmails = [
+    ...new Set(emails.map(normalizePipelineLogEmail).filter(Boolean)),
+  ];
+  if (!validCandidateIds.length && !normalizedEmails.length) return [];
+  const limit = Math.min(input?.limit ?? 3000, 1000);
   const queries: ReturnType<typeof supabase.from>[] = [];
-  if (candidateIds.length) {
+  if (validCandidateIds.length) {
     let byId = supabase
       .from('email_send_logs')
       .select(PIPELINE_EMAIL_SEND_LOG_SELECT)
-      .in('candidate_id', candidateIds)
+      .in('candidate_id', validCandidateIds)
       .order('created_at', { ascending: false })
       .limit(limit);
     if (input?.fromIso) byId = byId.gte('created_at', input.fromIso);
     if (input?.toIso) byId = byId.lte('created_at', input.toIso);
     queries.push(byId);
   }
-  if (emails.length) {
-    for (const email of emails) {
-      let byEmail = supabase
-        .from('email_send_logs')
-        .select(PIPELINE_EMAIL_SEND_LOG_SELECT)
-        .ilike('to_email', email)
-        .order('created_at', { ascending: false })
-        .limit(limit);
-      if (input?.fromIso) byEmail = byEmail.gte('created_at', input.fromIso);
-      if (input?.toIso) byEmail = byEmail.lte('created_at', input.toIso);
-      queries.push(byEmail);
-    }
+  if (normalizedEmails.length) {
+    let byEmail = supabase
+      .from('email_send_logs')
+      .select(PIPELINE_EMAIL_SEND_LOG_SELECT)
+      .in('to_email', normalizedEmails)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (input?.fromIso) byEmail = byEmail.gte('created_at', input.fromIso);
+    if (input?.toIso) byEmail = byEmail.lte('created_at', input.toIso);
+    queries.push(byEmail);
   }
   const results = await Promise.all(queries.map((query) => query));
   const firstError = results.find((result) => result.error)?.error;
@@ -2455,6 +2466,15 @@ export async function listPipelineIncomingEmailLogs(
     : candidateEmails
       ? [candidateEmails]
       : [];
+  if (isPipelineCandidateUuid(candidateId)) {
+    const { fetchCandidateMailLogsViaFunction } = await import('./emailWorkspaceApi');
+    const viaFn = await fetchCandidateMailLogsViaFunction({
+      candidateId,
+      emails,
+      limit: 1000,
+    });
+    if (viaFn.ok) return viaFn.incoming;
+  }
   return listPipelineIncomingEmailLogsMerged([candidateId], emails, { limit: 1000 });
 }
 
@@ -2467,6 +2487,15 @@ export async function listPipelineEmailSendLogs(
     : candidateEmails
       ? [candidateEmails]
       : [];
+  if (isPipelineCandidateUuid(candidateId)) {
+    const { fetchCandidateMailLogsViaFunction } = await import('./emailWorkspaceApi');
+    const viaFn = await fetchCandidateMailLogsViaFunction({
+      candidateId,
+      emails,
+      limit: 1000,
+    });
+    if (viaFn.ok) return viaFn.sendLogs;
+  }
   return listPipelineEmailSendLogsMerged([candidateId], emails, { limit: 500 });
 }
 
@@ -2695,6 +2724,7 @@ export async function syncPipelineIncomingEmails(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
+      action: 'sync',
       days,
       limit,
       fullHistory: options?.fullHistory === true,

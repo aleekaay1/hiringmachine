@@ -372,6 +372,12 @@ export async function loadMyCheckInForWeek(weekSince: string): Promise<Performan
   return (data as PerformanceCheckInRow | null) ?? null;
 }
 
+/** DB columns for daily/expected targets are integer — round team pace decimals (e.g. 4.3) on save. */
+function dbInteger(value: number | null | undefined): number | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  return Math.round(value);
+}
+
 export async function submitPerformanceCheckIn(input: {
   weekSince: string;
   weekUntil: string;
@@ -396,13 +402,13 @@ export async function submitPerformanceCheckIn(input: {
     submitter_name: input.submitterName ?? null,
     week_since: input.weekSince,
     week_until: input.weekUntil,
-    daily_call_target: input.stats.dailyCallTarget,
-    daily_booking_target: input.stats.dailyBookingTarget,
-    elapsed_days: input.stats.elapsedDays,
-    actual_calls: input.stats.actualCalls,
-    actual_booked: input.stats.actualBooked,
-    expected_calls: input.stats.expectedCalls,
-    expected_bookings: input.stats.expectedBookings,
+    daily_call_target: dbInteger(input.stats.dailyCallTarget),
+    daily_booking_target: dbInteger(input.stats.dailyBookingTarget),
+    elapsed_days: dbInteger(input.stats.elapsedDays) ?? 0,
+    actual_calls: dbInteger(input.stats.actualCalls) ?? 0,
+    actual_booked: dbInteger(input.stats.actualBooked) ?? 0,
+    expected_calls: dbInteger(input.stats.expectedCalls),
+    expected_bookings: dbInteger(input.stats.expectedBookings),
     calls_pace_pct: input.stats.callsPacePct,
     bookings_pace_pct: input.stats.bookingsPacePct,
     blocker_category: input.blockerCategory,

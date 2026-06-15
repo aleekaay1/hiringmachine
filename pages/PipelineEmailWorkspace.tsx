@@ -120,6 +120,17 @@ const PipelineEmailWorkspace: React.FC = () => {
 
   const loadCandidateMailLogs = React.useCallback(async (candidate: PipelineCandidate) => {
     const emails = collectPipelineCandidateEmails(candidate);
+    const { fetchCandidateMailLogsViaFunction } = await import('../services/emailWorkspaceApi');
+    const viaFn = await fetchCandidateMailLogsViaFunction({
+      candidateId: candidate.id,
+      emails,
+      limit: 1000,
+    });
+    if (viaFn.ok) {
+      setIncomingLogs(viaFn.incoming);
+      setSendLogs(viaFn.sendLogs);
+      return;
+    }
     const [incoming, sends] = await Promise.all([
       listPipelineIncomingEmailLogs(candidate.id, emails),
       listPipelineEmailSendLogs(candidate.id, emails),
@@ -128,14 +139,19 @@ const PipelineEmailWorkspace: React.FC = () => {
     setSendLogs(sends);
   }, []);
 
-  const loadWorkspace = React.useCallback(async (options?: { syncInbox?: boolean; candidateId?: string }) => {
+  const loadWorkspace = React.useCallback(async (options?: { syncInbox?: boolean; candidateId?: string; fullHistory?: boolean }) => {
     setLoading(true);
     setError(null);
     try {
       if (options?.syncInbox) {
         setSyncingInbox(true);
         try {
-          const result = await syncPipelineIncomingEmails(90, 500, { fullHistory: true });
+          const fullHistory = options.fullHistory === true;
+          const result = await syncPipelineIncomingEmails(
+            fullHistory ? 365 : 30,
+            fullHistory ? 400 : 150,
+            { fullHistory },
+          );
           const remappedNote = result.remapped ? `, ${result.remapped} remapped` : '';
           setMessage(`Inbox synced: ${result.synced} scanned, ${result.mapped} mapped${remappedNote}.`);
         } catch (syncErr) {
@@ -521,7 +537,7 @@ const PipelineEmailWorkspace: React.FC = () => {
                   variant="outline"
                   data-tour="email-sync-inbox"
                   className={`!min-h-0 h-8 px-2 text-xs ${isDark ? '!border-white/20 !bg-white/10 !text-slate-100 hover:!bg-white/15' : ''}`}
-                  onClick={() => void loadWorkspace({ syncInbox: true })}
+                  onClick={() => void loadWorkspace({ syncInbox: true, fullHistory: true })}
                   disabled={loading || syncingInbox}
                 >
                   {syncingInbox ? 'Syncing...' : 'Sync inbox'}
