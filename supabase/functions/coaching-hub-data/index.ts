@@ -49,6 +49,60 @@ function isCoachingAdmin(profile: { role: string; email: string } | null): boole
   return ADMIN_EMAILS.has(profile.email);
 }
 
+function torontoYmdFromIso(iso: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Toronto',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(iso));
+}
+
+function addDaysYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split('-').map((v) => Number(v));
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  return dt.toISOString().slice(0, 10);
+}
+
+const FRIDAY_WEEK_LABELS = ['Fri', 'Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu'];
+
+function aggregateCallActivityByUser(
+  weekSince: string,
+  rows: Array<{ recruiter_user_id?: string | null; disposed_at?: string | null; disposition?: string | null }>,
+): Array<{ userId: string; totalCalls: number; days: Array<{ ymd: string; label: string; calls: number; booked: number }> }> {
+  const dayDefs = FRIDAY_WEEK_LABELS.map((label, i) => ({
+    ymd: addDaysYmd(weekSince, i),
+    label,
+    calls: 0,
+    booked: 0,
+  }));
+  const dayIndex = new Map(dayDefs.map((d, i) => [d.ymd, i]));
+  const byUser = new Map<string, Array<{ ymd: string; label: string; calls: number; booked: number }>>();
+
+  for (const row of rows) {
+    const userId = String(row.recruiter_user_id || '').trim();
+    const iso = row.disposed_at;
+    if (!userId || !iso) continue;
+    const ymd = torontoYmdFromIso(iso);
+    const idx = dayIndex.get(ymd);
+    if (idx === undefined) continue;
+    if (!byUser.has(userId)) {
+      byUser.set(userId, dayDefs.map((d) => ({ ...d })));
+    }
+    const days = byUser.get(userId)!;
+    days[idx].calls += 1;
+    if (String(row.disposition || '').trim().toLowerCase() === 'booked') {
+      days[idx].booked += 1;
+    }
+  }
+
+  return [...byUser.entries()].map(([userId, days]) => ({
+    userId,
+    totalCalls: days.reduce((s, d) => s + d.calls, 0),
+    days,
+  }));
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -356,6 +410,8 @@ Deno.serve(async (req) => {
 
       const weekSince = (url.searchParams.get('weekSince') || '').trim();
       const historySince = (url.searchParams.get('historySince') || '').trim();
+      const fromIso = (url.searchParams.get('fromIso') || '').trim();
+      const toIso = (url.searchParams.get('toIso') || '').trim();
       const emailLimit = Math.min(120, Math.max(1, Number(url.searchParams.get('emailLimit') || '30') || 30));
 
       let weekInvitesQuery = admin
@@ -393,12 +449,25 @@ Deno.serve(async (req) => {
         .order('created_at', { ascending: false })
         .limit(emailLimit);
 
-      const [weekInvitesRes, weekFormsRes, historyFormsRes, historyInvitesRes, emailRes] = await Promise.all([
+      const callRecordsPromise =
+        weekSince && fromIso && toIso
+          ? admin
+            .from('pipeline_call_records')
+            .select('recruiter_user_id, disposed_at, disposition')
+            .gte('disposed_at', fromIso)
+            .lte('disposed_at', toIso)
+            .not('recruiter_user_id', 'is', null)
+            .limit(5000)
+          : Promise.resolve({ data: [] as Array<Record<string, unknown>>, error: null });
+
+      const [weekInvitesRes, weekFormsRes, historyFormsRes, historyInvitesRes, emailRes, callRecordsRes] =
+        await Promise.all([
         weekInvitesQuery,
         weekFormsQuery,
         historyFormsQuery,
         historyInvitesQuery,
         emailLogsPromise,
+        callRecordsPromise,
       ]);
 
       for (const res of [weekInvitesRes, weekFormsRes, historyFormsRes, historyInvitesRes]) {
@@ -431,6 +500,18 @@ Deno.serve(async (req) => {
         }
       }
 
+      const callActivityByUser =
+        weekSince && !callRecordsRes.error
+          ? aggregateCallActivityByUser(
+            weekSince,
+            (callRecordsRes.data || []) as Array<{
+              recruiter_user_id?: string | null;
+              disposed_at?: string | null;
+              disposition?: string | null;
+            }>,
+          )
+          : [];
+
       return new Response(
         JSON.stringify({
           ok: true,
@@ -439,6 +520,7 @@ Deno.serve(async (req) => {
           historyForms: historyFormsRes.error ? [] : historyFormsRes.data || [],
           historyInvites: historyInvitesRes.error ? [] : historyInvitesRes.data || [],
           emailLogs: logs.slice(0, emailLimit),
+          callActivityByUser,
         }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );

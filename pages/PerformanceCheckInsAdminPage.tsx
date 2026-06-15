@@ -39,7 +39,7 @@ import {
   labelForTroubleArea,
   PERFORMANCE_CHECKIN_AUTOMATION_ENABLED,
 } from '../services/performanceCheckInService';
-import { fridayWeekBoundsFromYmd, shiftYmdDays, ymdToShortLabel } from '../services/webinarGeekDates';
+import { COACHING_WEEKLY_BOOKING_TARGET } from '../services/coachingPace';
 
 function hintStyles(tone: CoachingBoardPerson['hint']['tone']): string {
   if (tone === 'positive') return 'border-emerald-200 bg-emerald-50 text-emerald-900';
@@ -208,11 +208,9 @@ function PersonCard({
                 label="Score"
                 value={person.leaderboardScore !== null ? Math.round(person.leaderboardScore) : '—'}
               />
-              {!person.hasTargets && (
-                <span className="self-center rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-600">
-                  Targets not set
-                </span>
-              )}
+              <span className="self-center rounded-full bg-[#eef6ff] px-2 py-1 text-[10px] font-medium text-[#4e79a9]">
+                Target {COACHING_WEEKLY_BOOKING_TARGET} bookings/wk
+              </span>
             </div>
 
             <div className="grid gap-4 lg:grid-cols-2">
@@ -246,6 +244,7 @@ function PersonCard({
                     weekLabel: p.weekLabel,
                     shortLabel: ymdToShortLabel(p.weekSince),
                     combinedPacePct: p.combinedPacePct,
+                    bookingsPacePct: p.bookingsPacePct,
                     belowThreshold: p.belowThreshold,
                     hasForm: p.hasForm,
                     actualCalls: p.actualCalls,
@@ -360,16 +359,14 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
 
   const teamPaceRows = React.useMemo(
     () =>
-      people
-        .filter((p) => p.hasTargets)
-        .map((p) => ({
+      people.map((p) => ({
           userId: p.userId,
           name: p.displayName,
-          pacePct: p.combinedPacePct,
+          pacePct: p.bookingsPacePct,
           belowThreshold: p.belowThreshold,
           calls: p.actualCalls,
           booked: p.actualBooked,
-        })),
+      })),
     [people],
   );
 

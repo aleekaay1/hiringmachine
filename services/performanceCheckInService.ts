@@ -10,6 +10,7 @@ import {
   fetchCoachingWeekDataViaFunction,
   fetchParticipantFormViaFunction,
 } from './coachingHubApi';
+import { computeCoachingWeeklyPace } from './coachingPace';
 import { isSupabaseNetworkError } from './dashboardTeamMetricsService';
 import { supabase } from './supabaseClient';
 import {
@@ -18,6 +19,7 @@ import {
   ymdToLocalDate,
   ymdToShortLabel,
 } from './webinarGeekDates';
+import { buildLeaderboardWindows } from './pipelineLeaderboard';
 
 export const PERFORMANCE_CHECKIN_AUTOMATION_ENABLED = false;
 
@@ -247,29 +249,11 @@ export async function loadCheckInFormPageData(
   if (viaFn.ok) {
     const d = viaFn.data;
     const elapsed = d.elapsedDays ?? elapsedDaysInFridayWeek(d.weekSince, now);
-    const hasStoredPace = d.callsPacePct !== null || d.bookingsPacePct !== null;
-    const pace = hasStoredPace
-      ? {
-          elapsedDays: elapsed,
-          dailyCallTarget: d.dailyCallTarget,
-          dailyBookingTarget: d.dailyBookingTarget,
-          actualCalls: d.actualCalls,
-          actualBooked: d.actualBooked,
-          expectedCalls: d.expectedCalls,
-          expectedBookings: d.expectedBookings,
-          callsPacePct: d.callsPacePct,
-          bookingsPacePct: d.bookingsPacePct,
-          belowThreshold:
-            (d.callsPacePct !== null && d.callsPacePct < 50) ||
-            (d.bookingsPacePct !== null && d.bookingsPacePct < 50),
-        }
-      : computePaceSnapshot({
-          dailyCallTarget: d.dailyCallTarget,
-          dailyBookingTarget: d.dailyBookingTarget,
-          actualCalls: d.actualCalls,
-          actualBooked: d.actualBooked,
-          elapsedDays: elapsed,
-        });
+    const pace = computeCoachingWeeklyPace({
+      actualCalls: d.actualCalls,
+      actualBooked: d.actualBooked,
+      elapsedDays: elapsed,
+    });
 
     return {
       stats: {
@@ -303,15 +287,14 @@ export async function loadCheckInFormPageData(
       expected_bookings?: number | null;
     }) | null;
 
-    const pace = inviteRow && inviteRow.calls_pace_pct !== null
-      ? computePaceSnapshot({
-          dailyCallTarget: inviteRow.daily_call_target ?? null,
-          dailyBookingTarget: inviteRow.daily_booking_target ?? null,
-          actualCalls: inviteRow.actual_calls ?? 0,
-          actualBooked: inviteRow.actual_booked ?? 0,
-          elapsedDays: inviteRow.elapsed_days ?? elapsed,
-        })
-      : await loadMidWeekStatsForProfileFallback(profile, effectiveWeek, effectiveUntil, now);
+    let pace = computeCoachingWeeklyPace({
+      actualCalls: inviteRow?.actual_calls ?? 0,
+      actualBooked: inviteRow?.actual_booked ?? 0,
+      elapsedDays: inviteRow?.elapsed_days ?? elapsed,
+    });
+    if (!inviteRow?.actual_calls && !inviteRow?.actual_booked) {
+      pace = await loadMidWeekStatsForProfileFallback(profile, effectiveWeek, effectiveUntil, now);
+    }
 
     return {
       stats: {
@@ -344,30 +327,21 @@ export async function loadCheckInFormPageData(
 async function loadMidWeekStatsForProfileFallback(
   profile: UserProfile,
   weekSince: string,
-  weekUntil: string,
+  _weekUntil: string,
   now: Date,
 ): Promise<Omit<PerformanceCheckInStats, 'weekSince' | 'weekUntil' | 'weekLabel'>> {
   const elapsedDays = elapsedDaysInFridayWeek(weekSince, now);
-  const { getPipelineUserCallSettings, listPipelineCallRecords } = await import('./pipelineService');
-  const windows = { fromIso: `${weekSince}T04:00:00.000Z`, toIso: `${weekUntil}T28:00:00.000Z` };
-  const [settings, records] = await Promise.all([
-    getPipelineUserCallSettings().catch(() => null),
-    listPipelineCallRecords({
-      recruiterUserId: profile.user_id,
-      fromIso: windows.fromIso,
-      toIso: windows.toIso,
-      limit: 2000,
-    }).catch(() => []),
-  ]);
+  const { listPipelineCallRecords } = await import('./pipelineService');
+  const windows = buildLeaderboardWindows('custom', now, { sinceYmd: weekSince, untilYmd: _weekUntil });
+  const records = await listPipelineCallRecords({
+    recruiterUserId: profile.user_id,
+    fromIso: windows.current.fromIso,
+    toIso: windows.current.toIso,
+    limit: 2000,
+  }).catch(() => []);
   const actualCalls = records.length;
   const actualBooked = records.filter((r) => String(r.disposition || '').toLowerCase() === 'booked').length;
-  return computePaceSnapshot({
-    dailyCallTarget: settings?.daily_upload_target ?? null,
-    dailyBookingTarget: settings?.daily_webinar_booking_target ?? null,
-    actualCalls,
-    actualBooked,
-    elapsedDays,
-  });
+  return computeCoachingWeeklyPace({ actualCalls, actualBooked, elapsedDays });
 }
 
 export async function loadInviteByToken(token: string): Promise<PerformanceCheckInInvite | null> {

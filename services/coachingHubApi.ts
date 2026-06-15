@@ -109,12 +109,19 @@ export async function fetchCoachingLadderViaFunction(
   };
 }
 
+export type CoachingCallActivity = {
+  userId: string;
+  totalCalls: number;
+  days: Array<{ ymd: string; label: string; calls: number; booked: number }>;
+};
+
 export type CoachingFullBoardPayload = {
   weekInvites: PerformanceCheckInInvite[];
   weekForms: PerformanceCheckInRow[];
   historyForms: PerformanceCheckInRow[];
   historyInvites: PerformanceCheckInInvite[];
   emailLogs: CoachingHubEmailLogRow[];
+  callActivityByUser: CoachingCallActivity[];
 };
 
 export type ParticipantFormPayload = {
@@ -153,12 +160,18 @@ export async function fetchParticipantFormViaFunction(input: {
 
 export async function fetchCoachingFullBoardViaFunction(input: {
   weekSince: string;
+  weekUntil: string;
+  fromIso: string;
+  toIso: string;
   historySince: string;
   emailLimit?: number;
 }): Promise<{ ok: true; data: CoachingFullBoardPayload } | { ok: false; error: string }> {
   const result = await coachingHubGet<CoachingFullBoardPayload>({
     action: 'fullBoard',
     weekSince: input.weekSince,
+    weekUntil: input.weekUntil,
+    fromIso: input.fromIso,
+    toIso: input.toIso,
     historySince: input.historySince,
     emailLimit: String(input.emailLimit ?? 30),
   });
@@ -171,6 +184,7 @@ export async function fetchCoachingFullBoardViaFunction(input: {
       historyForms: Array.isArray(result.historyForms) ? result.historyForms : [],
       historyInvites: Array.isArray(result.historyInvites) ? result.historyInvites : [],
       emailLogs: Array.isArray(result.emailLogs) ? result.emailLogs : [],
+      callActivityByUser: Array.isArray(result.callActivityByUser) ? result.callActivityByUser : [],
     },
   };
 }
