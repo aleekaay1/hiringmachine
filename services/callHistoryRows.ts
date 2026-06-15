@@ -136,3 +136,26 @@ export function dispositionBadgeClass(disposition: string): string {
   }
   return 'bg-[#edf5ff] text-[#285082]';
 }
+
+/** Chip styles for call workspace queue rail (border + background). */
+export function queueLeadChipClass(disposition: string | null | undefined, hasDisposition: boolean): string {
+  if (!hasDisposition) return 'border-slate-200 bg-slate-50 text-slate-700';
+  const d = String(disposition || '').trim().toLowerCase();
+  if (d === 'booked') return 'border-emerald-400 bg-emerald-100 text-emerald-950 ring-1 ring-emerald-300/60';
+  if (d === 'connected' || d === 'interested – next step' || d === 'scheduled interview') {
+    return 'border-emerald-300 bg-emerald-50 text-emerald-900';
+  }
+  if (d === 'callback requested') return 'border-amber-400 bg-amber-100 text-amber-950 ring-1 ring-amber-300/60';
+  if (d === 'no answer' || d === 'voicemail left' || d === 'busy / line busy') {
+    return 'border-yellow-300 bg-yellow-50 text-yellow-950';
+  }
+  if (d === 'not interested' || d === 'do not call' || d === 'wrong number') {
+    return 'border-rose-400 bg-rose-100 text-rose-950 ring-1 ring-rose-300/50';
+  }
+  return 'border-sky-200 bg-sky-50 text-sky-900';
+}
+
+export function queueLeadChipLabel(disposition: string | null | undefined, hasDisposition: boolean): string {
+  if (!hasDisposition) return 'New';
+  return String(disposition || 'Called').trim() || 'Called';
+}

@@ -14,6 +14,7 @@ import {
   Video,
 } from 'lucide-react';
 import CallHistorySheet from '../components/pipeline/CallHistorySheet';
+import CallQueueLeadRail from '../components/pipeline/CallQueueLeadRail';
 import CandidateDispositionHistory from '../components/pipeline/CandidateDispositionHistory';
 import CallScriptsDrawer from '../components/pipeline/CallScriptsDrawer';
 import CallScriptViewerModal from '../components/pipeline/CallScriptViewerModal';
@@ -136,8 +137,7 @@ function openWebinarVerifyTab(
   return true;
 }
 
-const TERMINAL_EXCLUDED_DISPOSITIONS = new Set(['not interested', 'do not call']);
-const RETRY_PRIORITY_ORDER: Record<string, number> = {
+const SKIP_EMAIL_DISPOSITIONS = new Set(['not interested', 'do not call', 'wrong number']);
   'callback requested': 0,
   'no answer': 1,
   'voicemail left': 2,
@@ -228,6 +228,7 @@ const PipelineCallWorkspace: React.FC = () => {
   const [postEmailDisposition, setPostEmailDisposition] = React.useState('');
   const selectedCandidateIdRef = React.useRef<string | null>(null);
   const appliedDialIntentRef = React.useRef(false);
+  const dialQueueInitRef = React.useRef<string | null>(null);
   /** When Place call opens 3CX — used as dial_started_at (not disposition save time). */
   const callPlacedAtRef = React.useRef<string | null>(null);
 
@@ -406,6 +407,14 @@ const PipelineCallWorkspace: React.FC = () => {
     });
   }, [dialScopeCandidates, queueFilter, latestByCandidate, callbackAtByCandidate, bookedOutcomeByCandidate]);
 
+  const orderedScopeCandidates = React.useMemo(() => {
+    const scope = loadedDialQueue ? dialScopeCandidates : filteredCandidates;
+    return [...scope].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  }, [loadedDialQueue, dialScopeCandidates, filteredCandidates]);
+
+  /** Full batch list for prev/next — every lead stays visible after disposition. */
+  const focusNavigationList = orderedScopeCandidates;
+
   const undisposedQueue = React.useMemo(
     () =>
       filteredCandidates.filter(
@@ -438,7 +447,12 @@ const PipelineCallWorkspace: React.FC = () => {
   const activeQueueRaw = React.useMemo(() => {
     let queue: PipelineCandidate[];
     if (queueFilter === 'all') {
-      queue = undisposedQueue.length > 0 ? undisposedQueue : retryQueue;
+      queue =
+        undisposedQueue.length > 0
+          ? undisposedQueue
+          : retryQueue.length > 0
+            ? retryQueue
+            : orderedScopeCandidates.filter((candidate) => !latestByCandidate.get(candidate.id));
     } else if (queueFilter === 'callbacks') {
       queue = [...filteredCandidates]
         .filter((candidate) => normalizeDispositionLabel(candidate.status) !== 'closed')
@@ -452,10 +466,7 @@ const PipelineCallWorkspace: React.FC = () => {
     }
 
     if (loadedDialQueue && queue.length) {
-      const orderedBatch = [...dialScopeCandidates].sort(
-        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-      );
-      queue = applyDialQueueStartMode(queue, orderedBatch, loadedDialQueue.startMode, latestByCandidate);
+      queue = applyDialQueueStartMode(queue, orderedScopeCandidates, loadedDialQueue.startMode, latestByCandidate);
     }
     return queue;
   }, [
@@ -465,7 +476,7 @@ const PipelineCallWorkspace: React.FC = () => {
     filteredCandidates,
     callbackAtByCandidate,
     loadedDialQueue,
-    dialScopeCandidates,
+    orderedScopeCandidates,
     latestByCandidate,
   ]);
 
@@ -482,15 +493,12 @@ const PipelineCallWorkspace: React.FC = () => {
   const queueActiveIds = React.useMemo(() => new Set(queueList.map((c) => c.id)), [queueList]);
 
   const doneList = React.useMemo(() => {
-    return filteredCandidates.filter((candidate) => {
+    return orderedScopeCandidates.filter((candidate) => {
       const latest = latestByCandidate.get(candidate.id);
       if (!latest) return false;
-      if (queueActiveIds.has(candidate.id)) return false;
-      const d = normalizeDispositionLabel(latest.disposition);
-      if (queueFilter === 'all' && TERMINAL_EXCLUDED_DISPOSITIONS.has(d)) return true;
-      return true;
+      return !queueActiveIds.has(candidate.id);
     });
-  }, [filteredCandidates, latestByCandidate, queueActiveIds, queueFilter]);
+  }, [orderedScopeCandidates, latestByCandidate, queueActiveIds]);
 
   const isCandidateNew = React.useCallback(
     (candidate: PipelineCandidate) => !latestByCandidate.get(candidate.id),
@@ -505,31 +513,6 @@ const PipelineCallWorkspace: React.FC = () => {
       }),
     [candidates, isCandidateNew],
   );
-
-  const focusNavigationList = React.useMemo(() => {
-    const scope = loadedDialQueue ? dialScopeCandidates : filteredCandidates;
-    const ordered = [...scope].sort(
-      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-    );
-    if (loadedDialQueue && ordered.length) {
-      return applyDialQueueStartMode(ordered, ordered, loadedDialQueue.startMode, latestByCandidate);
-    }
-    const seen = new Set<string>();
-    const merged: PipelineCandidate[] = [];
-    for (const candidate of [...queueList, ...doneList]) {
-      if (seen.has(candidate.id)) continue;
-      seen.add(candidate.id);
-      merged.push(candidate);
-    }
-    return merged.length ? merged : ordered;
-  }, [
-    loadedDialQueue,
-    dialScopeCandidates,
-    filteredCandidates,
-    queueList,
-    doneList,
-    latestByCandidate,
-  ]);
 
   const currentFocusIndex = React.useMemo(() => {
     if (!selectedCandidateId) return -1;
@@ -601,7 +584,14 @@ const PipelineCallWorkspace: React.FC = () => {
   }, [loadableBatchGroups, selectedLoadBatchKey]);
 
   React.useEffect(() => {
-    if (!loadedDialQueue) return;
+    if (!loadedDialQueue) {
+      dialQueueInitRef.current = null;
+      return;
+    }
+    const initKey = `${loadedDialQueue.batchKey}:${loadedDialQueue.startMode}:${loadedDialQueue.candidateId || ''}`;
+    if (dialQueueInitRef.current === initKey) return;
+    dialQueueInitRef.current = initKey;
+
     const targetId = loadedDialQueue.candidateId?.trim();
     if (targetId) {
       const found = candidates.find((c) => c.id === targetId);
@@ -610,9 +600,9 @@ const PipelineCallWorkspace: React.FC = () => {
         return;
       }
     }
-    if (!queueList.length) return;
-    setSelectedCandidateId(queueList[0].id);
-  }, [loadedDialQueue?.batchKey, loadedDialQueue?.startMode, loadedDialQueue?.candidateId, queueList, candidates]);
+    const first = orderedScopeCandidates[0] || queueList[0];
+    if (first) setSelectedCandidateId(first.id);
+  }, [loadedDialQueue, candidates, orderedScopeCandidates, queueList]);
 
   React.useEffect(() => {
     if (appliedDialIntentRef.current || initialLoading || !loadableBatchGroups.length) return;
@@ -689,16 +679,7 @@ const PipelineCallWorkspace: React.FC = () => {
     return 'Queue is empty for selected filters/cap.';
   }, [queueFilter, queueCap, undisposedQueue.length, retryQueue.length]);
 
-  const displayList = React.useMemo(() => {
-    const out: PipelineCandidate[] = [];
-    const seen = new Set<string>();
-    for (const row of [...queueList, ...doneList]) {
-      if (seen.has(row.id)) continue;
-      seen.add(row.id);
-      out.push(row);
-    }
-    return out;
-  }, [queueList, doneList]);
+  const displayList = orderedScopeCandidates;
 
   const currentCandidate = React.useMemo(() => {
     if (selectedCandidateId) {
@@ -706,8 +687,8 @@ const PipelineCallWorkspace: React.FC = () => {
       if (selected) return selected;
     }
     if (!displayList.length) return null;
-    return queueList[0] || displayList[0];
-  }, [candidates, selectedCandidateId, displayList, queueList]);
+    return displayList[0];
+  }, [candidates, selectedCandidateId, displayList]);
 
   const openEmailForCurrentLead = React.useCallback(() => {
     if (!currentCandidate) return;
@@ -1048,12 +1029,7 @@ const PipelineCallWorkspace: React.FC = () => {
         setTodaysCallCount((prev) => prev + 1);
       }
       if (AUTO_ADVANCE) {
-        const idx = queueList.findIndex((c) => c.id === currentCandidate.id);
-        if (idx >= 0 && idx < queueList.length - 1) {
-          setSelectedCandidateId(queueList[idx + 1].id);
-        } else {
-          goToNextLead();
-        }
+        goToNextLead();
       }
       if (
         dispositionModalMode === 'call' &&
@@ -1242,7 +1218,7 @@ const PipelineCallWorkspace: React.FC = () => {
                   {loadedDialQueue ? loadedDialQueue.batchTitle : 'Dial queue'}
                 </p>
                 <p className={`text-xs ${tone.panelMuted}`}>
-                  {queueList.length} to call · {doneList.length} done
+                  {queueList.length} next to call · {doneList.length} disposed · {focusNavigationList.length} in batch
                   {currentFocusIndex >= 0 && focusNavigationList.length > 0
                     ? ` · lead ${currentFocusIndex + 1} of ${focusNavigationList.length}`
                     : ''}
@@ -1298,6 +1274,16 @@ const PipelineCallWorkspace: React.FC = () => {
                   </Button>
                 </div>
               </div>
+            )}
+
+            {focusNavigationList.length > 0 && (
+              <CallQueueLeadRail
+                leads={focusNavigationList}
+                selectedId={selectedCandidateId}
+                latestByCandidate={latestByCandidate}
+                onSelect={setSelectedCandidateId}
+                tone={tone}
+              />
             )}
           </div>
 
