@@ -15,6 +15,7 @@ import PortalTour from './tour/PortalTour';
 import TaskWalkthrough from './tour/TaskWalkthrough';
 import PageHintBulb from './tour/PageHintBulb';
 import WeekWinnerAnnouncement from './WeekWinnerAnnouncement';
+import PerformanceCheckInDueBanner from './PerformanceCheckInDueBanner';
 import {
   clearStaffSessionCache,
   getStaffSessionSnapshot,
@@ -175,6 +176,7 @@ const Layout: React.FC<LayoutProps> = ({
           </header>
         )}
         <main className={`flex-grow flex flex-col min-h-0 relative overflow-x-hidden px-safe-area ${isAdmin ? 'max-lg:pl-[4.75rem]' : ''}`}>
+          {isAdmin && roleResolved && userId && <PerformanceCheckInDueBanner role={role} userId={userId} />}
           {children}
           {isAdmin && <PageHintBulb section={currentSection} />}
         </main>

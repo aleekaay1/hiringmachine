@@ -4,7 +4,12 @@ Sends mid-week (Monday/Tuesday Toronto) coaching emails to recruiters & leadersh
 
 ## Status
 
-**Disabled by default.** Set Edge secret `PERFORMANCE_CHECKIN_AUTOMATION_ENABLED=true` when ready to send live emails.
+Uses **Supabase pg_cron** (included — no extra server). Run `supabase/sql/paste_performance_check_in_cron.sql` after setting secrets.
+
+Set Edge secrets:
+- `PERFORMANCE_CHECKIN_CRON_SECRET` (match SQL / Vault)
+- `PERFORMANCE_CHECKIN_AUTOMATION_ENABLED` = `true`
+- `SMTP_*` (same as other staff emails)
 
 ## Invoke
 

@@ -18,11 +18,10 @@ import {
   loadCandidatePhonesById,
   loadLiveSessionRegistrantsForMatching,
 } from './liveSessionBookedOutcomes';
-import { listPipelineCallRecords } from './pipelineService';
+import { loadLeaderboardSnapshot } from './pipelineLeaderboardCache';
+import { listPipelineCallRecords, type PipelineCallRecord } from './pipelineService';
 import { supabase } from './supabaseClient';
 import {
-  computePaceSnapshot,
-  elapsedDaysInFridayWeek,
   computePaceSnapshot,
   elapsedDaysInFridayWeek,
   listPerformanceCheckInInvites,
@@ -195,13 +194,13 @@ function torontoYmdFromIso(iso: string): string {
 }
 
 function buildDailyBreakdown(
-  records: Array<{ called_at?: string | null; disposition?: string | null }>,
+  records: Array<{ disposed_at?: string | null; called_at?: string | null; disposition?: string | null }>,
   weekSince: string,
 ): CoachingDailyPoint[] {
   const days = fridayWeekDays(weekSince);
   const indexByYmd = new Map(days.map((d, i) => [d.ymd, i]));
   for (const record of records) {
-    const iso = record.called_at;
+    const iso = record.disposed_at || record.called_at;
     if (!iso) continue;
     const ymd = torontoYmdFromIso(iso);
     const idx = indexByYmd.get(ymd);
@@ -212,6 +211,18 @@ function buildDailyBreakdown(
     }
   }
   return days;
+}
+
+function indexRecordsByUser(records: PipelineCallRecord[]): Map<string, PipelineCallRecord[]> {
+  const recordsByUser = new Map<string, PipelineCallRecord[]>();
+  for (const record of records) {
+    const uid = record.recruiter_user_id;
+    if (!uid) continue;
+    const list = recordsByUser.get(uid) || [];
+    list.push(record);
+    recordsByUser.set(uid, list);
+  }
+  return recordsByUser;
 }
 
 async function loadAllCallSettings(): Promise<Map<string, CallSettingsRow>> {
@@ -226,17 +237,28 @@ async function loadAllCallSettings(): Promise<Map<string, CallSettingsRow>> {
   return map;
 }
 
-async function loadLeaderboardRowsForWeek(weekSince: string, weekUntil: string): Promise<RecruiterLeaderboardRow[]> {
+async function loadLeaderboardRowsForWeek(
+  weekSince: string,
+  weekUntil: string,
+): Promise<{ rows: RecruiterLeaderboardRow[]; recordsByUser: Map<string, PipelineCallRecord[]> }> {
+  const currentWeek = fridayWeekBoundsFromYmd(torontoYmdFromDate());
+  if (weekSince === currentWeek.since) {
+    const snapshot = await loadLeaderboardSnapshot('last7');
+    if (snapshot.data?.rows?.length) {
+      return { rows: snapshot.data.rows, recordsByUser: new Map() };
+    }
+  }
+
   const custom = { sinceYmd: weekSince, untilYmd: weekUntil };
   const windows = buildLeaderboardWindows('custom', new Date(), custom);
   const [currentRecords, profiles, scopedWebinarRows, liveRegistrants] = await Promise.all([
     listPipelineCallRecords({
       fromIso: windows.current.fromIso,
       toIso: windows.current.toIso,
-      limit: 8000,
-    }),
+      limit: 2500,
+    }).catch(() => [] as PipelineCallRecord[]),
     listAllUserProfiles().catch(() => []),
-    loadScopedWebinarRowsForViewer({ role: 'admin', viewerEmail: null, viewerFullName: null }),
+    loadScopedWebinarRowsForViewer({ role: 'admin', viewerEmail: null, viewerFullName: null }).catch(() => []),
     loadLiveSessionRegistrantsForMatching().catch(() => []),
   ]);
 
@@ -250,7 +272,7 @@ async function loadLeaderboardRowsForWeek(weekSince: string, weekUntil: string):
     profiles.map((p) => [p.user_id, { fullName: p.full_name, email: p.email ?? null }]),
   );
 
-  return buildCompositeLeaderboard({
+  const rows = buildCompositeLeaderboard({
     webinarRows: scopedWebinarRows as Array<Record<string, unknown>>,
     currentWindow: windows.current,
     previousWindow: windows.previous,
@@ -263,6 +285,8 @@ async function loadLeaderboardRowsForWeek(weekSince: string, weekUntil: string):
     liveSessionByEmail: buildLiveSessionRowsByEmail(liveRegistrants),
     liveSessionByPhone: buildLiveSessionRowsByPhone(liveRegistrants),
   });
+
+  return { rows, recordsByUser: indexRecordsByUser(currentRecords) };
 }
 
 export function listRecentFridayWeeks(count = 12, now = new Date()): Array<{ since: string; until: string; label: string }> {
@@ -288,18 +312,26 @@ export async function loadCoachingBoard(weekSince: string, now = new Date()): Pr
   const elapsedDays = elapsedDaysInFridayWeek(week.since, now);
   const isCurrentWeek = week.since === fridayWeekBoundsFromYmd(torontoYmdFromDate(now)).since;
 
-  const [profiles, settingsMap, invites, forms, leaderboardRows, allRecords] = await Promise.all([
+  const [profiles, settingsMap, invites, forms, leaderboardBundle] = await Promise.all([
     listAllUserProfiles(),
     loadAllCallSettings(),
     listPerformanceCheckInInvites(week.since),
     listPerformanceCheckIns(week.since),
     loadLeaderboardRowsForWeek(week.since, week.until),
-    listPipelineCallRecords({
-      fromIso: `${week.since}T00:00:00.000-04:00`,
-      toIso: `${week.until}T23:59:59.999-04:00`,
-      limit: 12000,
-    }),
   ]);
+
+  const leaderboardRows = leaderboardBundle.rows;
+  let recordsByUser = leaderboardBundle.recordsByUser;
+
+  if (recordsByUser.size === 0 && isCurrentWeek) {
+    const windows = buildLeaderboardWindows('custom', now, { sinceYmd: week.since, untilYmd: week.until });
+    const records = await listPipelineCallRecords({
+      fromIso: windows.current.fromIso,
+      toIso: windows.current.toIso,
+      limit: 2000,
+    }).catch(() => [] as PipelineCallRecord[]);
+    recordsByUser = indexRecordsByUser(records);
+  }
 
   const participants = filterProductionStaffProfiles(profiles).filter(
     (p) => (p.role === 'recruiter' || p.role === 'leadership' || p.role === 'webinar') && !isDemoStaffProfile(p),
@@ -310,15 +342,6 @@ export async function loadCoachingBoard(weekSince: string, now = new Date()): Pr
   const lbByUser = new Map(
     leaderboardRows.filter((r) => r.recruiterUserId).map((r) => [r.recruiterUserId as string, r]),
   );
-
-  const recordsByUser = new Map<string, typeof allRecords>();
-  for (const record of allRecords) {
-    const uid = record.recruiter_user_id;
-    if (!uid) continue;
-    const list = recordsByUser.get(uid) || [];
-    list.push(record);
-    recordsByUser.set(uid, list);
-  }
 
   const previousWeekSince = shiftYmdDays(week.since, -7);
   const previousForms = await listPerformanceCheckIns(previousWeekSince);
@@ -513,13 +536,28 @@ export async function loadUserImprovementLadder(userId: string, maxWeeks = 10): 
     .slice(-maxWeeks);
 }
 
-export async function loadCoachingEmailLogs(limit = 40): Promise<CoachingEmailLogRow[]> {
-  const { data, error } = await supabase
-    .from('email_send_logs')
-    .select('id, created_at, to_email, subject, status, metadata')
-    .or('trigger_label.eq.mid_week_performance_checkin,source.eq.performance-check-in-reminder')
-    .order('created_at', { ascending: false })
-    .limit(limit);
-  if (error) throw new Error(error.message);
-  return (data || []) as CoachingEmailLogRow[];
+export async function loadCoachingEmailLogs(limit = 30): Promise<CoachingEmailLogRow[]> {
+  try {
+    const { data, error } = await supabase
+      .from('email_send_logs')
+      .select('id, created_at, to_email, subject, status, metadata')
+      .eq('trigger_label', 'mid_week_performance_checkin')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (!error && data) return data as CoachingEmailLogRow[];
+
+    const fallback = await supabase
+      .from('email_send_logs')
+      .select('id, created_at, to_email, subject, status, metadata')
+      .order('created_at', { ascending: false })
+      .limit(Math.min(limit * 3, 120));
+    if (fallback.error) return [];
+    return ((fallback.data || []) as CoachingEmailLogRow[]).filter((row) => {
+      const meta = row.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+      const category = String((meta as Record<string, unknown>).category || '');
+      return category === 'mid_week_coaching';
+    }).slice(0, limit);
+  } catch {
+    return [];
+  }
 }

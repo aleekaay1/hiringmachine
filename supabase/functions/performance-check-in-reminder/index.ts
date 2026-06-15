@@ -153,17 +153,41 @@ function buildEmailHtml(input: {
   weekLabel: string;
   callsPacePct: number | null;
   bookingsPacePct: number | null;
+  actualCalls: number;
+  actualBooked: number;
+  expectedCalls: number | null;
+  expectedBookings: number | null;
+  dailyCallTarget: number | null;
+  dailyBookingTarget: number | null;
+  elapsedDays: number;
   formUrl: string;
 }): string {
-  const callsLine =
-    input.callsPacePct !== null ? `${input.callsPacePct}% of call target` : 'call target not set';
-  const bookingsLine =
-    input.bookingsPacePct !== null ? `${input.bookingsPacePct}% of booking target` : 'booking target not set';
+  const paceCell = (pct: number | null, actual: number, expected: number | null, label: string) => {
+    const color = pct !== null && pct < 50 ? '#e11d48' : '#0B1B34';
+    return `<tr>
+      <td style="padding:8px 12px;border-bottom:1px solid #e8f0fa;color:#5c7594">${escapeHtml(label)}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #e8f0fa;font-weight:600;color:${color}">${actual} / ${expected ?? '—'}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #e8f0fa;font-weight:600;color:${color}">${pct !== null ? `${pct}%` : '—'}</td>
+    </tr>`;
+  };
 
-  return `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#0B1B34;line-height:1.5">
+  return `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;color:#0B1B34;line-height:1.5;max-width:560px">
   <p>Hi ${escapeHtml(input.firstName)},</p>
-  <p>Mid-week pulse check for <strong>${escapeHtml(input.weekLabel)}</strong>.</p>
-  <p>You are pacing below 50% on at least one target (${escapeHtml(callsLine)} · ${escapeHtml(bookingsLine)}).</p>
+  <p>Mid-week pulse check for <strong>${escapeHtml(input.weekLabel)}</strong> (day ${input.elapsedDays} of the Fri–Thu week).</p>
+  <p>You are pacing <strong>below 50%</strong> on at least one target. Here is your snapshot:</p>
+  <table style="width:100%;border-collapse:collapse;margin:16px 0;background:#f8fbff;border-radius:12px;overflow:hidden">
+    <thead>
+      <tr style="background:#eef6ff">
+        <th style="padding:8px 12px;text-align:left;font-size:12px;color:#4e79a9">Metric</th>
+        <th style="padding:8px 12px;text-align:left;font-size:12px;color:#4e79a9">Actual / expected</th>
+        <th style="padding:8px 12px;text-align:left;font-size:12px;color:#4e79a9">Pace</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${paceCell(input.callsPacePct, input.actualCalls, input.expectedCalls, `Calls (target ${input.dailyCallTarget ?? '—'}/day)`)}
+      ${paceCell(input.bookingsPacePct, input.actualBooked, input.expectedBookings, `Bookings (target ${input.dailyBookingTarget ?? '—'}/day)`)}
+    </tbody>
+  </table>
   <p>Please take 2 minutes to tell us what is blocking you so we can coach you before the week ends:</p>
   <p><a href="${escapeHtml(input.formUrl)}" style="display:inline-block;padding:12px 18px;background:#4e9ae8;color:#fff;text-decoration:none;border-radius:8px;font-weight:600">Open check-in form</a></p>
   <p style="font-size:13px;color:#5c7594">After you submit, jump back into the phone workspace. Leadership reviews these before the recruiting meeting.</p>
@@ -197,7 +221,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const automationEnabled = (Deno.env.get('PERFORMANCE_CHECKIN_AUTOMATION_ENABLED') ?? 'false') === 'true';
+    const automationEnabled = (Deno.env.get('PERFORMANCE_CHECKIN_AUTOMATION_ENABLED') ?? 'true') === 'true';
     const url = new URL(req.url);
     const dryRun = url.searchParams.get('dry_run') === 'true' || !automationEnabled;
     const forceRun = url.searchParams.get('force') === 'true';
@@ -226,7 +250,7 @@ Deno.serve(async (req) => {
     const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const admin = createClient(supabaseUrl, serviceRole);
 
-    const [{ data: profiles }, { data: settingsRows }, { data: callRows }] = await Promise.all([
+    const [{ data: profiles }, { data: settingsRows }, { data: callRows }, { data: existingInvites }] = await Promise.all([
       admin
         .from('user_profiles')
         .select('user_id, email, full_name, role')
@@ -238,12 +262,22 @@ Deno.serve(async (req) => {
         .gte('called_at', weekStartIso)
         .lte('called_at', weekEndIso)
         .limit(20000),
+      admin
+        .from('recruiter_performance_check_in_invites')
+        .select('user_id, email_sent_at')
+        .eq('week_since', week.since),
     ]);
 
     const settingsByUser = new Map<string, SettingsRow>();
     for (const row of (settingsRows || []) as SettingsRow[]) {
       settingsByUser.set(row.user_id, row);
     }
+
+    const alreadyEmailed = new Set(
+      ((existingInvites || []) as Array<{ user_id: string; email_sent_at: string | null }>)
+        .filter((row) => row.email_sent_at)
+        .map((row) => row.user_id),
+    );
 
     const callsByUser = new Map<string, { calls: number; booked: number }>();
     for (const row of (callRows || []) as CallRow[]) {
@@ -279,6 +313,7 @@ Deno.serve(async (req) => {
         elapsedDays: days,
       });
       if (!pace.belowThreshold) continue;
+      if (!dryRun && alreadyEmailed.has(profile.user_id)) continue;
 
       const invitePayload = {
         user_id: profile.user_id,
@@ -302,7 +337,7 @@ Deno.serve(async (req) => {
       const { data: invite, error: inviteErr } = await admin
         .from('recruiter_performance_check_in_invites')
         .upsert(invitePayload, { onConflict: 'user_id,week_since' })
-        .select('invite_token')
+        .select('invite_token, email_sent_at')
         .single();
       if (inviteErr) {
         console.error('invite upsert failed', profile.user_id, inviteErr.message);
@@ -325,6 +360,13 @@ Deno.serve(async (req) => {
               weekLabel: `${week.since} → ${week.until}`,
               callsPacePct: pace.callsPacePct,
               bookingsPacePct: pace.bookingsPacePct,
+              actualCalls: agg.calls,
+              actualBooked: agg.booked,
+              expectedCalls: pace.expectedCalls,
+              expectedBookings: pace.expectedBookings,
+              dailyCallTarget,
+              dailyBookingTarget,
+              elapsedDays: days,
               formUrl,
             }),
           });

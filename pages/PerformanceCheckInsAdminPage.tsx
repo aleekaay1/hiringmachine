@@ -197,11 +197,12 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
         setAccessDenied(true);
         return;
       }
-      const [board, logs] = await Promise.all([loadCoachingBoard(weekSince), loadCoachingEmailLogs(30)]);
+      const board = await loadCoachingBoard(weekSince);
       setPeople(board.people);
       setSummary(board.summary);
-      setEmailLogs(logs);
       if (!ladderUserId && board.people[0]) setLadderUserId(board.people[0].userId);
+      const logs = await loadCoachingEmailLogs(30).catch(() => [] as CoachingEmailLogRow[]);
+      setEmailLogs(logs);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
