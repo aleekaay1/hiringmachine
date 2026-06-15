@@ -300,7 +300,7 @@ export function canAccessSection(
   if (section === 'account') return Boolean(role);
   if (section === 'support') return Boolean(role);
   if (section === 'performance-check-in') {
-    return role === 'recruiter' || role === 'leadership' || role === 'webinar';
+    return role === 'recruiter' || role === 'leadership' || role === 'webinar' || role === 'admin';
   }
   if (section === 'performance-check-ins') return canAccessReports(role, email);
   if (!role) return section === 'overview' || section === 'home';

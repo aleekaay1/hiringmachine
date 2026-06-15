@@ -6,14 +6,12 @@ import {
   type AppRole,
   type UserProfile,
 } from './accessControl';
-import { loadRecruiterPersonalMetrics } from './dashboardPersonalMetrics';
-import { supabase } from './supabaseClient';
 import {
   fetchCoachingWeekDataViaFunction,
-  fetchCoachingLadderViaFunction,
-  fetchCoachingEmailLogsViaFunction,
+  fetchParticipantFormViaFunction,
 } from './coachingHubApi';
 import { isSupabaseNetworkError } from './dashboardTeamMetricsService';
+import { supabase } from './supabaseClient';
 import {
   fridayWeekBoundsFromYmd,
   torontoYmdFromDate,
@@ -140,7 +138,7 @@ export type PerformanceCheckInInvite = {
 const PARTICIPANT_ROLES = new Set<AppRole>(['recruiter', 'leadership', 'webinar']);
 
 export function canAccessPerformanceCheckInParticipant(role: AppRole | null): boolean {
-  return Boolean(role && PARTICIPANT_ROLES.has(role));
+  return Boolean(role && (PARTICIPANT_ROLES.has(role) || role === 'admin'));
 }
 
 export function canAccessPerformanceCheckInAdmin(role: AppRole | null, email?: string | null): boolean {
@@ -223,24 +221,153 @@ export function computePaceSnapshot(input: {
 }
 
 export async function loadMidWeekStatsForProfile(profile: UserProfile, now = new Date()): Promise<PerformanceCheckInStats> {
+  const form = await loadCheckInFormPageData(profile, undefined, now);
+  return form.stats;
+}
+
+export type CheckInFormPageData = {
+  stats: PerformanceCheckInStats;
+  inviteId: string | null;
+  fromInvite: boolean;
+  alreadySubmitted: boolean;
+};
+
+export async function loadCheckInFormPageData(
+  profile: UserProfile,
+  token?: string,
+  now = new Date(),
+): Promise<CheckInFormPageData> {
   const week = currentFridayWeekBounds(now);
-  const elapsedDays = elapsedDaysInFridayWeek(week.since, now);
-  const metrics = await loadRecruiterPersonalMetrics(profile);
-  const actualCalls = metrics.calls;
-  const actualBooked = metrics.webinarBooked + metrics.liveSessionBooked;
-  const pace = computePaceSnapshot({
-    dailyCallTarget: metrics.uploadGoal,
-    dailyBookingTarget: metrics.webinarGoal,
+  const viaFn = await fetchParticipantFormViaFunction({
+    token: token?.trim() || undefined,
+    weekSince: week.since,
+    weekUntil: week.until,
+  });
+
+  if (viaFn.ok) {
+    const d = viaFn.data;
+    const elapsed = d.elapsedDays ?? elapsedDaysInFridayWeek(d.weekSince, now);
+    const hasStoredPace = d.callsPacePct !== null || d.bookingsPacePct !== null;
+    const pace = hasStoredPace
+      ? {
+          elapsedDays: elapsed,
+          dailyCallTarget: d.dailyCallTarget,
+          dailyBookingTarget: d.dailyBookingTarget,
+          actualCalls: d.actualCalls,
+          actualBooked: d.actualBooked,
+          expectedCalls: d.expectedCalls,
+          expectedBookings: d.expectedBookings,
+          callsPacePct: d.callsPacePct,
+          bookingsPacePct: d.bookingsPacePct,
+          belowThreshold:
+            (d.callsPacePct !== null && d.callsPacePct < 50) ||
+            (d.bookingsPacePct !== null && d.bookingsPacePct < 50),
+        }
+      : computePaceSnapshot({
+          dailyCallTarget: d.dailyCallTarget,
+          dailyBookingTarget: d.dailyBookingTarget,
+          actualCalls: d.actualCalls,
+          actualBooked: d.actualBooked,
+          elapsedDays: elapsed,
+        });
+
+    return {
+      stats: {
+        weekSince: d.weekSince,
+        weekUntil: d.weekUntil,
+        weekLabel: `${ymdToShortLabel(d.weekSince)} → ${ymdToShortLabel(d.weekUntil)}`,
+        ...pace,
+      },
+      inviteId: d.inviteId,
+      fromInvite: d.fromInvite,
+      alreadySubmitted: d.alreadySubmitted,
+    };
+  }
+
+  if (token?.trim()) {
+    const invite = await loadInviteByToken(token);
+    if (invite && invite.user_id !== profile.user_id) {
+      throw new Error('This check-in link was sent to a different account.');
+    }
+    const effectiveWeek = invite?.week_since ?? week.since;
+    const effectiveUntil = invite?.week_until ?? week.until;
+    const existing = await loadMyCheckInForWeek(effectiveWeek);
+    const elapsed = elapsedDaysInFridayWeek(effectiveWeek, now);
+    const inviteRow = invite as (PerformanceCheckInInvite & {
+      daily_call_target?: number | null;
+      daily_booking_target?: number | null;
+      elapsed_days?: number;
+      actual_calls?: number;
+      actual_booked?: number;
+      expected_calls?: number | null;
+      expected_bookings?: number | null;
+    }) | null;
+
+    const pace = inviteRow && inviteRow.calls_pace_pct !== null
+      ? computePaceSnapshot({
+          dailyCallTarget: inviteRow.daily_call_target ?? null,
+          dailyBookingTarget: inviteRow.daily_booking_target ?? null,
+          actualCalls: inviteRow.actual_calls ?? 0,
+          actualBooked: inviteRow.actual_booked ?? 0,
+          elapsedDays: inviteRow.elapsed_days ?? elapsed,
+        })
+      : await loadMidWeekStatsForProfileFallback(profile, effectiveWeek, effectiveUntil, now);
+
+    return {
+      stats: {
+        weekSince: effectiveWeek,
+        weekUntil: effectiveUntil,
+        weekLabel: `${ymdToShortLabel(effectiveWeek)} → ${ymdToShortLabel(effectiveUntil)}`,
+        ...pace,
+      },
+      inviteId: invite?.id ?? null,
+      fromInvite: Boolean(invite),
+      alreadySubmitted: Boolean(existing),
+    };
+  }
+
+  const existing = await loadMyCheckInForWeek(week.since);
+  const pace = await loadMidWeekStatsForProfileFallback(profile, week.since, week.until, now);
+  return {
+    stats: {
+      weekSince: week.since,
+      weekUntil: week.until,
+      weekLabel: week.title,
+      ...pace,
+    },
+    inviteId: null,
+    fromInvite: false,
+    alreadySubmitted: Boolean(existing),
+  };
+}
+
+async function loadMidWeekStatsForProfileFallback(
+  profile: UserProfile,
+  weekSince: string,
+  weekUntil: string,
+  now: Date,
+): Promise<Omit<PerformanceCheckInStats, 'weekSince' | 'weekUntil' | 'weekLabel'>> {
+  const elapsedDays = elapsedDaysInFridayWeek(weekSince, now);
+  const { getPipelineUserCallSettings, listPipelineCallRecords } = await import('./pipelineService');
+  const windows = { fromIso: `${weekSince}T04:00:00.000Z`, toIso: `${weekUntil}T28:00:00.000Z` };
+  const [settings, records] = await Promise.all([
+    getPipelineUserCallSettings().catch(() => null),
+    listPipelineCallRecords({
+      recruiterUserId: profile.user_id,
+      fromIso: windows.fromIso,
+      toIso: windows.toIso,
+      limit: 2000,
+    }).catch(() => []),
+  ]);
+  const actualCalls = records.length;
+  const actualBooked = records.filter((r) => String(r.disposition || '').toLowerCase() === 'booked').length;
+  return computePaceSnapshot({
+    dailyCallTarget: settings?.daily_upload_target ?? null,
+    dailyBookingTarget: settings?.daily_webinar_booking_target ?? null,
     actualCalls,
     actualBooked,
     elapsedDays,
   });
-  return {
-    weekSince: week.since,
-    weekUntil: week.until,
-    weekLabel: `${ymdToShortLabel(week.since)} → ${ymdToShortLabel(week.until)}`,
-    ...pace,
-  };
 }
 
 export async function loadInviteByToken(token: string): Promise<PerformanceCheckInInvite | null> {
@@ -258,9 +385,13 @@ export async function loadInviteByToken(token: string): Promise<PerformanceCheck
 }
 
 export async function loadMyCheckInForWeek(weekSince: string): Promise<PerformanceCheckInRow | null> {
+  const { data: auth } = await supabase.auth.getUser();
+  const userId = auth.user?.id;
+  if (!userId) return null;
   const { data, error } = await supabase
     .from('recruiter_performance_check_ins')
     .select('*')
+    .eq('user_id', userId)
     .eq('week_since', weekSince)
     .maybeSingle();
   if (error) throw new Error(error.message);

@@ -117,6 +117,40 @@ export type CoachingFullBoardPayload = {
   emailLogs: CoachingHubEmailLogRow[];
 };
 
+export type ParticipantFormPayload = {
+  inviteId: string | null;
+  fromInvite: boolean;
+  alreadySubmitted: boolean;
+  weekSince: string;
+  weekUntil: string;
+  dailyCallTarget: number | null;
+  dailyBookingTarget: number | null;
+  elapsedDays: number | null;
+  actualCalls: number;
+  actualBooked: number;
+  expectedCalls: number | null;
+  expectedBookings: number | null;
+  callsPacePct: number | null;
+  bookingsPacePct: number | null;
+};
+
+export async function fetchParticipantFormViaFunction(input: {
+  token?: string;
+  weekSince: string;
+  weekUntil: string;
+}): Promise<{ ok: true; data: ParticipantFormPayload } | { ok: false; error: string }> {
+  const params: Record<string, string> = {
+    action: 'participantForm',
+    weekSince: input.weekSince,
+    weekUntil: input.weekUntil,
+  };
+  if (input.token) params.token = input.token;
+  const result = await coachingHubGet<ParticipantFormPayload>(params);
+  if (!result.ok) return result;
+  const { ok: _ignored, ...data } = result;
+  return { ok: true, data: data as ParticipantFormPayload };
+}
+
 export async function fetchCoachingFullBoardViaFunction(input: {
   weekSince: string;
   historySince: string;

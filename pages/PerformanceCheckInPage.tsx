@@ -11,9 +11,7 @@ import {
   PERFORMANCE_CHECKIN_BLOCKERS,
   PERFORMANCE_CHECKIN_HELP_OPTIONS,
   PERFORMANCE_CHECKIN_TROUBLE_AREAS,
-  loadInviteByToken,
-  loadMidWeekStatsForProfile,
-  loadMyCheckInForWeek,
+  loadCheckInFormPageData,
   submitPerformanceCheckIn,
   type PerformanceCheckInBlocker,
   type PerformanceCheckInHelp,
@@ -94,25 +92,12 @@ const PerformanceCheckInPage: React.FC = () => {
           throw new Error('This check-in form is for recruiters and leadership only.');
         }
 
-        let weekSince: string | null = null;
-        if (token) {
-          const invite = await loadInviteByToken(token);
-          if (invite) {
-            if (invite.user_id !== profile.user_id) {
-              throw new Error('This check-in link was sent to a different account.');
-            }
-            weekSince = invite.week_since;
-            setInviteId(invite.id);
-            setFromInvite(true);
-          }
-        }
-
-        const midStats = await loadMidWeekStatsForProfile(profile);
-        const effectiveWeek = weekSince ?? midStats.weekSince;
-        const existing = await loadMyCheckInForWeek(effectiveWeek);
+        const formData = await loadCheckInFormPageData(profile, token || undefined);
         if (!cancelled) {
-          setStats({ ...midStats, weekSince: effectiveWeek, weekUntil: midStats.weekUntil });
-          setAlreadySubmitted(Boolean(existing));
+          setStats(formData.stats);
+          setInviteId(formData.inviteId);
+          setFromInvite(formData.fromInvite);
+          setAlreadySubmitted(formData.alreadySubmitted);
         }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
