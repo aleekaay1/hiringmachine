@@ -11,22 +11,41 @@ export async function uploadProfileAvatar(file: File): Promise<string> {
 
   const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
   const path = `${userId}/avatar-${Date.now()}.${ext}`;
+  const contentType =
+    file.type && file.type.startsWith('image/')
+      ? file.type
+      : ext === 'png'
+        ? 'image/png'
+        : ext === 'webp'
+          ? 'image/webp'
+          : ext === 'gif'
+            ? 'image/gif'
+            : 'image/jpeg';
 
   const { error: upErr } = await supabase.storage.from(AVATAR_BUCKET).upload(path, file, {
     cacheControl: '3600',
-    upsert: true,
-    contentType: file.type || 'image/jpeg',
+    upsert: false,
+    contentType,
   });
-  if (upErr) throw upErr;
+  if (upErr) {
+    throw new Error(upErr.message || 'Could not upload photo to storage.');
+  }
 
   const { data: pub } = supabase.storage.from(AVATAR_BUCKET).getPublicUrl(path);
   const avatarUrl = pub.publicUrl;
 
-  const { error: profileErr } = await supabase
+  const { data: updated, error: profileErr } = await supabase
     .from('user_profiles')
     .update({ avatar_url: avatarUrl })
-    .eq('user_id', userId);
-  if (profileErr) throw profileErr;
+    .eq('user_id', userId)
+    .select('user_id')
+    .maybeSingle();
+  if (profileErr) {
+    throw new Error(profileErr.message || 'Could not save profile photo.');
+  }
+  if (!updated) {
+    throw new Error('Staff profile not found. Ask an admin to confirm your account is set up in user profiles.');
+  }
 
   await supabase.auth.refreshSession();
   await resolveStaffSession(true);
