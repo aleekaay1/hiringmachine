@@ -227,12 +227,17 @@ function indexRecordsByUser(records: PipelineCallRecord[]): Map<string, Pipeline
 
 async function loadAllCallSettings(): Promise<Map<string, CallSettingsRow>> {
   const map = new Map<string, CallSettingsRow>();
-  const { data, error } = await supabase
-    .from('pipeline_user_call_settings')
-    .select('user_id, daily_upload_target, daily_webinar_booking_target');
+  const { data, error } = await supabase.from('pipeline_user_call_settings').select('*');
   if (error || !data) return map;
-  for (const row of data as CallSettingsRow[]) {
-    map.set(row.user_id, row);
+  for (const row of data as Record<string, unknown>[]) {
+    const userId = String(row.user_id || '');
+    if (!userId) continue;
+    map.set(userId, {
+      user_id: userId,
+      daily_upload_target: typeof row.daily_upload_target === 'number' ? row.daily_upload_target : null,
+      daily_webinar_booking_target:
+        typeof row.daily_webinar_booking_target === 'number' ? row.daily_webinar_booking_target : null,
+    });
   }
   return map;
 }
@@ -353,8 +358,19 @@ export async function loadCoachingBoard(weekSince: string, now = new Date()): Pr
 
   for (const profile of participants) {
     const settings = settingsMap.get(profile.user_id);
-    const dailyCallTarget = settings?.daily_upload_target ?? null;
-    const dailyBookingTarget = settings?.daily_webinar_booking_target ?? null;
+    const invite = inviteByUser.get(profile.user_id) ?? null;
+    const form = formByUser.get(profile.user_id) ?? null;
+    const inviteTargets = invite as (PerformanceCheckInInvite & {
+      daily_call_target?: number | null;
+      daily_booking_target?: number | null;
+    }) | null;
+    const dailyCallTarget =
+      settings?.daily_upload_target ?? form?.daily_call_target ?? inviteTargets?.daily_call_target ?? null;
+    const dailyBookingTarget =
+      settings?.daily_webinar_booking_target ??
+      form?.daily_booking_target ??
+      inviteTargets?.daily_booking_target ??
+      null;
     if (!dailyCallTarget && !dailyBookingTarget) continue;
 
     const lb = lbByUser.get(profile.user_id);
@@ -373,8 +389,6 @@ export async function loadCoachingBoard(weekSince: string, now = new Date()): Pr
       elapsedDays: elapsed,
     });
 
-    const invite = inviteByUser.get(profile.user_id) ?? null;
-    const form = formByUser.get(profile.user_id) ?? null;
     const combined = combinedPace(pace.callsPacePct, pace.bookingsPacePct);
     const prevCombined = prevPaceByUser.get(profile.user_id) ?? null;
 

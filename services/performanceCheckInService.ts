@@ -324,12 +324,7 @@ export async function listPerformanceCheckIns(weekSince?: string | null): Promis
 }
 
 export async function listPerformanceCheckInInvites(weekSince?: string | null): Promise<PerformanceCheckInInvite[]> {
-  let query = supabase
-    .from('recruiter_performance_check_in_invites')
-    .select(
-      'id, user_id, submitter_email, submitter_name, week_since, week_until, invite_token, email_sent_at, below_threshold, calls_pace_pct, bookings_pace_pct',
-    )
-    .order('created_at', { ascending: false });
+  let query = supabase.from('recruiter_performance_check_in_invites').select('*').order('created_at', { ascending: false });
   if (weekSince) query = query.eq('week_since', weekSince);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
