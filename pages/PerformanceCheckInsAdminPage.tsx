@@ -12,6 +12,8 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
+import StaffAvatar from '../components/StaffAvatar';
+import { useStaffAvatarLookup } from '../hooks/useStaffAvatarLookup';
 import {
   DailyWeekBars,
   ImprovementLadderChart,
@@ -26,6 +28,7 @@ import {
 import { Button } from '../components/UI';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import { getCurrentUserProfile } from '../services/accessControl';
+import type { StaffAvatarLookup } from '../services/staffAvatarLookup';
 import {
   loadFullCoachingHub,
   listRecentFridayWeeks,
@@ -83,6 +86,7 @@ function PersonCard({
   elapsedDays,
   viewMode,
   ladderDayCount,
+  avatarLookup,
 }: {
   person: CoachingBoardPerson;
   expanded: boolean;
@@ -92,6 +96,7 @@ function PersonCard({
   elapsedDays: number;
   viewMode: CoachingHubViewMode;
   ladderDayCount: number;
+  avatarLookup?: StaffAvatarLookup;
 }) {
   const formId = person.form?.id;
   const ladderPoints = React.useMemo(
@@ -135,6 +140,12 @@ function PersonCard({
         )}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
+            <StaffAvatar
+              name={person.displayName}
+              userId={person.userId}
+              lookup={avatarLookup}
+              size="sm"
+            />
             <h3 className="text-base font-semibold text-[#0B1B34]">{person.displayName}</h3>
             <span className="rounded-full bg-[#eef6ff] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[#4e79a9]">
               {person.role}
@@ -354,6 +365,7 @@ function PersonCard({
 }
 
 const PerformanceCheckInsAdminPage: React.FC = () => {
+  const avatarLookup = useStaffAvatarLookup();
   const defaultWeek = currentFridayWeekBounds().since;
   const [viewMode, setViewMode] = React.useState<CoachingHubViewMode>('week');
   const [weekSince, setWeekSince] = React.useState(defaultWeek);
@@ -756,6 +768,7 @@ const PerformanceCheckInsAdminPage: React.FC = () => {
                   elapsedDays={summary?.elapsedDays ?? 7}
                   viewMode={viewMode}
                   ladderDayCount={ladderDayCount}
+                  avatarLookup={avatarLookup}
                   onToggle={() => setExpandedId((id) => (id === person.userId ? null : person.userId))}
                   onSelectForm={(checked) => {
                     if (person.form) toggleFormSelect(person.form.id, checked);

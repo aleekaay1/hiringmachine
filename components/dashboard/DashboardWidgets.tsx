@@ -1,6 +1,8 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
+import StaffAvatar from '../StaffAvatar';
+import { useStaffAvatarLookup } from '../../hooks/useStaffAvatarLookup';
 import type { RecruiterLeaderboardRow } from '../../services/pipelineLeaderboard';
 import { DashboardStickyNotesPanel } from './DashboardStickyNotesPanel';
 
@@ -16,6 +18,7 @@ export function RecruiterStandingsBoard({
   rows: RecruiterLeaderboardRow[];
   title?: string;
 }) {
+  const avatarLookup = useStaffAvatarLookup();
   if (rows.length === 0) return null;
 
   return (
@@ -37,7 +40,17 @@ export function RecruiterStandingsBoard({
             {rows.map((row) => (
               <tr key={row.recruiterKey} className="border-t border-[#eef4fb] text-[#35567a]">
                 <td className="py-2 pr-3 font-semibold text-[#0B1B34]">{row.rank}</td>
-                <td className="py-2 pr-3">{row.displayName}</td>
+                <td className="py-2 pr-3">
+                  <span className="inline-flex items-center gap-2">
+                    <StaffAvatar
+                      name={row.displayName}
+                      userId={row.recruiterUserId}
+                      lookup={avatarLookup}
+                      size="xs"
+                    />
+                    {row.displayName}
+                  </span>
+                </td>
                 <td className="py-2 pr-3 tabular-nums">{row.webinarBooked}</td>
                 <td className="py-2 pr-3 tabular-nums">{row.webinarShowed}</td>
                 <td className="py-2 pr-3 tabular-nums">{row.calls}</td>

@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
+import { useStaffAvatarLookup } from '../hooks/useStaffAvatarLookup';
+import StaffAvatar from '../components/StaffAvatar';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
 import { getCurrentUserProfile, type AppRole } from '../services/accessControl';
@@ -14,7 +16,6 @@ import {
   getInviterAttributionFromRow,
   hrScheduledMsFromRow,
   inviteeLabelFromRow,
-  profileInitials,
   recruiterTeamFromRow,
   rowMatchesNameKey,
   webinarSessionMsFromRow,
@@ -35,6 +36,7 @@ import {
   subscriptionsFromDashboardData,
 } from '../services/webinarGeekDashboardCache';
 import { signInWithGoogle } from '../services/googleAuth';
+import type { StaffAvatarLookup } from '../services/staffAvatarLookup';
 
 type AnyRow = Record<string, unknown>;
 type DashboardData = Record<string, unknown>;
@@ -289,6 +291,7 @@ function subscriptionKey(row: AnyRow): string {
 
 const WebinarGeekDashboard: React.FC = () => {
   const isAuthenticated = useStaffAuthenticated();
+  const avatarLookup = useStaffAvatarLookup();
   const [email, setEmail] = useState('admin@globelife-paz.com');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
@@ -1003,7 +1006,6 @@ const WebinarGeekDashboard: React.FC = () => {
             <div className="flex gap-2.5 overflow-x-auto pb-1 -mx-1 px-1 snap-x snap-mandatory">
               <RecruiterFilterChip
                 displayName="All recruiters"
-                initials="All"
                 count={nameProfiles.reduce((s, p) => s + p.scheduled, 0)}
                 active={selectedNameKey === null}
                 onSelect={() => setSelectedNameKey(null)}
@@ -1012,9 +1014,9 @@ const WebinarGeekDashboard: React.FC = () => {
                 <RecruiterFilterChip
                   key={p.key}
                   displayName={p.displayName}
-                  initials={profileInitials(p.displayName)}
                   count={p.scheduled}
                   active={selectedNameKey === p.key}
+                  avatarLookup={avatarLookup}
                   onSelect={() => setSelectedNameKey((prev) => (prev === p.key ? null : p.key))}
                 />
               ))}
@@ -1535,18 +1537,18 @@ const Detail = ({ label, value }: { label: string; value: string }) => (
 
 type RecruiterFilterChipProps = {
   displayName: string;
-  initials: string;
   count: number;
   active: boolean;
   onSelect: () => void;
+  avatarLookup?: StaffAvatarLookup;
 };
 
 const RecruiterFilterChip: React.FC<RecruiterFilterChipProps> = ({
   displayName,
-  initials,
   count,
   active,
   onSelect,
+  avatarLookup,
 }) => (
   <button
     type="button"
@@ -1558,13 +1560,22 @@ const RecruiterFilterChip: React.FC<RecruiterFilterChipProps> = ({
     }`}
   >
     <div className="flex items-center gap-2.5">
-      <span
-        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ${
-          active ? 'bg-[#005EB8] text-white' : 'bg-slate-200 text-slate-700'
-        }`}
-      >
-        {initials}
-      </span>
+      {displayName === 'All recruiters' ? (
+        <span
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
+            active ? 'bg-[#005EB8] text-white' : 'bg-slate-200 text-slate-700'
+          }`}
+        >
+          All
+        </span>
+      ) : (
+        <StaffAvatar
+          name={displayName}
+          lookup={avatarLookup}
+          size="sm"
+          active={active}
+        />
+      )}
       <div className="min-w-0">
         <p className="text-xs font-semibold text-slate-900 truncate">{displayName}</p>
         <p className="text-[10px] text-slate-500 tabular-nums">{count} invite{count === 1 ? '' : 's'}</p>

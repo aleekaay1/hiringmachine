@@ -14,7 +14,9 @@ import {
   X,
 } from 'lucide-react';
 import { Button } from '../components/UI';
+import StaffAvatar from '../components/StaffAvatar';
 import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
+import { useStaffAvatarLookup } from '../hooks/useStaffAvatarLookup';
 import { getCurrentUserProfile, listAllUserProfiles, type AppRole } from '../services/accessControl';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import {
@@ -47,6 +49,7 @@ import { listPipelineCallRecords } from '../services/pipelineService';
 import { COINS_PER_LIVE_SESSION_SHOW, coinEarnWindow } from '../services/recruiterCoins';
 import { signInWithGoogle } from '../services/googleAuth';
 import { shiftYmdDays } from '../services/webinarGeekDates';
+import type { StaffAvatarLookup } from '../services/staffAvatarLookup';
 
 const OUTCOME_LABEL: Record<LiveSessionOutcomeStatus, string> = {
   attended: 'Showed',
@@ -62,15 +65,9 @@ const OUTCOME_TONE: Record<LiveSessionOutcomeStatus, string> = {
   pending: 'bg-slate-50 text-slate-700 border-slate-200',
 };
 
-function profileInitials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '?';
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
-}
-
 const LiveSessionsAnalyticsPage: React.FC = () => {
   const isAuthenticated = useStaffAuthenticated();
+  const avatarLookup = useStaffAvatarLookup();
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -202,6 +199,7 @@ const LiveSessionsAnalyticsPage: React.FC = () => {
   const recruiterChips = useMemo(() => {
     return recruiterProfiles.map((p) => ({
       key: p.userId || p.displayName,
+      userId: p.userId,
       label: p.displayName,
       booked: p.booked,
       showed: p.showed,
@@ -458,7 +456,8 @@ const LiveSessionsAnalyticsPage: React.FC = () => {
                 active={selectedRecruiterKey === chip.key}
                 label={chip.label}
                 sub={`${chip.showed}/${chip.booked} showed`}
-                initials={profileInitials(chip.label)}
+                userId={chip.userId}
+                avatarLookup={avatarLookup}
                 onClick={() =>
                   setSelectedRecruiterKey((prev) => (prev === chip.key ? null : chip.key))
                 }
@@ -487,7 +486,7 @@ const LiveSessionsAnalyticsPage: React.FC = () => {
         {loading && allRows.length === 0 ? (
           <p className="text-sm text-[#5c7594] py-8 text-center">Loading live session data…</p>
         ) : activeTab === 'bookings' ? (
-          <BookingsTable rows={filteredRows} />
+          <BookingsTable rows={filteredRows} avatarLookup={avatarLookup} />
         ) : activeTab === 'sessions' ? (
           <SessionsTable rows={sessionSummaries} onSelectSession={(d) => {
             setSessionDateFilter(d);
@@ -496,6 +495,7 @@ const LiveSessionsAnalyticsPage: React.FC = () => {
         ) : (
           <RecruitersTable
             profiles={recruiterProfiles}
+            avatarLookup={avatarLookup}
             onSelect={(key) => {
               setSelectedRecruiterKey(key);
               setActiveTab('bookings');
@@ -575,13 +575,15 @@ function RecruiterChip({
   active,
   label,
   sub,
-  initials,
+  userId,
+  avatarLookup,
   onClick,
 }: {
   active: boolean;
   label: string;
   sub: string;
-  initials?: string;
+  userId?: string | null;
+  avatarLookup?: StaffAvatarLookup;
   onClick: () => void;
 }) {
   return (
@@ -592,11 +594,7 @@ function RecruiterChip({
         active ? 'border-[#005EB8] bg-[#005EB8]/8' : 'border-[#d6deea] bg-white hover:border-[#005EB8]/30'
       }`}
     >
-      {initials && (
-        <span className="h-7 w-7 rounded-full bg-[#005EB8]/15 text-[#005EB8] text-[10px] font-bold flex items-center justify-center shrink-0">
-          {initials}
-        </span>
-      )}
+      <StaffAvatar name={label} userId={userId} lookup={avatarLookup} size="xs" active={active} />
       <span>
         <span className="block text-xs font-semibold text-[#0B1B34]">{label}</span>
         <span className="block text-[10px] text-[#5c7594]">{sub}</span>
@@ -613,7 +611,13 @@ function OutcomeBadge({ outcome }: { outcome: LiveSessionOutcomeStatus }) {
   );
 }
 
-function BookingsTable({ rows }: { rows: LiveSessionBookingRow[] }) {
+function BookingsTable({
+  rows,
+  avatarLookup,
+}: {
+  rows: LiveSessionBookingRow[];
+  avatarLookup?: StaffAvatarLookup;
+}) {
   if (rows.length === 0) {
     return <p className="text-sm text-[#5c7594] py-6 text-center">No bookings match your filters.</p>;
   }
@@ -634,7 +638,17 @@ function BookingsTable({ rows }: { rows: LiveSessionBookingRow[] }) {
         <tbody>
           {rows.map((row) => (
             <tr key={row.callRecordId} className="border-b border-[#f0f4f8] last:border-0 hover:bg-[#fafcff]">
-              <td className="px-3 py-2 font-medium text-[#0B1B34] whitespace-nowrap">{row.recruiterName}</td>
+              <td className="px-3 py-2 font-medium text-[#0B1B34] whitespace-nowrap">
+                <span className="inline-flex items-center gap-2">
+                  <StaffAvatar
+                    name={row.recruiterName}
+                    userId={row.recruiterUserId}
+                    lookup={avatarLookup}
+                    size="xs"
+                  />
+                  {row.recruiterName}
+                </span>
+              </td>
               <td className="px-3 py-2">
                 <div className="font-medium text-[#0B1B34]">{row.candidateName}</div>
                 <div className="text-[10px] text-[#5c7594]">{row.candidateEmail || row.candidatePhone || '—'}</div>
@@ -704,9 +718,11 @@ function SessionsTable({
 
 function RecruitersTable({
   profiles,
+  avatarLookup,
   onSelect,
 }: {
   profiles: ReturnType<typeof buildRecruiterProfilesFromBookingRows>;
+  avatarLookup?: StaffAvatarLookup;
   onSelect: (key: string) => void;
 }) {
   if (profiles.length === 0) {
@@ -733,7 +749,17 @@ function RecruitersTable({
               className="border-b border-[#f0f4f8] last:border-0 hover:bg-[#fafcff] cursor-pointer"
               onClick={() => onSelect(p.userId || p.displayName)}
             >
-              <td className="px-3 py-2 font-medium text-[#0B1B34]">{p.displayName}</td>
+              <td className="px-3 py-2 font-medium text-[#0B1B34]">
+                <span className="inline-flex items-center gap-2">
+                  <StaffAvatar
+                    name={p.displayName}
+                    userId={p.userId}
+                    lookup={avatarLookup}
+                    size="xs"
+                  />
+                  {p.displayName}
+                </span>
+              </td>
               <td className="px-3 py-2">{p.booked}</td>
               <td className="px-3 py-2 text-emerald-700 font-semibold">{p.showed}</td>
               <td className="px-3 py-2 text-red-700">{p.noShow}</td>

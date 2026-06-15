@@ -2,9 +2,9 @@ import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { FileSpreadsheet, FileText, RefreshCw, Search, UserCircle } from 'lucide-react';
 import { Button } from '../components/UI';
+import StaffAvatar from '../components/StaffAvatar';
 import { useAdminSessionOnce } from '../components/reports/useAdminSessionOnce';
 import { ReportDateRangeBar } from '../components/reports/ReportDateRangeBar';
-import { profileInitials } from '../services/webinarGeekRecruiterAnalytics';
 import {
   buildReportDateRange,
   listReportableStaff,
@@ -236,9 +236,12 @@ const Reports: React.FC = () => {
                   className="rounded-2xl border border-[#d9e5f6] bg-white/90 p-4 text-left shadow-sm transition hover:border-[#8bc3ff] hover:shadow-md"
                 >
                   <div className="flex items-start gap-3">
-                    <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#dff0ff] text-sm font-bold text-[#0B1B34]">
-                      {profileInitials(name)}
-                    </span>
+                    <StaffAvatar
+                      name={name}
+                      userId={card.profile.user_id}
+                      avatarUrl={card.profile.avatar_url}
+                      size="md"
+                    />
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-semibold text-[#0B1B34]">{name}</p>
                       <p className="truncate text-[11px] text-[#5c7594]">{card.profile.email}</p>

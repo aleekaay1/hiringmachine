@@ -17,6 +17,7 @@ import {
   Users,
 } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
+import StaffAvatar from '../components/StaffAvatar';
 import { LeaderboardPodium } from '../components/leaderboard/LeaderboardPodium';
 import {
   LeaderboardRefreshProgress,
@@ -61,6 +62,8 @@ import {
 } from '../services/pipelineLeaderboard';
 import { listPipelineCallRecords } from '../services/pipelineService';
 import { supabase } from '../services/supabaseClient';
+import { useStaffAvatarLookup } from '../hooks/useStaffAvatarLookup';
+import type { StaffAvatarLookup } from '../services/staffAvatarLookup';
 
 const PERIODS: Array<{ id: LeaderboardPeriod; label: string }> = [
   { id: 'last7', label: 'This week (Fri–Thu)' },
@@ -180,11 +183,13 @@ function PersonPerformanceBlock({
   tone = 'default',
   champion = false,
   pazCoins = 0,
+  avatarLookup,
 }: {
   row: RecruiterLeaderboardRow;
   tone?: 'default' | 'gold' | 'highlight';
   champion?: boolean;
   pazCoins?: number;
+  avatarLookup?: StaffAvatarLookup;
 }) {
   const nameClass =
     tone === 'gold'
@@ -196,7 +201,15 @@ function PersonPerformanceBlock({
 
   return (
     <div className="flex min-w-0 flex-1 items-start justify-between gap-3">
-      <div className="min-w-0 flex-1">
+      <div className="flex min-w-0 flex-1 items-start gap-3">
+        <StaffAvatar
+          name={row.displayName}
+          userId={row.recruiterUserId}
+          lookup={avatarLookup}
+          size="md"
+          className="mt-0.5"
+        />
+        <div className="min-w-0 flex-1">
         <p
           className={`truncate text-xl font-semibold tracking-tight ${nameClass}`}
           style={{ fontFamily: 'Outfit, Inter, system-ui, sans-serif' }}
@@ -222,6 +235,7 @@ function PersonPerformanceBlock({
           <Star size={14} className={tone === 'gold' ? 'text-[#9b6b00]' : 'text-[#2f6ea8]'} aria-hidden />
           Score {row.score.toFixed(1)}
         </p>
+        </div>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-2">
         {champion && (
@@ -264,6 +278,7 @@ const LeadershipLeaderboard: React.FC = () => {
     displayNameToUserId: new Map(),
     byDisplayLabel: new Map(),
   });
+  const avatarLookup = useStaffAvatarLookup();
 
   const leadershipView = viewerRole === 'admin' || viewerRole === 'leadership';
 
@@ -719,6 +734,7 @@ const LeadershipLeaderboard: React.FC = () => {
                 first={podiumSlots.first}
                 second={podiumSlots.second}
                 third={podiumSlots.third}
+                avatarLookup={avatarLookup}
               />
             </motion.div>
           )}
@@ -731,9 +747,17 @@ const LeadershipLeaderboard: React.FC = () => {
             >
               <p className="text-[10px] uppercase tracking-[0.2em] text-[#2f6ea8]">{previousLeaderTitle}</p>
               <p className="mt-0.5 text-[11px] text-[#5c7594]">{periodWindowLabels.previous}</p>
-              <p className="mt-1 text-sm font-semibold text-[#0B1B34]">
-                {previousTopPerformer.displayName}
-                <span className="ml-2 font-medium text-[#5c7594]">· Score {previousTopPerformer.score.toFixed(1)}</span>
+              <p className="mt-1 flex items-center gap-2 text-sm font-semibold text-[#0B1B34]">
+                <StaffAvatar
+                  name={previousTopPerformer.displayName}
+                  userId={previousTopPerformer.recruiterUserId}
+                  lookup={avatarLookup}
+                  size="sm"
+                />
+                <span>
+                  {previousTopPerformer.displayName}
+                  <span className="ml-2 font-medium text-[#5c7594]">· Score {previousTopPerformer.score.toFixed(1)}</span>
+                </span>
               </p>
             </motion.div>
           )}
@@ -810,6 +834,7 @@ const LeadershipLeaderboard: React.FC = () => {
                             <PersonPerformanceBlock
                               row={row}
                               pazCoins={coinBalanceForLeaderboardRow(row, coinLookup)}
+                              avatarLookup={avatarLookup}
                             />
                             {isViewer && overtakeMessage(row) && (
                               <p className="mt-1 text-[11px] font-medium text-[#35567a]">{overtakeMessage(row)}</p>
@@ -879,8 +904,20 @@ const LeadershipLeaderboard: React.FC = () => {
                           {badge.label}
                         </p>
                         <p className="mt-1 text-[11px] opacity-90">{badge.description}</p>
-                        <p className="mt-2 text-sm font-semibold text-[#0B1B34]">
-                          {winner ? winner.displayName : '—'}
+                        <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-[#0B1B34]">
+                          {winner ? (
+                            <>
+                              <StaffAvatar
+                                name={winner.displayName}
+                                userId={winner.recruiterUserId}
+                                lookup={avatarLookup}
+                                size="xs"
+                              />
+                              <span>{winner.displayName}</span>
+                            </>
+                          ) : (
+                            '—'
+                          )}
                         </p>
                         {winner && badge.id === 'fastClimber' && winner.rankDelta > 0 && (
                           <p className="text-[11px] text-[#5c7594]">Up {winner.rankDelta} places</p>

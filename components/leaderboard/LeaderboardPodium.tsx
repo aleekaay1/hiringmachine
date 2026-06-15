@@ -1,16 +1,8 @@
 import React from 'react';
 import { Crown, Medal, Trophy } from 'lucide-react';
+import StaffAvatar from '../StaffAvatar';
+import type { StaffAvatarLookup } from '../../services/staffAvatarLookup';
 import type { RecruiterLeaderboardRow } from '../../services/pipelineLeaderboard';
-
-function initialsFromName(name: string): string {
-  const parts = String(name || '')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-  if (parts.length >= 2) return `${parts[0][0] || ''}${parts[1][0] || ''}`.toUpperCase();
-  const one = parts[0] || '?';
-  return one.slice(0, 2).toUpperCase();
-}
 
 function pct(value: number): number {
   return Math.round(value * 100);
@@ -24,6 +16,7 @@ type PodiumSlotProps = {
   avatarRing: string;
   rankBadge: string;
   RankIcon: React.ComponentType<{ size?: number; className?: string }>;
+  avatarLookup?: StaffAvatarLookup;
 };
 
 function PodiumSlot({
@@ -34,6 +27,7 @@ function PodiumSlot({
   avatarRing,
   rankBadge,
   RankIcon,
+  avatarLookup,
 }: PodiumSlotProps) {
   if (!row) {
     return (
@@ -58,17 +52,21 @@ function PodiumSlot({
             aria-hidden
           />
         )}
-        <div
-          className={`flex h-[4.5rem] w-[4.5rem] items-center justify-center rounded-full border-[3px] text-lg font-bold text-white shadow-xl sm:h-20 sm:w-20 sm:text-xl ${avatarRing}`}
-          style={{ fontFamily: 'Outfit, Inter, system-ui, sans-serif' }}
-        >
-          {initialsFromName(row.displayName)}
+        <div className="relative">
+          <StaffAvatar
+            name={row.displayName}
+            userId={row.recruiterUserId}
+            lookup={avatarLookup}
+            size="lg"
+            ringClassName={`border-[3px] shadow-xl ${avatarRing}`}
+            className="sm:!h-20 sm:!w-20 sm:!text-xl"
+          />
+          <span
+            className={`absolute -bottom-1 -right-1 inline-flex h-7 w-7 items-center justify-center rounded-full border-2 border-[#0B1B34] text-[10px] font-bold shadow ${rankBadge}`}
+          >
+            {rank}
+          </span>
         </div>
-        <span
-          className={`absolute -bottom-1 -right-1 inline-flex h-7 w-7 items-center justify-center rounded-full border-2 border-[#0B1B34] text-[10px] font-bold shadow ${rankBadge}`}
-        >
-          {rank}
-        </span>
       </div>
       <p
         className="max-w-[9.5rem] truncate text-center text-sm font-semibold text-white sm:text-base"
@@ -97,10 +95,12 @@ export function LeaderboardPodium({
   first,
   second,
   third,
+  avatarLookup,
 }: {
   first: RecruiterLeaderboardRow | null;
   second: RecruiterLeaderboardRow | null;
   third: RecruiterLeaderboardRow | null;
+  avatarLookup?: StaffAvatarLookup;
 }) {
   return (
     <div className="relative overflow-hidden rounded-3xl border border-[#1c3760] bg-gradient-to-b from-[#0f2848] via-[#123563] to-[#1a4a7c] px-3 pb-2 pt-10 sm:px-6">
@@ -111,27 +111,30 @@ export function LeaderboardPodium({
           rank={2}
           orderClass="order-1 pb-0"
           pedestalClass="min-h-[5.5rem] bg-gradient-to-t from-slate-400/35 to-slate-300/15"
-          avatarRing="border-slate-200 bg-gradient-to-br from-slate-100 to-slate-300 text-slate-800"
+          avatarRing="border-slate-200"
           rankBadge="bg-slate-200 text-slate-800"
           RankIcon={Medal}
+          avatarLookup={avatarLookup}
         />
         <PodiumSlot
           row={first}
           rank={1}
           orderClass="order-2 -mt-6 pb-0 sm:-mt-8"
           pedestalClass="min-h-[7.5rem] bg-gradient-to-t from-amber-400/40 to-amber-200/15"
-          avatarRing="border-amber-200 bg-gradient-to-br from-amber-100 to-amber-300 text-amber-950"
+          avatarRing="border-amber-200"
           rankBadge="bg-amber-300 text-amber-950"
           RankIcon={Trophy}
+          avatarLookup={avatarLookup}
         />
         <PodiumSlot
           row={third}
           rank={3}
           orderClass="order-3 pb-0"
           pedestalClass="min-h-[4.75rem] bg-gradient-to-t from-orange-400/30 to-orange-200/12"
-          avatarRing="border-orange-200 bg-gradient-to-br from-orange-100 to-orange-300 text-orange-950"
+          avatarRing="border-orange-200"
           rankBadge="bg-orange-200 text-orange-950"
           RankIcon={Medal}
+          avatarLookup={avatarLookup}
         />
       </div>
     </div>

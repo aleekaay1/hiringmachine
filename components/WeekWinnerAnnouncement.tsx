@@ -13,6 +13,8 @@ import {
   X,
 } from 'lucide-react';
 import { LeaderboardCoinChip } from './dashboard/LeaderboardCoinChip';
+import StaffAvatar from './StaffAvatar';
+import { useStaffAvatarLookup } from '../hooks/useStaffAvatarLookup';
 import { loadLeaderboardSnapshot } from '../services/pipelineLeaderboardCache';
 import {
   dismissWeekWinnerAnnouncement,
@@ -27,15 +29,6 @@ import {
   type LastWeekWinnerContext,
 } from '../services/weekWinnerPopup';
 
-function initialsFromName(name: string): string {
-  const parts = String(name || '')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean);
-  if (parts.length >= 2) return `${parts[0][0] || ''}${parts[1][0] || ''}`.toUpperCase();
-  const one = parts[0] || '?';
-  return one.slice(0, 2).toUpperCase();
-}
 
 function pct(value: number): string {
   return `${Math.round(value * 100)}%`;
@@ -66,6 +59,7 @@ type WeekWinnerModalProps = {
 
 function WeekWinnerModal({ context, onClose }: WeekWinnerModalProps) {
   const { winner, weekPazCoins } = context;
+  const avatarLookup = useStaffAvatarLookup();
   const periodLabel = formatWeekWinnerPeriodLabel(context.weekSinceYmd, context.weekUntilYmd);
 
   return (
@@ -123,12 +117,14 @@ function WeekWinnerModal({ context, onClose }: WeekWinnerModalProps) {
 
           <div className="relative mx-auto mt-6 flex flex-col items-center">
             <Crown size={28} className="mb-2 text-amber-300 drop-shadow" aria-hidden />
-            <div
-              className="flex h-24 w-24 items-center justify-center rounded-full border-[3px] border-amber-200 bg-gradient-to-br from-amber-100 to-amber-300 text-2xl font-bold text-amber-950 shadow-xl"
-              style={{ fontFamily: 'Outfit, Inter, system-ui, sans-serif' }}
-            >
-              {initialsFromName(winner.displayName)}
-            </div>
+            <StaffAvatar
+              name={winner.displayName}
+              userId={winner.recruiterUserId}
+              lookup={avatarLookup}
+              size="xl"
+              ringClassName="border-[3px] border-amber-200 shadow-xl"
+              className="!h-24 !w-24 !text-2xl"
+            />
             <p
               className="mt-4 max-w-[18rem] truncate text-xl font-semibold text-white sm:text-2xl"
               style={{ fontFamily: 'Outfit, Inter, system-ui, sans-serif' }}
