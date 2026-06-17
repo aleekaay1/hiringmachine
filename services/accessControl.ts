@@ -1,5 +1,6 @@
 import type { User } from '@supabase/supabase-js';
 import { fetchDashboardTeamMetricsViaFunction } from './dashboardTeamMetricsService';
+import { MID_WEEK_COACHING_ENABLED, MID_WEEK_COACHING_HUB_ENABLED } from './midWeekCoachingConfig';
 import { supabase } from './supabaseClient';
 
 export type AppRole = 'admin' | 'leadership' | 'recruiter' | 'webinar' | 'hr' | 'viewer';
@@ -300,9 +301,13 @@ export function canAccessSection(
   if (section === 'account') return Boolean(role);
   if (section === 'support') return Boolean(role);
   if (section === 'performance-check-in') {
+    if (!MID_WEEK_COACHING_ENABLED) return false;
     return role === 'recruiter' || role === 'leadership' || role === 'webinar' || role === 'admin';
   }
-  if (section === 'performance-check-ins') return canAccessReports(role, email);
+  if (section === 'performance-check-ins') {
+    if (!MID_WEEK_COACHING_HUB_ENABLED) return false;
+    return canAccessReports(role, email);
+  }
   if (!role) return section === 'overview' || section === 'home';
   if (role === 'admin') {
     if (ADMIN_DATA_SECTIONS.includes(section)) return true;

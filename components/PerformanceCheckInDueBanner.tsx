@@ -10,6 +10,7 @@ import {
   loadMidWeekStatsForProfile,
   loadMyCheckInForWeek,
 } from '../services/performanceCheckInService';
+import { MID_WEEK_COACHING_ENABLED } from '../services/midWeekCoachingConfig';
 
 const DISMISS_KEY_PREFIX = 'pohiring_checkin_due_dismiss:';
 
@@ -24,6 +25,10 @@ const PerformanceCheckInDueBanner: React.FC<{ role: AppRole | null; userId: stri
   const [dismissed, setDismissed] = React.useState(false);
 
   React.useEffect(() => {
+    if (!MID_WEEK_COACHING_ENABLED) {
+      setDue(null);
+      return;
+    }
     if (!userId || !canAccessPerformanceCheckInParticipant(role)) {
       setDue(null);
       return;
@@ -71,7 +76,7 @@ const PerformanceCheckInDueBanner: React.FC<{ role: AppRole | null; userId: stri
     };
   }, [role, userId]);
 
-  if (!due || dismissed) return null;
+  if (!MID_WEEK_COACHING_ENABLED || !due || dismissed) return null;
 
   const dismissKey = `${DISMISS_KEY_PREFIX}${userId}:${due.weekSince}`;
 

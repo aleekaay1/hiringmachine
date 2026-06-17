@@ -6,6 +6,7 @@ import {
   type AppRole,
   type UserProfile,
 } from './accessControl';
+import { MID_WEEK_COACHING_ENABLED, MID_WEEK_COACHING_HUB_ENABLED } from './midWeekCoachingConfig';
 import {
   fetchCoachingWeekDataViaFunction,
   fetchParticipantFormViaFunction,
@@ -20,8 +21,9 @@ import {
   ymdToShortLabel,
 } from './webinarGeekDates';
 import { buildLeaderboardWindows } from './pipelineLeaderboard';
+import { MID_WEEK_COACHING_ENABLED } from './midWeekCoachingConfig';
 
-export const PERFORMANCE_CHECKIN_AUTOMATION_ENABLED = false;
+export const PERFORMANCE_CHECKIN_AUTOMATION_ENABLED = MID_WEEK_COACHING_ENABLED;
 
 export type PerformanceCheckInBlocker =
   | 'lead_quality'
@@ -140,10 +142,12 @@ export type PerformanceCheckInInvite = {
 const PARTICIPANT_ROLES = new Set<AppRole>(['recruiter', 'leadership', 'webinar']);
 
 export function canAccessPerformanceCheckInParticipant(role: AppRole | null): boolean {
+  if (!MID_WEEK_COACHING_ENABLED) return false;
   return Boolean(role && (PARTICIPANT_ROLES.has(role) || role === 'admin'));
 }
 
 export function canAccessPerformanceCheckInAdmin(role: AppRole | null, email?: string | null): boolean {
+  if (!MID_WEEK_COACHING_HUB_ENABLED) return false;
   if (role === 'admin') return true;
   return canAccessReports(role, email);
 }
@@ -391,6 +395,9 @@ export async function submitPerformanceCheckIn(input: {
   comments: string;
   needsCoaching: boolean;
 }): Promise<PerformanceCheckInRow> {
+  if (!MID_WEEK_COACHING_ENABLED) {
+    throw new Error('Mid-week check-in is temporarily disabled.');
+  }
   const { data: auth } = await supabase.auth.getUser();
   const userId = auth.user?.id;
   if (!userId) throw new Error('Not authenticated.');

@@ -6,6 +6,7 @@
  */
 import type { EmailTemplate } from './emailTemplates';
 import { EMAIL_TEMPLATES, POST_ASSESSMENT_SUBMIT_TEMPLATE } from './emailTemplates';
+import { MID_WEEK_COACHING_ENABLED } from './midWeekCoachingConfig';
 
 export const AUTOMATED_EMAILS_ENABLED = false;
 
@@ -15,8 +16,8 @@ export type AutomationTriggerId =
   | 'leadershipReminder24hAfterCheckin'
   | 'midWeekPerformanceCheckIn';
 
-/** Mid-week recruiter coaching emails — off until PERFORMANCE_CHECKIN_AUTOMATION_ENABLED on Edge. */
-export const PERFORMANCE_CHECKIN_AUTOMATION_ENABLED = false;
+/** Mid-week recruiter coaching emails — gated by MID_WEEK_COACHING_ENABLED (Edge: PERFORMANCE_CHECKIN_AUTOMATION_ENABLED). */
+export const PERFORMANCE_CHECKIN_AUTOMATION_ENABLED = MID_WEEK_COACHING_ENABLED;
 
 export interface AutomationTrigger {
   id: AutomationTriggerId;

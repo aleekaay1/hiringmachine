@@ -13,6 +13,9 @@ const corsHeaders = {
 
 const OPS_EMAILS = new Set(['ali@globelife-paz.com', 'alex@globelife-paz.com']);
 
+/** Mid-week coaching check-in bell alerts — off until re-enabled in app + Edge deploy. */
+const MID_WEEK_COACHING_ENABLED = false;
+
 type NotificationRow = {
   id: string;
   user_id: string | null;
@@ -218,6 +221,7 @@ async function syncPipelineNotifications(
   const callsPacePct = expectedCalls > 0 ? Math.round((actualCalls / expectedCalls) * 10000) / 100 : null;
 
   if (
+    MID_WEEK_COACHING_ENABLED &&
     ['recruiter', 'leadership', 'webinar'].includes(role) &&
     (weekday === 1 || weekday === 2) &&
     callsPacePct !== null &&

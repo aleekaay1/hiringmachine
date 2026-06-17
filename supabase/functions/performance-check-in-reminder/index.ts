@@ -1,5 +1,5 @@
 // Mid-week performance check-in reminder emails (Mon/Tue Toronto).
-// DISABLED by default: set PERFORMANCE_CHECKIN_AUTOMATION_ENABLED=true to send.
+// DISABLED by default — set PERFORMANCE_CHECKIN_AUTOMATION_ENABLED=true on Edge to send.
 // Invoke on schedule with: x-cron-secret: <PERFORMANCE_CHECKIN_CRON_SECRET>
 // Deploy: supabase functions deploy performance-check-in-reminder
 // Test: POST .../performance-check-in-reminder?dry_run=true
@@ -15,6 +15,9 @@ const corsHeaders = {
 };
 
 const APP_URL = (Deno.env.get('OPS_APP_URL') || 'https://paz-talent-journey.vercel.app').replace(/\/$/, '');
+
+/** Flip with Edge secret PERFORMANCE_CHECKIN_AUTOMATION_ENABLED=true when re-enabling. */
+const MID_WEEK_COACHING_ENABLED = false;
 
 type ProfileRow = {
   user_id: string;
@@ -221,10 +224,19 @@ Deno.serve(async (req) => {
       });
     }
 
-    const automationEnabled = (Deno.env.get('PERFORMANCE_CHECKIN_AUTOMATION_ENABLED') ?? 'true') === 'true';
+    const automationEnabled =
+      MID_WEEK_COACHING_ENABLED &&
+      (Deno.env.get('PERFORMANCE_CHECKIN_AUTOMATION_ENABLED') ?? 'false') === 'true';
     const url = new URL(req.url);
     const dryRun = url.searchParams.get('dry_run') === 'true' || !automationEnabled;
     const forceRun = url.searchParams.get('force') === 'true';
+
+    if (!MID_WEEK_COACHING_ENABLED) {
+      return new Response(
+        JSON.stringify({ ok: true, skipped: true, reason: 'Mid-week coaching disabled in code' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
 
     const now = new Date();
     if (!forceRun && !isMidWeekDay(now)) {
