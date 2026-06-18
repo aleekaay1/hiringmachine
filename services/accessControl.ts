@@ -111,7 +111,22 @@ function staffProfileFromAuthUser(user: User): UserProfile {
   };
 }
 
-export async function getCurrentUserProfile(): Promise<UserProfile | null> {
+const PROFILE_CACHE_TTL_MS = 60_000;
+const ALL_PROFILES_CACHE_TTL_MS = 120_000;
+
+let cachedCurrentProfile: { userId: string; profile: UserProfile; at: number } | null = null;
+let currentProfileInflight: Promise<UserProfile | null> | null = null;
+let cachedAllProfiles: { data: UserProfile[]; at: number } | null = null;
+let allProfilesInflight: Promise<UserProfile[]> | null = null;
+
+export function invalidateStaffDataCaches(): void {
+  cachedCurrentProfile = null;
+  currentProfileInflight = null;
+  cachedAllProfiles = null;
+  allProfilesInflight = null;
+}
+
+async function fetchCurrentUserProfileUncached(): Promise<UserProfile | null> {
   const { data: auth } = await supabase.auth.getUser();
   const user = auth.user;
   const userId = user?.id;
@@ -161,6 +176,39 @@ export async function getCurrentUserProfile(): Promise<UserProfile | null> {
   }
 
   return staffProfileFromAuthUser(user);
+}
+
+export async function getCurrentUserProfile(force = false): Promise<UserProfile | null> {
+  const { data: auth } = await supabase.auth.getUser();
+  const userId = auth.user?.id;
+  if (!userId) {
+    cachedCurrentProfile = null;
+    return null;
+  }
+
+  if (
+    !force &&
+    cachedCurrentProfile &&
+    cachedCurrentProfile.userId === userId &&
+    Date.now() - cachedCurrentProfile.at < PROFILE_CACHE_TTL_MS
+  ) {
+    return cachedCurrentProfile.profile;
+  }
+
+  if (!force && currentProfileInflight) return currentProfileInflight;
+
+  currentProfileInflight = (async () => {
+    const profile = await fetchCurrentUserProfileUncached();
+    if (profile) {
+      cachedCurrentProfile = { userId, profile, at: Date.now() };
+    } else {
+      cachedCurrentProfile = null;
+    }
+    currentProfileInflight = null;
+    return profile;
+  })();
+
+  return currentProfileInflight;
 }
 
 const ADMIN_DATA_SECTIONS: AppSection[] = [
@@ -460,44 +508,70 @@ export function resolveAppSectionFromLocation(pathname: string, search: string):
   return 'candidates';
 }
 
-export async function listAllUserProfiles(): Promise<UserProfile[]> {
-  const full = await supabase
-    .from('user_profiles')
-    .select('user_id, email, full_name, role, points, points_updated_at, avatar_url, phone, extension')
-    .order('full_name', { ascending: true })
-    .order('email', { ascending: true });
-  if (!full.error) return filterProductionStaffProfiles((full.data || []) as UserProfile[]);
-
-  const withoutContact = await supabase
-    .from('user_profiles')
-    .select('user_id, email, full_name, role, points, points_updated_at, avatar_url')
-    .order('full_name', { ascending: true })
-    .order('email', { ascending: true });
-  if (!withoutContact.error) {
-    return filterProductionStaffProfiles(
-      ((withoutContact.data || []) as UserProfile[]).map((row) => ({ ...row, phone: null, extension: null })),
-    );
+export async function listAllUserProfiles(force = false): Promise<UserProfile[]> {
+  if (!force && cachedAllProfiles && Date.now() - cachedAllProfiles.at < ALL_PROFILES_CACHE_TTL_MS) {
+    return cachedAllProfiles.data;
   }
+  if (!force && allProfilesInflight) return allProfilesInflight;
 
-  const withoutPoints = await supabase
-    .from('user_profiles')
-    .select('user_id, email, full_name, role')
-    .order('email', { ascending: true });
-  if (!withoutPoints.error) {
-    return filterProductionStaffProfiles(
-      ((withoutPoints.data || []) as UserProfile[]).map((row) => ({
-        ...row,
-        avatar_url: null,
-        phone: null,
-        extension: null,
-      })),
-    );
-  }
+  allProfilesInflight = (async () => {
+    const full = await supabase
+      .from('user_profiles')
+      .select('user_id, email, full_name, role, points, points_updated_at, avatar_url, phone, extension')
+      .order('full_name', { ascending: true })
+      .order('email', { ascending: true });
+    if (!full.error) {
+      const data = filterProductionStaffProfiles((full.data || []) as UserProfile[]);
+      cachedAllProfiles = { data, at: Date.now() };
+      allProfilesInflight = null;
+      return data;
+    }
 
-  const viaFn = await fetchDashboardTeamMetricsViaFunction('last7');
-  if (viaFn.ok && viaFn.profiles.length > 0) return filterProductionStaffProfiles(viaFn.profiles);
+    const withoutContact = await supabase
+      .from('user_profiles')
+      .select('user_id, email, full_name, role, points, points_updated_at, avatar_url')
+      .order('full_name', { ascending: true })
+      .order('email', { ascending: true });
+    if (!withoutContact.error) {
+      const data = filterProductionStaffProfiles(
+        ((withoutContact.data || []) as UserProfile[]).map((row) => ({ ...row, phone: null, extension: null })),
+      );
+      cachedAllProfiles = { data, at: Date.now() };
+      allProfilesInflight = null;
+      return data;
+    }
 
-  throw new Error(full.error.message || withoutPoints.error?.message || 'Could not load user profiles');
+    const withoutPoints = await supabase
+      .from('user_profiles')
+      .select('user_id, email, full_name, role')
+      .order('email', { ascending: true });
+    if (!withoutPoints.error) {
+      const data = filterProductionStaffProfiles(
+        ((withoutPoints.data || []) as UserProfile[]).map((row) => ({
+          ...row,
+          avatar_url: null,
+          phone: null,
+          extension: null,
+        })),
+      );
+      cachedAllProfiles = { data, at: Date.now() };
+      allProfilesInflight = null;
+      return data;
+    }
+
+    const viaFn = await fetchDashboardTeamMetricsViaFunction('last7');
+    if (viaFn.ok && viaFn.profiles.length > 0) {
+      const data = filterProductionStaffProfiles(viaFn.profiles);
+      cachedAllProfiles = { data, at: Date.now() };
+      allProfilesInflight = null;
+      return data;
+    }
+
+    allProfilesInflight = null;
+    throw new Error(full.error.message || withoutPoints.error?.message || 'Could not load user profiles');
+  })();
+
+  return allProfilesInflight;
 }
 
 function normalizeIdentityToken(value: string): string {
@@ -553,4 +627,8 @@ export function recruiterOwnsNameKey(nameKey: string | null, tokens: Set<string>
     if (normalized.includes(token) || token.includes(normalized)) return true;
   }
   return false;
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('pohiring:profile-updated', () => invalidateStaffDataCaches());
 }

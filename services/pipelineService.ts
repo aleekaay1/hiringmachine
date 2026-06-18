@@ -1,6 +1,4 @@
 import { supabase } from './supabaseClient';
-import mammoth from 'mammoth';
-import { createWorker } from 'tesseract.js';
 import {
   journeyStageForCallDisposition,
   type PipelineCallDisposition,
@@ -810,6 +808,7 @@ async function extractTextFromPdf(file: File): Promise<string> {
     // OCR fallback for scanned PDFs with little/no text layer.
     if (normalizeExtractText(out).length < 260) {
       try {
+        const { createWorker } = await import('tesseract.js');
         const worker = await createWorker('eng');
         const pagesForOcr = Math.min(doc.numPages, 3);
         for (let i = 1; i <= pagesForOcr; i += 1) {
@@ -841,6 +840,7 @@ async function extractTextFromPdf(file: File): Promise<string> {
 
 async function extractTextFromImage(file: File): Promise<string> {
   try {
+    const { createWorker } = await import('tesseract.js');
     const worker = await createWorker('eng');
     const result = await worker.recognize(file);
     await worker.terminate();
@@ -853,7 +853,8 @@ async function extractTextFromImage(file: File): Promise<string> {
 async function extractTextFromWord(file: File): Promise<string> {
   try {
     const arr = await file.arrayBuffer();
-    const res = await mammoth.extractRawText({ arrayBuffer: arr });
+    const mammoth = await import('mammoth');
+    const res = await mammoth.default.extractRawText({ arrayBuffer: arr });
     return String(res.value || '');
   } catch {
     return '';

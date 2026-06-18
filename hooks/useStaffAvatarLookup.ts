@@ -13,9 +13,9 @@ export function useStaffAvatarLookup(): StaffAvatarLookup {
   React.useEffect(() => {
     let cancelled = false;
 
-    const load = async () => {
+    const load = async (force = false) => {
       try {
-        const profiles = await listAllUserProfiles();
+        const profiles = await listAllUserProfiles(force);
         if (!cancelled) setLookup(buildStaffAvatarLookup(profiles));
       } catch {
         if (!cancelled) setLookup(emptyStaffAvatarLookup());
@@ -24,7 +24,7 @@ export function useStaffAvatarLookup(): StaffAvatarLookup {
 
     void load();
     const onProfileUpdated = () => {
-      void load();
+      void load(true);
     };
     window.addEventListener('pohiring:profile-updated', onProfileUpdated);
     return () => {

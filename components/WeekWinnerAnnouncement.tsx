@@ -183,27 +183,29 @@ const WeekWinnerAnnouncement: React.FC<WeekWinnerAnnouncementProps> = ({ userId 
     if (wasWeekWinnerShownThisSession(userId, week.since)) return;
 
     let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const { data } = await loadLeaderboardSnapshot('lastWeek');
+        if (cancelled) return;
 
-    void (async () => {
-      const { data } = await loadLeaderboardSnapshot('lastWeek');
-      if (cancelled) return;
+        const winner = pickWeekWinner(data?.rows ?? []);
+        if (!winner) return;
 
-      const winner = pickWeekWinner(data?.rows ?? []);
-      if (!winner) return;
-
-      setContext({
-        weekSinceYmd: week.since,
-        weekUntilYmd: week.until,
-        windowLabel: data?.windowLabel || week.title,
-        winner,
-        weekPazCoins: estimateWeekPazCoinsFromLeaderboardRow(winner),
-      });
-      setOpen(true);
-      markWeekWinnerShownThisSession(userId, week.since);
-    })();
+        setContext({
+          weekSinceYmd: week.since,
+          weekUntilYmd: week.until,
+          windowLabel: data?.windowLabel || week.title,
+          winner,
+          weekPazCoins: estimateWeekPazCoinsFromLeaderboardRow(winner),
+        });
+        setOpen(true);
+        markWeekWinnerShownThisSession(userId, week.since);
+      })();
+    }, 1500);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [userId]);
 

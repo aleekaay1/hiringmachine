@@ -19,5 +19,20 @@ export default defineConfig(({ mode }) => {
           '@': path.resolve(__dirname, '.'),
         }
       },
+      build: {
+        rollupOptions: {
+          output: {
+            manualChunks(id) {
+              if (!id.includes('node_modules')) return;
+              if (id.includes('jspdf') || id.includes('pdfjs') || id.includes('react-pdf')) return 'vendor-pdf';
+              if (id.includes('tesseract')) return 'vendor-ocr';
+              if (id.includes('mammoth')) return 'vendor-docx';
+              if (id.includes('framer-motion')) return 'vendor-motion';
+              if (id.includes('@supabase')) return 'vendor-supabase';
+              if (id.includes('react-dom') || id.includes('react-router')) return 'vendor-react';
+            },
+          },
+        },
+      },
     };
 });

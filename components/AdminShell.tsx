@@ -38,7 +38,6 @@ const AdminShell: React.FC = () => {
   const initialAuth = React.useMemo(() => getStaffAuthState(), []);
   const initialSession = React.useMemo(() => getStaffSessionSnapshot(), []);
   const [authReady, setAuthReady] = React.useState(initialAuth.authReady);
-  const [sessionReady, setSessionReady] = React.useState(initialSession.resolved);
   const [isAuthenticated, setIsAuthenticated] = React.useState(initialAuth.isAuthenticated);
   const [email, setEmail] = React.useState('admin@globelife-paz.com');
   const [password, setPassword] = React.useState('');
@@ -57,14 +56,11 @@ const AdminShell: React.FC = () => {
       const authed = await ensureStaffAuth();
       if (cancelled) return;
       syncAuth();
-      if (authed) await resolveStaffSession();
-      if (!cancelled) setSessionReady(true);
+      if (authed) void resolveStaffSession();
     })();
     const unsubscribe = subscribeStaffAuth(() => {
       syncAuth();
-      void resolveStaffSession().then(() => {
-        if (!cancelled) setSessionReady(true);
-      });
+      void resolveStaffSession();
     });
     return () => {
       cancelled = true;
@@ -72,7 +68,7 @@ const AdminShell: React.FC = () => {
     };
   }, [syncAuth]);
 
-  if (!authReady || (isAuthenticated && !sessionReady)) {
+  if (!authReady) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#eef2f7]">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#005EB8] border-t-transparent" />
@@ -116,7 +112,7 @@ const AdminShell: React.FC = () => {
 
   return (
     <Layout isAdmin>
-      <div key={location.pathname} className="admin-route-enter flex min-h-0 flex-1 flex-col">
+      <div className="admin-route-enter flex min-h-0 flex-1 flex-col">
         <Outlet />
       </div>
     </Layout>

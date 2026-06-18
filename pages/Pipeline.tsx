@@ -538,24 +538,20 @@ const Pipeline: React.FC = () => {
   };
 
   useEffect(() => {
-    void supabase.auth.getSession().then(({ data }) => {
-      if (data.session) {
-        setIsAuthenticated(true);
-        const restored = readPendingCallSession();
-        if (restored) setPendingCall(restored);
-        const cache = readPipelineUiCache();
-        if (cache) {
-          setCandidates(cache.candidates || []);
-          setSelectedCandidateId(cache.selectedCandidateId || null);
-          setSelectedBundle(cache.selectedBundle || null);
-          setSelectedResumeId(cache.selectedResumeId || null);
-          setTimelineRows(cache.timelineRows || []);
-        } else {
-          void loadCandidates();
-        }
-      }
-    });
-  }, []);
+    if (!isAuthenticated) return;
+    const restored = readPendingCallSession();
+    if (restored) setPendingCall(restored);
+    const cache = readPipelineUiCache();
+    if (cache) {
+      setCandidates(cache.candidates || []);
+      setSelectedCandidateId(cache.selectedCandidateId || null);
+      setSelectedBundle(cache.selectedBundle || null);
+      setSelectedResumeId(cache.selectedResumeId || null);
+      setTimelineRows(cache.timelineRows || []);
+    } else {
+      void loadCandidates();
+    }
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated) return;

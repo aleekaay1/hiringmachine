@@ -388,7 +388,7 @@ const LiveSessionsAnalyticsPage: React.FC = () => {
             variant="secondary"
             size="sm"
             disabled={!canExport}
-            onClick={() => exportLiveSessionAnalyticsPdf(exportBundle)}
+            onClick={() => void exportLiveSessionAnalyticsPdf(exportBundle)}
             title="Download PDF with current filters"
           >
             <FileText size={14} />

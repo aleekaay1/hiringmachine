@@ -1,4 +1,3 @@
-import { jsPDF } from 'jspdf';
 import { formatDateTimeCanadaEastern } from './dateDisplay';
 import type {
   LiveSessionBookingRow,
@@ -178,7 +177,8 @@ export function exportLiveSessionAnalyticsCsv(bundle: LiveSessionAnalyticsExport
   downloadTextFile(`live-session-stats-${exportStamp()}.csv`, sections.join('\n'), 'text/csv;charset=utf-8');
 }
 
-export function exportLiveSessionAnalyticsPdf(bundle: LiveSessionAnalyticsExportBundle): void {
+export async function exportLiveSessionAnalyticsPdf(bundle: LiveSessionAnalyticsExportBundle): Promise<void> {
+  const { jsPDF } = await import('jspdf');
   const doc = new jsPDF({ unit: 'pt', format: 'letter' });
   const margin = 48;
   const pageW = doc.internal.pageSize.getWidth();
