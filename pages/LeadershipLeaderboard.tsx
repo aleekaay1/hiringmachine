@@ -7,6 +7,7 @@ import {
   Crown,
   Flame,
   Medal,
+  Mail,
   Minus,
   RefreshCw,
   Star,
@@ -64,6 +65,11 @@ import { listPipelineCallRecords } from '../services/pipelineService';
 import { supabase } from '../services/supabaseClient';
 import { useStaffAvatarLookup } from '../hooks/useStaffAvatarLookup';
 import type { StaffAvatarLookup } from '../services/staffAvatarLookup';
+import {
+  buildWeeklyLeaderboardEmailPayload,
+  sendWeeklyLeaderboardEmail,
+} from '../services/weeklyLeaderboardEmail';
+import { estimateWeekPazCoinsFromLeaderboardRow } from '../services/weekWinnerPopup';
 
 const PERIODS: Array<{ id: LeaderboardPeriod; label: string }> = [
   { id: 'last7', label: 'This week (Fri–Thu)' },
@@ -278,7 +284,11 @@ const LeadershipLeaderboard: React.FC = () => {
     displayNameToUserId: new Map(),
     byDisplayLabel: new Map(),
   });
+  const [sendingWeeklyEmail, setSendingWeeklyEmail] = React.useState(false);
+  const [weeklyEmailNotice, setWeeklyEmailNotice] = React.useState<string | null>(null);
   const avatarLookup = useStaffAvatarLookup();
+
+  const isAdmin = viewerRole === 'admin';
 
   const leadershipView = viewerRole === 'admin' || viewerRole === 'leadership';
 
@@ -552,6 +562,46 @@ const LeadershipLeaderboard: React.FC = () => {
   const previousTopPerformer = previousRows[0] || null;
   const busy = loading || refreshing;
 
+  const handleSendWeeklyEmail = React.useCallback(async () => {
+    if (!rows.length) {
+      setWeeklyEmailNotice('Refresh leaderboard data before sending the weekly email.');
+      return;
+    }
+    setSendingWeeklyEmail(true);
+    setWeeklyEmailNotice(null);
+    try {
+      const payload = buildWeeklyLeaderboardEmailPayload({
+        windowLabel,
+        periodKey: snapshotKey,
+        fetchedAt: lastUpdated,
+        rows,
+        topPerformerName: badgeWinners.topPerformer?.displayName ?? null,
+        fastClimberName: badgeWinners.fastClimber?.displayName ?? null,
+        consistentCloserName: badgeWinners.consistentCloser?.displayName ?? null,
+        previousTopPerformerName: previousTopPerformer?.displayName ?? null,
+        periodCoinsForRow: estimateWeekPazCoinsFromLeaderboardRow,
+        coinBalanceForRow: (row) => coinBalanceForLeaderboardRow(row, coinLookup),
+      });
+      const result = await sendWeeklyLeaderboardEmail(payload);
+      if (!result.ok) throw new Error(result.error);
+      setWeeklyEmailNotice(`Weekly leaderboard sent to ${result.to} (${result.rowCount} callers).`);
+    } catch (e) {
+      setWeeklyEmailNotice(e instanceof Error ? e.message : 'Failed to send weekly email');
+    } finally {
+      setSendingWeeklyEmail(false);
+    }
+  }, [
+    rows,
+    windowLabel,
+    snapshotKey,
+    lastUpdated,
+    badgeWinners.topPerformer,
+    badgeWinners.fastClimber,
+    badgeWinners.consistentCloser,
+    previousTopPerformer,
+    coinLookup,
+  ]);
+
   const periodWindowLabels = React.useMemo(() => {
     const w = buildLeaderboardWindows(period, new Date(), activeCustomRange);
     return { current: w.current.label, previous: w.previous.label };
@@ -645,15 +695,29 @@ const LeadershipLeaderboard: React.FC = () => {
                 </p>
               </div>
               <div className="flex w-full max-w-sm flex-col items-end gap-2 sm:w-auto">
-                <Button
-                  variant="outline"
-                  className="!min-h-0 h-9 border-[#c3d8f2] !bg-white !text-[#0B1B34] hover:!bg-[#eef6ff]"
-                  onClick={() => void refreshLeaderboard()}
-                  disabled={busy || customRangeInvalid}
-                >
-                  <RefreshCw size={14} className={refreshing ? 'mr-1 animate-spin' : 'mr-1'} />
-                  Refresh
-                </Button>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {isAdmin && (
+                    <Button
+                      variant="outline"
+                      className="!min-h-0 h-9 border-[#c3d8f2] !bg-white !text-[#0B1B34] hover:!bg-[#eef6ff]"
+                      onClick={() => void handleSendWeeklyEmail()}
+                      disabled={busy || sendingWeeklyEmail || rows.length === 0}
+                      title="Email weekly leaderboard to the team inbox (test: ali@globelife-paz.com)"
+                    >
+                      <Mail size={14} className={sendingWeeklyEmail ? 'mr-1 animate-pulse' : 'mr-1'} />
+                      {sendingWeeklyEmail ? 'Sending…' : 'Send weekly email'}
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    className="!min-h-0 h-9 border-[#c3d8f2] !bg-white !text-[#0B1B34] hover:!bg-[#eef6ff]"
+                    onClick={() => void refreshLeaderboard()}
+                    disabled={busy || customRangeInvalid}
+                  >
+                    <RefreshCw size={14} className={refreshing ? 'mr-1 animate-spin' : 'mr-1'} />
+                    Refresh
+                  </Button>
+                </div>
                 {refreshing && refreshProgress ? (
                   <LeaderboardRefreshProgress progress={refreshProgress} variant="compact" />
                 ) : null}
@@ -663,6 +727,17 @@ const LeadershipLeaderboard: React.FC = () => {
             {syncNotice && (
               <p className="mt-3 rounded-xl border border-[#cfe0f5] bg-[#f0f7ff] px-3 py-2 text-xs text-[#365274]">
                 {syncNotice}
+              </p>
+            )}
+            {weeklyEmailNotice && (
+              <p
+                className={`mt-3 rounded-xl border px-3 py-2 text-xs ${
+                  weeklyEmailNotice.toLowerCase().includes('sent to')
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                    : 'border-amber-200 bg-amber-50 text-amber-900'
+                }`}
+              >
+                {weeklyEmailNotice}
               </p>
             )}
             <div className="mt-3 flex flex-wrap items-center gap-2">
