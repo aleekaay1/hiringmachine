@@ -8,6 +8,8 @@ import {
   Coins,
   RefreshCw,
   Search,
+  FileDown,
+  FileText,
   UserCheck,
   UserX,
   Video,
@@ -50,6 +52,11 @@ import { COINS_PER_LIVE_SESSION_SHOW, coinEarnWindow } from '../services/recruit
 import { signInWithGoogle } from '../services/googleAuth';
 import { shiftYmdDays } from '../services/webinarGeekDates';
 import type { StaffAvatarLookup } from '../services/staffAvatarLookup';
+import {
+  buildLiveSessionFiltersLabel,
+  exportLiveSessionAnalyticsCsv,
+  exportLiveSessionAnalyticsPdf,
+} from '../services/liveSessionAnalyticsExport';
 
 const OUTCOME_LABEL: Record<LiveSessionOutcomeStatus, string> = {
   attended: 'Showed',
@@ -223,6 +230,72 @@ const LiveSessionsAnalyticsPage: React.FC = () => {
     return rows;
   }, [periodRows, selectedRecruiterKey, outcomeFilter, sessionDateFilter, searchQuery]);
 
+  const filteredExportSessions = useMemo(
+    () => buildSessionSummariesFromBookingRows(filteredRows),
+    [filteredRows],
+  );
+
+  const filteredExportRecruiters = useMemo(
+    () => buildRecruiterProfilesFromBookingRows(filteredRows),
+    [filteredRows],
+  );
+
+  const filteredTotals = useMemo(() => {
+    const booked = filteredRows.length;
+    const showed = filteredRows.filter((r) => r.outcome === 'attended').length;
+    const noShow = filteredRows.filter((r) => r.outcome === 'no_show').length;
+    const scheduled = filteredRows.filter((r) => r.outcome === 'scheduled').length;
+    const pending = filteredRows.filter((r) => r.outcome === 'pending').length;
+    const showRate = booked > 0 ? Math.round((100 * showed) / booked) : 0;
+    const coins = showed * COINS_PER_LIVE_SESSION_SHOW;
+    return { booked, showed, noShow, scheduled, pending, showRate, coins };
+  }, [filteredRows]);
+
+  const exportBundle = useMemo(() => {
+    const selectedRecruiterLabel = selectedRecruiterKey
+      ? recruiterChips.find((c) => c.key === selectedRecruiterKey)?.label ?? selectedRecruiterKey
+      : null;
+    return {
+      generatedAt: new Date().toISOString(),
+      loadedAt: lastLoadedAt,
+      periodLabel: scope.title,
+      periodSinceYmd: scope.sinceYmd,
+      periodUntilYmd: scope.untilYmd,
+      dataWindowSinceYmd: earnWindow.sinceYmd,
+      dataWindowUntilYmd: earnWindow.untilYmd,
+      dateGrouping,
+      filtersLabel: buildLiveSessionFiltersLabel({
+        selectedRecruiterLabel,
+        outcomeFilter,
+        sessionDateFilter,
+        searchQuery,
+      }),
+      totals: filteredTotals,
+      bookings: filteredRows,
+      sessions: filteredExportSessions,
+      recruiters: filteredExportRecruiters,
+    };
+  }, [
+    selectedRecruiterKey,
+    recruiterChips,
+    scope.title,
+    scope.sinceYmd,
+    scope.untilYmd,
+    earnWindow.sinceYmd,
+    earnWindow.untilYmd,
+    dateGrouping,
+    outcomeFilter,
+    sessionDateFilter,
+    searchQuery,
+    filteredTotals,
+    filteredRows,
+    filteredExportSessions,
+    filteredExportRecruiters,
+    lastLoadedAt,
+  ]);
+
+  const canExport = !loading && allRows.length > 0;
+
   const totals = useMemo(() => {
     const booked = periodRows.length;
     const showed = periodRows.filter((r) => r.outcome === 'attended').length;
@@ -300,6 +373,26 @@ const LiveSessionsAnalyticsPage: React.FC = () => {
           >
             <RefreshCw size={14} className={syncing || loading ? 'animate-spin' : ''} />
             {syncing ? 'Syncing…' : 'Refresh'}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!canExport}
+            onClick={() => exportLiveSessionAnalyticsCsv(exportBundle)}
+            title="Download CSV with current filters"
+          >
+            <FileDown size={14} />
+            CSV
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!canExport}
+            onClick={() => exportLiveSessionAnalyticsPdf(exportBundle)}
+            title="Download PDF with current filters"
+          >
+            <FileText size={14} />
+            PDF
           </Button>
         </div>
       </header>
@@ -507,6 +600,8 @@ const LiveSessionsAnalyticsPage: React.FC = () => {
           <p className="text-[10px] text-[#8aa0bc]">
             Data window {earnWindow.sinceYmd} → {earnWindow.untilYmd}
             {lastLoadedAt ? ` · loaded ${formatDateTimeCanadaEastern(lastLoadedAt)}` : ''}
+            {' · '}
+            Refresh syncs Calendly/Zoom registrants and saves outcomes on call records in Supabase
           </p>
         )}
       </div>
