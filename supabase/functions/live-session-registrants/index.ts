@@ -11,7 +11,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, apikey, x-client-info',
 };
 
-const SELECT_COLS = 'session_date, email, name, phone, attended_zoom, calendly_no_show, zoom_join_at';
+const SELECT_COLS = 'session_date, email, name, phone, attended_zoom, calendly_no_show, zoom_join_at, zoom_leave_at';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {

@@ -45,6 +45,9 @@ export type LiveSessionBookingRow = {
   matchMethod: LiveSessionMatchMethod | null;
   calendlyNoShow: boolean | null;
   coinsEarned: number;
+  zoomJoinAt: string | null;
+  zoomLeaveAt: string | null;
+  watchMinutes: number | null;
 };
 
 export type LiveSessionRecruiterProfile = {
@@ -98,6 +101,14 @@ function displayNameForRecord(
   return 'Recruiter';
 }
 
+function liveSessionWatchMinutes(joinAt: string | null, leaveAt: string | null): number | null {
+  if (!joinAt || !leaveAt) return null;
+  const joinMs = Date.parse(joinAt);
+  const leaveMs = Date.parse(leaveAt);
+  if (!Number.isFinite(joinMs) || !Number.isFinite(leaveMs) || leaveMs <= joinMs) return null;
+  return Math.round((leaveMs - joinMs) / 60_000);
+}
+
 function resolveBookingOutcome(input: {
   record: PipelineCallRecord;
   candidateEmail?: string;
@@ -112,34 +123,44 @@ function resolveBookingOutcome(input: {
   sessionDate: string | null;
   matchMethod: LiveSessionMatchMethod | null;
   calendlyNoShow: boolean | null;
+  zoomJoinAt: string | null;
+  zoomLeaveAt: string | null;
 } {
+  const { registrant, matchMethod: pickedMethod } = pickRegistrantForCallDisposition({
+    email: input.candidateEmail,
+    candidatePhone: input.candidatePhone,
+    candidateName: input.candidateName,
+    dialedNumber: input.record.dialed_number,
+    disposedAtMs: Number.isFinite(Date.parse(input.record.disposed_at || input.record.created_at))
+      ? Date.parse(input.record.disposed_at || input.record.created_at)
+      : Date.now(),
+    byEmail: input.byEmail,
+    byPhone: input.byPhone,
+    allRegistrants: input.allRegistrants,
+  });
+  const zoomJoinAt = registrant?.zoom_join_at ?? null;
+  const zoomLeaveAt = registrant?.zoom_leave_at ?? null;
+
   const persisted = readCallRecordLiveSessionOutcome(input.record);
   if (persisted.status) {
     return {
       outcome: persisted.status,
       sessionDate: persisted.sessionDate,
-      matchMethod: (persisted.matchMethod as LiveSessionMatchMethod | null) || null,
-      calendlyNoShow: null,
+      matchMethod: (persisted.matchMethod as LiveSessionMatchMethod | null) || pickedMethod,
+      calendlyNoShow: registrant?.calendly_no_show ?? null,
+      zoomJoinAt,
+      zoomLeaveAt,
     };
   }
 
-  const disposedMs = Date.parse(input.record.disposed_at || input.record.created_at);
-  const { registrant, matchMethod } = pickRegistrantForCallDisposition({
-    email: input.candidateEmail,
-    candidatePhone: input.candidatePhone,
-    candidateName: input.candidateName,
-    dialedNumber: input.record.dialed_number,
-    disposedAtMs: Number.isFinite(disposedMs) ? disposedMs : Date.now(),
-    byEmail: input.byEmail,
-    byPhone: input.byPhone,
-    allRegistrants: input.allRegistrants,
-  });
   const resolved = resolveLiveSessionOutcome(registrant, input.now);
   return {
     outcome: resolved.status,
     sessionDate: resolved.sessionDate,
-    matchMethod: matchMethod || resolved.matchMethod,
+    matchMethod: pickedMethod || resolved.matchMethod,
     calendlyNoShow: registrant?.calendly_no_show ?? null,
+    zoomJoinAt,
+    zoomLeaveAt,
   };
 }
 
@@ -164,7 +185,7 @@ export function buildLiveSessionBookingRows(input: {
     const bookedMs = Date.parse(bookedAt);
     const bookedYmd = Number.isFinite(bookedMs) ? eventMsToTorontoYmd(bookedMs) : 'unknown';
 
-    const { outcome, sessionDate, matchMethod, calendlyNoShow } = resolveBookingOutcome({
+    const { outcome, sessionDate, matchMethod, calendlyNoShow, zoomJoinAt, zoomLeaveAt } = resolveBookingOutcome({
       record,
       candidateEmail: input.candidateEmailById.get(record.candidate_id),
       candidatePhone: input.candidatePhoneById.get(record.candidate_id),
@@ -192,6 +213,9 @@ export function buildLiveSessionBookingRows(input: {
       matchMethod,
       calendlyNoShow,
       coinsEarned: outcome === 'attended' ? COINS_PER_LIVE_SESSION_SHOW : 0,
+      zoomJoinAt,
+      zoomLeaveAt,
+      watchMinutes: liveSessionWatchMinutes(zoomJoinAt, zoomLeaveAt),
     });
   }
 

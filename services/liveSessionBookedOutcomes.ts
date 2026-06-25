@@ -19,6 +19,7 @@ export type LiveSessionRegistrantRow = {
   attended_zoom: boolean;
   calendly_no_show: boolean | null;
   zoom_join_at: string | null;
+  zoom_leave_at: string | null;
 };
 
 export type LiveSessionOutcomeStatus = 'pending' | 'scheduled' | 'attended' | 'no_show';
@@ -116,7 +117,7 @@ async function loadLiveSessionRegistrantsFromRest(
   while (from < 25_000) {
     let query = supabase
       .from('live_session_registrants')
-      .select('session_date, email, name, phone, attended_zoom, calendly_no_show, zoom_join_at')
+      .select('session_date, email, name, phone, attended_zoom, calendly_no_show, zoom_join_at, zoom_leave_at')
       .gte('session_date', sinceYmd)
       .order('session_date', { ascending: true })
       .range(from, from + pageSize - 1);

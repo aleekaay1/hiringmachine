@@ -8,6 +8,7 @@ export type LiveSessionRegistrantRow = {
   attended_zoom: boolean;
   calendly_no_show: boolean | null;
   zoom_join_at: string | null;
+  zoom_leave_at: string | null;
 };
 
 export type LiveSessionOutcomeStatus = 'pending' | 'scheduled' | 'attended' | 'no_show';
