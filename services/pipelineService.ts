@@ -7,6 +7,33 @@ import {
 const PIPELINE_BUCKET = 'pipeline-resumes';
 let pipelineCallRecordsPrimaryWriteDisabled = false;
 
+/** PostgREST GET URLs break when `.in()` lists hundreds of UUIDs. */
+const SUPABASE_IN_FILTER_CHUNK = 60;
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  if (!items.length) return [];
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function uniqueNonEmptyStrings(values: string[]): string[] {
+  return [...new Set(values.map((v) => String(v || '').trim()).filter(Boolean))];
+}
+
+async function mapInChunks<T>(
+  values: string[],
+  chunkSize: number,
+  mapper: (chunk: string[]) => Promise<T[]>,
+): Promise<T[]> {
+  if (!values.length) return [];
+  const chunks = chunkArray(values, chunkSize);
+  const parts = await Promise.all(chunks.map((chunk) => mapper(chunk)));
+  return parts.flat();
+}
+
 export type PipelineJourneyStage =
   | 'new'
   | 'queued_for_call'
@@ -1134,32 +1161,28 @@ export async function listPipelineFreshJourneyCandidates(): Promise<PipelineCand
   if (!candidatesWithJourneyResume.length) return [];
 
   const ids = candidatesWithJourneyResume.map((c) => c.id);
-  const [
-    { data: notes, error: notesErr },
-    { data: evals, error: evalErr },
-    { data: logs, error: logsErr },
-    { data: records, error: recordsErr },
-  ] = await Promise.all([
-    supabase.from('pipeline_notes').select('candidate_id').in('candidate_id', ids).limit(5000),
-    supabase.from('pipeline_evaluations').select('candidate_id').in('candidate_id', ids).limit(5000),
-    supabase.from('pipeline_call_logs').select('candidate_id').in('candidate_id', ids).limit(5000),
-    supabase.from('pipeline_call_records').select('candidate_id').in('candidate_id', ids).limit(5000),
+  const loadTouchedIds = async (table: string): Promise<Set<string>> => {
+    const rows = await mapInChunks(ids, SUPABASE_IN_FILTER_CHUNK, async (chunk) => {
+      const { data, error } = await supabase.from(table).select('candidate_id').in('candidate_id', chunk).limit(5000);
+      if (error) throw error;
+      return (data || []) as Array<{ candidate_id?: string }>;
+    });
+    return new Set(rows.map((row) => String(row.candidate_id || '')).filter(Boolean));
+  };
+
+  const [notesIds, evalIds, logIds, recordIds] = await Promise.all([
+    loadTouchedIds('pipeline_notes'),
+    loadTouchedIds('pipeline_evaluations'),
+    loadTouchedIds('pipeline_call_logs'),
+    loadTouchedIds('pipeline_call_records').catch((recordsErr) => {
+      const msg = String(recordsErr instanceof Error ? recordsErr.message : recordsErr);
+      const missing = msg.includes('pipeline_call_records');
+      if (missing) return new Set<string>();
+      throw recordsErr;
+    }),
   ]);
 
-  if (notesErr) throw notesErr;
-  if (evalErr) throw evalErr;
-  if (logsErr) throw logsErr;
-  if (recordsErr) {
-    const msg = String(recordsErr.message || '');
-    const missing = recordsErr.code === '42P01' || msg.includes('pipeline_call_records');
-    if (!missing) throw recordsErr;
-  }
-
-  const touchedIds = new Set<string>();
-  for (const row of notes || []) touchedIds.add(String((row as { candidate_id?: string }).candidate_id || ''));
-  for (const row of evals || []) touchedIds.add(String((row as { candidate_id?: string }).candidate_id || ''));
-  for (const row of logs || []) touchedIds.add(String((row as { candidate_id?: string }).candidate_id || ''));
-  for (const row of records || []) touchedIds.add(String((row as { candidate_id?: string }).candidate_id || ''));
+  const touchedIds = new Set<string>([...notesIds, ...evalIds, ...logIds, ...recordIds]);
 
   return candidatesWithJourneyResume.filter((c) => !touchedIds.has(c.id));
 }
@@ -2385,15 +2408,17 @@ async function listPipelineIncomingEmailLogsMerged(
   const limit = Math.min(input?.limit ?? 3000, 1000);
   const queries: ReturnType<typeof supabase.from>[] = [];
   if (validCandidateIds.length) {
-    let byId = supabase
-      .from('email_inbox_logs')
-      .select('*')
-      .in('candidate_id', validCandidateIds)
-      .order('received_at', { ascending: false })
-      .limit(limit);
-    if (input?.fromIso) byId = byId.gte('received_at', input.fromIso);
-    if (input?.toIso) byId = byId.lte('received_at', input.toIso);
-    queries.push(byId);
+    for (const chunk of chunkArray(validCandidateIds, SUPABASE_IN_FILTER_CHUNK)) {
+      let byId = supabase
+        .from('email_inbox_logs')
+        .select('*')
+        .in('candidate_id', chunk)
+        .order('received_at', { ascending: false })
+        .limit(limit);
+      if (input?.fromIso) byId = byId.gte('received_at', input.fromIso);
+      if (input?.toIso) byId = byId.lte('received_at', input.toIso);
+      queries.push(byId);
+    }
   }
   if (normalizedEmails.length) {
     let byEmail = supabase
@@ -2428,15 +2453,17 @@ async function listPipelineEmailSendLogsMerged(
   const limit = Math.min(input?.limit ?? 3000, 1000);
   const queries: ReturnType<typeof supabase.from>[] = [];
   if (validCandidateIds.length) {
-    let byId = supabase
-      .from('email_send_logs')
-      .select(PIPELINE_EMAIL_SEND_LOG_SELECT)
-      .in('candidate_id', validCandidateIds)
-      .order('created_at', { ascending: false })
-      .limit(limit);
-    if (input?.fromIso) byId = byId.gte('created_at', input.fromIso);
-    if (input?.toIso) byId = byId.lte('created_at', input.toIso);
-    queries.push(byId);
+    for (const chunk of chunkArray(validCandidateIds, SUPABASE_IN_FILTER_CHUNK)) {
+      let byId = supabase
+        .from('email_send_logs')
+        .select(PIPELINE_EMAIL_SEND_LOG_SELECT)
+        .in('candidate_id', chunk)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (input?.fromIso) byId = byId.gte('created_at', input.fromIso);
+      if (input?.toIso) byId = byId.lte('created_at', input.toIso);
+      queries.push(byId);
+    }
   }
   if (normalizedEmails.length) {
     let byEmail = supabase
@@ -2526,6 +2553,49 @@ export async function listPipelineCallRecords(input?: {
   limit?: number;
 }): Promise<PipelineCallRecord[]> {
   const limit = input?.limit ?? 1500;
+  const candidateIds = uniqueNonEmptyStrings(input?.candidateIds || []);
+  const recruiterUserId = input?.recruiterUserId || null;
+
+  // Huge IN lists blow URL limits (400). Recruiter scope is enough for most pages.
+  if (recruiterUserId && candidateIds.length > SUPABASE_IN_FILTER_CHUNK) {
+    const rows = await listPipelineCallRecordsQuery({
+      ...input,
+      candidateIds: undefined,
+      recruiterUserId,
+      limit,
+    });
+    const allowed = new Set(candidateIds);
+    return rows.filter((row) => allowed.has(row.candidate_id)).slice(0, limit);
+  }
+
+  if (candidateIds.length <= SUPABASE_IN_FILTER_CHUNK) {
+    return listPipelineCallRecordsQuery({ ...input, candidateIds, limit });
+  }
+
+  const mergedById = new Map<string, PipelineCallRecord>();
+  for (const chunk of chunkArray(candidateIds, SUPABASE_IN_FILTER_CHUNK)) {
+    const rows = await listPipelineCallRecordsQuery({
+      ...input,
+      candidateIds: chunk,
+      limit,
+    });
+    for (const row of rows) mergedById.set(row.id, row);
+    if (mergedById.size >= limit) break;
+  }
+
+  return [...mergedById.values()]
+    .sort((a, b) => new Date(b.disposed_at).getTime() - new Date(a.disposed_at).getTime())
+    .slice(0, limit);
+}
+
+async function listPipelineCallRecordsQuery(input: {
+  candidateIds?: string[];
+  recruiterUserId?: string | null;
+  fromIso?: string | null;
+  toIso?: string | null;
+  limit: number;
+}): Promise<PipelineCallRecord[]> {
+  const limit = input.limit;
   const toIsoString = (value: unknown): string => {
     const str = String(value || '').trim();
     if (!str) return new Date().toISOString();
@@ -2635,15 +2705,33 @@ export async function listPipelineCallRecords(input?: {
 }
 
 export async function listPipelineResumesForCandidates(candidateIds: string[]): Promise<PipelineResume[]> {
-  if (!candidateIds.length) return [];
-  const { data, error } = await supabase
-    .from('pipeline_resumes')
-    .select('*')
-    .in('candidate_id', candidateIds)
-    .order('created_at', { ascending: false })
-    .limit(4000);
-  if (error) throw error;
-  return (data || []) as PipelineResume[];
+  const ids = uniqueNonEmptyStrings(candidateIds);
+  if (!ids.length) return [];
+  if (ids.length <= SUPABASE_IN_FILTER_CHUNK) {
+    const { data, error } = await supabase
+      .from('pipeline_resumes')
+      .select('*')
+      .in('candidate_id', ids)
+      .order('created_at', { ascending: false })
+      .limit(4000);
+    if (error) throw error;
+    return (data || []) as PipelineResume[];
+  }
+
+  const rows = await mapInChunks(ids, SUPABASE_IN_FILTER_CHUNK, async (chunk) => {
+    const { data, error } = await supabase
+      .from('pipeline_resumes')
+      .select('*')
+      .in('candidate_id', chunk)
+      .order('created_at', { ascending: false })
+      .limit(4000);
+    if (error) throw error;
+    return (data || []) as PipelineResume[];
+  });
+
+  return rows
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 4000);
 }
 
 export async function listPipelineIncomingEmailLogsByCandidates(
@@ -2667,29 +2755,54 @@ export async function listPipelineCallLogs(input?: {
   toIso?: string | null;
   limit?: number;
 }): Promise<PipelineCallLog[]> {
-  let query = supabase
-    .from('pipeline_call_logs')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(input?.limit ?? 3000);
-  if (input?.candidateIds && input.candidateIds.length > 0) {
-    query = query.in('candidate_id', input.candidateIds);
+  const limit = input?.limit ?? 3000;
+  const candidateIds = uniqueNonEmptyStrings(input?.candidateIds || []);
+
+  const runQuery = async (chunk?: string[]) => {
+    let query = supabase
+      .from('pipeline_call_logs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (chunk && chunk.length > 0) {
+      query = query.in('candidate_id', chunk);
+    }
+    if (input?.createdByUserId) {
+      query = query.eq('created_by_user_id', input.createdByUserId);
+    }
+    if (input?.actions && input.actions.length > 0) {
+      query = query.in('action', input.actions);
+    }
+    if (input?.fromIso) {
+      query = query.gte('created_at', input.fromIso);
+    }
+    if (input?.toIso) {
+      query = query.lte('created_at', input.toIso);
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+    return (data || []) as PipelineCallLog[];
+  };
+
+  if (!candidateIds.length || candidateIds.length <= SUPABASE_IN_FILTER_CHUNK) {
+    return runQuery(candidateIds.length ? candidateIds : undefined);
   }
+
   if (input?.createdByUserId) {
-    query = query.eq('created_by_user_id', input.createdByUserId);
+    const rows = await runQuery(undefined);
+    const allowed = new Set(candidateIds);
+    return rows.filter((row) => allowed.has(row.candidate_id)).slice(0, limit);
   }
-  if (input?.actions && input.actions.length > 0) {
-    query = query.in('action', input.actions);
+
+  const merged = new Map<string, PipelineCallLog>();
+  for (const chunk of chunkArray(candidateIds, SUPABASE_IN_FILTER_CHUNK)) {
+    const rows = await runQuery(chunk);
+    for (const row of rows) merged.set(row.id, row);
+    if (merged.size >= limit) break;
   }
-  if (input?.fromIso) {
-    query = query.gte('created_at', input.fromIso);
-  }
-  if (input?.toIso) {
-    query = query.lte('created_at', input.toIso);
-  }
-  const { data, error } = await query;
-  if (error) throw error;
-  return (data || []) as PipelineCallLog[];
+  return [...merged.values()]
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, limit);
 }
 
 export async function deletePipelineIncomingEmailLog(logId: string): Promise<void> {

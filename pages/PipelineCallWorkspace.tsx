@@ -307,9 +307,12 @@ const PipelineCallWorkspace: React.FC = () => {
       }).catch(() => null);
       const liveRegistrantsPromise = loadLiveSessionRegistrantsForMatching().catch(() => [] as LiveSessionRegistrantRow[]);
 
-      const [resumeRows, callRecordRows, todayRows, webinarRows, liveRegRows] = await Promise.all([
+      const candidateIdSet = new Set(candidateIds);
+      const [resumeRows, callRecordRowsRaw, todayRows, webinarRows, liveRegRows] = await Promise.all([
         listPipelineResumesForCandidates(candidateIds),
-        listPipelineCallRecords({ candidateIds, limit: 5000 }),
+        uid
+          ? listPipelineCallRecords({ recruiterUserId: uid, limit: 5000 })
+          : listPipelineCallRecords({ candidateIds, limit: 5000 }),
         uid
           ? listPipelineCallRecords({
               recruiterUserId: uid,
@@ -321,6 +324,9 @@ const PipelineCallWorkspace: React.FC = () => {
         webinarRowsPromise,
         liveRegistrantsPromise,
       ]);
+      const callRecordRows = uid
+        ? callRecordRowsRaw.filter((row) => candidateIdSet.has(row.candidate_id))
+        : callRecordRowsRaw;
       const nextMap = new Map<string, PipelineResume[]>();
       for (const resume of resumeRows) {
         const list = nextMap.get(resume.candidate_id) || [];

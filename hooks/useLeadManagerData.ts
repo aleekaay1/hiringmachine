@@ -73,10 +73,8 @@ export function useLeadManagerData() {
       const rows = await listPipelineManualCandidates();
       const sorted = [...rows].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
       setCandidates(sorted);
-      const candidateIds = sorted.map((row) => row.id);
-      const callRows =
-        candidateIds.length && uid
-          ? await listPipelineCallRecords({ candidateIds, recruiterUserId: uid, limit: 8000 })
+      const callRows = uid
+          ? await listPipelineCallRecords({ recruiterUserId: uid, limit: 8000 })
           : [];
       setRecords(callRows);
     } catch (e) {
