@@ -61,11 +61,21 @@ function parseSubmittedAt(value: unknown): string | null {
 }
 
 function rowsFromJsonArray(json: Record<string, unknown>, keys: string[]): Array<Record<string, unknown>> {
+  if (Array.isArray(json.__root_array)) {
+    return json.__root_array as Array<Record<string, unknown>>;
+  }
   for (const key of keys) {
     const value = json[key];
     if (Array.isArray(value)) return value as Array<Record<string, unknown>>;
   }
   if (Array.isArray(json.data)) return json.data as Array<Record<string, unknown>>;
+  if (json.data && typeof json.data === 'object' && !Array.isArray(json.data)) {
+    const nested = json.data as Record<string, unknown>;
+    for (const key of keys) {
+      const value = nested[key];
+      if (Array.isArray(value)) return value as Array<Record<string, unknown>>;
+    }
+  }
   return [];
 }
 
@@ -91,7 +101,8 @@ function answersFromObject(obj: Record<string, unknown>): WgQuestionnaireAnswer[
 }
 
 function answersFromRow(row: Record<string, unknown>): WgQuestionnaireAnswer[] {
-  const direct = row.answers ?? row.responses ?? row.evaluation_answers ?? row.form_answers;
+  const direct = row.answers ?? row.responses ?? row.evaluation_answers ?? row.form_answers
+    ?? row.fields ?? row.questions ?? row.form_fields ?? row.items ?? row.results;
   if (Array.isArray(direct)) {
     return direct
       .map((entry) => {
@@ -171,13 +182,127 @@ function questionnaireLikeExtraFields(extra: Record<string, unknown>): WgQuestio
   return answersFromObject(extra);
 }
 
+export type WgEvaluationProbeResult = {
+  path: string;
+  status: number;
+  ok: boolean;
+  raw_count: number;
+  with_answers: number;
+};
+
+export type WgQuestionnaireFetchResult = {
+  rows: NormalizedWgQuestionnaireRow[];
+  sources: string[];
+  api_connected: boolean;
+  api_status: number;
+  probes: WgEvaluationProbeResult[];
+};
+
+async function ingestEvaluationApiPage(
+  merged: Map<string, NormalizedWgQuestionnaireRow>,
+  sources: string[],
+  path: string,
+  res: { ok: boolean; status: number; json: Record<string, unknown> },
+  subscriptionById: Map<string, Record<string, unknown>>,
+  pathHit: { value: boolean },
+): Promise<number> {
+  if (!res.ok) return 0;
+  const rawRows = rowsFromJsonArray(res.json, [
+    'evaluation_form_results',
+    'evaluation_form_responses',
+    'evaluations',
+    'evaluation_forms',
+    'evaluation_results',
+    'interaction_results',
+    'interactions',
+    'results',
+    'data',
+  ]);
+  if (!rawRows.length) return 0;
+  if (!pathHit.value) {
+    sources.push(path);
+    pathHit.value = true;
+  }
+  let withAnswers = 0;
+  for (const row of rawRows) {
+    const normalized = normalizeEvaluationRow(row, path.replace(/^\//, ''), subscriptionById);
+    if (!normalized || !normalized.answers.length) continue;
+    withAnswers += 1;
+    merged.set(normalized.wg_submission_key, normalized);
+  }
+  return withAnswers;
+}
+
+export async function probeWebinarGeekEvaluationApi(
+  wgGet: WgGetFn,
+): Promise<{ api_connected: boolean; api_status: number; probes: WgEvaluationProbeResult[] }> {
+  const account = await wgGet('/account');
+  const probes: WgEvaluationProbeResult[] = [];
+  const probePaths = [
+    '/evaluation_form_results',
+    '/evaluation_form_responses',
+    '/evaluations',
+    '/evaluation_forms',
+    '/evaluation_results',
+    '/interaction_results',
+    '/interactions',
+  ];
+
+  for (const path of probePaths) {
+    const res = await wgGet(path, { per_page: 5, page: 1 });
+    const rawRows = res.ok
+      ? rowsFromJsonArray(res.json, [
+        'evaluation_form_results',
+        'evaluation_form_responses',
+        'evaluations',
+        'evaluation_forms',
+        'evaluation_results',
+        'interaction_results',
+        'interactions',
+        'results',
+        'data',
+      ])
+      : [];
+    let withAnswers = 0;
+    for (const row of rawRows) {
+      const normalized = normalizeEvaluationRow(row, path.replace(/^\//, ''), new Map());
+      if (normalized?.answers.length) withAnswers += 1;
+    }
+    probes.push({
+      path,
+      status: res.status,
+      ok: res.ok,
+      raw_count: rawRows.length,
+      with_answers: withAnswers,
+    });
+  }
+
+  return {
+    api_connected: account.ok,
+    api_status: account.status,
+    probes,
+  };
+}
+
 export async function fetchWebinarGeekQuestionnaireRows(
   wgGet: WgGetFn,
   input?: { webinarId?: string; broadcastId?: string },
-): Promise<{ rows: NormalizedWgQuestionnaireRow[]; sources: string[] }> {
+): Promise<WgQuestionnaireFetchResult> {
   const merged = new Map<string, NormalizedWgQuestionnaireRow>();
   const sources: string[] = [];
   const subscriptionById = new Map<string, Record<string, unknown>>();
+  const probes: WgEvaluationProbeResult[] = [];
+
+  const account = await wgGet('/account');
+  if (!account.ok) {
+    return {
+      rows: [],
+      sources,
+      api_connected: false,
+      api_status: account.status,
+      probes,
+    };
+  }
 
   const probePaths = [
     '/evaluation_form_results',
@@ -191,7 +316,11 @@ export async function fetchWebinarGeekQuestionnaireRows(
 
   const maxPages = 8;
   for (const path of probePaths) {
-    let pathHit = false;
+    const pathHit = { value: false };
+    let pathRaw = 0;
+    let pathWithAnswers = 0;
+    let pathStatus = 0;
+    let pathOk = false;
     for (let page = 1; page <= maxPages; page += 1) {
       const res = await wgGet(path, {
         per_page: 250,
@@ -199,6 +328,8 @@ export async function fetchWebinarGeekQuestionnaireRows(
         webinar_id: input?.webinarId,
         broadcast_id: input?.broadcastId,
       });
+      pathStatus = res.status;
+      pathOk = res.ok;
       if (!res.ok) break;
       const rawRows = rowsFromJsonArray(res.json, [
         'evaluation_form_results',
@@ -211,21 +342,255 @@ export async function fetchWebinarGeekQuestionnaireRows(
         'results',
         'data',
       ]);
+      pathRaw += rawRows.length;
       if (!rawRows.length) break;
-      if (!pathHit) {
-        sources.push(path);
-        pathHit = true;
-      }
-      for (const row of rawRows) {
-        const normalized = normalizeEvaluationRow(row, path.replace(/^\//, ''), subscriptionById);
-        if (!normalized || !normalized.answers.length) continue;
-        merged.set(normalized.wg_submission_key, normalized);
-      }
+      const added = await ingestEvaluationApiPage(merged, sources, path, res, subscriptionById, pathHit);
+      pathWithAnswers += added;
       if (rawRows.length < 250) break;
+    }
+    probes.push({
+      path,
+      status: pathStatus,
+      ok: pathOk,
+      raw_count: pathRaw,
+      with_answers: pathWithAnswers,
+    });
+  }
+
+  if (merged.size === 0) {
+    const broadcastsRes = await wgGet('/broadcasts', {
+      per_page: 25,
+      page: 1,
+      webinar_id: input?.webinarId,
+    });
+    const broadcasts = broadcastsRes.ok
+      ? rowsFromJsonArray(broadcastsRes.json, ['broadcasts', 'data'])
+      : [];
+    for (const broadcast of broadcasts.slice(0, 15)) {
+      const broadcastId = pickString(broadcast.id);
+      if (!broadcastId) continue;
+      if (input?.broadcastId && broadcastId !== input.broadcastId) continue;
+      const nestedPaths = [
+        `/broadcasts/${broadcastId}/evaluation_form_results`,
+        `/broadcasts/${broadcastId}/evaluation_form_responses`,
+        `/broadcasts/${broadcastId}/evaluations`,
+      ];
+      for (const path of nestedPaths) {
+        const pathHit = { value: false };
+        const res = await wgGet(path, { per_page: 250, page: 1 });
+        const added = await ingestEvaluationApiPage(merged, sources, path, res, subscriptionById, pathHit);
+        if (added > 0) break;
+      }
+      if (merged.size > 0 && !input?.broadcastId) break;
     }
   }
 
-  return { rows: [...merged.values()], sources };
+  return {
+    rows: [...merged.values()],
+    sources,
+    api_connected: true,
+    api_status: account.status,
+    probes,
+  };
+}
+
+function unixMsFromSubscription(sub: Record<string, unknown>): number | null {
+  const broadcast = sub.broadcast && typeof sub.broadcast === 'object'
+    ? sub.broadcast as Record<string, unknown>
+    : null;
+  const candidates = [
+    sub.watched_true_set_at,
+    sub.watch_end,
+    sub.updated_at,
+    sub.created_at,
+    broadcast?.date,
+  ];
+  let best: number | null = null;
+  for (const value of candidates) {
+    const ms = parseSubmittedAt(value);
+    if (!ms) continue;
+    const n = Date.parse(ms);
+    if (!Number.isFinite(n)) continue;
+    if (best == null || n > best) best = n;
+  }
+  return best;
+}
+
+function normalizePhoneDigits(value: unknown): string | null {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length < 10) return null;
+  return digits.slice(-10);
+}
+
+/** Pull evaluation answers per recent watched subscription (WebinarGeek bulk endpoints are often empty). */
+export async function fetchRecentQuestionnaireRowsFromSubscriptions(
+  wgGet: WgGetFn,
+  subscriptions: Array<Record<string, unknown>>,
+  input?: { sinceMs?: number | null; maxSubscriptions?: number },
+): Promise<{ rows: NormalizedWgQuestionnaireRow[]; sources: string[]; scanned: number }> {
+  const sinceMs = input?.sinceMs ?? (Date.now() - 15 * 24 * 60 * 60 * 1000);
+  const maxSubscriptions = input?.maxSubscriptions ?? 300;
+  const subscriptionById = new Map<string, Record<string, unknown>>();
+  for (const row of subscriptions) {
+    const id = pickString(row.id);
+    if (id) subscriptionById.set(id, row);
+  }
+
+  const candidates = subscriptions
+    .filter((sub) => {
+      const eventMs = unixMsFromSubscription(sub);
+      if (eventMs != null && eventMs < sinceMs) return false;
+      return subscriptionShowed(sub) || sub.watched === true || sub.watched_live === true;
+    })
+    .sort((a, b) => (unixMsFromSubscription(b) ?? 0) - (unixMsFromSubscription(a) ?? 0))
+    .slice(0, maxSubscriptions);
+
+  const merged = new Map<string, NormalizedWgQuestionnaireRow>();
+  const sources: string[] = [];
+
+  const nestedSuffixes = [
+    'evaluation_form_results',
+    'evaluation_form_responses',
+    'evaluations',
+  ];
+
+  for (const sub of candidates) {
+    const subId = pickString(sub.id);
+    if (!subId) continue;
+
+    const inlineAnswers = answersFromRow(sub);
+    if (inlineAnswers.length) {
+      const normalized = normalizeEvaluationRow(
+        { ...sub, answers: inlineAnswers },
+        'subscription_inline',
+        subscriptionById,
+      );
+      if (normalized?.answers.length) {
+        normalized.wg_submission_key = `subscription_inline:${subId}`;
+        normalized.watched = sub.watched === true;
+        normalized.watch_duration_seconds = watchSecondsFromSubscription(sub);
+        merged.set(normalized.wg_submission_key, normalized);
+        if (!sources.includes('subscription_inline')) sources.push('subscription_inline');
+      }
+    }
+
+    for (const suffix of nestedSuffixes) {
+      const path = `/subscriptions/${subId}/${suffix}`;
+      const res = await wgGet(path, { per_page: 50 });
+      if (!res.ok) continue;
+      const rawRows = rowsFromJsonArray(res.json, [
+        suffix,
+        'evaluation_form_results',
+        'evaluation_form_responses',
+        'evaluations',
+        'results',
+        'data',
+      ]);
+      if (!rawRows.length && res.json && typeof res.json === 'object') {
+        const single = normalizeEvaluationRow(
+          { ...res.json, subscription_id: subId, email: (res.json as Record<string, unknown>).email ?? sub.email },
+          `subscription_${suffix}`,
+          subscriptionById,
+        );
+        if (single?.answers.length) {
+          single.wg_submission_key = `subscription_${suffix}:${subId}`;
+          merged.set(single.wg_submission_key, single);
+          if (!sources.includes(path)) sources.push(path);
+        }
+      }
+      for (const rawRow of rawRows) {
+        const normalized = normalizeEvaluationRow(
+          {
+            ...rawRow,
+            subscription_id: subId,
+            email: rawRow.email ?? sub.email,
+            firstname: rawRow.firstname ?? sub.firstname,
+            surname: rawRow.surname ?? sub.surname,
+            phone: rawRow.phone ?? sub.phone ?? sub.telephone,
+            custom_field: rawRow.custom_field ?? sub.custom_field,
+          },
+          `subscription_${suffix}`,
+          subscriptionById,
+        );
+        if (!normalized?.answers.length) continue;
+        normalized.watched = sub.watched === true;
+        normalized.watch_duration_seconds = watchSecondsFromSubscription(sub);
+        merged.set(normalized.wg_submission_key, normalized);
+        if (!sources.includes(path)) sources.push(path);
+      }
+      if (rawRows.length) break;
+    }
+  }
+
+  return { rows: [...merged.values()], sources, scanned: candidates.length };
+}
+
+export async function rematchStoredQuestionnaireRows(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  input: { sinceIso: string; limit?: number },
+): Promise<{ updated: number; matchedPipeline: number }> {
+  const limit = Math.min(Math.max(input.limit ?? 500, 1), 1000);
+  const { data, error } = await admin
+    .from('webinar_geek_questionnaire_submissions')
+    .select('*')
+    .gte('submitted_at', input.sinceIso)
+    .order('submitted_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(error.message);
+
+  const rows = (data || []) as Array<Record<string, unknown>>;
+  if (!rows.length) return { updated: 0, matchedPipeline: 0 };
+
+  const matchContext = await buildQuestionnaireMatchContext(admin);
+  let updated = 0;
+  let matchedPipeline = 0;
+  const syncedAt = new Date().toISOString();
+
+  for (const stored of rows) {
+    const answers = Array.isArray(stored.answers) ? stored.answers as WgQuestionnaireAnswer[] : [];
+    const normalized: NormalizedWgQuestionnaireRow = {
+      wg_submission_key: String(stored.wg_submission_key || stored.id),
+      subscription_id: pickString(stored.subscription_id),
+      webinar_id: pickString(stored.webinar_id),
+      broadcast_id: pickString(stored.broadcast_id),
+      webinar_title: pickString(stored.webinar_title),
+      broadcast_title: pickString(stored.broadcast_title),
+      email: pickString(stored.email),
+      first_name: pickString(stored.first_name),
+      last_name: pickString(stored.last_name),
+      phone: pickString(stored.phone),
+      submitted_at: pickString(stored.submitted_at),
+      answers,
+      raw_payload: (stored.raw_payload && typeof stored.raw_payload === 'object'
+        ? stored.raw_payload
+        : {}) as Record<string, unknown>,
+      recruiter_custom_field: pickString(stored.recruiter_custom_field),
+      source: String(stored.source_type || 'rematch'),
+      watched: stored.watched === true ? true : stored.watched === false ? false : null,
+      watch_duration_seconds: Number.isFinite(Number(stored.watch_duration_seconds))
+        ? Number(stored.watch_duration_seconds)
+        : null,
+    };
+    const match = matchQuestionnaireRowWithContext(normalized, matchContext);
+    const { error: upErr } = await admin
+      .from('webinar_geek_questionnaire_submissions')
+      .update({
+        pipeline_candidate_id: match.pipeline_candidate_id,
+        journey_candidate_id: match.journey_candidate_id,
+        booked_by_user_id: match.booked_by_user_id,
+        booked_by_label: match.booked_by_label,
+        recruiter_custom_field: match.recruiter_custom_field,
+        match_method: match.match_method,
+        updated_at: syncedAt,
+      })
+      .eq('id', stored.id);
+    if (upErr) continue;
+    updated += 1;
+    if (match.pipeline_candidate_id) matchedPipeline += 1;
+  }
+
+  return { updated, matchedPipeline };
 }
 
 const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
@@ -288,6 +653,8 @@ export function hiringStageForQuestionnaireRow(row: NormalizedWgQuestionnaireRow
 export type QuestionnaireMatchContext = {
   pipelineByEmail: Map<string, string>;
   journeyByEmail: Map<string, string>;
+  pipelineByPhone: Map<string, string>;
+  journeyByPhone: Map<string, string>;
   bookingByEmailBroadcast: Map<string, Record<string, unknown>>;
   bookingByEmail: Map<string, Record<string, unknown>>;
   settingsByTag: Map<string, { user_id: string; label: string | null }>;
@@ -299,6 +666,8 @@ export async function buildQuestionnaireMatchContext(
 ): Promise<QuestionnaireMatchContext> {
   const pipelineByEmail = new Map<string, string>();
   const journeyByEmail = new Map<string, string>();
+  const pipelineByPhone = new Map<string, string>();
+  const journeyByPhone = new Map<string, string>();
   const bookingByEmailBroadcast = new Map<string, Record<string, unknown>>();
   const bookingByEmail = new Map<string, Record<string, unknown>>();
   const settingsByTag = new Map<string, { user_id: string; label: string | null }>();
@@ -310,8 +679,8 @@ export async function buildQuestionnaireMatchContext(
     { data: settingsRows },
     { data: profileRows },
   ] = await Promise.all([
-    admin.from('pipeline_candidates').select('id, email').not('email', 'is', null).limit(8000),
-    admin.from('candidates').select('id, email').not('email', 'is', null).limit(8000),
+    admin.from('pipeline_candidates').select('id, email, phone').not('email', 'is', null).limit(8000),
+    admin.from('candidates').select('id, email, phone').not('email', 'is', null).limit(8000),
     admin.from('webinar_geek_portal_bookings').select('candidate_email, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at').eq('status', 'booked').order('created_at', { ascending: false }).limit(8000),
     admin.from('pipeline_user_call_settings').select('user_id, webinar_geek_custom_field').not('webinar_geek_custom_field', 'is', null),
     admin.from('user_profiles').select('user_id, full_name, email'),
@@ -319,13 +688,15 @@ export async function buildQuestionnaireMatchContext(
 
   for (const row of pipelineRows || []) {
     const email = normalizeEmail(row.email);
-    if (!email || pipelineByEmail.has(email)) continue;
-    pipelineByEmail.set(email, String(row.id));
+    if (email && !pipelineByEmail.has(email)) pipelineByEmail.set(email, String(row.id));
+    const phone = normalizePhoneDigits(row.phone);
+    if (phone && !pipelineByPhone.has(phone)) pipelineByPhone.set(phone, String(row.id));
   }
   for (const row of journeyRows || []) {
     const email = normalizeEmail(row.email);
-    if (!email || journeyByEmail.has(email)) continue;
-    journeyByEmail.set(email, String(row.id));
+    if (email && !journeyByEmail.has(email)) journeyByEmail.set(email, String(row.id));
+    const phone = normalizePhoneDigits(row.phone);
+    if (phone && !journeyByPhone.has(phone)) journeyByPhone.set(phone, String(row.id));
   }
   for (const row of bookingRows || []) {
     const email = normalizeEmail(row.candidate_email);
@@ -365,6 +736,8 @@ export async function buildQuestionnaireMatchContext(
   return {
     pipelineByEmail,
     journeyByEmail,
+    pipelineByPhone,
+    journeyByPhone,
     bookingByEmailBroadcast,
     bookingByEmail,
     settingsByTag,
@@ -390,6 +763,24 @@ export function matchQuestionnaireRowWithContext(
     if (journeyId) {
       journeyCandidateId = journeyId;
       matchMethod = matchMethod || 'journey_email';
+    }
+  }
+
+  const phoneKey = normalizePhoneDigits(row.phone);
+  if (phoneKey) {
+    if (!pipelineCandidateId) {
+      const pipelineId = context.pipelineByPhone.get(phoneKey);
+      if (pipelineId) {
+        pipelineCandidateId = pipelineId;
+        matchMethod = matchMethod ? `${matchMethod}+pipeline_phone` : 'pipeline_phone';
+      }
+    }
+    if (!journeyCandidateId) {
+      const journeyId = context.journeyByPhone.get(phoneKey);
+      if (journeyId) {
+        journeyCandidateId = journeyId;
+        matchMethod = matchMethod ? `${matchMethod}+journey_phone` : 'journey_phone';
+      }
     }
   }
 
@@ -493,6 +884,8 @@ export async function upsertQuestionnaireRowsBatched(
   const emptyContext: QuestionnaireMatchContext = {
     pipelineByEmail: new Map(),
     journeyByEmail: new Map(),
+    pipelineByPhone: new Map(),
+    journeyByPhone: new Map(),
     bookingByEmailBroadcast: new Map(),
     bookingByEmail: new Map(),
     settingsByTag: new Map(),
@@ -535,6 +928,172 @@ export async function upsertQuestionnaireRowsBatched(
   }
 
   return { upserted, matchedPipeline };
+}
+
+function webhookPayloadCandidates(body: Record<string, unknown>): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  const push = (value: unknown) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      out.push(value as Record<string, unknown>);
+    }
+  };
+  push(body);
+  push(body.data);
+  push(body.payload);
+  push(body.evaluation);
+  push(body.evaluation_form_result);
+  push(body.evaluation_form_response);
+  push(body.evaluation_form);
+  push(body.result);
+  if (body.subscription && typeof body.subscription === 'object') {
+    out.push({ ...(body.subscription as Record<string, unknown>) });
+    out.push({ ...(body.subscription as Record<string, unknown>), ...body });
+  }
+  return out;
+}
+
+/** Parse a WebinarGeek webhook / Zapier payload into a normalized questionnaire row. */
+export function normalizeQuestionnaireWebhookPayload(
+  body: Record<string, unknown>,
+): NormalizedWgQuestionnaireRow | null {
+  for (const candidate of webhookPayloadCandidates(body)) {
+    const normalized = normalizeEvaluationRow(candidate, 'wg_webhook', new Map());
+    if (!normalized || !normalized.answers.length) continue;
+    const idPart = pickString(candidate.id, candidate.uuid, candidate.evaluation_id, candidate.response_id)
+      || `${normalized.email || 'unknown'}|${normalized.submitted_at || new Date().toISOString()}`;
+    normalized.wg_submission_key = `wg_webhook:${idPart}`;
+    normalized.submitted_at = normalized.submitted_at || new Date().toISOString();
+    return normalized;
+  }
+  return null;
+}
+
+async function upsertStaffNotification(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  row: Record<string, unknown>,
+): Promise<void> {
+  const userId = row.user_id as string | null;
+  const dedupeKey = row.dedupe_key as string | null;
+  if (userId && dedupeKey) {
+    const { data: existing } = await admin
+      .from('staff_notifications')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('dedupe_key', dedupeKey)
+      .is('dismissed_at', null)
+      .maybeSingle();
+    if (existing?.id) {
+      await admin.from('staff_notifications').update({
+        title: row.title,
+        body: row.body,
+        link_route: row.link_route,
+        link_label: row.link_label,
+        metadata: row.metadata,
+      }).eq('id', existing.id);
+      return;
+    }
+  }
+  await admin.from('staff_notifications').insert(row);
+}
+
+export async function notifyQuestionnaireSubmission(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  row: NormalizedWgQuestionnaireRow,
+  match: QuestionnaireMatchResult,
+  submissionId?: string | null,
+): Promise<void> {
+  const name = [row.first_name, row.last_name].map((v) => String(v || '').trim()).filter(Boolean).join(' ')
+    || row.email
+    || 'A webinar attendee';
+  const dedupeBase = row.wg_submission_key;
+  const linkRoute = match.pipeline_candidate_id
+    ? `/pipeline/call?candidateId=${match.pipeline_candidate_id}`
+    : '/webinar-questionnaires';
+
+  if (match.booked_by_user_id) {
+    await upsertStaffNotification(admin, {
+      user_id: match.booked_by_user_id,
+      category: 'system',
+      title: 'Webinar questionnaire submitted',
+      body: `${name} completed the post-webinar questionnaire.`,
+      link_route: linkRoute,
+      link_label: 'Open lead',
+      dedupe_key: `wg_questionnaire:${dedupeBase}`,
+      metadata: {
+        wg_submission_key: row.wg_submission_key,
+        submission_id: submissionId ?? null,
+        email: row.email,
+      },
+    });
+  }
+
+  await upsertStaffNotification(admin, {
+    user_id: null,
+    target_roles: ['admin', 'leadership', 'hr', 'webinar'],
+    category: 'system',
+    title: 'New webinar questionnaire',
+    body: `${name}${match.booked_by_label ? ` · booked by ${match.booked_by_label}` : ''} submitted evaluation responses.`,
+    link_route: '/webinar-questionnaires',
+    link_label: 'Review answers',
+    dedupe_key: `wg_questionnaire_broadcast:${dedupeBase}`,
+    metadata: {
+      wg_submission_key: row.wg_submission_key,
+      submission_id: submissionId ?? null,
+      booked_by_user_id: match.booked_by_user_id,
+    },
+  });
+}
+
+export async function processIncomingQuestionnaireWebhook(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  body: Record<string, unknown>,
+): Promise<{
+  ok: boolean;
+  upserted: boolean;
+  submission_id?: string;
+  matched_pipeline: boolean;
+  error?: string;
+}> {
+  const row = normalizeQuestionnaireWebhookPayload(body);
+  if (!row) {
+    return { ok: false, upserted: false, matched_pipeline: false, error: 'No questionnaire answers in webhook payload' };
+  }
+
+  const matchContext = await buildQuestionnaireMatchContext(admin);
+  const match = matchQuestionnaireRowWithContext(row, matchContext);
+  const syncedAt = new Date().toISOString();
+  const payload = buildQuestionnaireUpsertPayload(row, match, {
+    sourceType: 'wg_webhook',
+    syncedAt,
+  });
+
+  const { data, error } = await admin
+    .from('webinar_geek_questionnaire_submissions')
+    .upsert(payload, { onConflict: 'wg_submission_key' })
+    .select('id')
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingQuestionnaireTableError(error)) {
+      throw new Error(
+        'Database table webinar_geek_questionnaire_submissions is missing. Run paste_webinar_geek_questionnaires.sql first.',
+      );
+    }
+    throw new Error(error.message);
+  }
+
+  const submissionId = data?.id ? String(data.id) : undefined;
+  await notifyQuestionnaireSubmission(admin, row, match, submissionId);
+
+  return {
+    ok: true,
+    upserted: true,
+    submission_id: submissionId,
+    matched_pipeline: Boolean(match.pipeline_candidate_id),
+  };
 }
 
 export type QuestionnaireMatchResult = {

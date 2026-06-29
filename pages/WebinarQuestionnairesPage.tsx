@@ -15,8 +15,12 @@ import {
   fetchWebinarQuestionnaireWebinarTitles,
   hiringStageLabel,
   sourceTypeLabel,
-  syncWebinarGeekQuestionnaires,
+  submissionMatchesPageFilters,
+  subscribeWebinarQuestionnaireSubmissions,
+  importRecentWebinarQuestionnaires,
+  rematchWebinarQuestionnaires,
   todayYmd,
+  webinarQuestionnaireWebhookUrl,
   watchMinutesFromSubmission,
   type QuestionnaireViewFilter,
   type WebinarQuestionnaireSubmission,
@@ -46,8 +50,13 @@ const WebinarQuestionnairesPage: React.FC = () => {
   const isAuthenticated = useStaffAuthenticated();
   const [role, setRole] = React.useState<AppRole | null>(null);
   const [loading, setLoading] = React.useState(true);
+  const [summaryLoading, setSummaryLoading] = React.useState(false);
   const [loadingMore, setLoadingMore] = React.useState(false);
-  const [syncing, setSyncing] = React.useState(false);
+  const [importing, setImporting] = React.useState(false);
+  const [rematching, setRematching] = React.useState(false);
+  const [liveConnected, setLiveConnected] = React.useState(false);
+  const [liveNotice, setLiveNotice] = React.useState<string | null>(null);
+  const [highlightIds, setHighlightIds] = React.useState<Set<string>>(() => new Set());
   const [error, setError] = React.useState<string | null>(null);
   const [message, setMessage] = React.useState<string | null>(null);
   const [rows, setRows] = React.useState<WebinarQuestionnaireSubmission[]>([]);
@@ -77,34 +86,113 @@ const WebinarQuestionnairesPage: React.FC = () => {
     return () => window.clearTimeout(timer);
   }, [search]);
 
+  const pageFilters = React.useMemo(() => ({
+    search: debouncedSearch || undefined,
+    dateFrom: dateFrom || undefined,
+    dateTo: dateTo || undefined,
+    webinarTitle: webinarTitle !== 'all' ? webinarTitle : undefined,
+    sourceType: sourceType !== 'all' ? sourceType : undefined,
+    viewFilter,
+  }), [debouncedSearch, dateFrom, dateTo, webinarTitle, sourceType, viewFilter]);
+
+  const bumpSummaryForRow = React.useCallback((row: WebinarQuestionnaireSubmission, delta: 1 | -1) => {
+    setSummary((prev) => {
+      const next = { ...prev };
+      next.total = Math.max(0, prev.total + delta);
+      if (row.hiring_stage === 'questionnaire_submitted') {
+        next.withAnswers = Math.max(0, prev.withAnswers + delta);
+      }
+      if (row.hiring_stage === 'attended_only') {
+        next.attendedOnly = Math.max(0, prev.attendedOnly + delta);
+      }
+      if (row.pipeline_candidate_id) {
+        next.matchedPipeline = Math.max(0, prev.matchedPipeline + delta);
+      }
+      return next;
+    });
+  }, []);
+
+  const flashRow = React.useCallback((id: string, notice: string) => {
+    setHighlightIds((prev) => new Set(prev).add(id));
+    setLiveNotice(notice);
+    window.setTimeout(() => {
+      setHighlightIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }, 5000);
+    window.setTimeout(() => setLiveNotice(null), 6000);
+  }, []);
+
+  const handleLiveInsert = React.useCallback((row: WebinarQuestionnaireSubmission) => {
+    if (!submissionMatchesPageFilters(row, pageFilters)) return;
+    setRows((prev) => {
+      if (prev.some((item) => item.id === row.id)) return prev;
+      return [row, ...prev];
+    });
+    bumpSummaryForRow(row, 1);
+    if (row.webinar_title) {
+      setWebinarTitles((prev) => (prev.includes(row.webinar_title!) ? prev : [...prev, row.webinar_title!].sort()));
+    }
+    flashRow(row.id, `New submission: ${displayNameFromSubmission(row)}`);
+  }, [bumpSummaryForRow, flashRow, pageFilters]);
+
+  const handleLiveUpdate = React.useCallback((row: WebinarQuestionnaireSubmission) => {
+    setRows((prev) => {
+      const idx = prev.findIndex((item) => item.id === row.id);
+      const matches = submissionMatchesPageFilters(row, pageFilters);
+      if (idx === -1) {
+        if (!matches) return prev;
+        return [row, ...prev];
+      }
+      if (!matches) {
+        bumpSummaryForRow(prev[idx], -1);
+        return prev.filter((item) => item.id !== row.id);
+      }
+      const next = [...prev];
+      next[idx] = { ...next[idx], ...row };
+      return next;
+    });
+    if (expandedId === row.id) {
+      setExpandedDetail((prev) => (prev?.id === row.id ? { ...prev, ...row } : prev));
+    }
+  }, [bumpSummaryForRow, expandedId, pageFilters]);
+
+  const loadMeta = React.useCallback(async () => {
+    setSummaryLoading(true);
+    try {
+      const [syncRun, stats, titles] = await Promise.all([
+        fetchLatestQuestionnaireSyncRun(),
+        fetchWebinarQuestionnaireSummary({ dateFrom, dateTo }),
+        fetchWebinarQuestionnaireWebinarTitles(),
+      ]);
+      setLastSync(syncRun);
+      setSummary(stats);
+      setWebinarTitles(titles);
+    } catch {
+      // list still usable
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, [dateFrom, dateTo]);
+
   const loadPage = React.useCallback(async (mode: 'reset' | 'more' = 'reset') => {
     if (mode === 'more') setLoadingMore(true);
     else setLoading(true);
     setError(null);
     try {
       const offset = mode === 'more' ? nextOffset : 0;
-      const [page, syncRun, stats] = await Promise.all([
-        fetchWebinarQuestionnairePage({
-          search: debouncedSearch || undefined,
-          dateFrom: dateFrom || undefined,
-          dateTo: dateTo || undefined,
-          webinarTitle: webinarTitle !== 'all' ? webinarTitle : undefined,
-          sourceType: sourceType !== 'all' ? sourceType : undefined,
-          viewFilter,
-          offset,
-        }),
-        mode === 'reset' ? fetchLatestQuestionnaireSyncRun() : Promise.resolve(lastSync),
-        mode === 'reset'
-          ? fetchWebinarQuestionnaireSummary({ dateFrom, dateTo })
-          : Promise.resolve(summary),
-      ]);
+      const page = await fetchWebinarQuestionnairePage({
+        ...pageFilters,
+        offset,
+      });
 
       setRows((prev) => (mode === 'more' ? [...prev, ...page.rows] : page.rows));
       setHasMore(page.hasMore);
       setNextOffset(page.nextOffset);
       if (mode === 'reset') {
-        setLastSync(syncRun);
-        setSummary(stats);
+        void loadMeta();
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -112,7 +200,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [debouncedSearch, dateFrom, dateTo, webinarTitle, sourceType, viewFilter, nextOffset]);
+  }, [loadMeta, nextOffset, pageFilters]);
 
   React.useEffect(() => {
     if (!isAuthenticated || !canAccessWebinarQuestionnaires(role)) return;
@@ -122,27 +210,51 @@ const WebinarQuestionnairesPage: React.FC = () => {
 
   React.useEffect(() => {
     if (!isAuthenticated || !canAccessWebinarQuestionnaires(role)) return;
-    void fetchWebinarQuestionnaireWebinarTitles().then(setWebinarTitles);
-  }, [isAuthenticated, role]);
+    const unsubscribe = subscribeWebinarQuestionnaireSubmissions({
+      onInsert: handleLiveInsert,
+      onUpdate: handleLiveUpdate,
+    });
+    setLiveConnected(true);
+    return () => {
+      unsubscribe();
+      setLiveConnected(false);
+    };
+  }, [isAuthenticated, role, handleLiveInsert, handleLiveUpdate]);
 
-  const handleSync = async () => {
-    setSyncing(true);
+  const handleImportRecent = async () => {
+    setImporting(true);
     setError(null);
     setMessage(null);
     try {
-      const result = await syncWebinarGeekQuestionnaires();
+      const result = await importRecentWebinarQuestionnaires(15);
       if (!result.ok) throw new Error(result.error);
       setMessage(
         result.data.message
-        || `Synced ${result.data.upserted_count} questionnaire submission(s) from WebinarGeek`
-        + (result.data.api_sources.length ? ` (${result.data.api_sources.join(', ')})` : ''),
+        || `Imported ${result.data.upserted_count} questionnaire(s) from the last 15 days`
+        + (result.data.subscriptions_scanned ? ` (scanned ${result.data.subscriptions_scanned} subscriptions)` : ''),
       );
       await loadPage('reset');
-      void fetchWebinarQuestionnaireWebinarTitles().then(setWebinarTitles);
+      void loadMeta();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setSyncing(false);
+      setImporting(false);
+    }
+  };
+
+  const handleRematch = async () => {
+    setRematching(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await rematchWebinarQuestionnaires(15);
+      if (!result.ok) throw new Error(result.error);
+      setMessage(result.data.message || `Re-matched ${result.data.rematched_count ?? 0} submission(s).`);
+      await loadPage('reset');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRematching(false);
     }
   };
 
@@ -178,7 +290,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
     );
   }
 
-  const busy = loading || syncing;
+  const busy = loading || importing || rematching;
 
   return (
     <div className="mx-auto max-w-[1400px] space-y-4 p-4 md:p-8">
@@ -194,9 +306,22 @@ const WebinarQuestionnairesPage: React.FC = () => {
             Webinar questionnaires
           </h1>
           <p className="mt-1 text-sm text-[#5c7594] max-w-2xl">
-            Post-webinar evaluation forms from WebinarGeek. Click <strong>Sync questionnaires</strong> to pull evaluation responses (a few API calls, saved in bulk).
-            Pipeline matching runs during sync; attendance data stays on the Webinar Geek dashboard.
+            Default view: <strong>last 15 days</strong>. Data is stored in Supabase — new forms pop in live via webhook.
           </p>
+          {liveConnected && (
+            <p className="mt-1 inline-flex items-center gap-1.5 text-[11px] text-emerald-700">
+              <span className="inline-block h-2 w-2 rounded-full bg-emerald-500 animate-pulse" aria-hidden />
+              Live updates on
+            </p>
+          )}
+          {(role === 'admin' || role === 'leadership') && webinarQuestionnaireWebhookUrl() && (
+            <p className="mt-2 rounded-lg border border-[#cfe3f9] bg-[#f4f9ff] px-3 py-2 text-[11px] text-[#365274]">
+              Webhook URL (WebinarGeek → Integrations → Webhooks → <em>New evaluation form</em>):{' '}
+              <code className="break-all text-[10px]">{webinarQuestionnaireWebhookUrl()}</code>
+              {' '}· Set secret <code className="text-[10px]">WEBINARGEEK_WEBHOOK_SECRET</code> in Supabase Edge secrets and add{' '}
+              <code className="text-[10px]">?secret=…</code> to the URL or header <code className="text-[10px]">x-webinar-geek-webhook-secret</code>.
+            </p>
+          )}
           {lastSync && (
             <p className="mt-1 text-[11px] text-[#8aa3c0]">
               Last import {formatDateTimeCanadaEastern(lastSync.synced_at)}
@@ -210,9 +335,12 @@ const WebinarQuestionnairesPage: React.FC = () => {
             <RefreshCw size={16} className={loading ? 'animate-spin mr-1.5' : 'mr-1.5'} />
             Refresh
           </Button>
-          <Button onClick={() => void handleSync()} disabled={busy}>
-            <RefreshCw size={16} className={syncing ? 'animate-spin mr-1.5' : 'mr-1.5'} />
-            {syncing ? 'Syncing…' : 'Sync questionnaires'}
+          <Button onClick={() => void handleImportRecent()} disabled={busy}>
+            <RefreshCw size={16} className={importing ? 'animate-spin mr-1.5' : 'mr-1.5'} />
+            {importing ? 'Importing…' : 'Import last 15 days'}
+          </Button>
+          <Button variant="outline" onClick={() => void handleRematch()} disabled={busy}>
+            {rematching ? 'Matching…' : 'Re-match pipeline'}
           </Button>
         </div>
       </div>
@@ -220,19 +348,27 @@ const WebinarQuestionnairesPage: React.FC = () => {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="rounded-xl border border-[#d6deea] bg-white p-3">
           <p className="text-[10px] uppercase tracking-wide text-[#7a8ba1]">In date range</p>
-          <p className="text-xl font-bold text-[#0B1B34]">{summary.total.toLocaleString()}</p>
+          <p className="text-xl font-bold text-[#0B1B34]">
+            {summaryLoading && !rows.length ? '…' : summary.total.toLocaleString()}
+          </p>
         </div>
         <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3">
           <p className="text-[10px] uppercase tracking-wide text-emerald-800">With questionnaire</p>
-          <p className="text-xl font-bold text-emerald-900">{summary.withAnswers.toLocaleString()}</p>
+          <p className="text-xl font-bold text-emerald-900">
+            {summaryLoading && !rows.length ? '…' : summary.withAnswers.toLocaleString()}
+          </p>
         </div>
         <div className="rounded-xl border border-sky-200 bg-sky-50/50 p-3">
           <p className="text-[10px] uppercase tracking-wide text-sky-800">Attended only</p>
-          <p className="text-xl font-bold text-sky-900">{summary.attendedOnly.toLocaleString()}</p>
+          <p className="text-xl font-bold text-sky-900">
+            {summaryLoading && !rows.length ? '…' : summary.attendedOnly.toLocaleString()}
+          </p>
         </div>
         <div className="rounded-xl border border-violet-200 bg-violet-50/50 p-3">
           <p className="text-[10px] uppercase tracking-wide text-violet-800">Matched pipeline</p>
-          <p className="text-xl font-bold text-violet-900">{summary.matchedPipeline.toLocaleString()}</p>
+          <p className="text-xl font-bold text-violet-900">
+            {summaryLoading && !rows.length ? '…' : summary.matchedPipeline.toLocaleString()}
+          </p>
         </div>
       </div>
 
@@ -291,12 +427,18 @@ const WebinarQuestionnairesPage: React.FC = () => {
               <option value="all">All sources</option>
               <option value="dashboard_cache">Attendance cache</option>
               <option value="wg_sync">WebinarGeek API</option>
+              <option value="wg_webhook">Live webhook</option>
             </select>
           </label>
           <span>{rows.length.toLocaleString()} loaded{hasMore ? '+' : ''}</span>
         </div>
       </div>
 
+      {liveNotice && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900">
+          {liveNotice}
+        </div>
+      )}
       {message && (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">{message}</div>
       )}
@@ -328,7 +470,9 @@ const WebinarQuestionnairesPage: React.FC = () => {
 
               return (
                 <React.Fragment key={row.id}>
-                  <tr className="border-t border-[#eef2f7] hover:bg-[#fafcff] align-top">
+                  <tr className={`border-t border-[#eef2f7] hover:bg-[#fafcff] align-top transition-colors ${
+                    highlightIds.has(row.id) ? 'bg-emerald-50/80 ring-1 ring-inset ring-emerald-200' : ''
+                  }`}>
                     <td className="px-3 py-2 whitespace-nowrap text-[#5c6b82] tabular-nums">
                       {row.submitted_at ? formatDateTimeCanadaEastern(row.submitted_at) : '—'}
                     </td>
@@ -417,8 +561,8 @@ const WebinarQuestionnairesPage: React.FC = () => {
             {!loading && rows.length === 0 && (
               <tr>
                 <td colSpan={8} className="px-4 py-10 text-center text-sm text-[#6f7b8d]">
-                  No questionnaire submissions in this date range. Run <strong>Sync questionnaires</strong> after the database migration is applied.
-                  If sync says the table is missing, run <code className="text-xs">paste_webinar_geek_questionnaires.sql</code> in Supabase SQL.
+                  No submissions match these filters. Questionnaires saved via webhook appear here automatically.
+                  Attendance-only rows come from the dashboard cache import.
                 </td>
               </tr>
             )}

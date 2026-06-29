@@ -7,7 +7,10 @@ import {
 } from '../_shared/webinarGeekBookingLinks.ts';
 import {
   extractQuestionnaireRowsFromCachedSubscriptions,
+  fetchRecentQuestionnaireRowsFromSubscriptions,
   fetchWebinarGeekQuestionnaireRows,
+  probeWebinarGeekEvaluationApi,
+  rematchStoredQuestionnaireRows,
   upsertQuestionnaireRowsBatched,
 } from '../_shared/webinarGeekQuestionnaires.ts';
 
@@ -80,7 +83,14 @@ async function wgRequest(path: string, init: RequestInit = {}): Promise<{ ok: bo
   let json: Record<string, unknown> = {};
   if (raw.trim()) {
     try {
-      json = JSON.parse(raw) as Record<string, unknown>;
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        json = { __root_array: parsed };
+      } else if (parsed && typeof parsed === 'object') {
+        json = parsed as Record<string, unknown>;
+      } else {
+        json = { value: parsed };
+      }
     } catch {
       json = { raw_body: raw.slice(0, 500) };
     }
@@ -103,6 +113,41 @@ async function wgPost(path: string, body: Record<string, unknown>) {
     method: 'POST',
     body: JSON.stringify(body),
   });
+}
+
+function questionnaireSyncMessage(input: {
+  rows: number;
+  upserted: number;
+  api_connected: boolean;
+  api_status: number;
+  probes: Array<{ path: string; ok: boolean; raw_count: number; with_answers: number }>;
+}): string | undefined {
+  if (input.rows > 0) {
+    if (input.upserted === 0) {
+      return 'WebinarGeek returned evaluation rows but none had questionnaire answers we could save.';
+    }
+    return undefined;
+  }
+
+  if (!input.api_connected) {
+    if (input.api_status === 503) {
+      return 'WEBINARGEEK_API_TOKEN is not set on the Edge Function. Subscriptions/dashboard still work only if another env provides the token.';
+    }
+    if (input.api_status === 401 || input.api_status === 403) {
+      return 'WebinarGeek rejected the API token (401/403). Regenerate the token in WebinarGeek and update WEBINARGEEK_API_TOKEN in Supabase secrets.';
+    }
+    return `WebinarGeek API is unreachable (HTTP ${input.api_status || 'error'}). Your token may be fine — this is a connectivity or API error.`;
+  }
+
+  const rawTotal = input.probes.reduce((sum, probe) => sum + probe.raw_count, 0);
+  const parsedTotal = input.probes.reduce((sum, probe) => sum + probe.with_answers, 0);
+  if (rawTotal > 0 && parsedTotal === 0) {
+    return 'WebinarGeek returned evaluation data but we could not parse questionnaire answers. Use the live webhook for new submissions; contact support with a sample payload.';
+  }
+
+  return 'WebinarGeek API connected successfully, but returned 0 evaluation form responses. '
+    + 'That usually means no one has submitted an evaluation form yet (attendance/subscriptions are separate). '
+    + 'New submissions arrive instantly via the webhook — Sync is only for historical backfill.';
 }
 
 function normalizeLookupEmail(value: string): string {
@@ -1457,6 +1502,144 @@ Deno.serve(async (req) => {
       });
     }
 
+    if (req.method === 'POST' && mode === 'questionnaire-recent-import') {
+      const body = (await req.json().catch(() => ({}))) as { days_back?: number };
+      const profileRes = await admin
+        .from('user_profiles')
+        .select('role')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      const role = String((profileRes.data as { role?: string } | null)?.role || '').trim();
+      const allowedRoles = new Set(['admin', 'leadership', 'hr', 'webinar', 'recruiter']);
+      if (!allowedRoles.has(role)) {
+        return new Response(JSON.stringify({ error: 'Forbidden' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const daysBack = Math.min(Math.max(Number(body.days_back || 15) || 15, 1), 45);
+      const sinceMs = Date.now() - daysBack * 24 * 60 * 60 * 1000;
+      const sinceIso = new Date(sinceMs).toISOString();
+      const nowIso = new Date().toISOString();
+
+      try {
+        const subs = await wgGetAllSubscriptions(
+          { per_page: 250, nested_resources: 'broadcast,webinar' },
+          { sinceMs, maxPages: 25 },
+        );
+        if (!subs.ok) {
+          throw new Error('Could not load WebinarGeek subscriptions for recent import.');
+        }
+
+        const recent = await fetchRecentQuestionnaireRowsFromSubscriptions(wgGet, subs.rows, {
+          sinceMs,
+          maxSubscriptions: 350,
+        });
+
+        let rows = recent.rows;
+        let sources = [...recent.sources];
+        let scanned = recent.scanned;
+
+        if (!rows.length) {
+          const bulk = await fetchWebinarGeekQuestionnaireRows(wgGet, {});
+          rows = bulk.rows;
+          sources = [...sources, ...bulk.sources];
+        }
+
+        const { upserted, matchedPipeline } = await upsertQuestionnaireRowsBatched(admin, rows, {
+          sourceType: 'wg_sync',
+          syncedAt: nowIso,
+        });
+
+        const rematch = await rematchStoredQuestionnaireRows(admin, { sinceIso, limit: 500 });
+
+        await admin.from('webinar_geek_questionnaire_sync_runs').insert({
+          synced_at: nowIso,
+          fetched_count: rows.length,
+          upserted_count: upserted,
+          matched_pipeline_count: matchedPipeline,
+          api_sources: sources.length ? sources : ['subscription_scan'],
+          triggered_by_user_id: user.id,
+        });
+
+        return new Response(JSON.stringify({
+          ok: true,
+          synced_at: nowIso,
+          days_back: daysBack,
+          subscriptions_scanned: scanned,
+          fetched_count: rows.length,
+          upserted_count: upserted,
+          matched_pipeline_count: matchedPipeline,
+          rematched_count: rematch.updated,
+          api_sources: sources,
+          message: upserted > 0
+            ? `Imported ${upserted} questionnaire submission(s) from the last ${daysBack} days.`
+            : `Scanned ${scanned} recent subscriptions but found 0 evaluation forms in WebinarGeek API. `
+              + 'Ensure the webhook is configured for new submissions going forward.',
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      } catch (importErr) {
+        const message = importErr instanceof Error ? importErr.message : String(importErr);
+        await admin.from('webinar_geek_questionnaire_sync_runs').insert({
+          synced_at: nowIso,
+          fetched_count: 0,
+          upserted_count: 0,
+          matched_pipeline_count: 0,
+          api_sources: ['subscription_scan'],
+          triggered_by_user_id: user.id,
+          error_message: message,
+        });
+        return new Response(JSON.stringify({ error: message }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
+    if (req.method === 'POST' && mode === 'questionnaire-rematch') {
+      const body = (await req.json().catch(() => ({}))) as { days_back?: number };
+      const profileRes = await admin
+        .from('user_profiles')
+        .select('role')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      const role = String((profileRes.data as { role?: string } | null)?.role || '').trim();
+      const allowedRoles = new Set(['admin', 'leadership', 'hr', 'webinar', 'recruiter']);
+      if (!allowedRoles.has(role)) {
+        return new Response(JSON.stringify({ error: 'Forbidden' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const daysBack = Math.min(Math.max(Number(body.days_back || 15) || 15, 1), 90);
+      const sinceIso = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+      try {
+        const rematch = await rematchStoredQuestionnaireRows(admin, { sinceIso, limit: 800 });
+        return new Response(JSON.stringify({
+          ok: true,
+          days_back: daysBack,
+          rematched_count: rematch.updated,
+          matched_pipeline_count: rematch.matchedPipeline,
+          message: rematch.updated > 0
+            ? `Re-matched ${rematch.updated} submission(s); ${rematch.matchedPipeline} linked to pipeline.`
+            : 'No stored submissions to re-match in this date range.',
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      } catch (rematchErr) {
+        const message = rematchErr instanceof Error ? rematchErr.message : String(rematchErr);
+        return new Response(JSON.stringify({ error: message }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
     if (req.method === 'POST' && mode === 'questionnaire-sync') {
       const body = (await req.json().catch(() => ({}))) as {
         webinar_id?: string;
@@ -1481,10 +1664,11 @@ Deno.serve(async (req) => {
       const nowIso = new Date().toISOString();
 
       try {
-        const { rows, sources } = await fetchWebinarGeekQuestionnaireRows(wgGet, {
+        const fetchResult = await fetchWebinarGeekQuestionnaireRows(wgGet, {
           webinarId: webinarId || undefined,
           broadcastId: broadcastId || undefined,
         });
+        const { rows, sources, api_connected, api_status, probes } = fetchResult;
 
         const { upserted, matchedPipeline } = await upsertQuestionnaireRowsBatched(admin, rows, {
           sourceType: 'wg_sync',
@@ -1507,11 +1691,16 @@ Deno.serve(async (req) => {
           upserted_count: upserted,
           matched_pipeline_count: matchedPipeline,
           api_sources: sources,
-          message: rows.length === 0
-            ? 'No evaluation form responses returned from WebinarGeek API. Confirm evaluation forms are enabled and WEBINARGEEK_API_TOKEN is set.'
-            : upserted === 0
-            ? 'Fetched rows but none had questionnaire answers to save.'
-            : undefined,
+          api_connected,
+          api_status,
+          api_probes: probes,
+          message: questionnaireSyncMessage({
+            rows: rows.length,
+            upserted,
+            api_connected,
+            api_status,
+            probes,
+          }),
         }), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },

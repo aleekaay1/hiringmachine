@@ -23,6 +23,7 @@ jobs:
             integrations-zoom-calendly
             sync-live-session-pipeline
             integrations-webinar-geek
+            webinar-geek-questionnaire-webhook
             send-email
             send-candidate-email
             live-session-calendar
@@ -44,6 +45,7 @@ jobs:
             sync-recruiter-coins
             live-session-auto-assessment
             pipeline-convert-resume
+            send-weekly-leaderboard-email
           )
           for fn in "${FUNCTIONS[@]}"; do
             if [ -f "supabase/functions/$fn/index.ts" ]; then

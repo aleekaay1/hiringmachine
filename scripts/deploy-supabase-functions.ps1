@@ -27,6 +27,7 @@ $functions = @(
   "sync-live-session-pipeline",
   "live-session-auto-assessment",
   "integrations-webinar-geek",
+  "webinar-geek-questionnaire-webhook",
   "send-email",
   "send-candidate-email",
   "live-session-calendar",
@@ -47,7 +48,8 @@ $functions = @(
   "pipeline-candidate-emails",
   "sync-recruiter-coins",
   "pipeline-convert-resume",
-  "pipeline-hr-leads"
+  "pipeline-hr-leads",
+  "send-weekly-leaderboard-email"
 )
 
 Write-Host "Deploying $($functions.Count) functions to project $ProjectRef ..." -ForegroundColor Green

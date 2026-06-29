@@ -73,6 +73,9 @@ export type WebinarQuestionnaireSyncResult = {
   cache_fetched_at?: string | null;
   cache_label?: string | null;
   subscription_count?: number;
+  subscriptions_scanned?: number;
+  rematched_count?: number;
+  days_back?: number;
   message?: string;
 };
 
@@ -111,7 +114,14 @@ export function watchMinutesFromSubmission(row: WebinarQuestionnaireSubmission):
 export function sourceTypeLabel(sourceType: string | null | undefined): string {
   if (sourceType === 'dashboard_cache') return 'Attendance cache';
   if (sourceType === 'wg_sync') return 'WebinarGeek API';
+  if (sourceType === 'wg_webhook') return 'Live webhook';
   return sourceType || 'Unknown';
+}
+
+export function webinarQuestionnaireWebhookUrl(): string {
+  const base = (import.meta.env.VITE_SUPABASE_URL as string | undefined) || '';
+  if (!base) return '';
+  return `${base.replace(/\/$/, '')}/functions/v1/webinar-geek-questionnaire-webhook`;
 }
 
 async function getAccessToken(): Promise<string | null> {
@@ -120,7 +130,7 @@ async function getAccessToken(): Promise<string | null> {
 }
 
 async function postQuestionnaireMode(
-  mode: 'questionnaire-sync' | 'questionnaire-backfill',
+  mode: 'questionnaire-sync' | 'questionnaire-backfill' | 'questionnaire-recent-import' | 'questionnaire-rematch',
   body?: Record<string, unknown>,
 ): Promise<{ ok: true; data: WebinarQuestionnaireSyncResult } | { ok: false; error: string }> {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
@@ -154,6 +164,9 @@ async function postQuestionnaireMode(
       cache_fetched_at: json.cache_fetched_at ? String(json.cache_fetched_at) : null,
       cache_label: json.cache_label ? String(json.cache_label) : null,
       subscription_count: Number(json.subscription_count || 0) || undefined,
+      subscriptions_scanned: Number(json.subscriptions_scanned || 0) || undefined,
+      rematched_count: Number(json.rematched_count || 0) || undefined,
+      days_back: Number(json.days_back || 0) || undefined,
       message: json.message ? String(json.message) : undefined,
     },
   };
@@ -167,6 +180,19 @@ export async function syncWebinarGeekQuestionnaires(input?: {
     webinar_id: input?.webinarId || undefined,
     broadcast_id: input?.broadcastId || undefined,
   });
+}
+
+/** Scan recent WebinarGeek subscriptions (default 15 days) and import evaluation forms. */
+export async function importRecentWebinarQuestionnaires(daysBack = 15): Promise<
+  { ok: true; data: WebinarQuestionnaireSyncResult } | { ok: false; error: string }
+> {
+  return postQuestionnaireMode('questionnaire-recent-import', { days_back: daysBack });
+}
+
+export async function rematchWebinarQuestionnaires(daysBack = 15): Promise<
+  { ok: true; data: WebinarQuestionnaireSyncResult } | { ok: false; error: string }
+> {
+  return postQuestionnaireMode('questionnaire-rematch', { days_back: daysBack });
 }
 
 /** Import from webinar_geek_dashboard_snapshots — no WebinarGeek API calls. */
@@ -271,46 +297,23 @@ export async function fetchWebinarQuestionnaireSummary(input?: {
   attendedOnly: number;
   matchedPipeline: number;
 }> {
-  let base = supabase.from('webinar_geek_questionnaire_submissions').select('id', { count: 'exact', head: true });
-  if (input?.dateFrom) base = base.gte('submitted_at', ymdStartIso(input.dateFrom));
-  if (input?.dateTo) base = base.lte('submitted_at', ymdEndIso(input.dateTo));
+  let query = supabase
+    .from('webinar_geek_questionnaire_submissions')
+    .select('hiring_stage, pipeline_candidate_id');
+  if (input?.dateFrom) query = query.gte('submitted_at', ymdStartIso(input.dateFrom));
+  if (input?.dateTo) query = query.lte('submitted_at', ymdEndIso(input.dateTo));
 
-  const [totalRes, answersRes, attendedRes, matchedRes] = await Promise.all([
-    base,
-    (() => {
-      let q = supabase
-        .from('webinar_geek_questionnaire_submissions')
-        .select('id', { count: 'exact', head: true })
-        .eq('hiring_stage', 'questionnaire_submitted');
-      if (input?.dateFrom) q = q.gte('submitted_at', ymdStartIso(input.dateFrom));
-      if (input?.dateTo) q = q.lte('submitted_at', ymdEndIso(input.dateTo));
-      return q;
-    })(),
-    (() => {
-      let q = supabase
-        .from('webinar_geek_questionnaire_submissions')
-        .select('id', { count: 'exact', head: true })
-        .eq('hiring_stage', 'attended_only');
-      if (input?.dateFrom) q = q.gte('submitted_at', ymdStartIso(input.dateFrom));
-      if (input?.dateTo) q = q.lte('submitted_at', ymdEndIso(input.dateTo));
-      return q;
-    })(),
-    (() => {
-      let q = supabase
-        .from('webinar_geek_questionnaire_submissions')
-        .select('id', { count: 'exact', head: true })
-        .not('pipeline_candidate_id', 'is', null);
-      if (input?.dateFrom) q = q.gte('submitted_at', ymdStartIso(input.dateFrom));
-      if (input?.dateTo) q = q.lte('submitted_at', ymdEndIso(input.dateTo));
-      return q;
-    })(),
-  ]);
+  const { data, error } = await query.limit(5000);
+  if (error) {
+    return { total: 0, withAnswers: 0, attendedOnly: 0, matchedPipeline: 0 };
+  }
 
+  const rows = data || [];
   return {
-    total: totalRes.count ?? 0,
-    withAnswers: answersRes.count ?? 0,
-    attendedOnly: attendedRes.count ?? 0,
-    matchedPipeline: matchedRes.count ?? 0,
+    total: rows.length,
+    withAnswers: rows.filter((row) => row.hiring_stage === 'questionnaire_submitted').length,
+    attendedOnly: rows.filter((row) => row.hiring_stage === 'attended_only').length,
+    matchedPipeline: rows.filter((row) => row.pipeline_candidate_id).length,
   };
 }
 
@@ -421,9 +424,106 @@ export function resolveHiringStage(input: {
 }
 
 export function defaultQuestionnaireDateFrom(): string {
-  return '2026-04-01';
+  const d = new Date();
+  d.setDate(d.getDate() - 15);
+  return d.toISOString().slice(0, 10);
 }
+
+export const QUESTIONNAIRE_DEFAULT_DAYS_BACK = 15;
 
 export function todayYmd(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+export type WebinarQuestionnairePageFilters = Pick<
+  WebinarQuestionnairePageQuery,
+  'search' | 'dateFrom' | 'dateTo' | 'webinarTitle' | 'sourceType' | 'viewFilter'
+>;
+
+function submissionMatchesSearch(row: WebinarQuestionnaireSubmission, search: string): boolean {
+  const q = search.trim().toLowerCase();
+  if (!q) return true;
+  const hay = [
+    row.email,
+    row.first_name,
+    row.last_name,
+    row.phone,
+    row.booked_by_label,
+    row.webinar_title,
+    row.broadcast_title,
+    row.recruiter_custom_field,
+  ]
+    .map((v) => String(v || '').trim().toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+  return hay.includes(q);
+}
+
+export function submissionMatchesPageFilters(
+  row: WebinarQuestionnaireSubmission,
+  input: WebinarQuestionnairePageFilters,
+): boolean {
+  const viewFilter = input.viewFilter || 'all';
+  if (viewFilter === 'with_answers' && row.hiring_stage !== 'questionnaire_submitted') return false;
+  if (viewFilter === 'attended_only' && row.hiring_stage !== 'attended_only') return false;
+  if (viewFilter === 'matched_pipeline' && !row.pipeline_candidate_id) return false;
+
+  if (input.sourceType && input.sourceType !== 'all' && row.source_type !== input.sourceType) return false;
+  if (input.webinarTitle && input.webinarTitle !== 'all' && row.webinar_title !== input.webinarTitle) return false;
+
+  if (input.dateFrom && row.submitted_at) {
+    if (row.submitted_at < ymdStartIso(input.dateFrom)) return false;
+  }
+  if (input.dateTo && row.submitted_at) {
+    if (row.submitted_at > ymdEndIso(input.dateTo)) return false;
+  }
+  if (input.search && !submissionMatchesSearch(row, input.search)) return false;
+
+  return true;
+}
+
+function mapRealtimeSubmissionRow(payload: Record<string, unknown>): WebinarQuestionnaireSubmission | null {
+  const id = String(payload.id || '').trim();
+  if (!id) return null;
+  return payload as unknown as WebinarQuestionnaireSubmission;
+}
+
+/** Live INSERT/UPDATE events — new webhook submissions appear without refresh. */
+export function subscribeWebinarQuestionnaireSubmissions(
+  handlers: {
+    onInsert?: (row: WebinarQuestionnaireSubmission) => void;
+    onUpdate?: (row: WebinarQuestionnaireSubmission) => void;
+  },
+): () => void {
+  const channel = supabase
+    .channel('webinar-questionnaire-live')
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'webinar_geek_questionnaire_submissions',
+      },
+      (payload) => {
+        const row = mapRealtimeSubmissionRow((payload.new || {}) as Record<string, unknown>);
+        if (row) handlers.onInsert?.(row);
+      },
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'webinar_geek_questionnaire_submissions',
+      },
+      (payload) => {
+        const row = mapRealtimeSubmissionRow((payload.new || {}) as Record<string, unknown>);
+        if (row) handlers.onUpdate?.(row);
+      },
+    )
+    .subscribe();
+
+  return () => {
+    void supabase.removeChannel(channel);
+  };
 }
