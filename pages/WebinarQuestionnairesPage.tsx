@@ -20,7 +20,6 @@ import {
   importRecentWebinarQuestionnaires,
   rematchWebinarQuestionnaires,
   todayYmd,
-  webinarQuestionnaireWebhookUrl,
   watchMinutesFromSubmission,
   type QuestionnaireViewFilter,
   type WebinarQuestionnaireSubmission,
@@ -306,20 +305,12 @@ const WebinarQuestionnairesPage: React.FC = () => {
             Webinar questionnaires
           </h1>
           <p className="mt-1 text-sm text-[#5c7594] max-w-2xl">
-            Default view: <strong>last 15 days</strong>. Data is stored in Supabase — new forms pop in live via webhook.
+            Post-webinar questionnaires from the last <strong>15 days</strong>. New submissions appear here automatically — no refresh needed.
           </p>
           {liveConnected && (
             <p className="mt-1 inline-flex items-center gap-1.5 text-[11px] text-emerald-700">
               <span className="inline-block h-2 w-2 rounded-full bg-emerald-500 animate-pulse" aria-hidden />
               Live updates on
-            </p>
-          )}
-          {(role === 'admin' || role === 'leadership') && webinarQuestionnaireWebhookUrl() && (
-            <p className="mt-2 rounded-lg border border-[#cfe3f9] bg-[#f4f9ff] px-3 py-2 text-[11px] text-[#365274]">
-              Webhook URL (WebinarGeek → Integrations → Webhooks → <em>New evaluation form</em>):{' '}
-              <code className="break-all text-[10px]">{webinarQuestionnaireWebhookUrl()}</code>
-              {' '}· Set secret <code className="text-[10px]">WEBINARGEEK_WEBHOOK_SECRET</code> in Supabase Edge secrets and add{' '}
-              <code className="text-[10px]">?secret=…</code> to the URL or header <code className="text-[10px]">x-webinar-geek-webhook-secret</code>.
             </p>
           )}
           {lastSync && (
@@ -561,8 +552,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
             {!loading && rows.length === 0 && (
               <tr>
                 <td colSpan={8} className="px-4 py-10 text-center text-sm text-[#6f7b8d]">
-                  No submissions match these filters. Questionnaires saved via webhook appear here automatically.
-                  Attendance-only rows come from the dashboard cache import.
+                  No submissions match these filters. Try <strong>Import last 15 days</strong> to pull recent forms from WebinarGeek.
                 </td>
               </tr>
             )}
