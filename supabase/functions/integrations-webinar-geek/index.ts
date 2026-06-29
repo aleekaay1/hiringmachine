@@ -6,11 +6,9 @@ import {
   recruiterOwnsBookingLinkSlug,
 } from '../_shared/webinarGeekBookingLinks.ts';
 import {
-  buildQuestionnaireMatchContext,
-  buildQuestionnaireUpsertPayload,
-  extractRowsFromCachedSubscriptions,
+  extractQuestionnaireRowsFromCachedSubscriptions,
   fetchWebinarGeekQuestionnaireRows,
-  matchQuestionnaireRowWithContext,
+  upsertQuestionnaireRowsBatched,
 } from '../_shared/webinarGeekQuestionnaires.ts';
 
 const corsHeaders = {
@@ -1488,21 +1486,10 @@ Deno.serve(async (req) => {
           broadcastId: broadcastId || undefined,
         });
 
-        const matchContext = await buildQuestionnaireMatchContext(admin);
-        let upserted = 0;
-        let matchedPipeline = 0;
-        for (const row of rows) {
-          const match = matchQuestionnaireRowWithContext(row, matchContext);
-          if (match.pipeline_candidate_id) matchedPipeline += 1;
-          const payload = buildQuestionnaireUpsertPayload(row, match, {
-            sourceType: 'wg_sync',
-            syncedAt: nowIso,
-          });
-          const { error: upErr } = await admin
-            .from('webinar_geek_questionnaire_submissions')
-            .upsert(payload, { onConflict: 'wg_submission_key' });
-          if (!upErr) upserted += 1;
-        }
+        const { upserted, matchedPipeline } = await upsertQuestionnaireRowsBatched(admin, rows, {
+          sourceType: 'wg_sync',
+          syncedAt: nowIso,
+        });
 
         await admin.from('webinar_geek_questionnaire_sync_runs').insert({
           synced_at: nowIso,
@@ -1520,6 +1507,11 @@ Deno.serve(async (req) => {
           upserted_count: upserted,
           matched_pipeline_count: matchedPipeline,
           api_sources: sources,
+          message: rows.length === 0
+            ? 'No evaluation form responses returned from WebinarGeek API. Confirm evaluation forms are enabled and WEBINARGEEK_API_TOKEN is set.'
+            : upserted === 0
+            ? 'Fetched rows but none had questionnaire answers to save.'
+            : undefined,
         }), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -1569,25 +1561,13 @@ Deno.serve(async (req) => {
         const subs = Array.isArray(snap?.subscriptions)
           ? snap.subscriptions as Array<Record<string, unknown>>
           : [];
-        const rows = extractRowsFromCachedSubscriptions(subs);
-        const matchContext = await buildQuestionnaireMatchContext(admin);
+        const rows = extractQuestionnaireRowsFromCachedSubscriptions(subs);
 
-        let upserted = 0;
-        let matchedPipeline = 0;
-        let withQuestionnaire = 0;
-        for (const row of rows) {
-          if (row.answers.length > 0) withQuestionnaire += 1;
-          const match = matchQuestionnaireRowWithContext(row, matchContext);
-          if (match.pipeline_candidate_id) matchedPipeline += 1;
-          const payload = buildQuestionnaireUpsertPayload(row, match, {
-            sourceType: 'dashboard_cache',
-            syncedAt: nowIso,
-          });
-          const { error: upErr } = await admin
-            .from('webinar_geek_questionnaire_submissions')
-            .upsert(payload, { onConflict: 'wg_submission_key' });
-          if (!upErr) upserted += 1;
-        }
+        const { upserted, matchedPipeline } = await upsertQuestionnaireRowsBatched(admin, rows, {
+          sourceType: 'dashboard_cache',
+          syncedAt: nowIso,
+        });
+        const withQuestionnaire = rows.filter((row) => row.answers.length > 0).length;
 
         await admin.from('webinar_geek_questionnaire_sync_runs').insert({
           synced_at: nowIso,

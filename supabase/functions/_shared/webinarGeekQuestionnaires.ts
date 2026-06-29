@@ -1,6 +1,8 @@
 import {
+  bookingLinkFirstNameSlug,
   parseBookingLinkTag,
   recruiterOwnsBookingLinkSlug,
+  suggestedBookingLinkTags,
 } from './webinarGeekBookingLinks.ts';
 
 export type WgQuestionnaireAnswer = {
@@ -173,79 +175,54 @@ export async function fetchWebinarGeekQuestionnaireRows(
   wgGet: WgGetFn,
   input?: { webinarId?: string; broadcastId?: string },
 ): Promise<{ rows: NormalizedWgQuestionnaireRow[]; sources: string[] }> {
-  const subscriptionParams: Record<string, string | number | boolean | undefined> = {
-    per_page: 250,
-    nested_resources: 'broadcast,webinar',
-  };
-  if (input?.webinarId) subscriptionParams.webinar_id = input.webinarId;
-  if (input?.broadcastId) subscriptionParams.broadcast_id = input.broadcastId;
-
-  const subscriptionRes = await wgGet('/subscriptions', subscriptionParams);
-  const subscriptionRows = subscriptionRes.ok
-    ? rowsFromJsonArray(subscriptionRes.json, ['subscriptions'])
-    : [];
-  const subscriptionById = new Map<string, Record<string, unknown>>();
-  for (const row of subscriptionRows) {
-    const id = pickString(row.id);
-    if (id) subscriptionById.set(id, row);
-  }
-
   const merged = new Map<string, NormalizedWgQuestionnaireRow>();
   const sources: string[] = [];
+  const subscriptionById = new Map<string, Record<string, unknown>>();
 
   const probePaths = [
+    '/evaluation_form_results',
+    '/evaluation_form_responses',
     '/evaluations',
     '/evaluation_forms',
-    '/evaluation_form_responses',
     '/evaluation_results',
     '/interaction_results',
     '/interactions',
   ];
 
+  const maxPages = 8;
   for (const path of probePaths) {
-    const res = await wgGet(path, {
-      per_page: 250,
-      webinar_id: input?.webinarId,
-      broadcast_id: input?.broadcastId,
-    });
-    if (!res.ok) continue;
-    const rawRows = rowsFromJsonArray(res.json, [
-      'evaluations',
-      'evaluation_forms',
-      'evaluation_form_responses',
-      'evaluation_results',
-      'interaction_results',
-      'interactions',
-      'results',
-      'data',
-    ]);
-    if (!rawRows.length) continue;
-    sources.push(path);
-    for (const row of rawRows) {
-      const normalized = normalizeEvaluationRow(row, path.replace(/^\//, ''), subscriptionById);
-      if (!normalized || !normalized.answers.length) continue;
-      merged.set(normalized.wg_submission_key, normalized);
+    let pathHit = false;
+    for (let page = 1; page <= maxPages; page += 1) {
+      const res = await wgGet(path, {
+        per_page: 250,
+        page,
+        webinar_id: input?.webinarId,
+        broadcast_id: input?.broadcastId,
+      });
+      if (!res.ok) break;
+      const rawRows = rowsFromJsonArray(res.json, [
+        'evaluation_form_results',
+        'evaluation_form_responses',
+        'evaluations',
+        'evaluation_forms',
+        'evaluation_results',
+        'interaction_results',
+        'interactions',
+        'results',
+        'data',
+      ]);
+      if (!rawRows.length) break;
+      if (!pathHit) {
+        sources.push(path);
+        pathHit = true;
+      }
+      for (const row of rawRows) {
+        const normalized = normalizeEvaluationRow(row, path.replace(/^\//, ''), subscriptionById);
+        if (!normalized || !normalized.answers.length) continue;
+        merged.set(normalized.wg_submission_key, normalized);
+      }
+      if (rawRows.length < 250) break;
     }
-  }
-
-  for (const sub of subscriptionRows) {
-    const extra = sub.extra_fields && typeof sub.extra_fields === 'object'
-      ? sub.extra_fields as Record<string, unknown>
-      : null;
-    if (!extra) continue;
-    const answers = questionnaireLikeExtraFields(extra);
-    if (!answers.length) continue;
-    const subId = pickString(sub.id) || 'unknown';
-    const normalized = normalizeEvaluationRow(
-      { ...sub, answers, submitted_at: sub.watched_true_set_at || sub.watch_end || sub.created_at },
-      'subscription_extra_fields',
-      subscriptionById,
-    );
-    if (!normalized) continue;
-    normalized.wg_submission_key = `subscription_extra_fields:${subId}`;
-    normalized.answers = answers;
-    merged.set(normalized.wg_submission_key, normalized);
-    if (!sources.includes('subscription_extra_fields')) sources.push('subscription_extra_fields');
   }
 
   return { rows: [...merged.values()], sources };
@@ -263,8 +240,8 @@ function subscriptionShowed(sub: Record<string, unknown>): boolean {
   return watchSecondsFromSubscription(sub) >= HALF_WATCH_SECONDS;
 }
 
-/** Import questionnaire + attendance rows from cached dashboard subscriptions (no WG API). */
-export function extractRowsFromCachedSubscriptions(
+/** Questionnaire answers only from cached subscriptions (no attendance bulk import). */
+export function extractQuestionnaireRowsFromCachedSubscriptions(
   subscriptionRows: Array<Record<string, unknown>>,
 ): NormalizedWgQuestionnaireRow[] {
   const subscriptionById = new Map<string, Record<string, unknown>>();
@@ -274,52 +251,34 @@ export function extractRowsFromCachedSubscriptions(
   }
 
   const merged = new Map<string, NormalizedWgQuestionnaireRow>();
-
   for (const sub of subscriptionRows) {
     const extra = sub.extra_fields && typeof sub.extra_fields === 'object'
       ? sub.extra_fields as Record<string, unknown>
       : null;
-    if (extra) {
-      const answers = questionnaireLikeExtraFields(extra);
-      if (answers.length) {
-        const subId = pickString(sub.id) || 'unknown';
-        const normalized = normalizeEvaluationRow(
-          { ...sub, answers, submitted_at: sub.watched_true_set_at || sub.watch_end || sub.created_at },
-          'subscription_extra_fields',
-          subscriptionById,
-        );
-        if (!normalized) continue;
-        normalized.wg_submission_key = `subscription_extra_fields:${subId}`;
-        normalized.answers = answers;
-        normalized.watched = sub.watched === true;
-        normalized.watch_duration_seconds = watchSecondsFromSubscription(sub);
-        merged.set(normalized.wg_submission_key, normalized);
-      }
-    }
-  }
-
-  for (const sub of subscriptionRows) {
+    if (!extra) continue;
+    const answers = questionnaireLikeExtraFields(extra);
+    if (!answers.length) continue;
     const subId = pickString(sub.id) || 'unknown';
-    const questionnaireKey = `subscription_extra_fields:${subId}`;
-    if (merged.has(questionnaireKey)) continue;
-    if (!subscriptionShowed(sub)) continue;
-    const email = normalizeEmail(sub.email);
-    if (!email) continue;
-
     const normalized = normalizeEvaluationRow(
-      { ...sub, submitted_at: sub.watched_true_set_at || sub.watch_end || sub.created_at },
-      'attendance_snapshot',
+      { ...sub, answers, submitted_at: sub.watched_true_set_at || sub.watch_end || sub.created_at },
+      'subscription_extra_fields',
       subscriptionById,
     );
     if (!normalized) continue;
-    normalized.wg_submission_key = `attendance_snapshot:${subId}`;
-    normalized.answers = [];
+    normalized.wg_submission_key = `subscription_extra_fields:${subId}`;
+    normalized.answers = answers;
     normalized.watched = sub.watched === true;
     normalized.watch_duration_seconds = watchSecondsFromSubscription(sub);
     merged.set(normalized.wg_submission_key, normalized);
   }
-
   return [...merged.values()];
+}
+
+/** @deprecated Prefer extractQuestionnaireRowsFromCachedSubscriptions (questionnaires only). */
+export function extractRowsFromCachedSubscriptions(
+  subscriptionRows: Array<Record<string, unknown>>,
+): NormalizedWgQuestionnaireRow[] {
+  return extractQuestionnaireRowsFromCachedSubscriptions(subscriptionRows);
 }
 
 export function hiringStageForQuestionnaireRow(row: NormalizedWgQuestionnaireRow): string {
@@ -391,6 +350,17 @@ export async function buildQuestionnaireMatchContext(
       label: pickString(profile?.full_name, profile?.email),
     });
   }
+  for (const profile of profileRows || []) {
+    const userId = String(profile.user_id || '');
+    if (!userId) continue;
+    const label = pickString(profile.full_name, profile.email);
+    for (const tag of suggestedBookingLinkTags(profile.email, profile.full_name)) {
+      const key = tag.toLowerCase();
+      if (!settingsByTag.has(key)) settingsByTag.set(key, { user_id: userId, label });
+    }
+    const slug = bookingLinkFirstNameSlug(profile.full_name, profile.email);
+    if (slug && !settingsByTag.has(slug)) settingsByTag.set(slug, { user_id: userId, label });
+  }
 
   return {
     pipelineByEmail,
@@ -441,11 +411,20 @@ export function matchQuestionnaireRowWithContext(
   }
 
   if (!bookedByUserId && recruiterCustomField) {
-    const settings = context.settingsByTag.get(recruiterCustomField.toLowerCase());
-    if (settings) {
+    const tagKeys = new Set<string>([
+      recruiterCustomField.toLowerCase(),
+      recruiterCustomField.toLowerCase().replace(/^(cooper|rms)[_\-]+/i, ''),
+    ]);
+    const parsed = parseBookingLinkTag(recruiterCustomField);
+    if (parsed) tagKeys.add(parsed.tag.toLowerCase());
+    for (const key of tagKeys) {
+      if (!key) continue;
+      const settings = context.settingsByTag.get(key);
+      if (!settings) continue;
       bookedByUserId = settings.user_id;
       bookedByLabel = settings.label;
-      matchMethod = matchMethod ? `${matchMethod}+custom_field` : 'custom_field';
+      matchMethod = matchMethod ? `${matchMethod}+booking_tag` : 'booking_tag';
+      break;
     }
   }
 
@@ -491,6 +470,71 @@ export function buildQuestionnaireUpsertPayload(
     synced_at: input.syncedAt,
     updated_at: input.syncedAt,
   };
+}
+
+const QUESTIONNAIRE_UPSERT_CHUNK = 80;
+
+function isMissingQuestionnaireTableError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  if (error.code === 'PGRST205') return true;
+  const msg = String(error.message || '');
+  return /webinar_geek_questionnaire_submissions/i.test(msg) && /schema cache|does not exist/i.test(msg);
+}
+
+export async function upsertQuestionnaireRowsBatched(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  rows: NormalizedWgQuestionnaireRow[],
+  input: { sourceType: string; syncedAt: string; match?: boolean },
+): Promise<{ upserted: number; matchedPipeline: number }> {
+  const withAnswers = rows.filter((row) => row.answers.length > 0);
+  if (!withAnswers.length) return { upserted: 0, matchedPipeline: 0 };
+
+  const emptyContext: QuestionnaireMatchContext = {
+    pipelineByEmail: new Map(),
+    journeyByEmail: new Map(),
+    bookingByEmailBroadcast: new Map(),
+    bookingByEmail: new Map(),
+    settingsByTag: new Map(),
+  };
+  const matchContext = input.match === false
+    ? emptyContext
+    : await buildQuestionnaireMatchContext(admin);
+
+  const payloads = withAnswers.map((row) => {
+    const match = input.match === false
+      ? {
+        pipeline_candidate_id: null,
+        journey_candidate_id: null,
+        booked_by_user_id: null,
+        booked_by_label: null,
+        match_method: null,
+        recruiter_custom_field: row.recruiter_custom_field,
+      }
+      : matchQuestionnaireRowWithContext(row, matchContext);
+    return buildQuestionnaireUpsertPayload(row, match, input);
+  });
+
+  let upserted = 0;
+  let matchedPipeline = 0;
+  for (let i = 0; i < payloads.length; i += QUESTIONNAIRE_UPSERT_CHUNK) {
+    const chunk = payloads.slice(i, i + QUESTIONNAIRE_UPSERT_CHUNK);
+    matchedPipeline += chunk.filter((row) => row.pipeline_candidate_id).length;
+    const { error } = await admin
+      .from('webinar_geek_questionnaire_submissions')
+      .upsert(chunk, { onConflict: 'wg_submission_key' });
+    if (error) {
+      if (isMissingQuestionnaireTableError(error)) {
+        throw new Error(
+          'Database table webinar_geek_questionnaire_submissions is missing. Run supabase/sql/paste_webinar_geek_questionnaires.sql in the Supabase SQL editor first.',
+        );
+      }
+      throw new Error(error.message);
+    }
+    upserted += chunk.length;
+  }
+
+  return { upserted, matchedPipeline };
 }
 
 export type QuestionnaireMatchResult = {

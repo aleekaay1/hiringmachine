@@ -1,15 +1,13 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown, ClipboardList, Database, RefreshCw, Search } from 'lucide-react';
+import { ChevronDown, ClipboardList, RefreshCw, Search } from 'lucide-react';
 import { Button } from '../components/UI';
 import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
 import { getCurrentUserProfile, type AppRole } from '../services/accessControl';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import {
-  backfillWebinarQuestionnairesFromCache,
   defaultQuestionnaireDateFrom,
   displayNameFromSubmission,
-  fetchDashboardCacheMetaForQuestionnaires,
   fetchLatestQuestionnaireSyncRun,
   fetchWebinarQuestionnaireDetail,
   fetchWebinarQuestionnairePage,
@@ -25,7 +23,6 @@ import {
 } from '../services/webinarGeekQuestionnaires';
 
 const SEARCH_DEBOUNCE_MS = 300;
-const BACKFILL_SESSION_KEY = 'wg_questionnaire_backfill_attempted';
 
 function canAccessWebinarQuestionnaires(role: AppRole | null): boolean {
   return role === 'admin' || role === 'leadership' || role === 'hr' || role === 'webinar' || role === 'recruiter';
@@ -51,7 +48,6 @@ const WebinarQuestionnairesPage: React.FC = () => {
   const [loading, setLoading] = React.useState(true);
   const [loadingMore, setLoadingMore] = React.useState(false);
   const [syncing, setSyncing] = React.useState(false);
-  const [backfilling, setBackfilling] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [message, setMessage] = React.useState<string | null>(null);
   const [rows, setRows] = React.useState<WebinarQuestionnaireSubmission[]>([]);
@@ -63,14 +59,13 @@ const WebinarQuestionnairesPage: React.FC = () => {
   const [dateTo, setDateTo] = React.useState(todayYmd());
   const [webinarTitle, setWebinarTitle] = React.useState('all');
   const [sourceType, setSourceType] = React.useState('all');
-  const [viewFilter, setViewFilter] = React.useState<QuestionnaireViewFilter>('all');
+  const [viewFilter, setViewFilter] = React.useState<QuestionnaireViewFilter>('with_answers');
   const [webinarTitles, setWebinarTitles] = React.useState<string[]>([]);
   const [expandedId, setExpandedId] = React.useState<string | null>(null);
   const [expandedDetail, setExpandedDetail] = React.useState<WebinarQuestionnaireSubmission | null>(null);
   const [detailLoadingId, setDetailLoadingId] = React.useState<string | null>(null);
   const [summary, setSummary] = React.useState({ total: 0, withAnswers: 0, attendedOnly: 0, matchedPipeline: 0 });
   const [lastSync, setLastSync] = React.useState<Awaited<ReturnType<typeof fetchLatestQuestionnaireSyncRun>>>(null);
-  const [cacheMeta, setCacheMeta] = React.useState<Awaited<ReturnType<typeof fetchDashboardCacheMetaForQuestionnaires>>>(null);
 
   React.useEffect(() => {
     if (!isAuthenticated) return;
@@ -81,12 +76,6 @@ const WebinarQuestionnairesPage: React.FC = () => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [search]);
-
-  React.useEffect(() => {
-    if (!isAuthenticated || !canAccessWebinarQuestionnaires(role)) return;
-    void fetchDashboardCacheMetaForQuestionnaires().then(setCacheMeta);
-    void fetchWebinarQuestionnaireWebinarTitles().then(setWebinarTitles);
-  }, [isAuthenticated, role]);
 
   const loadPage = React.useCallback(async (mode: 'reset' | 'more' = 'reset') => {
     if (mode === 'more') setLoadingMore(true);
@@ -131,55 +120,10 @@ const WebinarQuestionnairesPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, role, debouncedSearch, dateFrom, dateTo, webinarTitle, sourceType, viewFilter]);
 
-  const tryAutoBackfill = React.useCallback(async () => {
-    if (sessionStorage.getItem(BACKFILL_SESSION_KEY)) return;
-    if (!cacheMeta?.subscriptionCount) return;
-    sessionStorage.setItem(BACKFILL_SESSION_KEY, '1');
-    setBackfilling(true);
-    try {
-      const result = await backfillWebinarQuestionnairesFromCache();
-      if (result.ok && result.data.upserted_count > 0) {
-        setMessage(
-          `Imported ${result.data.upserted_count} row(s) from cached attendance data`
-          + (result.data.with_questionnaire_count ? ` (${result.data.with_questionnaire_count} with questionnaire answers)` : ''),
-        );
-        await loadPage('reset');
-        void fetchWebinarQuestionnaireWebinarTitles().then(setWebinarTitles);
-      }
-    } catch {
-      // silent on auto-backfill
-    } finally {
-      setBackfilling(false);
-    }
-  }, [cacheMeta?.subscriptionCount, loadPage]);
-
   React.useEffect(() => {
     if (!isAuthenticated || !canAccessWebinarQuestionnaires(role)) return;
-    if (loading || backfilling) return;
-    if (summary.total > 0) return;
-    void tryAutoBackfill();
-  }, [isAuthenticated, role, loading, backfilling, summary.total, tryAutoBackfill]);
-
-  const handleBackfill = async () => {
-    setBackfilling(true);
-    setError(null);
-    setMessage(null);
-    try {
-      const result = await backfillWebinarQuestionnairesFromCache();
-      if (!result.ok) throw new Error(result.error);
-      setMessage(
-        `Imported ${result.data.upserted_count} row(s) from cached WebinarGeek attendance`
-        + (result.data.with_questionnaire_count ? ` · ${result.data.with_questionnaire_count} with questionnaire` : '')
-        + (result.data.cache_fetched_at ? ` · cache from ${formatDateTimeCanadaEastern(result.data.cache_fetched_at)}` : ''),
-      );
-      await loadPage('reset');
-      void fetchWebinarQuestionnaireWebinarTitles().then(setWebinarTitles);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBackfilling(false);
-    }
-  };
+    void fetchWebinarQuestionnaireWebinarTitles().then(setWebinarTitles);
+  }, [isAuthenticated, role]);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -189,7 +133,8 @@ const WebinarQuestionnairesPage: React.FC = () => {
       const result = await syncWebinarGeekQuestionnaires();
       if (!result.ok) throw new Error(result.error);
       setMessage(
-        `Synced ${result.data.upserted_count} submission(s) from WebinarGeek API`
+        result.data.message
+        || `Synced ${result.data.upserted_count} questionnaire submission(s) from WebinarGeek`
         + (result.data.api_sources.length ? ` (${result.data.api_sources.join(', ')})` : ''),
       );
       await loadPage('reset');
@@ -233,7 +178,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
     );
   }
 
-  const busy = loading || syncing || backfilling;
+  const busy = loading || syncing;
 
   return (
     <div className="mx-auto max-w-[1400px] space-y-4 p-4 md:p-8">
@@ -246,19 +191,12 @@ const WebinarQuestionnairesPage: React.FC = () => {
           </p>
           <h1 className="text-2xl font-bold text-[#0B1B34] flex items-center gap-2">
             <ClipboardList size={24} className="text-[#005EB8]" />
-            Webinar questionnaires & attendance
+            Webinar questionnaires
           </h1>
           <p className="mt-1 text-sm text-[#5c7594] max-w-2xl">
-            Historical responses and attendees from your cached WebinarGeek dashboard data (no API calls).
-            Use <strong>Sync from WebinarGeek API</strong> only when you need the latest evaluation endpoints.
+            Post-webinar evaluation forms from WebinarGeek. Click <strong>Sync questionnaires</strong> to pull evaluation responses (a few API calls, saved in bulk).
+            Pipeline matching runs during sync; attendance data stays on the Webinar Geek dashboard.
           </p>
-          {cacheMeta && (
-            <p className="mt-1 text-[11px] text-[#8aa3c0]">
-              Attendance cache: {cacheMeta.subscriptionCount.toLocaleString()} subscriptions
-              {cacheMeta.fetchedAt ? ` · updated ${formatDateTimeCanadaEastern(cacheMeta.fetchedAt)}` : ''}
-              {cacheMeta.fetchLabel ? ` · ${cacheMeta.fetchLabel}` : ''}
-            </p>
-          )}
           {lastSync && (
             <p className="mt-1 text-[11px] text-[#8aa3c0]">
               Last import {formatDateTimeCanadaEastern(lastSync.synced_at)}
@@ -272,13 +210,9 @@ const WebinarQuestionnairesPage: React.FC = () => {
             <RefreshCw size={16} className={loading ? 'animate-spin mr-1.5' : 'mr-1.5'} />
             Refresh
           </Button>
-          <Button variant="outline" onClick={() => void handleBackfill()} disabled={busy}>
-            <Database size={16} className={backfilling ? 'animate-spin mr-1.5' : 'mr-1.5'} />
-            {backfilling ? 'Importing…' : 'Import from cache'}
-          </Button>
           <Button onClick={() => void handleSync()} disabled={busy}>
             <RefreshCw size={16} className={syncing ? 'animate-spin mr-1.5' : 'mr-1.5'} />
-            {syncing ? 'Syncing API…' : 'Sync from WebinarGeek API'}
+            {syncing ? 'Syncing…' : 'Sync questionnaires'}
           </Button>
         </div>
       </div>
@@ -483,8 +417,8 @@ const WebinarQuestionnairesPage: React.FC = () => {
             {!loading && rows.length === 0 && (
               <tr>
                 <td colSpan={8} className="px-4 py-10 text-center text-sm text-[#6f7b8d]">
-                  No rows in this range. Click <strong>Import from cache</strong> to load historical attendance and questionnaires
-                  from your WebinarGeek dashboard snapshot.
+                  No questionnaire submissions in this date range. Run <strong>Sync questionnaires</strong> after the database migration is applied.
+                  If sync says the table is missing, run <code className="text-xs">paste_webinar_geek_questionnaires.sql</code> in Supabase SQL.
                 </td>
               </tr>
             )}

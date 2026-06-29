@@ -73,6 +73,7 @@ export type WebinarQuestionnaireSyncResult = {
   cache_fetched_at?: string | null;
   cache_label?: string | null;
   subscription_count?: number;
+  message?: string;
 };
 
 export type WebinarHiringStage =
@@ -153,6 +154,7 @@ async function postQuestionnaireMode(
       cache_fetched_at: json.cache_fetched_at ? String(json.cache_fetched_at) : null,
       cache_label: json.cache_label ? String(json.cache_label) : null,
       subscription_count: Number(json.subscription_count || 0) || undefined,
+      message: json.message ? String(json.message) : undefined,
     },
   };
 }
@@ -419,9 +421,7 @@ export function resolveHiringStage(input: {
 }
 
 export function defaultQuestionnaireDateFrom(): string {
-  const d = new Date();
-  d.setDate(d.getDate() - 90);
-  return d.toISOString().slice(0, 10);
+  return '2026-04-01';
 }
 
 export function todayYmd(): string {
