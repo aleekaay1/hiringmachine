@@ -27,7 +27,7 @@ import {
   stringifySupabaseError,
   getPipelineUserCallSettings,
   isPipelinePhoneInputClean,
-  listPipelineCallRecords,
+  listPipelineCallRecordsForCandidates,
   listPipelineManualCandidates,
   listPipelineResumesForCandidates,
   logPipelineCallAction,
@@ -308,25 +308,15 @@ const PipelineCallWorkspace: React.FC = () => {
       const liveRegistrantsPromise = loadLiveSessionRegistrantsForMatching().catch(() => [] as LiveSessionRegistrantRow[]);
 
       const candidateIdSet = new Set(candidateIds);
-      const [resumeRows, callRecordRowsRaw, todayRows, webinarRows, liveRegRows] = await Promise.all([
+      const [resumeRows, callRecordRowsRaw, webinarRows, liveRegRows] = await Promise.all([
         listPipelineResumesForCandidates(candidateIds),
         uid
-          ? listPipelineCallRecords({ recruiterUserId: uid, limit: 5000 })
-          : listPipelineCallRecords({ candidateIds, limit: 5000 }),
-        uid
-          ? listPipelineCallRecords({
-              recruiterUserId: uid,
-              fromIso: new Date(new Date().setHours(0, 0, 0, 0)).toISOString(),
-              toIso: new Date(new Date().setHours(23, 59, 59, 999)).toISOString(),
-              limit: 5000,
-            })
-          : Promise.resolve([]),
+          ? listPipelineCallRecordsForCandidates(candidateIds, { recruiterUserId: uid })
+          : listPipelineCallRecordsForCandidates(candidateIds),
         webinarRowsPromise,
         liveRegistrantsPromise,
       ]);
-      const callRecordRows = uid
-        ? callRecordRowsRaw.filter((row) => candidateIdSet.has(row.candidate_id))
-        : callRecordRowsRaw;
+      const callRecordRows = callRecordRowsRaw.filter((row) => candidateIdSet.has(row.candidate_id));
       const nextMap = new Map<string, PipelineResume[]>();
       for (const resume of resumeRows) {
         const list = nextMap.get(resume.candidate_id) || [];
@@ -336,7 +326,15 @@ const PipelineCallWorkspace: React.FC = () => {
       setResumesByCandidate(nextMap);
       setRecords(callRecordRows);
       setLiveRegistrants(liveRegRows);
-      setTodaysCallCount(todayRows.length);
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+      const todaysCount = callRecordRows.filter((row) => {
+        const ms = Date.parse(row.disposed_at || row.created_at);
+        return ms >= todayStart.getTime() && ms <= todayEnd.getTime();
+      }).length;
+      setTodaysCallCount(todaysCount);
       const rowsByEmail = webinarRows ? buildWebinarRowsByEmail(webinarRows) : new Map();
       const liveSessionByEmail = buildLiveSessionRowsByEmail(liveRegRows);
       const latest = latestRecordByCandidate(callRecordRows);
@@ -361,7 +359,7 @@ const PipelineCallWorkspace: React.FC = () => {
         setSelectedCandidateId(sortedCandidates[0]?.id ?? null);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(stringifySupabaseError(e));
     } finally {
       setInitialLoading(false);
       setRefreshing(false);
@@ -883,7 +881,7 @@ const PipelineCallWorkspace: React.FC = () => {
       setPhoneInput(String(updated.phone || '').trim());
       setPhoneMsg('Corrected number saved for this candidate.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(stringifySupabaseError(e));
     } finally {
       setSavingPhone(false);
     }

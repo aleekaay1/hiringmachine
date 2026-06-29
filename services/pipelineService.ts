@@ -9,6 +9,12 @@ let pipelineCallRecordsPrimaryWriteDisabled = false;
 
 /** PostgREST GET URLs break when `.in()` lists hundreds of UUIDs. */
 const SUPABASE_IN_FILTER_CHUNK = 60;
+/** Matches supabase/config.toml max_rows — requests above this return HTTP 400. */
+const SUPABASE_MAX_ROWS = 1000;
+
+function capSupabaseLimit(limit?: number): number {
+  return Math.min(Math.max(limit ?? SUPABASE_MAX_ROWS, 1), SUPABASE_MAX_ROWS);
+}
 
 function chunkArray<T>(items: T[], size: number): T[][] {
   if (!items.length) return [];
@@ -979,7 +985,7 @@ async function listPipelineCandidatesUnscoped(): Promise<PipelineCandidate[]> {
     .from('pipeline_candidates')
     .select(PIPELINE_CANDIDATE_SELECT)
     .order('updated_at', { ascending: false })
-    .limit(2000);
+    .limit(capSupabaseLimit(1000));
   if (error) throw error;
   return (data || []) as PipelineCandidate[];
 }
@@ -1096,7 +1102,7 @@ export async function listPipelineCandidates(): Promise<PipelineCandidate[]> {
     .from('pipeline_candidates')
     .select(PIPELINE_CANDIDATE_SELECT)
     .order('updated_at', { ascending: false })
-    .limit(2000);
+    .limit(capSupabaseLimit(1000));
   query = applyPipelineUploaderScope(query, scope);
   const { data, error } = await query;
   if (error) throw error;
@@ -1132,29 +1138,21 @@ export async function listPipelineFreshJourneyCandidates(): Promise<PipelineCand
   });
   if (!queue.length) return [];
 
-  const queueIds = new Set(queue.map((c) => c.id));
-  const { data: resumes, error } = await supabase
-    .from('pipeline_resumes')
-    .select('candidate_id,resume_source')
-    .in('candidate_id', [...queueIds])
-    .limit(4000);
-
-  if (error) {
-    // Backward compatibility before resume_source migration.
-    const { data: legacyResumes, error: legacyErr } = await supabase
+  const queueIds = [...queue.map((c) => c.id)];
+  const resumeRows = await mapInChunks(queueIds, SUPABASE_IN_FILTER_CHUNK, async (chunk) => {
+    const { data, error } = await supabase
       .from('pipeline_resumes')
-      .select('candidate_id')
-      .in('candidate_id', [...queueIds])
-      .limit(4000);
-    if (legacyErr) throw legacyErr;
-    const ids = new Set((legacyResumes || []).map((r) => String((r as { candidate_id?: string }).candidate_id || '')).filter(Boolean));
-    return queue.filter((c) => ids.has(c.id));
-  }
+      .select('candidate_id,resume_source')
+      .in('candidate_id', chunk)
+      .limit(capSupabaseLimit());
+    if (error) throw error;
+    return (data || []) as Array<{ candidate_id?: string; resume_source?: string }>;
+  });
 
   const candidateIdsWithJourneyResume = new Set(
-    (resumes || [])
-      .filter((r) => String((r as { resume_source?: string }).resume_source || 'journey_upload') === 'journey_upload')
-      .map((r) => String((r as { candidate_id?: string }).candidate_id || ''))
+    resumeRows
+      .filter((r) => String(r.resume_source || 'journey_upload') === 'journey_upload')
+      .map((r) => String(r.candidate_id || ''))
       .filter(Boolean),
   );
   const candidatesWithJourneyResume = queue.filter((c) => candidateIdsWithJourneyResume.has(c.id));
@@ -1163,7 +1161,7 @@ export async function listPipelineFreshJourneyCandidates(): Promise<PipelineCand
   const ids = candidatesWithJourneyResume.map((c) => c.id);
   const loadTouchedIds = async (table: string): Promise<Set<string>> => {
     const rows = await mapInChunks(ids, SUPABASE_IN_FILTER_CHUNK, async (chunk) => {
-      const { data, error } = await supabase.from(table).select('candidate_id').in('candidate_id', chunk).limit(5000);
+      const { data, error } = await supabase.from(table).select('candidate_id').in('candidate_id', chunk).limit(capSupabaseLimit());
       if (error) throw error;
       return (data || []) as Array<{ candidate_id?: string }>;
     });
@@ -1524,7 +1522,7 @@ export async function syncJourneyResumesIntoPipeline(): Promise<{ importedCandid
     .from('candidates')
     .select('id, first_name, last_name, email, phone, status, admin_data, applicant_questionnaire')
     .order('timestamp', { ascending: false })
-    .limit(2000);
+    .limit(capSupabaseLimit(1000));
   if (sourceError) throw sourceError;
   const journeyRows = (sourceRows || []).filter((row) => {
     const status = String((row as { status?: string }).status || '').trim().toLowerCase();
@@ -1580,7 +1578,7 @@ export async function listSourceCandidateIdsInPipeline(): Promise<Set<string>> {
     .from('pipeline_candidates')
     .select('metadata,source')
     .eq('source', 'journey_upload')
-    .limit(5000);
+    .limit(capSupabaseLimit());
   if (error) throw error;
   const ids = new Set<string>();
   for (const row of data || []) {
@@ -2552,21 +2550,8 @@ export async function listPipelineCallRecords(input?: {
   toIso?: string | null;
   limit?: number;
 }): Promise<PipelineCallRecord[]> {
-  const limit = input?.limit ?? 1500;
+  const limit = capSupabaseLimit(input?.limit);
   const candidateIds = uniqueNonEmptyStrings(input?.candidateIds || []);
-  const recruiterUserId = input?.recruiterUserId || null;
-
-  // Huge IN lists blow URL limits (400). Recruiter scope is enough for most pages.
-  if (recruiterUserId && candidateIds.length > SUPABASE_IN_FILTER_CHUNK) {
-    const rows = await listPipelineCallRecordsQuery({
-      ...input,
-      candidateIds: undefined,
-      recruiterUserId,
-      limit,
-    });
-    const allowed = new Set(candidateIds);
-    return rows.filter((row) => allowed.has(row.candidate_id)).slice(0, limit);
-  }
 
   if (candidateIds.length <= SUPABASE_IN_FILTER_CHUNK) {
     return listPipelineCallRecordsQuery({ ...input, candidateIds, limit });
@@ -2588,14 +2573,45 @@ export async function listPipelineCallRecords(input?: {
     .slice(0, limit);
 }
 
+/** Load disposition history for a recruiter's assigned leads (chunked; safe for 500+ candidates). */
+export async function listPipelineCallRecordsForCandidates(
+  candidateIds: string[],
+  options?: {
+    recruiterUserId?: string | null;
+    fromIso?: string | null;
+    toIso?: string | null;
+  },
+): Promise<PipelineCallRecord[]> {
+  const ids = uniqueNonEmptyStrings(candidateIds);
+  if (!ids.length) return [];
+
+  const mergedById = new Map<string, PipelineCallRecord>();
+  for (const chunk of chunkArray(ids, SUPABASE_IN_FILTER_CHUNK)) {
+    const rows = await listPipelineCallRecordsQuery({
+      candidateIds: chunk,
+      recruiterUserId: options?.recruiterUserId ?? null,
+      fromIso: options?.fromIso ?? null,
+      toIso: options?.toIso ?? null,
+      limit: SUPABASE_MAX_ROWS,
+      primaryOnly: true,
+    });
+    for (const row of rows) mergedById.set(row.id, row);
+  }
+
+  return [...mergedById.values()].sort(
+    (a, b) => new Date(b.disposed_at).getTime() - new Date(a.disposed_at).getTime(),
+  );
+}
+
 async function listPipelineCallRecordsQuery(input: {
   candidateIds?: string[];
   recruiterUserId?: string | null;
   fromIso?: string | null;
   toIso?: string | null;
   limit: number;
+  primaryOnly?: boolean;
 }): Promise<PipelineCallRecord[]> {
-  const limit = input.limit;
+  const limit = capSupabaseLimit(input.limit);
   const toIsoString = (value: unknown): string => {
     const str = String(value || '').trim();
     if (!str) return new Date().toISOString();
@@ -2660,6 +2676,12 @@ async function listPipelineCallRecordsQuery(input: {
     // Ignore primary read failure and keep fallback rows only.
   }
 
+  if (input.primaryOnly || primaryRows.length > 0) {
+    return primaryRows
+      .sort((a, b) => new Date(b.disposed_at).getTime() - new Date(a.disposed_at).getTime())
+      .slice(0, limit);
+  }
+
   let fallbackQuery = supabase
     .from('pipeline_call_logs')
     .select('*')
@@ -2713,7 +2735,7 @@ export async function listPipelineResumesForCandidates(candidateIds: string[]): 
       .select('*')
       .in('candidate_id', ids)
       .order('created_at', { ascending: false })
-      .limit(4000);
+      .limit(capSupabaseLimit());
     if (error) throw error;
     return (data || []) as PipelineResume[];
   }
@@ -2724,14 +2746,14 @@ export async function listPipelineResumesForCandidates(candidateIds: string[]): 
       .select('*')
       .in('candidate_id', chunk)
       .order('created_at', { ascending: false })
-      .limit(4000);
+      .limit(capSupabaseLimit());
     if (error) throw error;
     return (data || []) as PipelineResume[];
   });
 
   return rows
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    .slice(0, 4000);
+    .slice(0, SUPABASE_MAX_ROWS);
 }
 
 export async function listPipelineIncomingEmailLogsByCandidates(
@@ -2755,7 +2777,7 @@ export async function listPipelineCallLogs(input?: {
   toIso?: string | null;
   limit?: number;
 }): Promise<PipelineCallLog[]> {
-  const limit = input?.limit ?? 3000;
+  const limit = capSupabaseLimit(input?.limit);
   const candidateIds = uniqueNonEmptyStrings(input?.candidateIds || []);
 
   const runQuery = async (chunk?: string[]) => {

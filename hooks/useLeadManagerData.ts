@@ -7,8 +7,9 @@ import {
   latestRecordByCandidate,
 } from '../services/recruiterLeadPackAnalytics';
 import {
-  listPipelineCallRecords,
+  listPipelineCallRecordsForCandidates,
   listPipelineManualCandidates,
+  stringifySupabaseError,
   type PipelineCandidate,
   type PipelineCallRecord,
 } from '../services/pipelineService';
@@ -73,12 +74,13 @@ export function useLeadManagerData() {
       const rows = await listPipelineManualCandidates();
       const sorted = [...rows].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
       setCandidates(sorted);
+      const candidateIds = sorted.map((row) => row.id);
       const callRows = uid
-          ? await listPipelineCallRecords({ recruiterUserId: uid, limit: 8000 })
-          : [];
+        ? await listPipelineCallRecordsForCandidates(candidateIds, { recruiterUserId: uid })
+        : [];
       setRecords(callRows);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(stringifySupabaseError(e));
     } finally {
       setLoading(false);
       setRefreshing(false);
