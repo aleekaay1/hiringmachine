@@ -25,6 +25,8 @@ export type NormalizedWgQuestionnaireRow = {
   raw_payload: Record<string, unknown>;
   recruiter_custom_field: string | null;
   source: string;
+  watched?: boolean | null;
+  watch_duration_seconds?: number | null;
 };
 
 type WgGetFn = (
@@ -247,6 +249,248 @@ export async function fetchWebinarGeekQuestionnaireRows(
   }
 
   return { rows: [...merged.values()], sources };
+}
+
+const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
+
+function watchSecondsFromSubscription(sub: Record<string, unknown>): number {
+  const sec = Number(sub.watch_duration || 0);
+  return Number.isFinite(sec) && sec > 0 ? sec : 0;
+}
+
+function subscriptionShowed(sub: Record<string, unknown>): boolean {
+  if (sub.watched === true) return true;
+  return watchSecondsFromSubscription(sub) >= HALF_WATCH_SECONDS;
+}
+
+/** Import questionnaire + attendance rows from cached dashboard subscriptions (no WG API). */
+export function extractRowsFromCachedSubscriptions(
+  subscriptionRows: Array<Record<string, unknown>>,
+): NormalizedWgQuestionnaireRow[] {
+  const subscriptionById = new Map<string, Record<string, unknown>>();
+  for (const row of subscriptionRows) {
+    const id = pickString(row.id);
+    if (id) subscriptionById.set(id, row);
+  }
+
+  const merged = new Map<string, NormalizedWgQuestionnaireRow>();
+
+  for (const sub of subscriptionRows) {
+    const extra = sub.extra_fields && typeof sub.extra_fields === 'object'
+      ? sub.extra_fields as Record<string, unknown>
+      : null;
+    if (extra) {
+      const answers = questionnaireLikeExtraFields(extra);
+      if (answers.length) {
+        const subId = pickString(sub.id) || 'unknown';
+        const normalized = normalizeEvaluationRow(
+          { ...sub, answers, submitted_at: sub.watched_true_set_at || sub.watch_end || sub.created_at },
+          'subscription_extra_fields',
+          subscriptionById,
+        );
+        if (!normalized) continue;
+        normalized.wg_submission_key = `subscription_extra_fields:${subId}`;
+        normalized.answers = answers;
+        normalized.watched = sub.watched === true;
+        normalized.watch_duration_seconds = watchSecondsFromSubscription(sub);
+        merged.set(normalized.wg_submission_key, normalized);
+      }
+    }
+  }
+
+  for (const sub of subscriptionRows) {
+    const subId = pickString(sub.id) || 'unknown';
+    const questionnaireKey = `subscription_extra_fields:${subId}`;
+    if (merged.has(questionnaireKey)) continue;
+    if (!subscriptionShowed(sub)) continue;
+    const email = normalizeEmail(sub.email);
+    if (!email) continue;
+
+    const normalized = normalizeEvaluationRow(
+      { ...sub, submitted_at: sub.watched_true_set_at || sub.watch_end || sub.created_at },
+      'attendance_snapshot',
+      subscriptionById,
+    );
+    if (!normalized) continue;
+    normalized.wg_submission_key = `attendance_snapshot:${subId}`;
+    normalized.answers = [];
+    normalized.watched = sub.watched === true;
+    normalized.watch_duration_seconds = watchSecondsFromSubscription(sub);
+    merged.set(normalized.wg_submission_key, normalized);
+  }
+
+  return [...merged.values()];
+}
+
+export function hiringStageForQuestionnaireRow(row: NormalizedWgQuestionnaireRow): string {
+  return row.answers.length > 0 ? 'questionnaire_submitted' : 'attended_only';
+}
+
+export type QuestionnaireMatchContext = {
+  pipelineByEmail: Map<string, string>;
+  journeyByEmail: Map<string, string>;
+  bookingByEmailBroadcast: Map<string, Record<string, unknown>>;
+  bookingByEmail: Map<string, Record<string, unknown>>;
+  settingsByTag: Map<string, { user_id: string; label: string | null }>;
+};
+
+export async function buildQuestionnaireMatchContext(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+): Promise<QuestionnaireMatchContext> {
+  const pipelineByEmail = new Map<string, string>();
+  const journeyByEmail = new Map<string, string>();
+  const bookingByEmailBroadcast = new Map<string, Record<string, unknown>>();
+  const bookingByEmail = new Map<string, Record<string, unknown>>();
+  const settingsByTag = new Map<string, { user_id: string; label: string | null }>();
+
+  const [
+    { data: pipelineRows },
+    { data: journeyRows },
+    { data: bookingRows },
+    { data: settingsRows },
+    { data: profileRows },
+  ] = await Promise.all([
+    admin.from('pipeline_candidates').select('id, email').not('email', 'is', null).limit(8000),
+    admin.from('candidates').select('id, email').not('email', 'is', null).limit(8000),
+    admin.from('webinar_geek_portal_bookings').select('candidate_email, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at').eq('status', 'booked').order('created_at', { ascending: false }).limit(8000),
+    admin.from('pipeline_user_call_settings').select('user_id, webinar_geek_custom_field').not('webinar_geek_custom_field', 'is', null),
+    admin.from('user_profiles').select('user_id, full_name, email'),
+  ]);
+
+  for (const row of pipelineRows || []) {
+    const email = normalizeEmail(row.email);
+    if (!email || pipelineByEmail.has(email)) continue;
+    pipelineByEmail.set(email, String(row.id));
+  }
+  for (const row of journeyRows || []) {
+    const email = normalizeEmail(row.email);
+    if (!email || journeyByEmail.has(email)) continue;
+    journeyByEmail.set(email, String(row.id));
+  }
+  for (const row of bookingRows || []) {
+    const email = normalizeEmail(row.candidate_email);
+    if (!email) continue;
+    if (!bookingByEmail.has(email)) bookingByEmail.set(email, row);
+    const broadcastId = pickString(row.broadcast_id);
+    const key = broadcastId ? `${email}|${broadcastId}` : email;
+    if (!bookingByEmailBroadcast.has(key)) bookingByEmailBroadcast.set(key, row);
+  }
+
+  const profileByUserId = new Map<string, { full_name?: string; email?: string }>();
+  for (const profile of profileRows || []) {
+    profileByUserId.set(String(profile.user_id), profile);
+  }
+  for (const settings of settingsRows || []) {
+    const tag = pickString(settings.webinar_geek_custom_field);
+    const userId = String(settings.user_id || '');
+    if (!tag || !userId) continue;
+    const profile = profileByUserId.get(userId);
+    settingsByTag.set(tag.toLowerCase(), {
+      user_id: userId,
+      label: pickString(profile?.full_name, profile?.email),
+    });
+  }
+
+  return {
+    pipelineByEmail,
+    journeyByEmail,
+    bookingByEmailBroadcast,
+    bookingByEmail,
+    settingsByTag,
+  };
+}
+
+export function matchQuestionnaireRowWithContext(
+  row: NormalizedWgQuestionnaireRow,
+  context: QuestionnaireMatchContext,
+): QuestionnaireMatchResult {
+  const email = normalizeEmail(row.email);
+  let pipelineCandidateId: string | null = null;
+  let journeyCandidateId: string | null = null;
+  let matchMethod: string | null = null;
+
+  if (email) {
+    const pipelineId = context.pipelineByEmail.get(email);
+    if (pipelineId) {
+      pipelineCandidateId = pipelineId;
+      matchMethod = 'pipeline_email';
+    }
+    const journeyId = context.journeyByEmail.get(email);
+    if (journeyId) {
+      journeyCandidateId = journeyId;
+      matchMethod = matchMethod || 'journey_email';
+    }
+  }
+
+  let bookedByUserId: string | null = null;
+  let bookedByLabel: string | null = null;
+  let recruiterCustomField = row.recruiter_custom_field;
+
+  if (email) {
+    const broadcastKey = row.broadcast_id ? `${email}|${row.broadcast_id}` : email;
+    const booking = context.bookingByEmailBroadcast.get(broadcastKey)
+      || context.bookingByEmail.get(email)
+      || null;
+    if (booking) {
+      bookedByUserId = booking.booked_by_user_id ? String(booking.booked_by_user_id) : null;
+      bookedByLabel = pickString(booking.booked_by_label);
+      recruiterCustomField = recruiterCustomField || pickString(booking.custom_field);
+      matchMethod = matchMethod ? `${matchMethod}+portal_booking` : 'portal_booking';
+    }
+  }
+
+  if (!bookedByUserId && recruiterCustomField) {
+    const settings = context.settingsByTag.get(recruiterCustomField.toLowerCase());
+    if (settings) {
+      bookedByUserId = settings.user_id;
+      bookedByLabel = settings.label;
+      matchMethod = matchMethod ? `${matchMethod}+custom_field` : 'custom_field';
+    }
+  }
+
+  return {
+    pipeline_candidate_id: pipelineCandidateId,
+    journey_candidate_id: journeyCandidateId,
+    booked_by_user_id: bookedByUserId,
+    booked_by_label: bookedByLabel,
+    match_method: matchMethod,
+    recruiter_custom_field: recruiterCustomField,
+  };
+}
+
+export function buildQuestionnaireUpsertPayload(
+  row: NormalizedWgQuestionnaireRow,
+  match: QuestionnaireMatchResult,
+  input: { sourceType: string; syncedAt: string },
+): Record<string, unknown> {
+  return {
+    wg_submission_key: row.wg_submission_key,
+    subscription_id: row.subscription_id,
+    webinar_id: row.webinar_id,
+    broadcast_id: row.broadcast_id,
+    webinar_title: row.webinar_title,
+    broadcast_title: row.broadcast_title,
+    email: row.email,
+    first_name: row.first_name,
+    last_name: row.last_name,
+    phone: row.phone,
+    submitted_at: row.submitted_at,
+    answers: row.answers,
+    raw_payload: { ...row.raw_payload, _source: row.source },
+    pipeline_candidate_id: match.pipeline_candidate_id,
+    journey_candidate_id: match.journey_candidate_id,
+    booked_by_user_id: match.booked_by_user_id,
+    booked_by_label: match.booked_by_label,
+    recruiter_custom_field: match.recruiter_custom_field,
+    match_method: match.match_method,
+    hiring_stage: hiringStageForQuestionnaireRow(row),
+    source_type: input.sourceType,
+    watched: row.watched ?? null,
+    watch_duration_seconds: row.watch_duration_seconds ?? null,
+    synced_at: input.syncedAt,
+    updated_at: input.syncedAt,
+  };
 }
 
 export type QuestionnaireMatchResult = {

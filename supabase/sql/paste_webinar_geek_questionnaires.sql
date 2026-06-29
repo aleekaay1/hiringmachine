@@ -113,3 +113,5 @@ for all
 to service_role
 using (true)
 with check (true);
+
+-- Also run 20260630_100000_webinar_geek_questionnaire_attendance.sql for source_type + attendance columns.
