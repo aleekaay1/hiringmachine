@@ -201,7 +201,6 @@ const PipelineCallWorkspace: React.FC = () => {
   const [candidates, setCandidates] = React.useState<PipelineCandidate[]>([]);
   const [resumesByCandidate, setResumesByCandidate] = React.useState<Map<string, PipelineResume[]>>(new Map());
   const [records, setRecords] = React.useState<PipelineCallRecord[]>([]);
-  const [todaysCallCount, setTodaysCallCount] = React.useState(0);
   const [bookedOutcomeByCandidate, setBookedOutcomeByCandidate] = React.useState<CandidateBookedOutcomeMap>(new Map());
   const [liveRegistrants, setLiveRegistrants] = React.useState<LiveSessionRegistrantRow[]>([]);
   const [currentUserId, setCurrentUserId] = React.useState<string | null>(null);
@@ -295,7 +294,6 @@ const PipelineCallWorkspace: React.FC = () => {
         setResumesByCandidate(new Map());
         setRecords([]);
         setSelectedCandidateId(null);
-        setTodaysCallCount(0);
         setBookedOutcomeByCandidate(new Map());
         return;
       }
@@ -326,15 +324,6 @@ const PipelineCallWorkspace: React.FC = () => {
       setResumesByCandidate(nextMap);
       setRecords(callRecordRows);
       setLiveRegistrants(liveRegRows);
-      const todayStart = new Date();
-      todayStart.setHours(0, 0, 0, 0);
-      const todayEnd = new Date();
-      todayEnd.setHours(23, 59, 59, 999);
-      const todaysCount = callRecordRows.filter((row) => {
-        const ms = Date.parse(row.disposed_at || row.created_at);
-        return ms >= todayStart.getTime() && ms <= todayEnd.getTime();
-      }).length;
-      setTodaysCallCount(todaysCount);
       const rowsByEmail = webinarRows ? buildWebinarRowsByEmail(webinarRows) : new Map();
       const liveSessionByEmail = buildLiveSessionRowsByEmail(liveRegRows);
       const latest = latestRecordByCandidate(callRecordRows);
@@ -371,6 +360,21 @@ const PipelineCallWorkspace: React.FC = () => {
   }, [loadWorkspace]);
 
   const latestByCandidate = React.useMemo(() => latestRecordByCandidate(records), [records]);
+
+  /** Today's call KPI — derived from loaded records (no extra query). */
+  const todaysCallCount = React.useMemo(() => {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+    const startMs = todayStart.getTime();
+    const endMs = todayEnd.getTime();
+    return records.filter((row) => {
+      if (currentUserId && row.recruiter_user_id !== currentUserId) return false;
+      const ms = Date.parse(row.disposed_at || row.created_at);
+      return ms >= startMs && ms <= endMs;
+    }).length;
+  }, [records, currentUserId]);
 
   const callbackAtByCandidate = React.useMemo(() => {
     const map = new Map<string, string>();
@@ -1027,12 +1031,6 @@ const PipelineCallWorkspace: React.FC = () => {
           next.delete(currentCandidate.id);
           return next;
         });
-      }
-      const alreadyTracked = records.some((row) => row.id === latestSaved.id);
-      const sameRecruiter = !currentUserId || latestSaved.recruiter_user_id === currentUserId;
-      const disposedToday = new Date(latestSaved.disposed_at).toDateString() === new Date().toDateString();
-      if (!alreadyTracked && sameRecruiter && disposedToday) {
-        setTodaysCallCount((prev) => prev + 1);
       }
       if (AUTO_ADVANCE) {
         goToNextLead();

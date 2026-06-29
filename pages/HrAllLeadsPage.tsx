@@ -55,6 +55,8 @@ function buildGroups(leads: HrAllLeadRow[]): GroupedLeads[] {
     }));
 }
 
+const SEARCH_DEBOUNCE_MS = 300;
+
 function dispositionClass(disposition: string | null): string {
   const d = String(disposition || '').toLowerCase();
   if (!d) return 'bg-slate-100 text-slate-600';
@@ -71,6 +73,7 @@ const HrAllLeadsPage: React.FC = () => {
   const [teams, setTeams] = React.useState<string[]>([]);
   const [batches, setBatches] = React.useState<PipelineLeadBatch[]>([]);
   const [search, setSearch] = React.useState('');
+  const [searchDebounced, setSearchDebounced] = React.useState('');
   const [teamFilter, setTeamFilter] = React.useState('');
   const [batchFilter, setBatchFilter] = React.useState('');
   const [statusFilter, setStatusFilter] = React.useState<'all' | 'pool' | 'assigned'>('all');
@@ -85,6 +88,11 @@ const HrAllLeadsPage: React.FC = () => {
     });
   }, []);
 
+  React.useEffect(() => {
+    const timer = window.setTimeout(() => setSearchDebounced(search), SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
   const loadData = React.useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -96,7 +104,7 @@ const HrAllLeadsPage: React.FC = () => {
           status: statusFilter,
           dateFrom: dateFrom || undefined,
           dateTo: dateTo || undefined,
-          search: search.trim() || undefined,
+          search: searchDebounced.trim() || undefined,
         }),
         fetchHrLeadBatches(50),
       ]);
@@ -113,7 +121,7 @@ const HrAllLeadsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [batchFilter, teamFilter, statusFilter, dateFrom, dateTo, search]);
+  }, [batchFilter, teamFilter, statusFilter, dateFrom, dateTo, searchDebounced]);
 
   React.useEffect(() => {
     if (!allowed) return;
@@ -161,6 +169,9 @@ const HrAllLeadsPage: React.FC = () => {
                   placeholder="Name, email, phone"
                   className="w-full rounded-xl border border-[#c8ddf4] py-2 pl-9 pr-3 text-sm"
                 />
+                {search.trim() !== searchDebounced.trim() && (
+                  <p className="mt-1 text-[10px] text-[#6b84a8]">Searching…</p>
+                )}
               </div>
             </label>
             <label className="text-xs font-medium text-[#365274]">

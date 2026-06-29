@@ -82,6 +82,7 @@ const PipelineEmailWorkspace: React.FC = () => {
   const [composeView, setComposeView] = React.useState<ComposeView>('write');
   const [sending, setSending] = React.useState(false);
   const [syncingInbox, setSyncingInbox] = React.useState(false);
+  const [lastInboxSyncAt, setLastInboxSyncAt] = React.useState<string | null>(null);
   const [message, setMessage] = React.useState<string | null>(null);
   const [inReplyTo, setInReplyTo] = React.useState<string | null>(null);
   const [references, setReferences] = React.useState<string | null>(null);
@@ -154,6 +155,7 @@ const PipelineEmailWorkspace: React.FC = () => {
           );
           const remappedNote = result.remapped ? `, ${result.remapped} remapped` : '';
           setMessage(`Inbox synced: ${result.synced} scanned, ${result.mapped} mapped${remappedNote}.`);
+          setLastInboxSyncAt(new Date().toISOString());
         } catch (syncErr) {
           setError(syncErr instanceof Error ? syncErr.message : String(syncErr));
         } finally {
@@ -191,10 +193,9 @@ const PipelineEmailWorkspace: React.FC = () => {
   React.useEffect(() => {
     const candidateId = searchParams.get('candidateId') || searchParams.get('candidate') || '';
     void loadWorkspace({
-      syncInbox: true,
       candidateId: candidateId.trim() || undefined,
     });
-    // Mount-only inbox sync + candidate list load.
+    // Mount-only candidate list load; inbox sync is manual via Sync inbox.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -531,7 +532,16 @@ const PipelineEmailWorkspace: React.FC = () => {
         >
           <section className={`rounded-2xl border p-3 space-y-2 ${tone.glassPanel}`} data-tour="email-inbox">
             <div className="flex items-center justify-between gap-2">
-              <p className={`text-xs font-semibold ${tone.panelTitle}`}>Inbox ({filteredInbox.length})</p>
+              <div>
+                <p className={`text-xs font-semibold ${tone.panelTitle}`}>Inbox ({filteredInbox.length})</p>
+                {lastInboxSyncAt ? (
+                  <p className={`text-[10px] ${tone.panelMuted}`}>
+                    Last synced {formatDateTimeCanadaEastern(lastInboxSyncAt)}
+                  </p>
+                ) : (
+                  <p className={`text-[10px] ${tone.panelMuted}`}>Shows saved mail — sync to pull new messages</p>
+                )}
+              </div>
               <div className="flex items-center gap-1.5">
                 <Button
                   variant="outline"

@@ -53,20 +53,23 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
   const navigate = useNavigate();
   const [open, setOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
+  const [syncing, setSyncing] = React.useState(false);
   const [notifications, setNotifications] = React.useState<StaffNotification[]>([]);
   const [unread, setUnread] = React.useState(0);
+  const [lastFetchedAt, setLastFetchedAt] = React.useState<string | null>(null);
   const panelRef = React.useRef<HTMLDivElement>(null);
 
   const visible = shouldShowStaffNotificationBell(userId, roleResolved);
   const canFetch = visible;
 
-  const refresh = React.useCallback(async (sync = false) => {
+  const refreshList = React.useCallback(async () => {
     if (!canFetch) return;
     setLoading(true);
     try {
-      const result = sync ? await syncStaffNotifications() : await loadStaffNotifications();
+      const result = await loadStaffNotifications();
       setNotifications(result.notifications);
       setUnread(result.unread);
+      setLastFetchedAt(new Date().toISOString());
     } catch {
       // silent — bell stays usable
     } finally {
@@ -74,12 +77,27 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
     }
   }, [canFetch]);
 
+  const syncAlerts = React.useCallback(async () => {
+    if (!canFetch) return;
+    setSyncing(true);
+    try {
+      const result = await syncStaffNotifications();
+      setNotifications(result.notifications);
+      setUnread(result.unread);
+      setLastFetchedAt(new Date().toISOString());
+    } catch {
+      // silent — bell stays usable
+    } finally {
+      setSyncing(false);
+    }
+  }, [canFetch]);
+
   React.useEffect(() => {
     if (!canFetch) return;
-    void refresh(false);
-    const timer = window.setInterval(() => void refresh(true), 5 * 60 * 1000);
+    void refreshList();
+    const timer = window.setInterval(() => void refreshList(), 5 * 60 * 1000);
     return () => window.clearInterval(timer);
-  }, [canFetch, refresh]);
+  }, [canFetch, refreshList]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -117,13 +135,19 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
       ? 'relative inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#b8d4f0] bg-white text-[#0B1B34] shadow-md ring-1 ring-[#d4e4f7] transition hover:border-[#4e9ae8] hover:bg-[#eef6ff]'
       : 'relative inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10 hover:text-white';
 
+  const statusLine = loading
+    ? 'Updating…'
+    : unread
+      ? `${unread} unread`
+      : 'All caught up';
+
   return (
     <div ref={panelRef} className={`relative ${className}`}>
       <button
         type="button"
         onClick={() => {
           setOpen((v) => !v);
-          if (!open) void refresh(true);
+          if (!open) void refreshList();
         }}
         className={buttonClass}
         aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`}
@@ -142,23 +166,35 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
           <div className="flex items-center justify-between border-b border-[#e8f0fa] bg-[#f8fbff] px-4 py-3">
             <div>
               <p className="text-sm font-semibold text-[#0B1B34]">Notifications</p>
-              <p className="text-[11px] text-[#5c7594]">
-                {loading ? 'Updating…' : unread ? `${unread} unread` : 'All caught up'}
-              </p>
+              <p className="text-[11px] text-[#5c7594]">{statusLine}</p>
+              {lastFetchedAt && (
+                <p className="text-[10px] text-[#8aa3c0]">
+                  Updated {formatDateTimeCanadaEastern(lastFetchedAt)}
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                onClick={() => void refresh(true)}
-                className="rounded-lg px-2 py-1 text-[11px] text-[#4e79a9] hover:bg-[#eef6ff]"
+                onClick={() => void refreshList()}
+                disabled={loading || syncing}
+                className="rounded-lg px-2 py-1 text-[11px] text-[#4e79a9] hover:bg-[#eef6ff] disabled:opacity-60"
               >
-                Refresh
+                {loading ? 'Loading…' : 'Refresh'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void syncAlerts()}
+                disabled={loading || syncing}
+                className="rounded-lg px-2 py-1 text-[11px] text-[#4e79a9] hover:bg-[#eef6ff] disabled:opacity-60"
+              >
+                {syncing ? 'Syncing…' : 'Sync alerts'}
               </button>
               {unread > 0 && (
                 <button
                   type="button"
                   onClick={() => {
-                    void markAllStaffNotificationsRead().then(() => refresh(false));
+                    void markAllStaffNotificationsRead().then(() => refreshList());
                   }}
                   className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-[#4e79a9] hover:bg-[#eef6ff]"
                 >

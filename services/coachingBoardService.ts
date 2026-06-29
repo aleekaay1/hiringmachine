@@ -662,6 +662,7 @@ export async function loadFullCoachingHub(
     mode,
     monthFirstYmd: mode === 'month' ? monthFirstYmd : undefined,
     monthWeeks: mode === 'month' ? monthWeeks : undefined,
+    skipLeaderboardFetch: bulk.ok,
   });
 
   return { ...board, emailLogs };
@@ -679,6 +680,8 @@ export async function loadCoachingBoard(
     mode?: CoachingHubViewMode;
     monthFirstYmd?: string;
     monthWeeks?: Array<{ since: string; until: string; label: string }>;
+    /** Edge fullBoard already supplied call activity — skip heavy client leaderboard rebuild. */
+    skipLeaderboardFetch?: boolean;
   },
 ): Promise<{
   summary: CoachingBoardSummary;
@@ -716,12 +719,21 @@ export async function loadCoachingBoard(
     ? Promise.resolve(prefetched.previousForms)
     : listPerformanceCheckIns(previousWeekSince);
 
-  const skipClientCallRecords = false;
+  const skipLeaderboardFetch = Boolean(
+    prefetched?.skipLeaderboardFetch && prefetched?.callActivityByUser,
+  );
+  const leaderboardBundlePromise = skipLeaderboardFetch
+    ? Promise.resolve({ rows: [], recordsByUser: new Map(), liveRegistrantCount: 0 })
+    : loadLeaderboardRowsForWeek(week.since, rangeUntil, {
+        allowSnapshot: false,
+        skipClientCallRecords: Boolean(prefetched?.callActivityByUser),
+      });
+
   const [profiles, invites, forms, leaderboardBundle, previousForms] = await Promise.all([
     listAllUserProfiles(),
     invitesPromise,
     formsPromise,
-    loadLeaderboardRowsForWeek(week.since, rangeUntil, { allowSnapshot: false, skipClientCallRecords }),
+    leaderboardBundlePromise,
     previousFormsPromise,
   ]);
 

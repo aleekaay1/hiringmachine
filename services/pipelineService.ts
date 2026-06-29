@@ -2677,6 +2677,7 @@ async function listPipelineCallRecordsQuery(input: {
   }
 
   if (input.primaryOnly || primaryRows.length > 0) {
+    // Legacy rows may exist only in pipeline_call_logs — fallback runs only when primary is empty.
     return primaryRows
       .sort((a, b) => new Date(b.disposed_at).getTime() - new Date(a.disposed_at).getTime())
       .slice(0, limit);
