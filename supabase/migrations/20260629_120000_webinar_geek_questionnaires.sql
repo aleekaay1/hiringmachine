@@ -1,5 +1,8 @@
 -- WebinarGeek post-webinar evaluation / questionnaire submissions (synced from API).
 
+alter table if exists public.pipeline_user_call_settings
+  add column if not exists webinar_geek_custom_field text;
+
 create table if not exists public.webinar_geek_questionnaire_submissions (
   id uuid primary key default gen_random_uuid(),
   wg_submission_key text not null,
