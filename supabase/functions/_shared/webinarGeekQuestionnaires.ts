@@ -1029,6 +1029,10 @@ function webhookPayloadCandidates(body: Record<string, unknown>): Record<string,
   push(body);
   push(body.data);
   push(body.payload);
+  push(body.entity);
+  if (body.entity && typeof body.entity === 'object') {
+    out.push({ ...(body.entity as Record<string, unknown>), ...body });
+  }
   push(body.evaluation_form_answers);
   push(body.evaluation);
   push(body.evaluation_form_result);
