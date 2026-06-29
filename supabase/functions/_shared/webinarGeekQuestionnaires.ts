@@ -712,7 +712,6 @@ export function extractQuestionnaireRowsFromCachedSubscriptions(
     if (!extra) continue;
     const answers = questionnaireLikeExtraFields(extra);
     if (!answers.length) continue;
-    const subId = pickString(sub.id) || 'unknown';
     const normalized = normalizeEvaluationRow(
       { ...sub, answers, submitted_at: sub.watched_true_set_at || sub.watch_end || sub.created_at },
       'subscription_extra_fields',
