@@ -16,13 +16,16 @@ create table if not exists public.webinar_geek_questionnaire_submissions (
   answers jsonb not null default '[]'::jsonb,
   raw_payload jsonb not null default '{}'::jsonb,
   pipeline_candidate_id uuid references public.pipeline_candidates (id) on delete set null,
-  journey_candidate_id uuid references public.candidates (id) on delete set null,
+  journey_candidate_id text references public.candidates (id) on delete set null,
   booked_by_user_id uuid references auth.users (id) on delete set null,
   booked_by_label text,
   recruiter_custom_field text,
   match_method text,
   hiring_stage text not null default 'questionnaire_submitted'
-    check (hiring_stage in ('questionnaire_submitted', 'ready_for_followup')),
+    check (hiring_stage in ('questionnaire_submitted', 'ready_for_followup', 'attended_only')),
+  source_type text not null default 'wg_sync',
+  watched boolean,
+  watch_duration_seconds int,
   synced_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -40,6 +43,9 @@ create index if not exists webinar_geek_questionnaire_submissions_booked_by_idx
 
 create index if not exists webinar_geek_questionnaire_submissions_pipeline_candidate_idx
   on public.webinar_geek_questionnaire_submissions (pipeline_candidate_id);
+
+create index if not exists webinar_geek_questionnaire_submissions_source_idx
+  on public.webinar_geek_questionnaire_submissions (source_type, submitted_at desc nulls last);
 
 comment on table public.webinar_geek_questionnaire_submissions is
   'Post-webinar evaluation/questionnaire responses from WebinarGeek, matched to pipeline candidates and booking recruiter.';

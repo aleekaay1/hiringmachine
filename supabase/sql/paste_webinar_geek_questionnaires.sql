@@ -1,5 +1,5 @@
--- Paste in Supabase SQL editor if migrations are not applied yet.
--- WebinarGeek post-webinar evaluation / questionnaire submissions (synced from API).
+-- Paste in Supabase SQL editor (run this entire file once).
+-- WebinarGeek questionnaire + attendance submissions.
 
 create table if not exists public.webinar_geek_questionnaire_submissions (
   id uuid primary key default gen_random_uuid(),
@@ -17,18 +17,56 @@ create table if not exists public.webinar_geek_questionnaire_submissions (
   answers jsonb not null default '[]'::jsonb,
   raw_payload jsonb not null default '{}'::jsonb,
   pipeline_candidate_id uuid references public.pipeline_candidates (id) on delete set null,
-  journey_candidate_id uuid references public.candidates (id) on delete set null,
+  journey_candidate_id text references public.candidates (id) on delete set null,
   booked_by_user_id uuid references auth.users (id) on delete set null,
   booked_by_label text,
   recruiter_custom_field text,
   match_method text,
   hiring_stage text not null default 'questionnaire_submitted'
-    check (hiring_stage in ('questionnaire_submitted', 'ready_for_followup')),
+    check (hiring_stage in ('questionnaire_submitted', 'ready_for_followup', 'attended_only')),
+  source_type text not null default 'wg_sync',
+  watched boolean,
+  watch_duration_seconds int,
   synced_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint webinar_geek_questionnaire_submissions_key_unique unique (wg_submission_key)
 );
+
+-- If an older failed attempt created journey_candidate_id as uuid, fix it:
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'webinar_geek_questionnaire_submissions'
+      and column_name = 'journey_candidate_id'
+      and data_type = 'uuid'
+  ) then
+    alter table public.webinar_geek_questionnaire_submissions
+      drop constraint if exists webinar_geek_questionnaire_submission_journey_candidate_id_fkey;
+    alter table public.webinar_geek_questionnaire_submissions
+      drop constraint if exists webinar_geek_questionnaire_submissions_journey_candidate_id_fkey;
+    alter table public.webinar_geek_questionnaire_submissions
+      alter column journey_candidate_id type text using journey_candidate_id::text;
+    alter table public.webinar_geek_questionnaire_submissions
+      add constraint webinar_geek_questionnaire_submissions_journey_candidate_id_fkey
+      foreign key (journey_candidate_id) references public.candidates (id) on delete set null;
+  end if;
+end $$;
+
+alter table public.webinar_geek_questionnaire_submissions
+  add column if not exists source_type text not null default 'wg_sync',
+  add column if not exists watched boolean,
+  add column if not exists watch_duration_seconds int;
+
+alter table public.webinar_geek_questionnaire_submissions
+  drop constraint if exists webinar_geek_questionnaire_submissions_hiring_stage_check;
+
+alter table public.webinar_geek_questionnaire_submissions
+  add constraint webinar_geek_questionnaire_submissions_hiring_stage_check
+  check (hiring_stage in ('questionnaire_submitted', 'ready_for_followup', 'attended_only'));
 
 create index if not exists webinar_geek_questionnaire_submissions_email_idx
   on public.webinar_geek_questionnaire_submissions (lower(trim(email)));
@@ -42,8 +80,14 @@ create index if not exists webinar_geek_questionnaire_submissions_booked_by_idx
 create index if not exists webinar_geek_questionnaire_submissions_pipeline_candidate_idx
   on public.webinar_geek_questionnaire_submissions (pipeline_candidate_id);
 
+create index if not exists webinar_geek_questionnaire_submissions_source_idx
+  on public.webinar_geek_questionnaire_submissions (source_type, submitted_at desc nulls last);
+
 comment on table public.webinar_geek_questionnaire_submissions is
   'Post-webinar evaluation/questionnaire responses from WebinarGeek, matched to pipeline candidates and booking recruiter.';
+
+comment on column public.webinar_geek_questionnaire_submissions.source_type is
+  'wg_sync = live WebinarGeek API; dashboard_cache = imported from webinar_geek_dashboard_snapshots.';
 
 alter table public.webinar_geek_questionnaire_submissions enable row level security;
 
@@ -113,5 +157,3 @@ for all
 to service_role
 using (true)
 with check (true);
-
--- Also run 20260630_100000_webinar_geek_questionnaire_attendance.sql for source_type + attendance columns.
