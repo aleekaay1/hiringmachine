@@ -1,13 +1,17 @@
 import type { PipelineCallRecord, PipelineCandidate } from './pipelineService';
 import type { UserProfile } from './accessControl';
+import type { CallLogPageQuery } from './callLogQuery';
 
-const CACHE_KEY = 'paz_call_log_v1';
+const CACHE_KEY = 'paz_call_log_v2';
 
 export type CallLogCachePayload = {
   savedAt: string;
+  query: CallLogPageQuery;
   rows: PipelineCallRecord[];
   candidates: PipelineCandidate[];
   staffProfiles: UserProfile[];
+  hasMore: boolean;
+  nextOffset: number;
 };
 
 export function readCallLogCache(): CallLogCachePayload | null {
@@ -15,7 +19,7 @@ export function readCallLogCache(): CallLogCachePayload | null {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as CallLogCachePayload;
-    if (!parsed?.savedAt || !Array.isArray(parsed.rows)) return null;
+    if (!parsed?.savedAt || !Array.isArray(parsed.rows) || !parsed.query?.fromYmd) return null;
     return parsed;
   } catch {
     return null;

@@ -3,6 +3,8 @@ import { queueLeadChipLabel } from '../../services/callHistoryRows';
 import { formatDateTimeCanadaEastern } from '../../services/dateDisplay';
 import type { PipelineCallRecord, PipelineCandidate } from '../../services/pipelineService';
 
+export type WebinarPipelineStage = 'booked' | 'showed' | 'questionnaire';
+
 export type CallQueueLeadRailTone = {
   panelMuted: string;
   panelLabel: string;
@@ -20,6 +22,7 @@ type CallQueueLeadRailProps = {
   leads: PipelineCandidate[];
   selectedId: string | null;
   latestByCandidate: Map<string, PipelineCallRecord>;
+  webinarStageByCandidate?: Map<string, WebinarPipelineStage>;
   onSelect: (candidateId: string) => void;
   tone: CallQueueLeadRailTone;
 };
@@ -32,11 +35,32 @@ const LEGEND: Array<{ key: string; label: string; dot: string }> = [
   { key: 'declined', label: 'Declined', dot: 'bg-rose-600' },
 ];
 
+const WEBINAR_STAGE_BADGE: Record<WebinarPipelineStage, string> = {
+  booked: 'bg-emerald-50 text-emerald-800 border-emerald-200',
+  showed: 'bg-teal-50 text-teal-800 border-teal-200',
+  questionnaire: 'bg-violet-50 text-violet-900 border-violet-200',
+};
+
+const WEBINAR_STAGE_LABEL: Record<WebinarPipelineStage, string> = {
+  booked: 'Webinar booked',
+  showed: 'Webinar showed',
+  questionnaire: 'Questionnaire',
+};
+
 function shortName(name: string): string {
   const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return 'Lead';
   if (parts.length === 1) return parts[0].slice(0, 16);
   return `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`;
+}
+
+function webinarStageForLead(
+  leadId: string,
+  disposition: string | null | undefined,
+  webinarStageByCandidate?: Map<string, WebinarPipelineStage>,
+): WebinarPipelineStage | null {
+  if (String(disposition || '').trim().toLowerCase() !== 'booked') return null;
+  return webinarStageByCandidate?.get(leadId) ?? 'booked';
 }
 
 function leadQueueStyle(disposition: string | null | undefined, hasDisposition: boolean): QueueLeadStyle {
@@ -102,6 +126,7 @@ const CallQueueLeadRail: React.FC<CallQueueLeadRailProps> = ({
   leads,
   selectedId,
   latestByCandidate,
+  webinarStageByCandidate,
   onSelect,
   tone,
 }) => {
@@ -149,6 +174,7 @@ const CallQueueLeadRail: React.FC<CallQueueLeadRailProps> = ({
           const selected = lead.id === selectedId;
           const style = leadQueueStyle(disposition, hasDisposition);
           const statusLabel = queueLeadChipLabel(disposition, hasDisposition);
+          const webinarStage = webinarStageForLead(lead.id, disposition, webinarStageByCandidate);
 
           return (
             <button
@@ -178,6 +204,14 @@ const CallQueueLeadRail: React.FC<CallQueueLeadRailProps> = ({
               >
                 {statusLabel}
               </span>
+
+              {webinarStage && (
+                <span
+                  className={`mt-1.5 inline-flex w-fit max-w-full truncate rounded-md border px-2 py-0.5 text-[9px] font-semibold leading-tight ${WEBINAR_STAGE_BADGE[webinarStage]}`}
+                >
+                  {WEBINAR_STAGE_LABEL[webinarStage]}
+                </span>
+              )}
 
               {latest?.disposed_at && (
                 <span className={`mt-2 pl-2 text-[10px] tabular-nums leading-tight ${tone.panelMuted}`}>

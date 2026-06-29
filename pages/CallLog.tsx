@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
 import { Button } from '../components/UI';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
@@ -16,7 +16,11 @@ import {
   writeCallLogCache,
 } from '../services/callLogCache';
 import {
-  listPipelineCallRecords,
+  CALL_LOG_PAGE_SIZE,
+  fetchCallLogPage,
+  type CallLogPageQuery,
+} from '../services/callLogQuery';
+import {
   listPipelineCandidatesForCallLog,
   readCallRecordCandidateSnapshot,
   readCallRecordMeta,
@@ -27,7 +31,10 @@ import {
 } from '../services/pipelineService';
 import { PIPELINE_CALL_DISPOSITIONS } from '../services/pipelineCallDispositions';
 import { fetchCallRecordingForDisposition } from '../services/threecxCallLogAdmin';
+import { torontoYmdFromDate } from '../services/webinarGeekDates';
 import { Headphones, PhoneCall, RefreshCw, Search } from 'lucide-react';
+
+const SEARCH_DEBOUNCE_MS = 400;
 
 function formatDuration(seconds: number | null): string {
   if (!seconds || seconds <= 0) return '—';
@@ -76,6 +83,42 @@ function dispositionTone(disposition: string): string {
   return 'text-[#334155]';
 }
 
+function mergeCandidates(
+  existing: PipelineCandidate[],
+  incoming: PipelineCandidate[],
+): PipelineCandidate[] {
+  const map = new Map(existing.map((c) => [c.id, c]));
+  for (const c of incoming) map.set(c.id, c);
+  return [...map.values()];
+}
+
+function buildPageQuery(input: {
+  dateFrom: string;
+  dateTo: string;
+  recruiterFilter: string;
+  dispositionFilter: string;
+  searchDebounced: string;
+}): CallLogPageQuery {
+  const today = torontoYmdFromDate();
+  return {
+    fromYmd: input.dateFrom || today,
+    toYmd: input.dateTo || today,
+    recruiterUserId: input.recruiterFilter,
+    disposition: input.dispositionFilter,
+    search: input.searchDebounced.trim() || null,
+  };
+}
+
+function queriesMatch(a: CallLogPageQuery, b: CallLogPageQuery): boolean {
+  return (
+    a.fromYmd === b.fromYmd
+    && a.toYmd === b.toYmd
+    && (a.recruiterUserId || 'all') === (b.recruiterUserId || 'all')
+    && (a.disposition || 'all') === (b.disposition || 'all')
+    && (a.search || '') === (b.search || '')
+  );
+}
+
 const CallLog: React.FC = () => {
   const isAuthenticated = useStaffAuthenticated();
   const [accessAllowed, setAccessAllowed] = useState<boolean | null>(null);
@@ -83,18 +126,33 @@ const CallLog: React.FC = () => {
   const [candidates, setCandidates] = useState<PipelineCandidate[]>([]);
   const [staffProfiles, setStaffProfiles] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [searchDebounced, setSearchDebounced] = useState('');
   const [recruiterFilter, setRecruiterFilter] = useState<string>('all');
   const [dispositionFilter, setDispositionFilter] = useState<string>('all');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
+  const [dateFrom, setDateFrom] = useState(() => torontoYmdFromDate());
+  const [dateTo, setDateTo] = useState(() => torontoYmdFromDate());
   const [refreshing, setRefreshing] = useState(false);
   const [cacheAge, setCacheAge] = useState<string | null>(null);
   const [hydratedFromCache, setHydratedFromCache] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextOffset, setNextOffset] = useState(0);
   const [fetchingRecordingId, setFetchingRecordingId] = useState<string | null>(null);
   const [recordingErrors, setRecordingErrors] = useState<Record<string, string>>({});
   const [expandedRecordingIds, setExpandedRecordingIds] = useState<Set<string>>(new Set());
+  const loadRequestIdRef = useRef(0);
+
+  const pageQuery = useMemo(
+    () => buildPageQuery({ dateFrom, dateTo, recruiterFilter, dispositionFilter, searchDebounced }),
+    [dateFrom, dateTo, recruiterFilter, dispositionFilter, searchDebounced],
+  );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearchDebounced(search), SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -106,55 +164,128 @@ const CallLog: React.FC = () => {
     });
   }, [isAuthenticated]);
 
-  const load = useCallback(async () => {
-    setLoadError(null);
-    setLoading(true);
+  useEffect(() => {
+    if (!isAuthenticated || !accessAllowed) return;
+    void listAllUserProfiles()
+      .then(setStaffProfiles)
+      .catch(() => setStaffProfiles([]));
+  }, [isAuthenticated, accessAllowed]);
+
+  const loadPage = useCallback(async (input: {
+    query: CallLogPageQuery;
+    offset: number;
+    append: boolean;
+    staff: UserProfile[];
+  }) => {
+    const requestId = ++loadRequestIdRef.current;
+    if (input.append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+      setLoadError(null);
+    }
+
     try {
-      const callRows = await listPipelineCallRecords({ limit: 2500 });
-      const candidateIds = [...new Set(callRows.map((row) => row.candidate_id).filter(Boolean))];
-      const [candidateRows, profiles] = await Promise.all([
-        listPipelineCandidatesForCallLog(candidateIds),
-        listAllUserProfiles().catch(() => [] as UserProfile[]),
-      ]);
-      setRows(callRows);
-      setCandidates(candidateRows);
-      setStaffProfiles(profiles);
-      writeCallLogCache({
-        rows: callRows,
-        candidates: candidateRows,
-        staffProfiles: profiles,
+      const page = await fetchCallLogPage({
+        ...input.query,
+        offset: input.offset,
+        limit: CALL_LOG_PAGE_SIZE,
       });
+      if (requestId !== loadRequestIdRef.current) return;
+
+      const candidateIds = [...new Set(page.rows.map((row) => row.candidate_id).filter(Boolean))];
+      const candidateRows = candidateIds.length
+        ? await listPipelineCandidatesForCallLog(candidateIds)
+        : [];
+
+      if (requestId !== loadRequestIdRef.current) return;
+
+      setRows((prev) => (input.append ? [...prev, ...page.rows] : page.rows));
+      setCandidates((prev) => (input.append ? mergeCandidates(prev, candidateRows) : candidateRows));
+      setHasMore(page.hasMore);
+      setNextOffset(page.nextOffset);
       setCacheAge('just now');
+      setHydratedFromCache(false);
+
+      if (!input.append) {
+        writeCallLogCache({
+          query: input.query,
+          rows: page.rows,
+          candidates: candidateRows,
+          staffProfiles: input.staff,
+          hasMore: page.hasMore,
+          nextOffset: page.nextOffset,
+        });
+      }
     } catch (err) {
-      setRows([]);
+      if (requestId !== loadRequestIdRef.current) return;
+      if (!input.append) {
+        setRows([]);
+        setCandidates([]);
+        setHasMore(false);
+        setNextOffset(0);
+      }
       setLoadError(err instanceof Error ? err.message : 'Failed to load call log.');
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestIdRef.current) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     if (!isAuthenticated || !accessAllowed) return;
+
     const cached = readCallLogCache();
-    if (cached) {
+    if (cached && queriesMatch(cached.query, pageQuery) && cached.nextOffset <= CALL_LOG_PAGE_SIZE) {
       setRows(cached.rows);
       setCandidates(cached.candidates);
-      setStaffProfiles(cached.staffProfiles);
+      setStaffProfiles((prev) => (prev.length ? prev : cached.staffProfiles));
+      setHasMore(cached.hasMore);
+      setNextOffset(cached.nextOffset);
       setCacheAge(formatCallLogCacheAge(cached.savedAt));
       setHydratedFromCache(true);
       return;
     }
-    void load();
-  }, [isAuthenticated, accessAllowed, load]);
+
+    void loadPage({
+      query: pageQuery,
+      offset: 0,
+      append: false,
+      staff: staffProfiles,
+    });
+  }, [isAuthenticated, accessAllowed, pageQuery, loadPage]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
     setHydratedFromCache(false);
     try {
-      await load();
+      await loadPage({
+        query: pageQuery,
+        offset: 0,
+        append: false,
+        staff: staffProfiles,
+      });
     } finally {
       setRefreshing(false);
     }
+  };
+
+  const handleLoadMore = () => {
+    if (loading || loadingMore || !hasMore) return;
+    void loadPage({
+      query: pageQuery,
+      offset: nextOffset,
+      append: true,
+      staff: staffProfiles,
+    });
+  };
+
+  const handleTodayPreset = () => {
+    const today = torontoYmdFromDate();
+    setDateFrom(today);
+    setDateTo(today);
   };
 
   const handleLoadRecording = async (row: PipelineCallRecord) => {
@@ -222,66 +353,30 @@ const CallLog: React.FC = () => {
   }, [staffProfiles]);
 
   const recruiterOptions = useMemo(() => {
-    const byId = new Map<string, string>();
-    for (const row of rows) {
-      if (!row.recruiter_user_id) continue;
-      byId.set(row.recruiter_user_id, resolveRecruiterLabel(row, staffById));
-    }
-    return [...byId.entries()]
-      .map(([id, label]) => ({ id, label }))
+    return staffProfiles
+      .map((profile) => ({
+        id: profile.user_id,
+        label: profile.full_name?.trim() || profile.email?.trim() || profile.user_id.slice(0, 8),
+      }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [rows, staffById]);
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const fromMs = dateFrom ? new Date(`${dateFrom}T00:00:00`).getTime() : null;
-    const toMs = dateTo ? new Date(`${dateTo}T23:59:59.999`).getTime() : null;
-
-    return rows.filter((row) => {
-      const atMs = new Date(row.disposed_at).getTime();
-      if (fromMs !== null && atMs < fromMs) return false;
-      if (toMs !== null && atMs > toMs) return false;
-      if (recruiterFilter !== 'all' && row.recruiter_user_id !== recruiterFilter) return false;
-      if (dispositionFilter !== 'all' && row.disposition !== dispositionFilter) return false;
-
-      if (!q) return true;
-      const display = resolveCandidateDisplay(row, candidateById);
-      const candidate = candidateById.get(row.candidate_id);
-      const hay = [
-        display.fullName,
-        display.email || '',
-        candidate?.phone || '',
-        row.dialed_number || '',
-        row.disposition || '',
-        row.comment || '',
-        resolveRecruiterLabel(row, staffById),
-      ]
-        .join(' ')
-        .toLowerCase();
-      return hay.includes(q);
-    }).sort((a, b) => new Date(b.disposed_at).getTime() - new Date(a.disposed_at).getTime());
-  }, [
-    rows,
-    search,
-    recruiterFilter,
-    dispositionFilter,
-    dateFrom,
-    dateTo,
-    candidateById,
-    staffById,
-  ]);
+  }, [staffProfiles]);
 
   const summary = useMemo(() => {
-    const withRecording = filtered.filter((r) => Boolean(readCallRecordRecording(r).recordingUrl)).length;
-    const recruiters = new Set(filtered.map((r) => r.recruiter_user_id).filter(Boolean));
-    const booked = filtered.filter((r) => r.disposition === 'Booked').length;
+    const withRecording = rows.filter((r) => Boolean(readCallRecordRecording(r).recordingUrl)).length;
+    const recruiters = new Set(rows.map((r) => r.recruiter_user_id).filter(Boolean));
+    const booked = rows.filter((r) => r.disposition === 'Booked').length;
     return {
-      total: filtered.length,
+      total: rows.length,
       recruiters: recruiters.size,
       booked,
       withRecording,
     };
-  }, [filtered]);
+  }, [rows]);
+
+  const dateRangeLabel = useMemo(() => {
+    if (dateFrom === dateTo) return dateFrom;
+    return `${dateFrom} → ${dateTo}`;
+  }, [dateFrom, dateTo]);
 
   if (!isAuthenticated) {
     return (
@@ -330,7 +425,7 @@ const CallLog: React.FC = () => {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 shrink-0 mb-3">
         <div className="rounded-xl border border-[#d6deea] bg-white p-3">
-          <p className="text-[10px] uppercase tracking-wide text-[#7a8ba1]">Calls shown</p>
+          <p className="text-[10px] uppercase tracking-wide text-[#7a8ba1]">Calls loaded</p>
           <p className="text-xl font-bold text-[#0B1B34]">{summary.total}</p>
         </div>
         <div className="rounded-xl border border-[#d6deea] bg-white p-3">
@@ -354,7 +449,7 @@ const CallLog: React.FC = () => {
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search candidate, phone, disposition, recruiter…"
+            placeholder="Search all dispositions (name, phone, recruiter…)"
             className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-[#cfe3f9] text-sm text-[#0B1B34] focus:outline-none focus:ring-2 focus:ring-[#005EB8]/30"
           />
         </div>
@@ -401,14 +496,28 @@ const CallLog: React.FC = () => {
               className="rounded-lg border border-[#cfe3f9] px-2 py-1.5 text-sm"
             />
           </label>
+          <button
+            type="button"
+            onClick={handleTodayPreset}
+            className="rounded-lg border border-[#cfe3f9] px-2.5 py-1.5 text-sm text-[#005EB8] hover:bg-[#f4f9ff]"
+          >
+            Today
+          </button>
           <span className="text-[#5c6b82] shrink-0">
-            Showing <strong>{filtered.length}</strong> of {rows.length} loaded
+            {loading && !loadingMore
+              ? 'Loading…'
+              : (
+                <>
+                  <strong>{rows.length}</strong> call{rows.length === 1 ? '' : 's'} · {dateRangeLabel}
+                  {searchDebounced.trim().length >= 2 ? ' · searching full call log' : ''}
+                </>
+              )}
           </span>
         </div>
       </div>
 
       {loadError && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-sm px-4 py-3">{loadError}</div>
+        <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-sm px-4 py-3 mb-3">{loadError}</div>
       )}
 
       <div className="call-log-page__table-wrap">
@@ -427,7 +536,7 @@ const CallLog: React.FC = () => {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((row) => {
+              {rows.map((row) => {
                 const candidate = candidateById.get(row.candidate_id);
                 const candidateDisplay = resolveCandidateDisplay(row, candidateById);
                 const meta = readCallRecordMeta(row);
@@ -520,16 +629,29 @@ const CallLog: React.FC = () => {
                   </React.Fragment>
                 );
               })}
-              {!loading && filtered.length === 0 && !loadError && (
+              {!loading && rows.length === 0 && !loadError && (
                 <tr>
                   <td colSpan={9} className="p-8 text-center text-sm text-[#6f7b8d]">
-                    No calls match your filters, or the log is empty.
+                    No calls match your filters for this date range.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
       </div>
+
+      {(hasMore || loadingMore) && (
+        <div className="flex justify-center py-4">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={handleLoadMore}
+            disabled={loading || loadingMore || !hasMore}
+          >
+            {loadingMore ? 'Loading more…' : `Load more (${CALL_LOG_PAGE_SIZE} at a time)`}
+          </Button>
+        </div>
+      )}
     </div>
   );
 };

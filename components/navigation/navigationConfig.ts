@@ -102,6 +102,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { name: 'Live Sessions', route: '/live-sessions', icon: Video, section: 'live-sessions' },
       { name: 'Live session stats', route: '/live-sessions/analytics', icon: BarChart3, section: 'live-sessions' },
       { name: 'Webinar Geek', route: '/webinar-geek', icon: MonitorPlay, section: 'webinar-geek' },
+      { name: 'Webinar questionnaires', route: '/webinar-questionnaires', icon: ClipboardList, section: 'webinar-questionnaires' },
     ],
   },
   {

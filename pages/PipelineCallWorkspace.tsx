@@ -14,7 +14,7 @@ import {
   Video,
 } from 'lucide-react';
 import CallHistorySheet from '../components/pipeline/CallHistorySheet';
-import CallQueueLeadRail from '../components/pipeline/CallQueueLeadRail';
+import CallQueueLeadRail, { type WebinarPipelineStage } from '../components/pipeline/CallQueueLeadRail';
 import CandidateDispositionHistory from '../components/pipeline/CandidateDispositionHistory';
 import CallScriptsDrawer from '../components/pipeline/CallScriptsDrawer';
 import CallScriptViewerModal from '../components/pipeline/CallScriptViewerModal';
@@ -84,6 +84,10 @@ import {
   saveLastUsedCallScriptId,
   type PipelineCallScript,
 } from '../services/pipelineCallScripts';
+import {
+  loadQuestionnaireMapForCandidateIds,
+  type WebinarQuestionnaireSubmission,
+} from '../services/webinarGeekQuestionnaires';
 
 type QueueFilter = 'all' | 'callbacks' | 'not_interested' | 'booked' | 'booked_no_show' | 'booked_didnt_watch';
 
@@ -154,6 +158,29 @@ function dispositionIsRetry(label: string): boolean {
   return Object.prototype.hasOwnProperty.call(RETRY_PRIORITY_ORDER, label);
 }
 
+function buildWebinarStageMap(
+  candidates: PipelineCandidate[],
+  latest: Map<string, PipelineCallRecord>,
+  bookedOutcomes: CandidateBookedOutcomeMap,
+  questionnaires: Map<string, WebinarQuestionnaireSubmission>,
+): Map<string, WebinarPipelineStage> {
+  const map = new Map<string, WebinarPipelineStage>();
+  for (const candidate of candidates) {
+    const latestRecord = latest.get(candidate.id);
+    if (!latestRecord || normalizeDispositionLabel(latestRecord.disposition) !== 'booked') continue;
+    if (questionnaires.has(candidate.id)) {
+      map.set(candidate.id, 'questionnaire');
+      continue;
+    }
+    if (bookedOutcomes.get(candidate.id) === 'booked') {
+      map.set(candidate.id, 'showed');
+      continue;
+    }
+    map.set(candidate.id, 'booked');
+  }
+  return map;
+}
+
 function toDatetimeLocalValue(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '';
@@ -202,6 +229,9 @@ const PipelineCallWorkspace: React.FC = () => {
   const [resumesByCandidate, setResumesByCandidate] = React.useState<Map<string, PipelineResume[]>>(new Map());
   const [records, setRecords] = React.useState<PipelineCallRecord[]>([]);
   const [bookedOutcomeByCandidate, setBookedOutcomeByCandidate] = React.useState<CandidateBookedOutcomeMap>(new Map());
+  const [questionnaireByCandidate, setQuestionnaireByCandidate] = React.useState<
+    Map<string, WebinarQuestionnaireSubmission>
+  >(new Map());
   const [liveRegistrants, setLiveRegistrants] = React.useState<LiveSessionRegistrantRow[]>([]);
   const [currentUserId, setCurrentUserId] = React.useState<string | null>(null);
   const [selfLeadName, setSelfLeadName] = React.useState('');
@@ -295,6 +325,7 @@ const PipelineCallWorkspace: React.FC = () => {
         setRecords([]);
         setSelectedCandidateId(null);
         setBookedOutcomeByCandidate(new Map());
+        setQuestionnaireByCandidate(new Map());
         return;
       }
 
@@ -306,13 +337,14 @@ const PipelineCallWorkspace: React.FC = () => {
       const liveRegistrantsPromise = loadLiveSessionRegistrantsForMatching().catch(() => [] as LiveSessionRegistrantRow[]);
 
       const candidateIdSet = new Set(candidateIds);
-      const [resumeRows, callRecordRowsRaw, webinarRows, liveRegRows] = await Promise.all([
+      const [resumeRows, callRecordRowsRaw, webinarRows, liveRegRows, questionnaireMap] = await Promise.all([
         listPipelineResumesForCandidates(candidateIds),
         uid
           ? listPipelineCallRecordsForCandidates(candidateIds, { recruiterUserId: uid })
           : listPipelineCallRecordsForCandidates(candidateIds),
         webinarRowsPromise,
         liveRegistrantsPromise,
+        loadQuestionnaireMapForCandidateIds(candidateIds).catch(() => new Map<string, WebinarQuestionnaireSubmission>()),
       ]);
       const callRecordRows = callRecordRowsRaw.filter((row) => candidateIdSet.has(row.candidate_id));
       const nextMap = new Map<string, PipelineResume[]>();
@@ -343,6 +375,7 @@ const PipelineCallWorkspace: React.FC = () => {
         bookedMap.set(candidate.id, classification.bucket);
       }
       setBookedOutcomeByCandidate(bookedMap);
+      setQuestionnaireByCandidate(questionnaireMap);
       const activeSelectedId = selectedCandidateIdRef.current;
       if (!activeSelectedId || !sortedCandidates.some((row) => row.id === activeSelectedId)) {
         setSelectedCandidateId(sortedCandidates[0]?.id ?? null);
@@ -360,6 +393,11 @@ const PipelineCallWorkspace: React.FC = () => {
   }, [loadWorkspace]);
 
   const latestByCandidate = React.useMemo(() => latestRecordByCandidate(records), [records]);
+
+  const webinarStageByCandidate = React.useMemo(
+    () => buildWebinarStageMap(candidates, latestByCandidate, bookedOutcomeByCandidate, questionnaireByCandidate),
+    [candidates, latestByCandidate, bookedOutcomeByCandidate, questionnaireByCandidate],
+  );
 
   /** Today's call KPI — derived from loaded records (no extra query). */
   const todaysCallCount = React.useMemo(() => {
@@ -1285,6 +1323,7 @@ const PipelineCallWorkspace: React.FC = () => {
                 leads={focusNavigationList}
                 selectedId={selectedCandidateId}
                 latestByCandidate={latestByCandidate}
+                webinarStageByCandidate={webinarStageByCandidate}
                 onSelect={setSelectedCandidateId}
                 tone={tone}
               />
@@ -1388,6 +1427,16 @@ const PipelineCallWorkspace: React.FC = () => {
                     records={myCallRecords}
                     tone={tone}
                   />
+
+                  {questionnaireByCandidate.get(currentCandidate.id) && (
+                    <p className="rounded-xl border border-violet-200 bg-violet-50/80 px-3 py-2 text-xs text-violet-900">
+                      Post-webinar questionnaire submitted
+                      {' · '}
+                      <Link to="/webinar-questionnaires" className="font-semibold underline">
+                        View responses
+                      </Link>
+                    </p>
+                  )}
 
                   {latestByCandidate.get(currentCandidate.id) && (
                     (() => {

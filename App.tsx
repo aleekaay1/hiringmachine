@@ -19,6 +19,7 @@ const QrCodes = React.lazy(() => import('./pages/QrCodes'));
 const LiveSessionsDashboard = React.lazy(() => import('./pages/LiveSessionsDashboard'));
 const LiveSessionsAnalyticsPage = React.lazy(() => import('./pages/LiveSessionsAnalyticsPage'));
 const WebinarGeekDashboard = React.lazy(() => import('./pages/WebinarGeekDashboard'));
+const WebinarQuestionnairesPage = React.lazy(() => import('./pages/WebinarQuestionnairesPage'));
 const LeadershipLeaderboard = React.lazy(() => import('./pages/LeadershipLeaderboard'));
 const HRDashboard = React.lazy(() => import('./pages/HRDashboard'));
 const EmailLog = React.lazy(() => import('./pages/EmailLog'));
@@ -70,6 +71,7 @@ const App: React.FC = () => {
           <Route path="/live-sessions" element={<Lazy><LiveSessionsDashboard /></Lazy>} />
           <Route path="/live-sessions/analytics" element={<Lazy><LiveSessionsAnalyticsPage /></Lazy>} />
           <Route path="/webinar-geek" element={<Lazy><WebinarGeekDashboard /></Lazy>} />
+          <Route path="/webinar-questionnaires" element={<Lazy><WebinarQuestionnairesPage /></Lazy>} />
           <Route path="/calls-analytics" element={<Navigate to="/reports" replace />} />
           <Route path="/calls-analytics/leaderboard" element={<Lazy><LeadershipLeaderboard /></Lazy>} />
           <Route path="/leaderboard" element={<Navigate to="/calls-analytics/leaderboard" replace />} />

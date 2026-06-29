@@ -5,6 +5,10 @@ import {
   parseBookingLinkTag,
   recruiterOwnsBookingLinkSlug,
 } from '../_shared/webinarGeekBookingLinks.ts';
+import {
+  fetchWebinarGeekQuestionnaireRows,
+  matchQuestionnaireRow,
+} from '../_shared/webinarGeekQuestionnaires.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -1450,6 +1454,108 @@ Deno.serve(async (req) => {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
+    }
+
+    if (req.method === 'POST' && mode === 'questionnaire-sync') {
+      const body = (await req.json().catch(() => ({}))) as {
+        webinar_id?: string;
+        broadcast_id?: string;
+      };
+      const profileRes = await admin
+        .from('user_profiles')
+        .select('role')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      const role = String((profileRes.data as { role?: string } | null)?.role || '').trim();
+      const allowedRoles = new Set(['admin', 'leadership', 'hr', 'webinar', 'recruiter']);
+      if (!allowedRoles.has(role)) {
+        return new Response(JSON.stringify({ error: 'Forbidden' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const webinarId = String(body.webinar_id || url.searchParams.get('webinar_id') || '').trim();
+      const broadcastId = String(body.broadcast_id || url.searchParams.get('broadcast_id') || '').trim();
+      const nowIso = new Date().toISOString();
+
+      try {
+        const { rows, sources } = await fetchWebinarGeekQuestionnaireRows(wgGet, {
+          webinarId: webinarId || undefined,
+          broadcastId: broadcastId || undefined,
+        });
+
+        let upserted = 0;
+        let matchedPipeline = 0;
+        for (const row of rows) {
+          const match = await matchQuestionnaireRow(admin, row);
+          if (match.pipeline_candidate_id) matchedPipeline += 1;
+          const payload = {
+            wg_submission_key: row.wg_submission_key,
+            subscription_id: row.subscription_id,
+            webinar_id: row.webinar_id,
+            broadcast_id: row.broadcast_id,
+            webinar_title: row.webinar_title,
+            broadcast_title: row.broadcast_title,
+            email: row.email,
+            first_name: row.first_name,
+            last_name: row.last_name,
+            phone: row.phone,
+            submitted_at: row.submitted_at,
+            answers: row.answers,
+            raw_payload: { ...row.raw_payload, _source: row.source },
+            pipeline_candidate_id: match.pipeline_candidate_id,
+            journey_candidate_id: match.journey_candidate_id,
+            booked_by_user_id: match.booked_by_user_id,
+            booked_by_label: match.booked_by_label,
+            recruiter_custom_field: match.recruiter_custom_field,
+            match_method: match.match_method,
+            hiring_stage: 'questionnaire_submitted',
+            synced_at: nowIso,
+            updated_at: nowIso,
+          };
+          const { error: upErr } = await admin
+            .from('webinar_geek_questionnaire_submissions')
+            .upsert(payload, { onConflict: 'wg_submission_key' });
+          if (!upErr) upserted += 1;
+        }
+
+        await admin.from('webinar_geek_questionnaire_sync_runs').insert({
+          synced_at: nowIso,
+          fetched_count: rows.length,
+          upserted_count: upserted,
+          matched_pipeline_count: matchedPipeline,
+          api_sources: sources,
+          triggered_by_user_id: user.id,
+        });
+
+        return new Response(JSON.stringify({
+          ok: true,
+          synced_at: nowIso,
+          fetched_count: rows.length,
+          upserted_count: upserted,
+          matched_pipeline_count: matchedPipeline,
+          api_sources: sources,
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      } catch (syncErr) {
+        const message = syncErr instanceof Error ? syncErr.message : String(syncErr);
+        await admin.from('webinar_geek_questionnaire_sync_runs').insert({
+          synced_at: nowIso,
+          fetched_count: 0,
+          upserted_count: 0,
+          matched_pipeline_count: 0,
+          api_sources: [],
+          triggered_by_user_id: user.id,
+          error_message: message,
+        });
+        return new Response(JSON.stringify({ error: message }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
     }
 
     return new Response(JSON.stringify({ error: 'Unsupported mode' }), {

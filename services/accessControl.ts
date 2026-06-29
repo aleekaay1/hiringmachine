@@ -10,6 +10,7 @@ export type AppSection =
   | 'qr'
   | 'live-sessions'
   | 'webinar-geek'
+  | 'webinar-questionnaires'
   | 'calls-analytics'
   | 'analytics'
   | 'settings'
@@ -218,6 +219,7 @@ const ADMIN_DATA_SECTIONS: AppSection[] = [
   'qr',
   'live-sessions',
   'webinar-geek',
+  'webinar-questionnaires',
   'calls-analytics',
   'leaderboard',
   'analytics',
@@ -384,6 +386,7 @@ export function canAccessSection(
       section === 'performance-check-in' ||
       PIPELINE_OPERATIONAL_SECTIONS.includes(section) ||
       section === 'webinar-geek' ||
+      section === 'webinar-questionnaires' ||
       section === 'leaderboard'
     );
   }
@@ -392,6 +395,7 @@ export function canAccessSection(
       section === 'home' ||
       section === 'overview' ||
       section === 'webinar-geek' ||
+      section === 'webinar-questionnaires' ||
       section === 'pipeline-webinar-verify' ||
       section === 'leaderboard' ||
       section === 'support' ||
@@ -409,7 +413,9 @@ export function canAccessSection(
       section === 'pipeline-hr-leads' ||
       section === 'live-sessions' ||
       section === 'email-log' ||
-      section === 'leaderboard'
+      section === 'leaderboard' ||
+      section === 'webinar-geek' ||
+      section === 'webinar-questionnaires'
     );
   }
   return section === 'overview' || section === 'leaderboard' || section === 'home' || section === 'support';
@@ -488,6 +494,7 @@ export function resolveAppSectionFromLocation(pathname: string, search: string):
   if (pathname === '/calls-analytics') return 'calls-analytics';
   if (pathname === '/calls-analytics/leaderboard' || pathname === '/leaderboard') return 'leaderboard';
   if (pathname === '/webinar-geek') return 'webinar-geek';
+  if (pathname === '/webinar-questionnaires') return 'webinar-questionnaires';
   if (pathname.startsWith('/live-sessions')) return 'live-sessions';
   if (pathname === '/hr-dashboard') return 'hr-dashboard';
   if (pathname === '/hr/lead-distribution' || pathname === '/hr/leads') return 'pipeline-hr-leads';
