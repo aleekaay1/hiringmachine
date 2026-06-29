@@ -1534,8 +1534,12 @@ Deno.serve(async (req) => {
 
         const recent = await fetchRecentQuestionnaireRowsFromSubscriptions(wgGet, subs.rows, {
           sinceMs,
-          maxSubscriptions: 350,
+          maxSubscriptions: 500,
         });
+
+        const subsWithEval = subs.rows.filter(
+          (row) => Array.isArray(row.evaluation_form_answers) && (row.evaluation_form_answers as unknown[]).length > 0,
+        ).length;
 
         let rows = recent.rows;
         let sources = [...recent.sources];
@@ -1568,6 +1572,8 @@ Deno.serve(async (req) => {
           synced_at: nowIso,
           days_back: daysBack,
           subscriptions_scanned: scanned,
+          subscriptions_loaded: subs.rows.length,
+          subscriptions_with_evaluation_form_answers: subsWithEval,
           fetched_count: rows.length,
           upserted_count: upserted,
           matched_pipeline_count: matchedPipeline,
@@ -1575,8 +1581,10 @@ Deno.serve(async (req) => {
           api_sources: sources,
           message: upserted > 0
             ? `Imported ${upserted} questionnaire submission(s) from the last ${daysBack} days.`
-            : `Scanned ${scanned} recent subscriptions but found 0 evaluation forms in WebinarGeek API. `
-              + 'Ensure the webhook is configured for new submissions going forward.',
+            : subsWithEval > 0
+            ? `Found ${subsWithEval} subscription(s) with evaluation_form_answers but could not parse answers. Contact support.`
+            : `Loaded ${subs.rows.length} subscriptions (${scanned} scanned) — none had evaluation_form_answers from WebinarGeek. `
+              + 'Register the webhook in WebinarGeek (Integrations → Webhooks → New evaluation form) for new submissions.',
         }), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },

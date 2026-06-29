@@ -25,16 +25,32 @@ supabase secrets set WEBINARGEEK_WEBHOOK_PUBLIC_URL="https://hlfufjrjztuknioydlu
 - `supabase/sql/paste_webinar_geek_questionnaires.sql`
 - `supabase/sql/paste_webinar_geek_webhook_events.sql`
 
-## 4) Register in WebinarGeek
+## API vs webhook (important)
 
-1. WebinarGeek → **Integrations** → **Webhooks**
-2. Add endpoint URL:
+| What | Where it lives | What it does |
+|------|----------------|--------------|
+| `WEBINARGEEK_API_TOKEN` | Supabase Edge secrets | **Pull** subscriptions from WebinarGeek. Evaluation answers are on each subscription as `evaluation_form_answers` (not a separate bulk endpoint). |
+| `WEBINARGEEK_WEBHOOK_SECRET` | Supabase Edge secrets | **Push** — validates incoming POSTs from WebinarGeek. Does nothing until you register the webhook URL inside WebinarGeek. |
+
+Setting the API token in Supabase is **not enough** for live delivery. You must also register the webhook in WebinarGeek (steps below).
+
+## WebinarGeek setup (required once)
+
+1. Log in to **WebinarGeek** → **Account** (top right) → **Integrations** → **Webhooks**
+2. **Add webhook** / connect Webhooks integration
+3. **Endpoint URL** (replace `YOUR_SECRET` with the value of `WEBINARGEEK_WEBHOOK_SECRET` in Supabase):
 
    `https://hlfufjrjztuknioydlut.supabase.co/functions/v1/webinar-geek-questionnaire-webhook?secret=YOUR_SECRET`
 
-3. Trigger: **New evaluation form** (evaluation form submitted)
+4. **Trigger:** `New evaluation form` (fires when a viewer submits the post-webinar evaluation)
+5. Scope: account-level (all webinars) or per webinar — your choice
+6. Each webinar must have an **evaluation form** enabled (webinar settings → evaluation form)
 
-Test: open the URL in a browser (GET) — should return JSON with `ok: true` and setup hints.
+The leader email (`noreply@globelife-paz.com`) is WebinarGeek's built-in notification — it does **not** automatically send data to Paz. Only the webhook (or API import) does.
+
+## Backfill (last 15 days)
+
+In Paz: **Webinar questionnaires** → **Import last 15 days**. This re-fetches subscriptions from the API and reads `evaluation_form_answers` on each row.
 
 ## What happens on each webhook
 

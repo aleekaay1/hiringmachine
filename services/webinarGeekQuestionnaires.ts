@@ -74,6 +74,8 @@ export type WebinarQuestionnaireSyncResult = {
   cache_label?: string | null;
   subscription_count?: number;
   subscriptions_scanned?: number;
+  subscriptions_loaded?: number;
+  subscriptions_with_evaluation_form_answers?: number;
   rematched_count?: number;
   days_back?: number;
   message?: string;
@@ -165,6 +167,8 @@ async function postQuestionnaireMode(
       cache_label: json.cache_label ? String(json.cache_label) : null,
       subscription_count: Number(json.subscription_count || 0) || undefined,
       subscriptions_scanned: Number(json.subscriptions_scanned || 0) || undefined,
+      subscriptions_loaded: Number(json.subscriptions_loaded || 0) || undefined,
+      subscriptions_with_evaluation_form_answers: Number(json.subscriptions_with_evaluation_form_answers || 0) || undefined,
       rematched_count: Number(json.rematched_count || 0) || undefined,
       days_back: Number(json.days_back || 0) || undefined,
       message: json.message ? String(json.message) : undefined,

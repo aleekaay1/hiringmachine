@@ -100,7 +100,46 @@ function answersFromObject(obj: Record<string, unknown>): WgQuestionnaireAnswer[
   return answers;
 }
 
+function answersFromEvaluationFormAnswers(value: unknown): WgQuestionnaireAnswer[] {
+  if (!Array.isArray(value) || !value.length) return [];
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        const text = String(entry || '').trim();
+        return text ? { question: 'Answer', answer: text } : null;
+      }
+      const item = entry as Record<string, unknown>;
+      const question = pickString(
+        item.question,
+        item.label,
+        item.title,
+        item.name,
+        item.field,
+        item.question_text,
+        item.question_label,
+      ) || 'Question';
+      const answer = pickString(
+        item.answer,
+        item.value,
+        item.response,
+        item.text,
+        item.content,
+        item.answer_text,
+      );
+      if (!answer) return null;
+      return {
+        question,
+        answer,
+        field_key: pickString(item.key, item.field_key, item.id, item.question_id),
+      };
+    })
+    .filter((v): v is WgQuestionnaireAnswer => Boolean(v));
+}
+
 function answersFromRow(row: Record<string, unknown>): WgQuestionnaireAnswer[] {
+  const evalForm = answersFromEvaluationFormAnswers(row.evaluation_form_answers);
+  if (evalForm.length) return evalForm;
+
   const direct = row.answers ?? row.responses ?? row.evaluation_answers ?? row.form_answers
     ?? row.fields ?? row.questions ?? row.form_fields ?? row.items ?? row.results;
   if (Array.isArray(direct)) {
@@ -440,9 +479,14 @@ export async function fetchRecentQuestionnaireRowsFromSubscriptions(
     .filter((sub) => {
       const eventMs = unixMsFromSubscription(sub);
       if (eventMs != null && eventMs < sinceMs) return false;
-      return subscriptionShowed(sub) || sub.watched === true || sub.watched_live === true;
+      return true;
     })
-    .sort((a, b) => (unixMsFromSubscription(b) ?? 0) - (unixMsFromSubscription(a) ?? 0))
+    .sort((a, b) => {
+      const aHas = answersFromEvaluationFormAnswers(a.evaluation_form_answers).length ? 1 : 0;
+      const bHas = answersFromEvaluationFormAnswers(b.evaluation_form_answers).length ? 1 : 0;
+      if (bHas !== aHas) return bHas - aHas;
+      return (unixMsFromSubscription(b) ?? 0) - (unixMsFromSubscription(a) ?? 0);
+    })
     .slice(0, maxSubscriptions);
 
   const merged = new Map<string, NormalizedWgQuestionnaireRow>();
@@ -457,6 +501,29 @@ export async function fetchRecentQuestionnaireRowsFromSubscriptions(
   for (const sub of candidates) {
     const subId = pickString(sub.id);
     if (!subId) continue;
+
+    const evalAnswers = answersFromEvaluationFormAnswers(sub.evaluation_form_answers);
+    if (evalAnswers.length) {
+      const normalized = normalizeEvaluationRow(
+        {
+          ...sub,
+          answers: evalAnswers,
+          submitted_at: sub.watched_true_set_at || sub.watch_end || sub.updated_at || sub.created_at,
+        },
+        'subscription_evaluation_form_answers',
+        subscriptionById,
+      );
+      if (normalized?.answers.length) {
+        normalized.wg_submission_key = `subscription_evaluation_form_answers:${subId}`;
+        normalized.watched = sub.watched === true;
+        normalized.watch_duration_seconds = watchSecondsFromSubscription(sub);
+        merged.set(normalized.wg_submission_key, normalized);
+        if (!sources.includes('subscription_evaluation_form_answers')) {
+          sources.push('subscription_evaluation_form_answers');
+        }
+        continue;
+      }
+    }
 
     const inlineAnswers = answersFromRow(sub);
     if (inlineAnswers.length) {
@@ -617,6 +684,28 @@ export function extractQuestionnaireRowsFromCachedSubscriptions(
 
   const merged = new Map<string, NormalizedWgQuestionnaireRow>();
   for (const sub of subscriptionRows) {
+    const subId = pickString(sub.id) || 'unknown';
+    const evalAnswers = answersFromEvaluationFormAnswers(sub.evaluation_form_answers);
+    if (evalAnswers.length) {
+      const normalized = normalizeEvaluationRow(
+        {
+          ...sub,
+          answers: evalAnswers,
+          submitted_at: sub.watched_true_set_at || sub.watch_end || sub.updated_at || sub.created_at,
+        },
+        'subscription_evaluation_form_answers',
+        subscriptionById,
+      );
+      if (normalized) {
+        normalized.wg_submission_key = `subscription_evaluation_form_answers:${subId}`;
+        normalized.answers = evalAnswers;
+        normalized.watched = sub.watched === true;
+        normalized.watch_duration_seconds = watchSecondsFromSubscription(sub);
+        merged.set(normalized.wg_submission_key, normalized);
+      }
+      continue;
+    }
+
     const extra = sub.extra_fields && typeof sub.extra_fields === 'object'
       ? sub.extra_fields as Record<string, unknown>
       : null;
@@ -940,6 +1029,7 @@ function webhookPayloadCandidates(body: Record<string, unknown>): Record<string,
   push(body);
   push(body.data);
   push(body.payload);
+  push(body.evaluation_form_answers);
   push(body.evaluation);
   push(body.evaluation_form_result);
   push(body.evaluation_form_response);
