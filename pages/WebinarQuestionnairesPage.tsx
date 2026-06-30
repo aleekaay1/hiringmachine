@@ -417,6 +417,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
             <select value={sourceType} onChange={(e) => setSourceType(e.target.value)} className="rounded-lg border border-[#cfe3f9] px-2 py-1 text-sm">
               <option value="all">All sources</option>
               <option value="dashboard_cache">Attendance cache</option>
+              <option value="google_form">Google Form</option>
               <option value="wg_sync">WebinarGeek API</option>
               <option value="wg_webhook">Live webhook</option>
             </select>

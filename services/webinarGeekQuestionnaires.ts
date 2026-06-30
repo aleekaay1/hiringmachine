@@ -117,6 +117,7 @@ export function sourceTypeLabel(sourceType: string | null | undefined): string {
   if (sourceType === 'dashboard_cache') return 'Attendance cache';
   if (sourceType === 'wg_sync') return 'WebinarGeek API';
   if (sourceType === 'wg_webhook') return 'Live webhook';
+  if (sourceType === 'google_form') return 'Google Form';
   return sourceType || 'Unknown';
 }
 

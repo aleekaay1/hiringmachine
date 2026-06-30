@@ -64,7 +64,7 @@ import {
   buildWebinarRowsByEmail,
   classifyBookedOutcome,
   loadScopedWebinarRowsForViewer,
-  type BookedOutcomeBucket,
+  type BookedOutcomeClassification,
 } from '../services/pipelineBookedOutcomes';
 import {
   groupPipelineCandidatesByBatch,
@@ -91,7 +91,7 @@ import {
 
 type QueueFilter = 'all' | 'callbacks' | 'not_interested' | 'booked' | 'booked_no_show' | 'booked_didnt_watch';
 
-type CandidateBookedOutcomeMap = Map<string, BookedOutcomeBucket>;
+type CandidateBookedOutcomeMap = Map<string, BookedOutcomeClassification>;
 
 const AUTO_ADVANCE = true;
 
@@ -168,11 +168,15 @@ function buildWebinarStageMap(
   for (const candidate of candidates) {
     const latestRecord = latest.get(candidate.id);
     if (!latestRecord || normalizeDispositionLabel(latestRecord.disposition) !== 'booked') continue;
+    const meta = readCallRecordMeta(latestRecord);
+    const subtype = String(meta.bookedSubtype || latestRecord.booked_subtype || '').trim().toLowerCase();
+    if (subtype && subtype !== 'webinar') continue;
     if (questionnaires.has(candidate.id)) {
       map.set(candidate.id, 'questionnaire');
       continue;
     }
-    if (bookedOutcomes.get(candidate.id) === 'booked') {
+    const classification = bookedOutcomes.get(candidate.id);
+    if (classification?.watchedSignal) {
       map.set(candidate.id, 'showed');
       continue;
     }
@@ -229,6 +233,8 @@ const PipelineCallWorkspace: React.FC = () => {
   const [resumesByCandidate, setResumesByCandidate] = React.useState<Map<string, PipelineResume[]>>(new Map());
   const [records, setRecords] = React.useState<PipelineCallRecord[]>([]);
   const [bookedOutcomeByCandidate, setBookedOutcomeByCandidate] = React.useState<CandidateBookedOutcomeMap>(new Map());
+  const webinarRowsByEmailRef = React.useRef<Map<string, Array<Record<string, unknown>>>>(new Map());
+  const liveSessionByEmailRef = React.useRef<Map<string, LiveSessionRegistrantRow[]>>(new Map());
   const [questionnaireByCandidate, setQuestionnaireByCandidate] = React.useState<
     Map<string, WebinarQuestionnaireSubmission>
   >(new Map());
@@ -358,8 +364,10 @@ const PipelineCallWorkspace: React.FC = () => {
       setLiveRegistrants(liveRegRows);
       const rowsByEmail = webinarRows ? buildWebinarRowsByEmail(webinarRows) : new Map();
       const liveSessionByEmail = buildLiveSessionRowsByEmail(liveRegRows);
+      webinarRowsByEmailRef.current = rowsByEmail;
+      liveSessionByEmailRef.current = liveSessionByEmail;
       const latest = latestRecordByCandidate(callRecordRows);
-      const bookedMap = new Map<string, BookedOutcomeBucket>();
+      const bookedMap = new Map<string, BookedOutcomeClassification>();
       for (const candidate of sortedCandidates) {
         const latestRecord = latest.get(candidate.id);
         if (!latestRecord || String(latestRecord.disposition || '').toLowerCase() !== 'booked') continue;
@@ -372,7 +380,7 @@ const PipelineCallWorkspace: React.FC = () => {
           liveSessionByEmail,
           disposedAtMs: Number.isFinite(disposedMs) ? disposedMs : null,
         });
-        bookedMap.set(candidate.id, classification.bucket);
+        bookedMap.set(candidate.id, classification);
       }
       setBookedOutcomeByCandidate(bookedMap);
       setQuestionnaireByCandidate(questionnaireMap);
@@ -444,10 +452,10 @@ const PipelineCallWorkspace: React.FC = () => {
         return d === 'booked';
       }
       if (queueFilter === 'booked_no_show') {
-        return bookedOutcomeByCandidate.get(candidate.id) === 'booked_no_show';
+        return bookedOutcomeByCandidate.get(candidate.id)?.bucket === 'booked_no_show';
       }
       if (queueFilter === 'booked_didnt_watch') {
-        return bookedOutcomeByCandidate.get(candidate.id) === 'booked_didnt_watch';
+        return bookedOutcomeByCandidate.get(candidate.id)?.bucket === 'booked_didnt_watch';
       }
       return true;
     });
@@ -1062,7 +1070,15 @@ const PipelineCallWorkspace: React.FC = () => {
         }),
       );
       if (disposition === 'Booked') {
-        setBookedOutcomeByCandidate((prev) => new Map(prev).set(currentCandidate.id, 'booked'));
+        const disposedMs = Date.parse(latestSaved.disposed_at || latestSaved.created_at);
+        const classification = classifyBookedOutcome({
+          bookedSubtype: bookedSubtype || null,
+          candidateEmail: savedEmail || currentCandidate.email,
+          rowsByEmail: webinarRowsByEmailRef.current,
+          liveSessionByEmail: liveSessionByEmailRef.current,
+          disposedAtMs: Number.isFinite(disposedMs) ? disposedMs : null,
+        });
+        setBookedOutcomeByCandidate((prev) => new Map(prev).set(currentCandidate.id, classification));
       } else {
         setBookedOutcomeByCandidate((prev) => {
           const next = new Map(prev);

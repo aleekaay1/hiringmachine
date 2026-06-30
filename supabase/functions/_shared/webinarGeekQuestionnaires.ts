@@ -1139,10 +1139,62 @@ export async function notifyQuestionnaireSubmission(
   });
 }
 
-export async function processIncomingQuestionnaireWebhook(
+/** Parse Google Apps Script webhook payload (post-webinar Google Form). */
+export function normalizeGoogleFormWebhookPayload(
+  body: Record<string, unknown>,
+): NormalizedWgQuestionnaireRow | null {
+  const source = String(body.source || 'google_form').toLowerCase();
+  if (source !== 'google_form') return null;
+
+  let answers: WgQuestionnaireAnswer[] = [];
+  if (Array.isArray(body.answers)) {
+    answers = (body.answers as unknown[])
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return null;
+        const item = entry as Record<string, unknown>;
+        const question = pickString(item.question, item.title, item.label) || 'Question';
+        const answer = pickString(item.answer, item.value, item.response);
+        if (!answer) return null;
+        return {
+          question,
+          answer,
+          field_key: pickString(item.field_key, item.key),
+        };
+      })
+      .filter((x): x is WgQuestionnaireAnswer => x !== null);
+  }
+  if (!answers.length) answers = answersFromObject(body);
+  if (!answers.length) return null;
+
+  const responseId = pickString(body.response_id, body.responseId, body.id);
+  const formId = pickString(body.form_id, body.formId) || 'form';
+  const email = pickString(body.email, body.Email);
+  const submittedAt = parseSubmittedAt(body.submitted_at ?? body.submittedAt ?? body.timestamp);
+
+  return {
+    wg_submission_key: `google_form:${formId}:${responseId || `${email || 'unknown'}|${submittedAt || new Date().toISOString()}`}`,
+    subscription_id: null,
+    webinar_id: null,
+    broadcast_id: null,
+    webinar_title: pickString(body.form_title, body.formTitle, body.webinar_title),
+    broadcast_title: null,
+    email,
+    first_name: pickString(body.first_name, body.firstName, body.firstname),
+    last_name: pickString(body.last_name, body.lastName, body.lastname, body.surname),
+    phone: pickString(body.phone, body.Phone, body.mobile, body.telephone),
+    submitted_at: submittedAt || new Date().toISOString(),
+    answers,
+    raw_payload: body,
+    recruiter_custom_field: pickString(body.recruiter_custom_field, body.recruiter, body.custom_field),
+    source: 'google_form',
+  };
+}
+
+async function processIncomingQuestionnaireRow(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   admin: any,
-  body: Record<string, unknown>,
+  row: NormalizedWgQuestionnaireRow,
+  sourceType: string,
 ): Promise<{
   ok: boolean;
   upserted: boolean;
@@ -1150,16 +1202,11 @@ export async function processIncomingQuestionnaireWebhook(
   matched_pipeline: boolean;
   error?: string;
 }> {
-  const row = normalizeQuestionnaireWebhookPayload(body);
-  if (!row) {
-    return { ok: false, upserted: false, matched_pipeline: false, error: 'No questionnaire answers in webhook payload' };
-  }
-
   const matchContext = await buildQuestionnaireMatchContext(admin);
   const match = matchQuestionnaireRowWithContext(row, matchContext);
   const syncedAt = new Date().toISOString();
   const payload = buildQuestionnaireUpsertPayload(row, match, {
-    sourceType: 'wg_webhook',
+    sourceType,
     syncedAt,
   });
 
@@ -1187,6 +1234,42 @@ export async function processIncomingQuestionnaireWebhook(
     submission_id: submissionId,
     matched_pipeline: Boolean(match.pipeline_candidate_id),
   };
+}
+
+export async function processIncomingQuestionnaireWebhook(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  body: Record<string, unknown>,
+): Promise<{
+  ok: boolean;
+  upserted: boolean;
+  submission_id?: string;
+  matched_pipeline: boolean;
+  error?: string;
+}> {
+  const row = normalizeQuestionnaireWebhookPayload(body);
+  if (!row) {
+    return { ok: false, upserted: false, matched_pipeline: false, error: 'No questionnaire answers in webhook payload' };
+  }
+  return processIncomingQuestionnaireRow(admin, row, 'wg_webhook');
+}
+
+export async function processIncomingGoogleFormWebhook(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  body: Record<string, unknown>,
+): Promise<{
+  ok: boolean;
+  upserted: boolean;
+  submission_id?: string;
+  matched_pipeline: boolean;
+  error?: string;
+}> {
+  const row = normalizeGoogleFormWebhookPayload(body);
+  if (!row) {
+    return { ok: false, upserted: false, matched_pipeline: false, error: 'No Google Form answers in webhook payload' };
+  }
+  return processIncomingQuestionnaireRow(admin, row, 'google_form');
 }
 
 export type QuestionnaireMatchResult = {
