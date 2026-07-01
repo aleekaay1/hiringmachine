@@ -31,6 +31,7 @@ import {
   listPipelineManualCandidatesPage,
   listPipelineCallRecordsToday,
   PIPELINE_CALL_QUEUE_PAGE_SIZE,
+  readPipelineQuestionnaireWebinarContext,
   listPipelineResumesForCandidates,
   logPipelineCallAction,
   normalizeDialDestination,
@@ -176,6 +177,11 @@ function buildWebinarStageMap(
     const subtype = String(meta.bookedSubtype || latestRecord.booked_subtype || '').trim().toLowerCase();
     if (subtype && subtype !== 'webinar') continue;
     if (questionnaires.has(candidate.id)) {
+      map.set(candidate.id, 'questionnaire');
+      continue;
+    }
+    const questionnaireCtx = readPipelineQuestionnaireWebinarContext(candidate);
+    if (questionnaireCtx && (questionnaireCtx.answerCount > 0 || questionnaireCtx.submittedAt)) {
       map.set(candidate.id, 'questionnaire');
       continue;
     }

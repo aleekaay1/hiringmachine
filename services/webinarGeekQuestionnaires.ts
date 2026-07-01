@@ -553,6 +553,7 @@ export async function loadQuestionnaireMapForCandidateIds(
   const map = new Map<string, WebinarQuestionnaireSubmission>();
   if (!ids.length) return map;
 
+  const filledStages = ['questionnaire_submitted', 'ready_for_followup'];
   const chunkSize = 60;
   for (let i = 0; i < ids.length; i += chunkSize) {
     const chunk = ids.slice(i, i + chunkSize);
@@ -560,7 +561,7 @@ export async function loadQuestionnaireMapForCandidateIds(
       .from('webinar_geek_questionnaire_submissions')
       .select(LIST_SELECT)
       .in('pipeline_candidate_id', chunk)
-      .eq('hiring_stage', 'questionnaire_submitted')
+      .in('hiring_stage', filledStages)
       .order('submitted_at', { ascending: false });
     if (error) throw new Error(error.message);
     for (const row of (data || []) as WebinarQuestionnaireSubmission[]) {
