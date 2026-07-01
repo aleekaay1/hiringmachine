@@ -388,7 +388,7 @@ type CrmCandidateHireRow = {
   first_name: string | null;
   last_name: string | null;
   admin_data: Record<string, unknown> | null;
-  updated_at: string | null;
+  timestamp: string | null;
 };
 
 function isCrmCandidateHired(adminData: Record<string, unknown> | null | undefined): boolean {
@@ -416,7 +416,7 @@ function displayNameForHire(pipeline: PipelineCandidateHireRow, crm: CrmCandidat
 }
 
 function hireEarnedAt(pipeline: PipelineCandidateHireRow, crm: CrmCandidateHireRow | null): string {
-  if (crm?.updated_at) return crm.updated_at;
+  if (crm?.timestamp) return crm.timestamp;
   if (pipeline.updated_at) return pipeline.updated_at;
   return new Date().toISOString();
 }
@@ -526,7 +526,7 @@ async function loadHireAttributionForUser(
     if (!slice.length) continue;
     const { data, error } = await admin
       .from('candidates')
-      .select('id, email, first_name, last_name, admin_data, updated_at')
+      .select('id, email, first_name, last_name, admin_data, timestamp')
       .in('id', slice);
     if (error) throw error;
     for (const row of (data || []) as CrmCandidateHireRow[]) {
@@ -542,7 +542,7 @@ async function loadHireAttributionForUser(
     if (!slice.length) continue;
     const { data, error } = await admin
       .from('candidates')
-      .select('id, email, first_name, last_name, admin_data, updated_at')
+      .select('id, email, first_name, last_name, admin_data, timestamp')
       .in('email', slice);
     if (error) throw error;
     for (const row of (data || []) as CrmCandidateHireRow[]) {

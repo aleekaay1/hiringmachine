@@ -203,23 +203,11 @@ const WebinarQuestionnairesPage: React.FC = () => {
     }
   }, [loadMeta, nextOffset, pageFilters]);
 
-  const autoRematchDoneRef = React.useRef(false);
-
   React.useEffect(() => {
     if (!isAuthenticated || !canAccessWebinarQuestionnaires(role)) return;
     void loadPage('reset');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, role, debouncedSearch, dateFrom, dateTo, webinarTitle, sourceType, viewFilter]);
-
-  React.useEffect(() => {
-    if (!isAuthenticated || !canAccessWebinarQuestionnaires(role) || autoRematchDoneRef.current) return;
-    autoRematchDoneRef.current = true;
-    void rematchWebinarQuestionnaires(30).then((result) => {
-      if (!result.ok || !result.data.newly_matched_count) return;
-      void loadPage('reset');
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated, role]);
 
   React.useEffect(() => {
     if (!isAuthenticated || !canAccessWebinarQuestionnaires(role)) return;

@@ -160,13 +160,14 @@ export async function persistLiveSessionsRegistry(
       ]),
     );
 
-    const { error: clearRegErr } = await admin
-      .from('live_session_registrants')
-      .delete()
-      .eq('session_date', sessionDate);
-    if (clearRegErr) throw clearRegErr;
-
-    if (invitees.length === 0) return;
+    if (invitees.length === 0) {
+      const { error: clearRegErr } = await admin
+        .from('live_session_registrants')
+        .delete()
+        .eq('session_date', sessionDate);
+      if (clearRegErr) throw clearRegErr;
+      return;
+    }
 
     const rows = invitees.map((i) => {
       const email = String(i.email ?? '').trim().toLowerCase();
@@ -197,8 +198,28 @@ export async function persistLiveSessionsRegistry(
     }).filter(Boolean) as Record<string, unknown>[];
 
     registrantCount += rows.length;
-    const { error: regErr } = await admin.from('live_session_registrants').insert(rows);
+    const { error: regErr } = await admin.from('live_session_registrants').upsert(rows, {
+      onConflict: 'session_date,email',
+    });
     if (regErr) throw regErr;
+
+    const keepEmails = new Set(
+      rows.map((row) => String(row.email || '').trim().toLowerCase()).filter(Boolean),
+    );
+    const { data: existingRegs } = await admin
+      .from('live_session_registrants')
+      .select('email')
+      .eq('session_date', sessionDate);
+    for (const existing of existingRegs ?? []) {
+      const email = String((existing as { email?: string }).email || '').trim().toLowerCase();
+      if (!email || keepEmails.has(email)) continue;
+      const { error: delErr } = await admin
+        .from('live_session_registrants')
+        .delete()
+        .eq('session_date', sessionDate)
+        .eq('email', email);
+      if (delErr) throw delErr;
+    }
   };
 
   try {

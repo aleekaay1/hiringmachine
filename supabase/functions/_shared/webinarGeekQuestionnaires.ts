@@ -656,7 +656,25 @@ export async function rematchStoredQuestionnaireRows(
   }
   if (!rows.length) return { updated: 0, matchedPipeline: 0, newlyMatched: 0 };
 
-  const matchContext = await buildQuestionnaireMatchContext(admin);
+  const matchContext = (input.email || input.phone) && input.onlyUnmatched
+    ? await buildQuestionnaireMatchContextForRow(admin, {
+      wg_submission_key: 'rematch',
+      subscription_id: null,
+      webinar_id: null,
+      broadcast_id: null,
+      webinar_title: null,
+      broadcast_title: null,
+      email: input.email ?? null,
+      first_name: null,
+      last_name: null,
+      phone: input.phone ?? null,
+      submitted_at: null,
+      answers: [],
+      raw_payload: {},
+      recruiter_custom_field: null,
+      source: 'rematch',
+    })
+    : await buildQuestionnaireMatchContext(admin);
   let updated = 0;
   let matchedPipeline = 0;
   let newlyMatched = 0;
@@ -849,6 +867,118 @@ export async function buildQuestionnaireMatchContext(
     }
     const slug = bookingLinkFirstNameSlug(profile.full_name, profile.email);
     if (slug && !settingsByTag.has(slug)) settingsByTag.set(slug, { user_id: userId, label });
+  }
+
+  return {
+    pipelineByEmail,
+    journeyByEmail,
+    pipelineByPhone,
+    journeyByPhone,
+    bookingByEmailBroadcast,
+    bookingByEmail,
+    settingsByTag,
+  };
+}
+
+/** Targeted match lookups for a single webhook row (avoids scanning 8k+ rows). */
+export async function buildQuestionnaireMatchContextForRow(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  row: NormalizedWgQuestionnaireRow,
+): Promise<QuestionnaireMatchContext> {
+  const pipelineByEmail = new Map<string, string>();
+  const journeyByEmail = new Map<string, string>();
+  const pipelineByPhone = new Map<string, string>();
+  const journeyByPhone = new Map<string, string>();
+  const bookingByEmailBroadcast = new Map<string, Record<string, unknown>>();
+  const bookingByEmail = new Map<string, Record<string, unknown>>();
+  const settingsByTag = new Map<string, { user_id: string; label: string | null }>();
+
+  const email = normalizeEmail(row.email);
+  const phone = normalizePhoneDigits(row.phone);
+
+  if (email) {
+    const [{ data: pipelineRows }, { data: journeyRows }, { data: bookingRows }] = await Promise.all([
+      admin.from('pipeline_candidates').select('id, email, phone').ilike('email', email).limit(5),
+      admin.from('candidates').select('id, email, phone').ilike('email', email).limit(5),
+      admin.from('webinar_geek_portal_bookings')
+        .select('candidate_email, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at')
+        .eq('status', 'booked')
+        .ilike('candidate_email', email)
+        .order('created_at', { ascending: false })
+        .limit(10),
+    ]);
+    for (const pipelineRow of pipelineRows || []) {
+      const em = normalizeEmail(pipelineRow.email);
+      if (em && !pipelineByEmail.has(em)) pipelineByEmail.set(em, String(pipelineRow.id));
+      const ph = normalizePhoneDigits(pipelineRow.phone);
+      if (ph && !pipelineByPhone.has(ph)) pipelineByPhone.set(ph, String(pipelineRow.id));
+    }
+    for (const journeyRow of journeyRows || []) {
+      const em = normalizeEmail(journeyRow.email);
+      if (em && !journeyByEmail.has(em)) journeyByEmail.set(em, String(journeyRow.id));
+      const ph = normalizePhoneDigits(journeyRow.phone);
+      if (ph && !journeyByPhone.has(ph)) journeyByPhone.set(ph, String(journeyRow.id));
+    }
+    for (const bookingRow of bookingRows || []) {
+      const em = normalizeEmail(bookingRow.candidate_email);
+      if (!em) continue;
+      if (!bookingByEmail.has(em)) bookingByEmail.set(em, bookingRow);
+      const broadcastId = pickString(bookingRow.broadcast_id);
+      const key = broadcastId ? `${em}|${broadcastId}` : em;
+      if (!bookingByEmailBroadcast.has(key)) bookingByEmailBroadcast.set(key, bookingRow);
+    }
+  }
+
+  if (phone && !pipelineByPhone.has(phone)) {
+    const { data: pipelineRows } = await admin
+      .from('pipeline_candidates')
+      .select('id, email, phone')
+      .ilike('phone', `%${phone.slice(-10)}%`)
+      .limit(5);
+    for (const pipelineRow of pipelineRows || []) {
+      const ph = normalizePhoneDigits(pipelineRow.phone);
+      if (ph && !pipelineByPhone.has(ph)) pipelineByPhone.set(ph, String(pipelineRow.id));
+      const em = normalizeEmail(pipelineRow.email);
+      if (em && !pipelineByEmail.has(em)) pipelineByEmail.set(em, String(pipelineRow.id));
+    }
+  }
+
+  const recruiterTag = pickString(row.recruiter_custom_field);
+  if (recruiterTag) {
+    const tagKeys = new Set<string>([
+      recruiterTag.toLowerCase(),
+      recruiterTag.toLowerCase().replace(/^(cooper|rms)[_\-]+/i, ''),
+    ]);
+    const parsed = parseBookingLinkTag(recruiterTag);
+    if (parsed) tagKeys.add(parsed.tag.toLowerCase());
+    const { data: settingsRows } = await admin
+      .from('pipeline_user_call_settings')
+      .select('user_id, webinar_geek_custom_field')
+      .not('webinar_geek_custom_field', 'is', null);
+    const profileIds = new Set<string>();
+    for (const settings of settingsRows || []) {
+      const settingsTag = pickString(settings.webinar_geek_custom_field);
+      if (!settingsTag || !tagKeys.has(settingsTag.toLowerCase())) continue;
+      const userId = String(settings.user_id || '');
+      if (!userId) continue;
+      profileIds.add(userId);
+      settingsByTag.set(settingsTag.toLowerCase(), { user_id: userId, label: null });
+    }
+    if (profileIds.size) {
+      const { data: profileRows } = await admin
+        .from('user_profiles')
+        .select('user_id, full_name, email')
+        .in('user_id', [...profileIds]);
+      for (const profile of profileRows || []) {
+        const userId = String(profile.user_id || '');
+        if (!userId) continue;
+        const label = pickString(profile.full_name, profile.email);
+        for (const [tag, entry] of settingsByTag.entries()) {
+          if (entry.user_id === userId) settingsByTag.set(tag, { user_id: userId, label });
+        }
+      }
+    }
   }
 
   return {
@@ -1235,7 +1365,9 @@ async function processIncomingQuestionnaireRow(
   matched_pipeline: boolean;
   error?: string;
 }> {
-  const matchContext = await buildQuestionnaireMatchContext(admin);
+  const matchContext = sourceType === 'google_form' || sourceType === 'wg_webhook'
+    ? await buildQuestionnaireMatchContextForRow(admin, row)
+    : await buildQuestionnaireMatchContext(admin);
   const match = matchQuestionnaireRowWithContext(row, matchContext);
   const syncedAt = new Date().toISOString();
   const payload = buildQuestionnaireUpsertPayload(row, match, {

@@ -1089,7 +1089,7 @@ const PipelineCallWorkspace: React.FC = () => {
       }
       const rematchEmail = savedEmail || currentCandidate.email;
       const rematchPhone = currentCandidate.phone;
-      if (rematchEmail || rematchPhone) {
+      if (disposition === 'Booked' && (rematchEmail || rematchPhone)) {
         void rematchWebinarQuestionnairesForContact({
           email: rematchEmail || undefined,
           phone: rematchPhone || undefined,

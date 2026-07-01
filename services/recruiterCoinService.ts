@@ -26,6 +26,10 @@ export type RecruiterCoinWallet = {
   ledgerMissing: boolean;
 };
 
+const COIN_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
+const COIN_SYNC_AT_KEY = 'paz_recruiter_coin_sync_at';
+const COIN_SYNC_BALANCE_KEY = 'paz_recruiter_coin_balance';
+
 async function postRecruiterCoinSync(body: Record<string, unknown> = {}): Promise<{
   ok: boolean;
   balance?: number;
@@ -77,9 +81,33 @@ export async function syncMyRecruiterCoins(): Promise<{
   ledgerMissing: boolean;
   error?: string;
 }> {
+  try {
+    const lastSync = Number(sessionStorage.getItem(COIN_SYNC_AT_KEY) || 0);
+    const cachedBalance = sessionStorage.getItem(COIN_SYNC_BALANCE_KEY);
+    if (
+      cachedBalance
+      && Number.isFinite(lastSync)
+      && Date.now() - lastSync < COIN_SYNC_COOLDOWN_MS
+    ) {
+      return {
+        balance: Number(cachedBalance),
+        ledgerReady: true,
+        ledgerMissing: false,
+      };
+    }
+  } catch {
+    // sessionStorage unavailable
+  }
+
   const result = await postRecruiterCoinSync({});
   if (!result.ok) {
     return { balance: 0, ledgerReady: false, ledgerMissing: false, error: result.error };
+  }
+  try {
+    sessionStorage.setItem(COIN_SYNC_AT_KEY, String(Date.now()));
+    sessionStorage.setItem(COIN_SYNC_BALANCE_KEY, String(result.balance ?? 0));
+  } catch {
+    // ignore
   }
   return {
     balance: result.balance ?? 0,

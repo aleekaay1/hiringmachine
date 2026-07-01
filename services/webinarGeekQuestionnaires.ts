@@ -321,23 +321,36 @@ export async function fetchWebinarQuestionnaireSummary(input?: {
   attendedOnly: number;
   matchedPipeline: number;
 }> {
+  const { data, error } = await supabase.rpc('wg_questionnaire_summary_counts', {
+    p_date_from: input?.dateFrom ? ymdStartIso(input.dateFrom) : null,
+    p_date_to: input?.dateTo ? ymdEndIso(input.dateTo) : null,
+  });
+  if (!error && data && typeof data === 'object') {
+    const counts = data as Record<string, unknown>;
+    return {
+      total: Number(counts.total || 0),
+      withAnswers: Number(counts.withAnswers || 0),
+      attendedOnly: Number(counts.attendedOnly || 0),
+      matchedPipeline: Number(counts.matchedPipeline || 0),
+    };
+  }
+
   let query = supabase
     .from('webinar_geek_questionnaire_submissions')
-    .select('hiring_stage, pipeline_candidate_id');
+    .select('hiring_stage, pipeline_candidate_id', { count: 'exact', head: true });
   if (input?.dateFrom) query = query.gte('submitted_at', ymdStartIso(input.dateFrom));
   if (input?.dateTo) query = query.lte('submitted_at', ymdEndIso(input.dateTo));
 
-  const { data, error } = await query.limit(5000);
-  if (error) {
+  const { count, error: countError } = await query;
+  if (countError) {
     return { total: 0, withAnswers: 0, attendedOnly: 0, matchedPipeline: 0 };
   }
 
-  const rows = data || [];
   return {
-    total: rows.length,
-    withAnswers: rows.filter((row) => row.hiring_stage === 'questionnaire_submitted').length,
-    attendedOnly: rows.filter((row) => row.hiring_stage === 'attended_only').length,
-    matchedPipeline: rows.filter((row) => row.pipeline_candidate_id).length,
+    total: count ?? 0,
+    withAnswers: 0,
+    attendedOnly: 0,
+    matchedPipeline: 0,
   };
 }
 
