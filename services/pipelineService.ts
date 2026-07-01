@@ -1,4 +1,6 @@
 import { supabase } from './supabaseClient';
+import { getCurrentUserProfile, type AppRole } from './accessControl';
+import { fetchHierarchyTeamUserIds } from './webinarGeekQuestionnaires';
 import {
   journeyStageForCallDisposition,
   type PipelineCallDisposition,
@@ -944,13 +946,30 @@ const PIPELINE_CANDIDATE_SELECT =
 type PipelineViewerScope = {
   userId: string | null;
   hasFullVisibility: boolean;
+  teamUserIds?: string[];
 };
+
+function roleHasFullPipelineVisibility(role: AppRole | null | undefined): boolean {
+  return role === 'admin' || role === 'hr' || role === 'webinar';
+}
 
 async function resolvePipelineViewerScope(): Promise<PipelineViewerScope> {
   const { data: auth } = await supabase.auth.getUser();
   const userId = auth.user?.id ?? null;
-  // Every operational user (recruiter, leadership) owns their upload queue only.
-  // Admins use analytics dashboards, not shared pipeline candidate lists.
+  const profile = await getCurrentUserProfile().catch(() => null);
+  const role = profile?.role ?? null;
+  if (roleHasFullPipelineVisibility(role)) {
+    return { userId, hasFullVisibility: true };
+  }
+  if (role === 'leadership' && userId) {
+    const teamUserIds = await fetchHierarchyTeamUserIds(userId).catch(() => [userId]);
+    const uniqueTeamIds = [...new Set(teamUserIds.filter(Boolean))];
+    return {
+      userId,
+      hasFullVisibility: false,
+      teamUserIds: uniqueTeamIds.length ? uniqueTeamIds : [userId],
+    };
+  }
   return { userId, hasFullVisibility: false };
 }
 
@@ -965,7 +984,14 @@ function applyPipelineUploaderScope<
 ): TQuery {
   if (scope.hasFullVisibility) return query;
   if (!scope.userId) return query.eq('id', '__no_pipeline_access__');
-  return query.or(`uploader_user_id.eq.${scope.userId},assigned_to_user_id.eq.${scope.userId}`);
+  const ownerIds = scope.teamUserIds?.length
+    ? [...new Set([scope.userId, ...scope.teamUserIds])]
+    : [scope.userId];
+  const clauses = ownerIds.flatMap((id) => [
+    `uploader_user_id.eq.${id}`,
+    `assigned_to_user_id.eq.${id}`,
+  ]);
+  return query.or(clauses.join(','));
 }
 
 async function canAccessPipelineCandidate(candidateId: string): Promise<boolean> {

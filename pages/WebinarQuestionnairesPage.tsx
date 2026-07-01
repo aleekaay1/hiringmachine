@@ -25,6 +25,7 @@ import {
   purgeLegacyQuestionnaireSubmissions,
   questionnaireLeadOwnedByScope,
   rematchWebinarQuestionnaires,
+  rematchWebinarQuestionnairesForContact,
   seedQuestionnaireOpenedIdsIfEmpty,
   submissionMatchesPageFilters,
   subscribeWebinarQuestionnaireSubmissions,
@@ -52,8 +53,8 @@ function stageTone(stage: string): string {
   return 'bg-slate-100 text-slate-700';
 }
 
-function submissionReadyToCall(row: WebinarQuestionnaireSubmission): boolean {
-  return row.hiring_stage === 'ready_for_followup' || row.hiring_stage === 'questionnaire_submitted';
+function submissionCallable(row: WebinarQuestionnaireSubmission): boolean {
+  return Boolean(row.email || row.phone || row.pipeline_candidate_id);
 }
 
 type QuestionnaireCallButtonProps = {
@@ -78,9 +79,8 @@ const QuestionnaireCallButton: React.FC<QuestionnaireCallButtonProps> = ({
   const navigate = useNavigate();
   const [loading, setLoading] = React.useState(false);
 
-  const canCall = showForAwaiting || submissionReadyToCall(row);
+  const canCall = showForAwaiting || submissionCallable(row);
   if (!canCall) return null;
-  if (!row.email && !row.phone && !pipelineCandidateId && !row.pipeline_candidate_id) return null;
   if (
     accessScope
     && !questionnaireLeadOwnedByScope(accessScope, row.booked_by_user_id, row.recruiter_custom_field)
@@ -274,6 +274,21 @@ const WebinarQuestionnairesPage: React.FC = () => {
     }));
     flashRow(row.id, `New form submission: ${displayNameFromSubmission(row)}`);
     void loadFollowUp();
+    if (!row.pipeline_candidate_id && (row.email || row.phone)) {
+      void rematchWebinarQuestionnairesForContact({
+        email: row.email,
+        phone: row.phone,
+      }).then((result) => {
+        if (result.ok) {
+          void fetchWebinarQuestionnaireDetail(row.id).then((detail) => {
+            if (!detail?.pipeline_candidate_id) return;
+            setRows((prev) => prev.map((item) => (
+              item.id === row.id ? { ...item, pipeline_candidate_id: detail.pipeline_candidate_id } : item
+            )));
+          });
+        }
+      });
+    }
   }, [accessScope, flashRow, loadFollowUp, pageFilters.dateFrom, pageFilters.dateTo]);
 
   const handleLiveUpdate = React.useCallback((row: WebinarQuestionnaireSubmission) => {
@@ -296,6 +311,54 @@ const WebinarQuestionnairesPage: React.FC = () => {
       setExpandedDetail((prev) => (prev?.id === row.id ? { ...prev, ...row } : prev));
     }
   }, [accessScope, expandedId, pageFilters, filterOptions]);
+
+  const pipelineBackfillRef = React.useRef(false);
+
+  const linkPipelineProfilesForRows = React.useCallback(async (rowsToLink: WebinarQuestionnaireSubmission[]) => {
+    const unmatched = rowsToLink.filter((row) => !row.pipeline_candidate_id && (row.email || row.phone));
+    if (!unmatched.length) return;
+
+    if (!pipelineBackfillRef.current && (canManage || role === 'leadership' || role === 'hr' || role === 'webinar')) {
+      pipelineBackfillRef.current = true;
+      void rematchWebinarQuestionnaires(90).then((result) => {
+        if (!result.ok) return;
+        const linked = result.data.newly_matched_count
+          || result.data.rematched_count
+          || result.data.matched_pipeline_count;
+        if (!linked) return;
+        void fetchWebinarQuestionnairePage({ ...pageFilters, offset: 0 }).then((page) => {
+          setRows(page.rows.filter((row) => {
+            if (accessScope && !questionnaireLeadOwnedByScope(accessScope, row.booked_by_user_id, row.recruiter_custom_field)) {
+              return false;
+            }
+            if (viewFilter === 'new_unread') {
+              return submissionMatchesPageFilters(row, pageFilters, filterOptions);
+            }
+            if (pageFilters.sourceType && pageFilters.sourceType !== 'all' && row.source_type !== pageFilters.sourceType) {
+              return false;
+            }
+            return true;
+          }));
+        });
+      });
+      return;
+    }
+
+    await Promise.all(
+      unmatched.slice(0, 8).map(async (row) => {
+        const result = await rematchWebinarQuestionnairesForContact({
+          email: row.email,
+          phone: row.phone,
+        });
+        if (!result.ok) return;
+        const detail = await fetchWebinarQuestionnaireDetail(row.id);
+        if (!detail?.pipeline_candidate_id) return;
+        setRows((prev) => prev.map((item) => (
+          item.id === row.id ? { ...item, pipeline_candidate_id: detail.pipeline_candidate_id } : item
+        )));
+      }),
+    );
+  }, [accessScope, canManage, filterOptions, pageFilters, role, viewFilter]);
 
   const loadMeta = React.useCallback(async () => {
     setSummaryLoading(true);
@@ -342,6 +405,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
       setNextOffset(page.nextOffset);
       if (mode === 'reset') {
         void loadMeta();
+        void linkPipelineProfilesForRows(visible);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -349,7 +413,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [accessScope, loadMeta, nextOffset, pageFilters, filterOptions, userId, viewFilter]);
+  }, [accessScope, linkPipelineProfilesForRows, loadMeta, nextOffset, pageFilters, filterOptions, userId, viewFilter]);
 
   React.useEffect(() => {
     if (!isAuthenticated || !canAccessWebinarQuestionnaires(role) || !accessScope) return;
@@ -668,17 +732,10 @@ const WebinarQuestionnairesPage: React.FC = () => {
                         </span>
                       </td>
                       <td className="px-3 py-2">
-                        <QuestionnaireCallButton row={row} accessScope={accessScope} onLinked={markSubmissionLinked} />
-                        {!submissionReadyToCall(row) && row.pipeline_candidate_id && (
-                          <Link
-                            to={`/pipeline/call?candidateId=${row.pipeline_candidate_id}`}
-                            className="text-[10px] text-[#005EB8] hover:underline"
-                          >
-                            Open lead
-                          </Link>
-                        )}
-                        {!row.pipeline_candidate_id && submissionReadyToCall(row) && (
-                          <span className="text-[10px] text-[#8aa3c0]">Linking…</span>
+                        {submissionCallable(row) ? (
+                          <QuestionnaireCallButton row={row} accessScope={accessScope} onLinked={markSubmissionLinked} />
+                        ) : (
+                          <span className="text-[10px] text-[#8aa3c0]">No contact</span>
                         )}
                       </td>
                       {canManage && (

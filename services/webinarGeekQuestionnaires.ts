@@ -1298,6 +1298,8 @@ export async function lookupPipelineCandidateIdByContact(
 
   return null;
 }
+
+export async function deleteWebinarQuestionnaireSubmission(id: string): Promise<void> {
   const { error } = await supabase
     .from('webinar_geek_questionnaire_submissions')
     .delete()
