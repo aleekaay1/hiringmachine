@@ -312,37 +312,9 @@ const WebinarQuestionnairesPage: React.FC = () => {
     }
   }, [accessScope, expandedId, pageFilters, filterOptions]);
 
-  const pipelineBackfillRef = React.useRef(false);
-
   const linkPipelineProfilesForRows = React.useCallback(async (rowsToLink: WebinarQuestionnaireSubmission[]) => {
     const unmatched = rowsToLink.filter((row) => !row.pipeline_candidate_id && (row.email || row.phone));
     if (!unmatched.length) return;
-
-    if (!pipelineBackfillRef.current && (canManage || role === 'leadership' || role === 'hr' || role === 'webinar')) {
-      pipelineBackfillRef.current = true;
-      void rematchWebinarQuestionnaires(90).then((result) => {
-        if (!result.ok) return;
-        const linked = result.data.newly_matched_count
-          || result.data.rematched_count
-          || result.data.matched_pipeline_count;
-        if (!linked) return;
-        void fetchWebinarQuestionnairePage({ ...pageFilters, offset: 0 }).then((page) => {
-          setRows(page.rows.filter((row) => {
-            if (accessScope && !questionnaireLeadOwnedByScope(accessScope, row.booked_by_user_id, row.recruiter_custom_field)) {
-              return false;
-            }
-            if (viewFilter === 'new_unread') {
-              return submissionMatchesPageFilters(row, pageFilters, filterOptions);
-            }
-            if (pageFilters.sourceType && pageFilters.sourceType !== 'all' && row.source_type !== pageFilters.sourceType) {
-              return false;
-            }
-            return true;
-          }));
-        });
-      });
-      return;
-    }
 
     await Promise.all(
       unmatched.slice(0, 8).map(async (row) => {
@@ -358,7 +330,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
         )));
       }),
     );
-  }, [accessScope, canManage, filterOptions, pageFilters, role, viewFilter]);
+  }, [accessScope, filterOptions, pageFilters, viewFilter]);
 
   const loadMeta = React.useCallback(async () => {
     setSummaryLoading(true);

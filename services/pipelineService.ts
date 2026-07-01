@@ -1,5 +1,5 @@
 import { supabase } from './supabaseClient';
-import { getCurrentUserProfile, type AppRole } from './accessControl';
+import { getCurrentUserProfile } from './accessControl';
 import { fetchHierarchyTeamUserIds } from './webinarGeekQuestionnaires';
 import {
   journeyStageForCallDisposition,
@@ -949,18 +949,12 @@ type PipelineViewerScope = {
   teamUserIds?: string[];
 };
 
-function roleHasFullPipelineVisibility(role: AppRole | null | undefined): boolean {
-  return role === 'admin' || role === 'hr' || role === 'webinar';
-}
-
 async function resolvePipelineViewerScope(): Promise<PipelineViewerScope> {
   const { data: auth } = await supabase.auth.getUser();
   const userId = auth.user?.id ?? null;
   const profile = await getCurrentUserProfile().catch(() => null);
   const role = profile?.role ?? null;
-  if (roleHasFullPipelineVisibility(role)) {
-    return { userId, hasFullVisibility: true };
-  }
+  // Admin/HR/webinar: own queue only in lists; single-lead access uses pipeline_can_access_candidate RPC.
   if (role === 'leadership' && userId) {
     const teamUserIds = await fetchHierarchyTeamUserIds(userId).catch(() => [userId]);
     const uniqueTeamIds = [...new Set(teamUserIds.filter(Boolean))];
