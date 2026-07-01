@@ -370,6 +370,7 @@ export async function fetchWebinarQuestionnairePage(
     .from('webinar_geek_questionnaire_submissions')
     .select(LIST_SELECT)
     .order('submitted_at', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
     .range(offset, offset + fetchLimit - 1);
 
   const search = input.search?.trim();
@@ -406,7 +407,7 @@ export async function fetchWebinarQuestionnairePage(
       .eq('hiring_stage', 'questionnaire_submitted');
   } else if (viewFilter === 'wg_linked') {
     query = query.or(
-      'subscription_id.not.is.null,watched.eq.true,watch_duration_seconds.gt.0,match_method.ilike.%wg_%',
+      'subscription_id.not.is.null,watched.eq.true,watch_duration_seconds.gt.0,match_method.ilike.%wg_%,recruiter_custom_field.not.is.null,booked_by_user_id.not.is.null,raw_payload->>wg_linked_email.not.is.null',
     );
   }
 

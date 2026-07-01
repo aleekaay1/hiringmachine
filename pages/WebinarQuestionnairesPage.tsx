@@ -78,7 +78,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
   const [debouncedSearch, setDebouncedSearch] = React.useState('');
   const [dateFrom, setDateFrom] = React.useState(defaultQuestionnaireDateFrom());
   const [dateTo, setDateTo] = React.useState('');
-  const [viewFilter, setViewFilter] = React.useState<QuestionnaireViewFilter>('wg_linked');
+  const [viewFilter, setViewFilter] = React.useState<QuestionnaireViewFilter>('all');
   const [expandedId, setExpandedId] = React.useState<string | null>(null);
   const [expandedDetail, setExpandedDetail] = React.useState<WebinarQuestionnaireSubmission | null>(null);
   const [detailLoadingId, setDetailLoadingId] = React.useState<string | null>(null);
@@ -164,7 +164,12 @@ const WebinarQuestionnairesPage: React.FC = () => {
 
   const handleLiveInsert = React.useCallback((row: WebinarQuestionnaireSubmission) => {
     if (row.source_type !== 'google_form') return;
-    if (!submissionMatchesPageFilters(row, pageFilters, filterOptions)) return;
+    if (pageFilters.dateFrom && row.submitted_at && row.submitted_at < `${pageFilters.dateFrom}T00:00:00.000Z`) {
+      return;
+    }
+    if (pageFilters.dateTo && row.submitted_at && row.submitted_at > `${pageFilters.dateTo}T23:59:59.999Z`) {
+      return;
+    }
     setRows((prev) => {
       if (prev.some((item) => item.id === row.id)) return prev;
       return [row, ...prev];
@@ -177,21 +182,20 @@ const WebinarQuestionnairesPage: React.FC = () => {
     }));
     flashRow(row.id, `New form submission: ${displayNameFromSubmission(row)}`);
     void loadFollowUp();
-  }, [flashRow, loadFollowUp, pageFilters, filterOptions]);
+  }, [flashRow, loadFollowUp, pageFilters.dateFrom, pageFilters.dateTo]);
 
   const handleLiveUpdate = React.useCallback((row: WebinarQuestionnaireSubmission) => {
     if (row.source_type !== 'google_form') return;
     setRows((prev) => {
       const idx = prev.findIndex((item) => item.id === row.id);
-      const matches = submissionMatchesPageFilters(row, pageFilters, filterOptions);
-      if (idx === -1) {
-        if (!matches) return prev;
-        return [row, ...prev];
+      if (idx !== -1) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], ...row };
+        return next;
       }
-      if (!matches) return prev.filter((item) => item.id !== row.id);
-      const next = [...prev];
-      next[idx] = { ...next[idx], ...row };
-      return next;
+      const matches = submissionMatchesPageFilters(row, pageFilters, filterOptions);
+      if (!matches) return prev;
+      return [row, ...prev];
     });
     if (expandedId === row.id) {
       setExpandedDetail((prev) => (prev?.id === row.id ? { ...prev, ...row } : prev));
@@ -226,7 +230,15 @@ const WebinarQuestionnairesPage: React.FC = () => {
       if (mode === 'reset' && userId) {
         setOpenedIds(seedQuestionnaireOpenedIdsIfEmpty(userId, page.rows.map((row) => row.id)));
       }
-      const visible = page.rows.filter((row) => submissionMatchesPageFilters(row, pageFilters, filterOptions));
+      const visible = page.rows.filter((row) => {
+        if (viewFilter === 'new_unread') {
+          return submissionMatchesPageFilters(row, pageFilters, filterOptions);
+        }
+        if (pageFilters.sourceType && pageFilters.sourceType !== 'all' && row.source_type !== pageFilters.sourceType) {
+          return false;
+        }
+        return true;
+      });
       setRows((prev) => (mode === 'more' ? [...prev, ...visible] : visible));
       setHasMore(page.hasMore);
       setNextOffset(page.nextOffset);
@@ -239,7 +251,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [loadMeta, nextOffset, pageFilters, filterOptions, userId]);
+  }, [loadMeta, nextOffset, pageFilters, filterOptions, userId, viewFilter]);
 
   React.useEffect(() => {
     if (!isAuthenticated || !canAccessWebinarQuestionnaires(role) || !accessScope) return;
