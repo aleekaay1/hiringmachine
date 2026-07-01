@@ -1,5 +1,6 @@
--- Run if questionnaire table exists but recruiters see nothing / import failed with PGRST205.
--- Recruiters: awaiting-only (no submission rows); leadership: team hierarchy scope.
+-- Recruiters: no access to form submission rows (leaders handle after submit).
+-- Leadership: team-scoped via user_profile_hierarchy + booking ownership.
+-- RPC for awaiting board filled-email check without exposing submission details to recruiters.
 
 create or replace function public.wg_recruiter_tag_belongs_to_user(
   p_recruiter_custom_field text,

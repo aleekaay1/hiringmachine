@@ -1706,6 +1706,41 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (req.method === 'POST' && mode === 'questionnaire-purge-legacy') {
+      const profileRes = await admin
+        .from('user_profiles')
+        .select('role')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      const role = String((profileRes.data as { role?: string } | null)?.role || '').trim();
+      if (!['admin', 'leadership', 'hr', 'webinar'].includes(role)) {
+        return new Response(JSON.stringify({ error: 'Forbidden' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const { count, error: delErr } = await admin
+        .from('webinar_geek_questionnaire_submissions')
+        .delete({ count: 'exact' })
+        .neq('source_type', 'google_form');
+      if (delErr) {
+        return new Response(JSON.stringify({ error: delErr.message }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      return new Response(JSON.stringify({
+        ok: true,
+        deleted_count: count ?? 0,
+        message: `Removed ${count ?? 0} legacy (non–Google Form) row(s).`,
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     if (req.method === 'POST' && mode === 'questionnaire-sync') {
       const body = (await req.json().catch(() => ({}))) as {
         webinar_id?: string;

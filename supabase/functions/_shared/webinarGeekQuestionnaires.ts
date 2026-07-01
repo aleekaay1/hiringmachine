@@ -40,6 +40,12 @@ function normalizeEmail(value: unknown): string {
   return String(value || '').trim().toLowerCase();
 }
 
+function normalizePersonNameKey(first: unknown, last: unknown): string | null {
+  const parts = [first, last].map((v) => String(v || '').trim().toLowerCase()).filter(Boolean);
+  if (!parts.length) return null;
+  return parts.join(' ').replace(/\s+/g, ' ');
+}
+
 function pickString(...values: unknown[]): string | null {
   for (const value of values) {
     const str = String(value ?? '').trim();
@@ -791,8 +797,11 @@ export type QuestionnaireMatchContext = {
   journeyByEmail: Map<string, string>;
   pipelineByPhone: Map<string, string>;
   journeyByPhone: Map<string, string>;
+  pipelineByName: Map<string, string>;
+  journeyByName: Map<string, string>;
   bookingByEmailBroadcast: Map<string, Record<string, unknown>>;
   bookingByEmail: Map<string, Record<string, unknown>>;
+  bookingByName: Map<string, Record<string, unknown>>;
   settingsByTag: Map<string, { user_id: string; label: string | null }>;
 };
 
@@ -804,8 +813,11 @@ export async function buildQuestionnaireMatchContext(
   const journeyByEmail = new Map<string, string>();
   const pipelineByPhone = new Map<string, string>();
   const journeyByPhone = new Map<string, string>();
+  const pipelineByName = new Map<string, string>();
+  const journeyByName = new Map<string, string>();
   const bookingByEmailBroadcast = new Map<string, Record<string, unknown>>();
   const bookingByEmail = new Map<string, Record<string, unknown>>();
+  const bookingByName = new Map<string, Record<string, unknown>>();
   const settingsByTag = new Map<string, { user_id: string; label: string | null }>();
 
   const [
@@ -815,9 +827,9 @@ export async function buildQuestionnaireMatchContext(
     { data: settingsRows },
     { data: profileRows },
   ] = await Promise.all([
-    admin.from('pipeline_candidates').select('id, email, phone').not('email', 'is', null).limit(8000),
-    admin.from('candidates').select('id, email, phone').not('email', 'is', null).limit(8000),
-    admin.from('webinar_geek_portal_bookings').select('candidate_email, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at').eq('status', 'booked').order('created_at', { ascending: false }).limit(8000),
+    admin.from('pipeline_candidates').select('id, email, phone, first_name, last_name').not('email', 'is', null).limit(8000),
+    admin.from('candidates').select('id, email, phone, first_name, last_name').not('email', 'is', null).limit(8000),
+    admin.from('webinar_geek_portal_bookings').select('candidate_email, candidate_first_name, candidate_last_name, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at').eq('status', 'booked').order('created_at', { ascending: false }).limit(8000),
     admin.from('pipeline_user_call_settings').select('user_id, webinar_geek_custom_field').not('webinar_geek_custom_field', 'is', null),
     admin.from('user_profiles').select('user_id, full_name, email'),
   ]);
@@ -827,12 +839,16 @@ export async function buildQuestionnaireMatchContext(
     if (email && !pipelineByEmail.has(email)) pipelineByEmail.set(email, String(row.id));
     const phone = normalizePhoneDigits(row.phone);
     if (phone && !pipelineByPhone.has(phone)) pipelineByPhone.set(phone, String(row.id));
+    const nameKey = normalizePersonNameKey(row.first_name, row.last_name);
+    if (nameKey && !pipelineByName.has(nameKey)) pipelineByName.set(nameKey, String(row.id));
   }
   for (const row of journeyRows || []) {
     const email = normalizeEmail(row.email);
     if (email && !journeyByEmail.has(email)) journeyByEmail.set(email, String(row.id));
     const phone = normalizePhoneDigits(row.phone);
     if (phone && !journeyByPhone.has(phone)) journeyByPhone.set(phone, String(row.id));
+    const nameKey = normalizePersonNameKey(row.first_name, row.last_name);
+    if (nameKey && !journeyByName.has(nameKey)) journeyByName.set(nameKey, String(row.id));
   }
   for (const row of bookingRows || []) {
     const email = normalizeEmail(row.candidate_email);
@@ -841,6 +857,8 @@ export async function buildQuestionnaireMatchContext(
     const broadcastId = pickString(row.broadcast_id);
     const key = broadcastId ? `${email}|${broadcastId}` : email;
     if (!bookingByEmailBroadcast.has(key)) bookingByEmailBroadcast.set(key, row);
+    const nameKey = normalizePersonNameKey(row.candidate_first_name, row.candidate_last_name);
+    if (nameKey && !bookingByName.has(nameKey)) bookingByName.set(nameKey, row);
   }
 
   const profileByUserId = new Map<string, { full_name?: string; email?: string }>();
@@ -874,8 +892,11 @@ export async function buildQuestionnaireMatchContext(
     journeyByEmail,
     pipelineByPhone,
     journeyByPhone,
+    pipelineByName,
+    journeyByName,
     bookingByEmailBroadcast,
     bookingByEmail,
+    bookingByName,
     settingsByTag,
   };
 }
@@ -890,19 +911,25 @@ export async function buildQuestionnaireMatchContextForRow(
   const journeyByEmail = new Map<string, string>();
   const pipelineByPhone = new Map<string, string>();
   const journeyByPhone = new Map<string, string>();
+  const pipelineByName = new Map<string, string>();
+  const journeyByName = new Map<string, string>();
   const bookingByEmailBroadcast = new Map<string, Record<string, unknown>>();
   const bookingByEmail = new Map<string, Record<string, unknown>>();
+  const bookingByName = new Map<string, Record<string, unknown>>();
   const settingsByTag = new Map<string, { user_id: string; label: string | null }>();
 
   const email = normalizeEmail(row.email);
   const phone = normalizePhoneDigits(row.phone);
+  const firstName = pickString(row.first_name);
+  const lastName = pickString(row.last_name);
+  const nameKey = normalizePersonNameKey(row.first_name, row.last_name);
 
   if (email) {
     const [{ data: pipelineRows }, { data: journeyRows }, { data: bookingRows }] = await Promise.all([
-      admin.from('pipeline_candidates').select('id, email, phone').ilike('email', email).limit(5),
-      admin.from('candidates').select('id, email, phone').ilike('email', email).limit(5),
+      admin.from('pipeline_candidates').select('id, email, phone, first_name, last_name').ilike('email', email).limit(5),
+      admin.from('candidates').select('id, email, phone, first_name, last_name').ilike('email', email).limit(5),
       admin.from('webinar_geek_portal_bookings')
-        .select('candidate_email, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at')
+        .select('candidate_email, candidate_first_name, candidate_last_name, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at')
         .eq('status', 'booked')
         .ilike('candidate_email', email)
         .order('created_at', { ascending: false })
@@ -913,12 +940,16 @@ export async function buildQuestionnaireMatchContextForRow(
       if (em && !pipelineByEmail.has(em)) pipelineByEmail.set(em, String(pipelineRow.id));
       const ph = normalizePhoneDigits(pipelineRow.phone);
       if (ph && !pipelineByPhone.has(ph)) pipelineByPhone.set(ph, String(pipelineRow.id));
+      const nk = normalizePersonNameKey(pipelineRow.first_name, pipelineRow.last_name);
+      if (nk && !pipelineByName.has(nk)) pipelineByName.set(nk, String(pipelineRow.id));
     }
     for (const journeyRow of journeyRows || []) {
       const em = normalizeEmail(journeyRow.email);
       if (em && !journeyByEmail.has(em)) journeyByEmail.set(em, String(journeyRow.id));
       const ph = normalizePhoneDigits(journeyRow.phone);
       if (ph && !journeyByPhone.has(ph)) journeyByPhone.set(ph, String(journeyRow.id));
+      const nk = normalizePersonNameKey(journeyRow.first_name, journeyRow.last_name);
+      if (nk && !journeyByName.has(nk)) journeyByName.set(nk, String(journeyRow.id));
     }
     for (const bookingRow of bookingRows || []) {
       const em = normalizeEmail(bookingRow.candidate_email);
@@ -927,20 +958,82 @@ export async function buildQuestionnaireMatchContextForRow(
       const broadcastId = pickString(bookingRow.broadcast_id);
       const key = broadcastId ? `${em}|${broadcastId}` : em;
       if (!bookingByEmailBroadcast.has(key)) bookingByEmailBroadcast.set(key, bookingRow);
+      const nk = normalizePersonNameKey(bookingRow.candidate_first_name, bookingRow.candidate_last_name);
+      if (nk && !bookingByName.has(nk)) bookingByName.set(nk, bookingRow);
     }
   }
 
-  if (phone && !pipelineByPhone.has(phone)) {
-    const { data: pipelineRows } = await admin
-      .from('pipeline_candidates')
-      .select('id, email, phone')
-      .ilike('phone', `%${phone.slice(-10)}%`)
-      .limit(5);
-    for (const pipelineRow of pipelineRows || []) {
-      const ph = normalizePhoneDigits(pipelineRow.phone);
-      if (ph && !pipelineByPhone.has(ph)) pipelineByPhone.set(ph, String(pipelineRow.id));
-      const em = normalizeEmail(pipelineRow.email);
-      if (em && !pipelineByEmail.has(em)) pipelineByEmail.set(em, String(pipelineRow.id));
+  if (phone) {
+    if (!pipelineByPhone.has(phone)) {
+      const { data: pipelineRows } = await admin
+        .from('pipeline_candidates')
+        .select('id, email, phone, first_name, last_name')
+        .ilike('phone', `%${phone.slice(-10)}%`)
+        .limit(5);
+      for (const pipelineRow of pipelineRows || []) {
+        const ph = normalizePhoneDigits(pipelineRow.phone);
+        if (ph && !pipelineByPhone.has(ph)) pipelineByPhone.set(ph, String(pipelineRow.id));
+        const em = normalizeEmail(pipelineRow.email);
+        if (em && !pipelineByEmail.has(em)) pipelineByEmail.set(em, String(pipelineRow.id));
+        const nk = normalizePersonNameKey(pipelineRow.first_name, pipelineRow.last_name);
+        if (nk && !pipelineByName.has(nk)) pipelineByName.set(nk, String(pipelineRow.id));
+      }
+    }
+    if (!journeyByPhone.has(phone)) {
+      const { data: journeyRows } = await admin
+        .from('candidates')
+        .select('id, email, phone, first_name, last_name')
+        .ilike('phone', `%${phone.slice(-10)}%`)
+        .limit(5);
+      for (const journeyRow of journeyRows || []) {
+        const ph = normalizePhoneDigits(journeyRow.phone);
+        if (ph && !journeyByPhone.has(ph)) journeyByPhone.set(ph, String(journeyRow.id));
+        const em = normalizeEmail(journeyRow.email);
+        if (em && !journeyByEmail.has(em)) journeyByEmail.set(em, String(journeyRow.id));
+        const nk = normalizePersonNameKey(journeyRow.first_name, journeyRow.last_name);
+        if (nk && !journeyByName.has(nk)) journeyByName.set(nk, String(journeyRow.id));
+      }
+    }
+  }
+
+  if (nameKey && firstName && lastName) {
+    if (!pipelineByName.has(nameKey)) {
+      const { data: pipelineRows } = await admin
+        .from('pipeline_candidates')
+        .select('id, email, phone, first_name, last_name')
+        .ilike('first_name', firstName)
+        .ilike('last_name', lastName)
+        .limit(5);
+      for (const pipelineRow of pipelineRows || []) {
+        const nk = normalizePersonNameKey(pipelineRow.first_name, pipelineRow.last_name);
+        if (nk && !pipelineByName.has(nk)) pipelineByName.set(nk, String(pipelineRow.id));
+      }
+    }
+    if (!journeyByName.has(nameKey)) {
+      const { data: journeyRows } = await admin
+        .from('candidates')
+        .select('id, email, phone, first_name, last_name')
+        .ilike('first_name', firstName)
+        .ilike('last_name', lastName)
+        .limit(5);
+      for (const journeyRow of journeyRows || []) {
+        const nk = normalizePersonNameKey(journeyRow.first_name, journeyRow.last_name);
+        if (nk && !journeyByName.has(nk)) journeyByName.set(nk, String(journeyRow.id));
+      }
+    }
+    if (!bookingByName.has(nameKey)) {
+      const { data: bookingRows } = await admin
+        .from('webinar_geek_portal_bookings')
+        .select('candidate_email, candidate_first_name, candidate_last_name, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at')
+        .eq('status', 'booked')
+        .ilike('candidate_first_name', firstName)
+        .ilike('candidate_last_name', lastName)
+        .order('created_at', { ascending: false })
+        .limit(5);
+      for (const bookingRow of bookingRows || []) {
+        const nk = normalizePersonNameKey(bookingRow.candidate_first_name, bookingRow.candidate_last_name);
+        if (nk && !bookingByName.has(nk)) bookingByName.set(nk, bookingRow);
+      }
     }
   }
 
@@ -986,8 +1079,11 @@ export async function buildQuestionnaireMatchContextForRow(
     journeyByEmail,
     pipelineByPhone,
     journeyByPhone,
+    pipelineByName,
+    journeyByName,
     bookingByEmailBroadcast,
     bookingByEmail,
+    bookingByName,
     settingsByTag,
   };
 }
@@ -1032,6 +1128,24 @@ export function matchQuestionnaireRowWithContext(
     }
   }
 
+  const personNameKey = normalizePersonNameKey(row.first_name, row.last_name);
+  if (personNameKey) {
+    if (!pipelineCandidateId) {
+      const pipelineId = context.pipelineByName.get(personNameKey);
+      if (pipelineId) {
+        pipelineCandidateId = pipelineId;
+        matchMethod = matchMethod ? `${matchMethod}+pipeline_name` : 'pipeline_name';
+      }
+    }
+    if (!journeyCandidateId) {
+      const journeyId = context.journeyByName.get(personNameKey);
+      if (journeyId) {
+        journeyCandidateId = journeyId;
+        matchMethod = matchMethod ? `${matchMethod}+journey_name` : 'journey_name';
+      }
+    }
+  }
+
   let bookedByUserId: string | null = null;
   let bookedByLabel: string | null = null;
   let recruiterCustomField = row.recruiter_custom_field;
@@ -1046,6 +1160,16 @@ export function matchQuestionnaireRowWithContext(
       bookedByLabel = pickString(booking.booked_by_label);
       recruiterCustomField = recruiterCustomField || pickString(booking.custom_field);
       matchMethod = matchMethod ? `${matchMethod}+portal_booking` : 'portal_booking';
+    }
+  }
+
+  if (!bookedByUserId && personNameKey) {
+    const booking = context.bookingByName.get(personNameKey) || null;
+    if (booking) {
+      bookedByUserId = booking.booked_by_user_id ? String(booking.booked_by_user_id) : null;
+      bookedByLabel = pickString(booking.booked_by_label);
+      recruiterCustomField = recruiterCustomField || pickString(booking.custom_field);
+      matchMethod = matchMethod ? `${matchMethod}+portal_booking_name` : 'portal_booking_name';
     }
   }
 
@@ -1134,8 +1258,11 @@ export async function upsertQuestionnaireRowsBatched(
     journeyByEmail: new Map(),
     pipelineByPhone: new Map(),
     journeyByPhone: new Map(),
+    pipelineByName: new Map(),
+    journeyByName: new Map(),
     bookingByEmailBroadcast: new Map(),
     bookingByEmail: new Map(),
+    bookingByName: new Map(),
     settingsByTag: new Map(),
   };
   const matchContext = input.match === false
@@ -1451,89 +1578,6 @@ export async function matchQuestionnaireRow(
   admin: any,
   row: NormalizedWgQuestionnaireRow,
 ): Promise<QuestionnaireMatchResult> {
-  const email = normalizeEmail(row.email);
-  let pipelineCandidateId: string | null = null;
-  let journeyCandidateId: string | null = null;
-  let matchMethod: string | null = null;
-
-  if (email) {
-    const { data: pipelineRow } = await admin
-      .from('pipeline_candidates')
-      .select('id')
-      .ilike('email', email)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (pipelineRow?.id) {
-      pipelineCandidateId = String(pipelineRow.id);
-      matchMethod = 'pipeline_email';
-    }
-
-    const { data: journeyRow } = await admin
-      .from('candidates')
-      .select('id')
-      .ilike('email', email)
-      .order('timestamp', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (journeyRow?.id) {
-      journeyCandidateId = String(journeyRow.id);
-      matchMethod = matchMethod || 'journey_email';
-    }
-  }
-
-  let bookedByUserId: string | null = null;
-  let bookedByLabel: string | null = null;
-  let recruiterCustomField = row.recruiter_custom_field;
-
-  if (email) {
-    let bookingQuery = admin
-      .from('webinar_geek_portal_bookings')
-      .select('booked_by_user_id, booked_by_label, custom_field')
-      .eq('status', 'booked')
-      .ilike('candidate_email', email)
-      .order('created_at', { ascending: false })
-      .limit(1);
-    if (row.broadcast_id) {
-      bookingQuery = bookingQuery.eq('broadcast_id', row.broadcast_id);
-    }
-    const { data: booking } = await bookingQuery.maybeSingle();
-    if (booking) {
-      bookedByUserId = booking.booked_by_user_id ? String(booking.booked_by_user_id) : null;
-      bookedByLabel = pickString(booking.booked_by_label);
-      recruiterCustomField = recruiterCustomField || pickString(booking.custom_field);
-      matchMethod = matchMethod ? `${matchMethod}+portal_booking` : 'portal_booking';
-    }
-  }
-
-  if (!bookedByUserId && recruiterCustomField) {
-    const { data: settingsRows } = await admin
-      .from('pipeline_user_call_settings')
-      .select('user_id, webinar_geek_custom_field')
-      .not('webinar_geek_custom_field', 'is', null);
-    for (const settings of settingsRows || []) {
-      const settingsTag = pickString(settings.webinar_geek_custom_field);
-      if (!settingsTag || settingsTag.toLowerCase() !== recruiterCustomField!.toLowerCase()) continue;
-      const userId = String(settings.user_id || '');
-      if (!userId) continue;
-      const { data: profile } = await admin
-        .from('user_profiles')
-        .select('full_name, email')
-        .eq('user_id', userId)
-        .maybeSingle();
-      bookedByUserId = userId;
-      bookedByLabel = pickString(profile?.full_name, profile?.email);
-      matchMethod = matchMethod ? `${matchMethod}+custom_field` : 'custom_field';
-      break;
-    }
-  }
-
-  return {
-    pipeline_candidate_id: pipelineCandidateId,
-    journey_candidate_id: journeyCandidateId,
-    booked_by_user_id: bookedByUserId,
-    booked_by_label: bookedByLabel,
-    match_method: matchMethod,
-    recruiter_custom_field: recruiterCustomField,
-  };
+  const context = await buildQuestionnaireMatchContextForRow(admin, row);
+  return matchQuestionnaireRowWithContext(row, context);
 }

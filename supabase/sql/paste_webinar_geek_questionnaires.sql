@@ -95,6 +95,40 @@ comment on column public.webinar_geek_questionnaire_submissions.source_type is
 
 alter table public.webinar_geek_questionnaire_submissions enable row level security;
 
+create or replace function public.wg_recruiter_tag_belongs_to_user(
+  p_recruiter_custom_field text,
+  p_user_id uuid
+)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    p_recruiter_custom_field is not null
+    and trim(p_recruiter_custom_field) <> ''
+    and exists (
+      select 1
+      from public.user_profiles up
+      left join public.pipeline_user_call_settings pcs on pcs.user_id = up.user_id
+      where up.user_id = p_user_id
+        and (
+          lower(trim(coalesce(pcs.webinar_geek_custom_field, ''))) = lower(trim(p_recruiter_custom_field))
+          or (
+            coalesce(
+              nullif(trim(split_part(coalesce(up.full_name, ''), ' ', 1)), ''),
+              nullif(trim(split_part(split_part(coalesce(up.email, ''), '@', 1), '.', 1)), '')
+            ) is not null
+            and lower(p_recruiter_custom_field) like '%' || lower(coalesce(
+              nullif(trim(split_part(coalesce(up.full_name, ''), ' ', 1)), ''),
+              nullif(trim(split_part(split_part(coalesce(up.email, ''), '@', 1), '.', 1)), '')
+            )) || '%'
+          )
+        )
+    );
+$$;
+
 create or replace function public.wg_recruiter_can_view_questionnaire_row(
   p_recruiter_custom_field text,
   p_booked_by_user_id uuid
@@ -107,26 +141,32 @@ set search_path = public
 as $$
   select
     p_booked_by_user_id = auth.uid()
-    or (
-      p_recruiter_custom_field is not null
-      and trim(p_recruiter_custom_field) <> ''
-      and exists (
-        select 1
-        from public.user_profiles up
-        left join public.pipeline_user_call_settings pcs on pcs.user_id = up.user_id
-        where up.user_id = auth.uid()
-          and up.role = 'recruiter'
-          and (
-            lower(trim(coalesce(pcs.webinar_geek_custom_field, ''))) = lower(trim(p_recruiter_custom_field))
-            or (
-              coalesce(nullif(trim(split_part(coalesce(up.full_name, ''), ' ', 1)), ''), nullif(trim(split_part(split_part(coalesce(up.email, ''), '@', 1), '.', 1)), '')) is not null
-              and lower(p_recruiter_custom_field) like '%' || lower(coalesce(
-                nullif(trim(split_part(coalesce(up.full_name, ''), ' ', 1)), ''),
-                nullif(trim(split_part(split_part(coalesce(up.email, ''), '@', 1), '.', 1)), '')
-              )) || '%'
-            )
-          )
-      )
+    or public.wg_recruiter_tag_belongs_to_user(p_recruiter_custom_field, auth.uid());
+$$;
+
+create or replace function public.wg_leadership_can_view_questionnaire_row(
+  p_booked_by_user_id uuid,
+  p_recruiter_custom_field text
+)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    p_booked_by_user_id = auth.uid()
+    or p_booked_by_user_id in (
+      select h.member_user_id
+      from public.user_profile_hierarchy h
+      where h.leader_user_id = auth.uid()
+    )
+    or public.wg_recruiter_tag_belongs_to_user(p_recruiter_custom_field, auth.uid())
+    or exists (
+      select 1
+      from public.user_profile_hierarchy h
+      where h.leader_user_id = auth.uid()
+        and public.wg_recruiter_tag_belongs_to_user(p_recruiter_custom_field, h.member_user_id)
     );
 $$;
 
@@ -139,9 +179,16 @@ using (
   exists (
     select 1 from public.user_profiles up
     where up.user_id = auth.uid()
-      and up.role in ('admin', 'leadership', 'hr', 'webinar')
+      and up.role in ('admin', 'hr', 'webinar')
   )
-  or public.wg_recruiter_can_view_questionnaire_row(recruiter_custom_field, booked_by_user_id)
+  or (
+    exists (
+      select 1 from public.user_profiles up
+      where up.user_id = auth.uid()
+        and up.role = 'leadership'
+    )
+    and public.wg_leadership_can_view_questionnaire_row(booked_by_user_id, recruiter_custom_field)
+  )
 );
 
 drop policy if exists webinar_geek_questionnaire_submissions_service_write on public.webinar_geek_questionnaire_submissions;
