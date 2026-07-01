@@ -1,6 +1,6 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
-import { ChevronDown, ClipboardList, RefreshCw, Search, Trash2 } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { ChevronDown, ClipboardList, Phone, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { Button } from '../components/UI';
 import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
 import { getCurrentUserProfile, type AppRole } from '../services/accessControl';
@@ -20,6 +20,7 @@ import {
   isQuestionnaireRecruiterRole,
   isQuestionnaireSubmissionUnread,
   loadOpenedQuestionnaireIds,
+  lookupPipelineCandidateIdByContact,
   markQuestionnaireSubmissionOpened,
   purgeLegacyQuestionnaireSubmissions,
   rematchWebinarQuestionnaires,
@@ -48,6 +49,75 @@ function stageTone(stage: string): string {
   if (stage === 'questionnaire_submitted') return 'bg-emerald-100 text-emerald-900';
   return 'bg-slate-100 text-slate-700';
 }
+
+function submissionReadyToCall(row: WebinarQuestionnaireSubmission): boolean {
+  return row.hiring_stage === 'ready_for_followup' || row.hiring_stage === 'questionnaire_submitted';
+}
+
+type QuestionnaireCallButtonProps = {
+  row: WebinarQuestionnaireSubmission;
+  submissionId?: string | null;
+  pipelineCandidateId?: string | null;
+  showForAwaiting?: boolean;
+  onLinked?: (submissionId: string, pipelineCandidateId: string) => void;
+  className?: string;
+};
+
+const QuestionnaireCallButton: React.FC<QuestionnaireCallButtonProps> = ({
+  row,
+  submissionId,
+  pipelineCandidateId,
+  showForAwaiting = false,
+  onLinked,
+  className = '',
+}) => {
+  const navigate = useNavigate();
+  const [loading, setLoading] = React.useState(false);
+
+  const canCall = showForAwaiting || submissionReadyToCall(row);
+  if (!canCall) return null;
+  if (!row.email && !row.phone && !pipelineCandidateId && !row.pipeline_candidate_id) return null;
+
+  const handleClick = async () => {
+    setLoading(true);
+    try {
+      let candidateId = pipelineCandidateId || row.pipeline_candidate_id || null;
+      if (!candidateId) {
+        await rematchWebinarQuestionnairesForContact({
+          email: row.email,
+          phone: row.phone,
+        });
+        const detailId = submissionId || row.id;
+        if (detailId) {
+          const detail = await fetchWebinarQuestionnaireDetail(detailId);
+          candidateId = detail?.pipeline_candidate_id ?? null;
+          if (candidateId) onLinked?.(detailId, candidateId);
+        }
+        if (!candidateId) {
+          candidateId = await lookupPipelineCandidateIdByContact(row.email, row.phone);
+        }
+      }
+      if (candidateId) {
+        navigate(`/pipeline/call?candidateId=${encodeURIComponent(candidateId)}`);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void handleClick()}
+      disabled={loading}
+      title="Open call workspace"
+      className={`inline-flex items-center gap-1 rounded-lg bg-[#0B1B34] px-2.5 py-1 text-[10px] font-semibold text-white shadow-sm transition hover:bg-[#16325f] disabled:opacity-60 ${className}`}
+    >
+      <Phone size={12} />
+      {loading ? 'Opening…' : 'Call'}
+    </button>
+  );
+};
 
 const VIEW_FILTERS: Array<{ id: QuestionnaireViewFilter; label: string }> = [
   { id: 'new_unread', label: 'New (unopened)' },
@@ -127,6 +197,14 @@ const WebinarQuestionnairesPage: React.FC = () => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [search]);
+
+  const markSubmissionLinked = React.useCallback((submissionId: string, pipelineCandidateId: string) => {
+    setRows((prev) => prev.map((row) => (
+      row.id === submissionId
+        ? { ...row, pipeline_candidate_id: pipelineCandidateId, hiring_stage: 'ready_for_followup' }
+        : row
+    )));
+  }, []);
 
   const pageFilters = React.useMemo(() => ({
     search: debouncedSearch || undefined,
@@ -517,7 +595,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
                 <th className="px-3 py-2">WebinarGeek</th>
                 <th className="px-3 py-2">Booked by</th>
                 <th className="px-3 py-2">Stage</th>
-                <th className="px-3 py-2">Pipeline</th>
+                <th className="px-3 py-2 w-20">Call</th>
                 {canManage && <th className="px-3 py-2 w-16" />}
               </tr>
             </thead>
@@ -569,13 +647,18 @@ const WebinarQuestionnairesPage: React.FC = () => {
                           {hiringStageLabel(row.hiring_stage)}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-xs">
-                        {row.pipeline_candidate_id ? (
-                          <Link to={`/pipeline/call?candidateId=${row.pipeline_candidate_id}`} className="text-[#005EB8] hover:underline">
+                      <td className="px-3 py-2">
+                        <QuestionnaireCallButton row={row} onLinked={markSubmissionLinked} />
+                        {!submissionReadyToCall(row) && row.pipeline_candidate_id && (
+                          <Link
+                            to={`/pipeline/call?candidateId=${row.pipeline_candidate_id}`}
+                            className="text-[10px] text-[#005EB8] hover:underline"
+                          >
                             Open lead
                           </Link>
-                        ) : (
-                          <span className="text-[#8aa3c0]">Not linked</span>
+                        )}
+                        {!row.pipeline_candidate_id && submissionReadyToCall(row) && (
+                          <span className="text-[10px] text-[#8aa3c0]">Linking…</span>
                         )}
                       </td>
                       {canManage && (
@@ -700,11 +783,33 @@ const WebinarQuestionnairesPage: React.FC = () => {
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-xs">
-                    {row.pipelineCandidateId ? (
-                      <Link to={`/pipeline/call?candidateId=${row.pipelineCandidateId}`} className="text-[#005EB8] hover:underline">
-                        {isRecruiter || !row.filled ? 'Call lead' : 'Final interview follow-up'}
-                      </Link>
+                  <td className="px-3 py-2">
+                    {(row.pipelineCandidateId || row.email) ? (
+                      <QuestionnaireCallButton
+                        showForAwaiting
+                        submissionId={row.submissionId}
+                        pipelineCandidateId={row.pipelineCandidateId}
+                        row={{
+                          id: row.submissionId || row.key,
+                          pipeline_candidate_id: row.pipelineCandidateId,
+                          hiring_stage: row.filled ? 'ready_for_followup' : 'questionnaire_submitted',
+                          email: row.email,
+                          phone: null,
+                        } as WebinarQuestionnaireSubmission}
+                        onLinked={(linkedSubmissionId, linkedPipelineId) => {
+                          setFollowUp((prev) => {
+                            if (!prev) return prev;
+                            return {
+                              ...prev,
+                              rows: prev.rows.map((entry) => (
+                                entry.key === row.key || entry.submissionId === linkedSubmissionId
+                                  ? { ...entry, pipelineCandidateId: linkedPipelineId, submissionId: linkedSubmissionId }
+                                  : entry
+                              )),
+                            };
+                          });
+                        }}
+                      />
                     ) : (
                       <span className="text-[#8aa3c0]">{isRecruiter ? 'Call to remind' : '—'}</span>
                     )}

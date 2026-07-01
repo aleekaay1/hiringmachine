@@ -40,6 +40,7 @@ import {
   savePipelineCandidateEmailOverride,
   savePipelineCandidatePhoneOverride,
   createPipelineSelfLead,
+  getPipelineCandidateBundle,
   type PipelineCallRecord,
   type PipelineCandidate,
   type PipelineResume,
@@ -265,6 +266,7 @@ const PipelineCallWorkspace: React.FC = () => {
   const selectedCandidateIdRef = React.useRef<string | null>(null);
   const appliedDialIntentRef = React.useRef(false);
   const dialQueueInitRef = React.useRef<string | null>(null);
+  const deepLinkHandledRef = React.useRef<string | null>(null);
   /** When Place call opens 3CX — used as dial_started_at (not disposition save time). */
   const callPlacedAtRef = React.useRef<string | null>(null);
 
@@ -400,6 +402,67 @@ const PipelineCallWorkspace: React.FC = () => {
   React.useEffect(() => {
     void loadWorkspace('initial');
   }, [loadWorkspace]);
+
+  const deepLinkCandidateId = (searchParams.get('candidateId') || searchParams.get('candidate') || '').trim();
+
+  React.useEffect(() => {
+    if (initialLoading || !deepLinkCandidateId) return;
+
+    const existing = candidates.find((candidate) => candidate.id === deepLinkCandidateId);
+    if (existing) {
+      if (selectedCandidateIdRef.current !== deepLinkCandidateId) {
+        setSelectedCandidateId(deepLinkCandidateId);
+      }
+      deepLinkHandledRef.current = deepLinkCandidateId;
+      return;
+    }
+    if (deepLinkHandledRef.current === deepLinkCandidateId) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const bundle = await getPipelineCandidateBundle(deepLinkCandidateId);
+        if (cancelled) return;
+        if (!bundle?.candidate) {
+          setError('Lead not found or you do not have access to call this candidate.');
+          return;
+        }
+
+        deepLinkHandledRef.current = deepLinkCandidateId;
+        setCandidates((prev) => (
+          prev.some((candidate) => candidate.id === bundle.candidate.id)
+            ? prev
+            : [bundle.candidate, ...prev]
+        ));
+        setResumesByCandidate((prev) => {
+          const next = new Map(prev);
+          next.set(bundle.candidate.id, bundle.resumes || []);
+          return next;
+        });
+        setRecords((prev) => {
+          const merged = [...prev];
+          for (const record of bundle.callRecords || []) {
+            if (!merged.some((row) => row.id === record.id)) merged.push(record);
+          }
+          return merged.sort(
+            (a, b) => Date.parse(b.disposed_at || b.created_at) - Date.parse(a.disposed_at || a.created_at),
+          );
+        });
+        const questionnaireMap = await loadQuestionnaireMapForCandidateIds([bundle.candidate.id]).catch(
+          () => new Map<string, WebinarQuestionnaireSubmission>(),
+        );
+        setQuestionnaireByCandidate((prev) => new Map([...prev, ...questionnaireMap]));
+        setSelectedCandidateId(bundle.candidate.id);
+        setActionMsg(`Opened ${bundle.candidate.full_name || 'lead'} — ready to call.`);
+      } catch (e) {
+        if (!cancelled) setError(stringifySupabaseError(e));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialLoading, deepLinkCandidateId, candidates]);
 
   const latestByCandidate = React.useMemo(() => latestRecordByCandidate(records), [records]);
 

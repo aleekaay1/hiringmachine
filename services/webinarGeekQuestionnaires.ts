@@ -1250,7 +1250,36 @@ export async function fetchQuestionnaireFollowUpBoard(
   };
 }
 
-export async function deleteWebinarQuestionnaireSubmission(id: string): Promise<void> {
+/** Resolve a pipeline candidate id from stored questionnaire contact fields. */
+export async function lookupPipelineCandidateIdByContact(
+  email?: string | null,
+  phone?: string | null,
+): Promise<string | null> {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (normalizedEmail) {
+    const { data } = await supabase
+      .from('pipeline_candidates')
+      .select('id')
+      .ilike('email', normalizedEmail)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (data?.[0]?.id) return String(data[0].id);
+  }
+
+  const digits = String(phone || '').replace(/\D/g, '');
+  const phoneKey = digits.length >= 10 ? digits.slice(-10) : '';
+  if (phoneKey) {
+    const { data } = await supabase
+      .from('pipeline_candidates')
+      .select('id')
+      .eq('phone_last10', phoneKey)
+      .order('updated_at', { ascending: false })
+      .limit(1);
+    if (data?.[0]?.id) return String(data[0].id);
+  }
+
+  return null;
+}
   const { error } = await supabase
     .from('webinar_geek_questionnaire_submissions')
     .delete()
