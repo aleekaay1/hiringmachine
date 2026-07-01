@@ -29,6 +29,7 @@ type NotificationRow = {
   dedupe_key: string | null;
   read_at: string | null;
   created_at: string;
+  expires_at?: string | null;
 };
 
 function torontoWeekdayIndex(now = new Date()): number {
@@ -76,32 +77,57 @@ async function upsertNotification(
 ): Promise<void> {
   const userId = row.user_id as string | null;
   const dedupeKey = row.dedupe_key as string | null;
-  if (!userId || !dedupeKey) {
+  if (userId && dedupeKey) {
+    const { data: existing } = await admin
+      .from('staff_notifications')
+      .select('id, dismissed_at')
+      .eq('user_id', userId)
+      .eq('dedupe_key', dedupeKey)
+      .maybeSingle();
+    if (existing?.dismissed_at) return;
+    if (existing?.id) {
+      await admin
+        .from('staff_notifications')
+        .update({
+          title: row.title,
+          body: row.body,
+          link_route: row.link_route,
+          link_label: row.link_label,
+          metadata: row.metadata,
+          expires_at: row.expires_at ?? null,
+        })
+        .eq('id', existing.id);
+      return;
+    }
+  } else if (!userId || !dedupeKey) {
     await admin.from('staff_notifications').insert(row);
     return;
   }
-  const { data: existing } = await admin
-    .from('staff_notifications')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('dedupe_key', dedupeKey)
-    .is('dismissed_at', null)
-    .maybeSingle();
-  if (existing?.id) {
-    await admin
-      .from('staff_notifications')
-      .update({
-        title: row.title,
-        body: row.body,
-        link_route: row.link_route,
-        link_label: row.link_label,
-        metadata: row.metadata,
-        expires_at: row.expires_at ?? null,
-      })
-      .eq('id', existing.id);
-    return;
-  }
   await admin.from('staff_notifications').insert(row);
+}
+
+async function loadDismissedBroadcastIds(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+): Promise<Set<string>> {
+  const { data, error } = await admin
+    .from('staff_notification_dismissals')
+    .select('notification_id')
+    .eq('user_id', userId);
+  if (error) {
+    if (/does not exist|schema cache|relation/i.test(String(error.message || ''))) return new Set();
+    throw error;
+  }
+  return new Set((data || []).map((row) => String((row as { notification_id: string }).notification_id)));
+}
+
+function isNotificationActive(row: NotificationRow, nowMs = Date.now()): boolean {
+  if (!row) return false;
+  if (row.expires_at) {
+    const expiresMs = Date.parse(row.expires_at);
+    if (Number.isFinite(expiresMs) && expiresMs <= nowMs) return false;
+  }
+  return true;
 }
 
 async function syncPipelineNotifications(
@@ -282,6 +308,9 @@ async function listNotificationsForUser(
   role: string,
   limit = 80,
 ): Promise<NotificationRow[]> {
+  const dismissedBroadcastIds = await loadDismissedBroadcastIds(admin, userId);
+  const nowMs = Date.now();
+
   const { data: personal, error: pErr } = await admin
     .from('staff_notifications')
     .select('*')
@@ -307,11 +336,95 @@ async function listNotificationsForUser(
   const out: NotificationRow[] = [];
   for (const row of merged) {
     if (seen.has(row.id)) continue;
+    if (!isNotificationActive(row, nowMs)) continue;
+    if (!row.user_id && dismissedBroadcastIds.has(row.id)) continue;
     seen.add(row.id);
     out.push(row);
     if (out.length >= limit) break;
   }
   return out;
+}
+
+async function dismissNotificationForUser(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  notificationId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const { data: row, error } = await admin
+    .from('staff_notifications')
+    .select('id, user_id')
+    .eq('id', notificationId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!row?.id) return { ok: true };
+
+  const ownerId = row.user_id as string | null;
+  const nowIso = new Date().toISOString();
+
+  if (ownerId === userId) {
+    const { error: updateErr } = await admin
+      .from('staff_notifications')
+      .update({ dismissed_at: nowIso })
+      .eq('id', notificationId)
+      .eq('user_id', userId);
+    if (updateErr) throw updateErr;
+    return { ok: true };
+  }
+
+  if (ownerId === null) {
+    const { error: dismissErr } = await admin
+      .from('staff_notification_dismissals')
+      .upsert(
+        { user_id: userId, notification_id: notificationId },
+        { onConflict: 'user_id,notification_id' },
+      );
+    if (dismissErr) {
+      if (/does not exist|schema cache|relation/i.test(String(dismissErr.message || ''))) {
+        return {
+          ok: false,
+          error: 'Dismissals table not installed. Run paste_staff_notification_dismissals.sql in Supabase.',
+        };
+      }
+      throw dismissErr;
+    }
+    return { ok: true };
+  }
+
+  return { ok: false, error: 'Forbidden' };
+}
+
+async function dismissAllNotificationsForUser(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  role: string,
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  await admin
+    .from('staff_notifications')
+    .update({ dismissed_at: nowIso })
+    .eq('user_id', userId)
+    .is('dismissed_at', null);
+
+  const { data: broadcasts, error } = await admin
+    .from('staff_notifications')
+    .select('id')
+    .is('user_id', null)
+    .is('dismissed_at', null)
+    .or(`target_roles.is.null,target_roles.cs.{${role}}`);
+  if (error) throw error;
+
+  const dismissRows = (broadcasts || []).map((row) => ({
+    user_id: userId,
+    notification_id: String((row as { id: string }).id),
+  }));
+  if (!dismissRows.length) return;
+
+  const { error: dismissErr } = await admin
+    .from('staff_notification_dismissals')
+    .upsert(dismissRows, { onConflict: 'user_id,notification_id' });
+  if (dismissErr && !/does not exist|schema cache|relation/i.test(String(dismissErr.message || ''))) {
+    throw dismissErr;
+  }
 }
 
 Deno.serve(async (req) => {
@@ -353,7 +466,6 @@ Deno.serve(async (req) => {
       const url = new URL(req.url);
       const action = url.searchParams.get('action') || 'list';
       if (action === 'list') {
-        await syncPipelineNotifications(admin, user.id, role);
         const rows = await listNotificationsForUser(admin, user.id, role);
         const unread = rows.filter((r) => !r.read_at).length;
         return new Response(JSON.stringify({ ok: true, notifications: rows, unread }), {
@@ -415,6 +527,35 @@ Deno.serve(async (req) => {
         .eq('user_id', user.id)
         .is('read_at', null)
         .is('dismissed_at', null);
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (action === 'dismiss') {
+      const id = String(body.id || '').trim();
+      if (!id) {
+        return new Response(JSON.stringify({ error: 'id required' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const result = await dismissNotificationForUser(admin, user.id, id);
+      if (!result.ok) {
+        return new Response(JSON.stringify({ error: result.error || 'Forbidden' }), {
+          status: result.error?.includes('not installed') ? 200 : 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if (action === 'dismiss_all') {
+      await dismissAllNotificationsForUser(admin, user.id, role);
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

@@ -130,6 +130,23 @@ export async function markAllStaffNotificationsRead(): Promise<void> {
   });
 }
 
+export async function dismissStaffNotification(id: string): Promise<void> {
+  const json = await callStaffNotifications({
+    method: 'POST',
+    body: JSON.stringify({ action: 'dismiss', id }),
+  });
+  if (json.ok !== true && typeof json.error === 'string') {
+    throw new Error(json.error);
+  }
+}
+
+export async function dismissAllStaffNotifications(): Promise<void> {
+  await callStaffNotifications({
+    method: 'POST',
+    body: JSON.stringify({ action: 'dismiss_all' }),
+  });
+}
+
 export async function createStaffNotification(input: {
   title: string;
   body?: string;

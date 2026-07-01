@@ -1774,11 +1774,11 @@ async function upsertStaffNotification(
   if (userId && dedupeKey) {
     const { data: existing } = await admin
       .from('staff_notifications')
-      .select('id')
+      .select('id, dismissed_at')
       .eq('user_id', userId)
       .eq('dedupe_key', dedupeKey)
-      .is('dismissed_at', null)
       .maybeSingle();
+    if (existing?.dismissed_at) return;
     if (existing?.id) {
       await admin.from('staff_notifications').update({
         title: row.title,

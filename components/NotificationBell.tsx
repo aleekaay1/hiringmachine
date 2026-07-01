@@ -1,10 +1,12 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { Bell, CheckCheck, Mail, Phone, PhoneCall, ClipboardList, Megaphone, LifeBuoy, AlertTriangle } from 'lucide-react';
+import { Bell, Mail, Phone, PhoneCall, ClipboardList, Megaphone, LifeBuoy, AlertTriangle, X, Trash2 } from 'lucide-react';
 import type { AppRole } from '../services/accessControl';
 import {
+  dismissAllStaffNotifications,
+  dismissStaffNotification,
   loadStaffNotifications,
-  markAllStaffNotificationsRead,
   markStaffNotificationRead,
   NOTIFICATION_CATEGORY_LABELS,
   shouldShowStaffNotificationBell,
@@ -54,9 +56,13 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
   const [open, setOpen] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [syncing, setSyncing] = React.useState(false);
+  const [clearing, setClearing] = React.useState(false);
+  const [dismissingId, setDismissingId] = React.useState<string | null>(null);
   const [notifications, setNotifications] = React.useState<StaffNotification[]>([]);
   const [unread, setUnread] = React.useState(0);
   const [lastFetchedAt, setLastFetchedAt] = React.useState<string | null>(null);
+  const [panelStyle, setPanelStyle] = React.useState<React.CSSProperties>({});
+  const buttonRef = React.useRef<HTMLButtonElement>(null);
   const panelRef = React.useRef<HTMLDivElement>(null);
 
   const visible = shouldShowStaffNotificationBell(userId, roleResolved);
@@ -92,6 +98,23 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
     }
   }, [canFetch]);
 
+  const positionPanel = React.useCallback(() => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = Math.min(384, window.innerWidth - 16);
+    const right = Math.max(8, window.innerWidth - rect.right);
+    const top = rect.bottom + 8;
+    const maxHeight = Math.min(window.innerHeight - top - 12, window.innerHeight * 0.7);
+    setPanelStyle({
+      position: 'fixed',
+      top,
+      right,
+      width,
+      maxHeight,
+      zIndex: 200,
+    });
+  }, []);
+
   React.useEffect(() => {
     if (!canFetch) return;
     void refreshList();
@@ -101,10 +124,23 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
 
   React.useEffect(() => {
     if (!open) return;
+    positionPanel();
+    const onResize = () => positionPanel();
+    window.addEventListener('resize', onResize);
+    window.addEventListener('scroll', onResize, true);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('scroll', onResize, true);
+    };
+  }, [open, positionPanel]);
+
+  React.useEffect(() => {
+    if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      if (panelRef.current?.contains(target)) return;
+      if (buttonRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
@@ -130,6 +166,33 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
     }
   };
 
+  const onDismissItem = async (item: StaffNotification) => {
+    setDismissingId(item.id);
+    try {
+      await dismissStaffNotification(item.id);
+      setNotifications((prev) => prev.filter((n) => n.id !== item.id));
+      if (!item.read_at) setUnread((c) => Math.max(0, c - 1));
+    } catch {
+      // keep item visible if dismiss failed
+    } finally {
+      setDismissingId(null);
+    }
+  };
+
+  const onClearAll = async () => {
+    if (!notifications.length) return;
+    setClearing(true);
+    try {
+      await dismissAllStaffNotifications();
+      setNotifications([]);
+      setUnread(0);
+    } catch {
+      // silent
+    } finally {
+      setClearing(false);
+    }
+  };
+
   const buttonClass =
     variant === 'topbar'
       ? 'relative inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[#b8d4f0] bg-white text-[#0B1B34] shadow-md ring-1 ring-[#d4e4f7] transition hover:border-[#4e9ae8] hover:bg-[#eef6ff]'
@@ -139,15 +202,133 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
     ? 'Updating…'
     : unread
       ? `${unread} unread`
-      : 'All caught up';
+      : notifications.length
+        ? 'All read'
+        : 'All caught up';
+
+  const panel = open ? (
+    <div
+      ref={panelRef}
+      style={panelStyle}
+      className="flex flex-col overflow-hidden rounded-2xl border border-[#d4e4f7] bg-white shadow-2xl"
+    >
+      <div className="border-b border-[#e8f0fa] bg-[#f8fbff] px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-[#0B1B34]">Notifications</p>
+            <p className="text-[11px] text-[#5c7594]">{statusLine}</p>
+            {lastFetchedAt && (
+              <p className="text-[10px] text-[#8aa3c0]">
+                Updated {formatDateTimeCanadaEastern(lastFetchedAt)}
+              </p>
+            )}
+          </div>
+          {notifications.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void onClearAll()}
+              disabled={clearing || loading || syncing}
+              className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[#d4e4f7] bg-white px-2.5 py-1.5 text-[11px] font-medium text-[#c24141] transition hover:bg-[#fff1f1] disabled:opacity-60"
+            >
+              <Trash2 size={12} />
+              {clearing ? 'Clearing…' : 'Clear all'}
+            </button>
+          )}
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          <button
+            type="button"
+            onClick={() => void refreshList()}
+            disabled={loading || syncing || clearing}
+            className="rounded-lg px-2 py-1 text-[11px] text-[#4e79a9] hover:bg-[#eef6ff] disabled:opacity-60"
+          >
+            {loading ? 'Loading…' : 'Refresh'}
+          </button>
+          <button
+            type="button"
+            onClick={() => void syncAlerts()}
+            disabled={loading || syncing || clearing}
+            className="rounded-lg px-2 py-1 text-[11px] text-[#4e79a9] hover:bg-[#eef6ff] disabled:opacity-60"
+          >
+            {syncing ? 'Syncing…' : 'Sync alerts'}
+          </button>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {notifications.length === 0 ? (
+          <p className="px-4 py-8 text-center text-sm text-[#5c7594]">No notifications right now.</p>
+        ) : (
+          notifications.map((item) => {
+            const Icon = categoryIcon(item.category);
+            const unreadItem = !item.read_at;
+            const dismissing = dismissingId === item.id;
+            return (
+              <div
+                key={item.id}
+                className={`flex items-start gap-2 border-b border-[#f0f4fa] px-3 py-3 transition hover:bg-[#f8fbff] ${
+                  unreadItem ? 'bg-[#eef6ff]/60' : ''
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => void onOpenItem(item)}
+                  className="flex min-w-0 flex-1 items-start gap-3 text-left"
+                >
+                  <span
+                    className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
+                      unreadItem ? 'bg-[#0B1B34] text-white' : 'bg-[#eef6ff] text-[#4e79a9]'
+                    }`}
+                  >
+                    <Icon size={15} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-[#0B1B34]">{item.title}</span>
+                      <span className="rounded-full bg-[#eef6ff] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#4e79a9]">
+                        {NOTIFICATION_CATEGORY_LABELS[item.category] || item.category}
+                      </span>
+                    </span>
+                    {item.body && (
+                      <span className="mt-1 block text-xs leading-relaxed text-[#5c7594]">{item.body}</span>
+                    )}
+                    <span className="mt-1 block text-[10px] text-[#8aa3c0]">
+                      {formatDateTimeCanadaEastern(item.created_at)}
+                      {item.link_label ? ` · ${item.link_label}` : ''}
+                    </span>
+                  </span>
+                  {unreadItem && <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-rose-500" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onDismissItem(item)}
+                  disabled={dismissing || clearing}
+                  aria-label={`Dismiss ${item.title}`}
+                  title="Dismiss"
+                  className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[#8aa3c0] transition hover:bg-[#fff1f1] hover:text-[#c24141] disabled:opacity-50"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  ) : null;
 
   return (
-    <div ref={panelRef} className={`relative ${className}`}>
+    <div className={`relative ${className}`}>
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => {
-          setOpen((v) => !v);
-          if (!open) void refreshList();
+          const nextOpen = !open;
+          setOpen(nextOpen);
+          if (nextOpen) {
+            positionPanel();
+            void refreshList();
+          }
         }}
         className={buttonClass}
         aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`}
@@ -161,96 +342,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
         )}
       </button>
 
-      {open && (
-        <div className="absolute right-0 top-full z-[80] mt-2 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-[#d4e4f7] bg-white shadow-2xl">
-          <div className="flex items-center justify-between border-b border-[#e8f0fa] bg-[#f8fbff] px-4 py-3">
-            <div>
-              <p className="text-sm font-semibold text-[#0B1B34]">Notifications</p>
-              <p className="text-[11px] text-[#5c7594]">{statusLine}</p>
-              {lastFetchedAt && (
-                <p className="text-[10px] text-[#8aa3c0]">
-                  Updated {formatDateTimeCanadaEastern(lastFetchedAt)}
-                </p>
-              )}
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => void refreshList()}
-                disabled={loading || syncing}
-                className="rounded-lg px-2 py-1 text-[11px] text-[#4e79a9] hover:bg-[#eef6ff] disabled:opacity-60"
-              >
-                {loading ? 'Loading…' : 'Refresh'}
-              </button>
-              <button
-                type="button"
-                onClick={() => void syncAlerts()}
-                disabled={loading || syncing}
-                className="rounded-lg px-2 py-1 text-[11px] text-[#4e79a9] hover:bg-[#eef6ff] disabled:opacity-60"
-              >
-                {syncing ? 'Syncing…' : 'Sync alerts'}
-              </button>
-              {unread > 0 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    void markAllStaffNotificationsRead().then(() => refreshList());
-                  }}
-                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-[#4e79a9] hover:bg-[#eef6ff]"
-                >
-                  <CheckCheck size={12} />
-                  Mark all
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="max-h-[min(24rem,60vh)] overflow-y-auto">
-            {notifications.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-[#5c7594]">No notifications right now.</p>
-            ) : (
-              notifications.map((item) => {
-                const Icon = categoryIcon(item.category);
-                const unreadItem = !item.read_at;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => void onOpenItem(item)}
-                    className={`flex w-full items-start gap-3 border-b border-[#f0f4fa] px-4 py-3 text-left transition hover:bg-[#f8fbff] ${
-                      unreadItem ? 'bg-[#eef6ff]/60' : ''
-                    }`}
-                  >
-                    <span
-                      className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
-                        unreadItem ? 'bg-[#0B1B34] text-white' : 'bg-[#eef6ff] text-[#4e79a9]'
-                      }`}
-                    >
-                      <Icon size={15} />
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-medium text-[#0B1B34]">{item.title}</span>
-                        <span className="rounded-full bg-[#eef6ff] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#4e79a9]">
-                          {NOTIFICATION_CATEGORY_LABELS[item.category] || item.category}
-                        </span>
-                      </span>
-                      {item.body && (
-                        <span className="mt-1 block text-xs leading-relaxed text-[#5c7594]">{item.body}</span>
-                      )}
-                      <span className="mt-1 block text-[10px] text-[#8aa3c0]">
-                        {formatDateTimeCanadaEastern(item.created_at)}
-                        {item.link_label ? ` · ${item.link_label}` : ''}
-                      </span>
-                    </span>
-                    {unreadItem && <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-rose-500" />}
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
+      {typeof document !== 'undefined' && panel ? createPortal(panel, document.body) : null}
     </div>
   );
 };
