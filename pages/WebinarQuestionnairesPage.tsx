@@ -69,7 +69,6 @@ const WebinarQuestionnairesPage: React.FC = () => {
   const [purging, setPurging] = React.useState(false);
   const [rematching, setRematching] = React.useState(false);
   const [followUpLoading, setFollowUpLoading] = React.useState(false);
-  const [liveConnected, setLiveConnected] = React.useState(false);
   const [liveNotice, setLiveNotice] = React.useState<string | null>(null);
   const [highlightIds, setHighlightIds] = React.useState<Set<string>>(() => new Set());
   const [error, setError] = React.useState<string | null>(null);
@@ -262,10 +261,8 @@ const WebinarQuestionnairesPage: React.FC = () => {
       onInsert: handleLiveInsert,
       onUpdate: handleLiveUpdate,
     });
-    setLiveConnected(true);
     return () => {
       unsubscribe();
-      setLiveConnected(false);
     };
   }, [isAuthenticated, role, isRecruiter, handleLiveInsert, handleLiveUpdate]);
 
@@ -341,13 +338,13 @@ const WebinarQuestionnairesPage: React.FC = () => {
   };
 
   if (!isAuthenticated) {
-    return <div className="p-6 text-sm text-slate-600">Sign in to view webinar questionnaires.</div>;
+    return <div className="p-6 text-sm text-slate-600">Sign in to view Webinar Questionnaire.</div>;
   }
 
   if (role && !canAccessWebinarQuestionnaires(role)) {
     return (
       <div className="p-6">
-        <p className="text-sm text-slate-600">You do not have access to webinar questionnaires.</p>
+        <p className="text-sm text-slate-600">You do not have access to Webinar Questionnaire.</p>
         <Link to="/home" className="mt-2 inline-block text-sm text-[#005EB8] hover:underline">Back to home</Link>
       </div>
     );
@@ -363,36 +360,12 @@ const WebinarQuestionnairesPage: React.FC = () => {
           <p className="text-xs text-[#4b6d95]">
             <Link to="/webinar-geek" className="hover:underline">Webinar Geek</Link>
             <span className="mx-1">/</span>
-            Questionnaires
+            Webinar Questionnaire
           </p>
           <h1 className="text-2xl font-bold text-[#0B1B34] flex items-center gap-2">
             <ClipboardList size={24} className="text-[#005EB8]" />
-            {isRecruiter ? 'Questionnaire follow-up' : 'Google Form questionnaires'}
+            Webinar Questionnaire
           </h1>
-          <p className="mt-1 text-sm text-[#5c7594] max-w-2xl">
-            {isRecruiter ? (
-              <>
-                Your booked webinar leads who still need the <strong>Applicant Questionnaire</strong>.
-                Once they submit, leadership takes over — you will not see their answers here.
-              </>
-            ) : role === 'leadership' ? (
-              <>
-                Google Form submissions and follow-up for your team&apos;s booked webinars (hierarchy scope).
-                Matched by email, phone, and name.
-              </>
-            ) : (
-              <>
-                Live feed from your <strong>Applicant Questionnaire</strong> Google Form (via Apps Script → Paz webhook).
-                Matched to pipeline and booking recruiter by email, phone, and name.
-              </>
-            )}
-          </p>
-          {liveConnected && (
-            <p className="mt-1 inline-flex items-center gap-1.5 text-[11px] text-emerald-700">
-              <span className="inline-block h-2 w-2 rounded-full bg-emerald-500 animate-pulse" aria-hidden />
-              Live updates on
-            </p>
-          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => (tab === 'submissions' && !isRecruiter ? void loadPage('reset') : void loadFollowUp())} disabled={busy}>
@@ -425,16 +398,12 @@ const WebinarQuestionnairesPage: React.FC = () => {
           <div className="rounded-xl border border-sky-200 bg-sky-50/50 p-3">
             <p className="text-[10px] uppercase tracking-wide text-sky-800">New unopened</p>
             <p className="text-xl font-bold text-sky-900">{unreadCount}</p>
-            <p className="text-[10px] text-sky-800">Open answers to clear</p>
           </div>
         )}
         <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3">
           <p className="text-[10px] uppercase tracking-wide text-amber-900">Awaiting form</p>
           <p className="text-xl font-bold text-amber-950">
             {board?.awaitingCount ?? '…'}
-          </p>
-          <p className="text-[10px] text-amber-800">
-            {isRecruiter ? 'Your leads — call to remind' : 'Showed on WG, no form yet'}
           </p>
         </div>
         <div className="rounded-xl border border-rose-200 bg-rose-50/50 p-3">
@@ -445,7 +414,6 @@ const WebinarQuestionnairesPage: React.FC = () => {
           <div className="rounded-xl border border-violet-200 bg-violet-50/50 p-3">
             <p className="text-[10px] uppercase tracking-wide text-violet-800">Ready for follow-up</p>
             <p className="text-xl font-bold text-violet-900">{board?.readyForFollowUpCount ?? '…'}</p>
-            <p className="text-[10px] text-violet-800">Filled + matched pipeline</p>
           </div>
         )}
       </div>
@@ -459,7 +427,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
               tab === 'submissions' ? 'border-[#005EB8] text-[#005EB8]' : 'border-transparent text-[#5c7594]'
             }`}
           >
-            Form submissions
+            Submissions
             {unreadCount > 0 && (
               <span className="ml-1.5 rounded-full bg-sky-100 px-1.5 text-[10px] font-bold text-sky-900">{unreadCount}</span>
             )}
@@ -472,7 +440,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
             tab === 'awaiting' ? 'border-[#005EB8] text-[#005EB8]' : 'border-transparent text-[#5c7594]'
           }`}
         >
-          {isRecruiter ? 'My leads awaiting form' : 'Awaiting questionnaire'}
+          Awaiting
           {board && board.awaitingCount > 0 && (
             <span className="ml-1.5 rounded-full bg-amber-100 px-1.5 text-[10px] text-amber-900">{board.awaitingCount}</span>
           )}
@@ -513,7 +481,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
               <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="mt-1 w-full rounded-xl border border-[#cfe3f9] px-2 py-2 text-sm" />
             </label>
             <label className="text-xs text-[#5c7594]">
-              To <span className="text-[#8aa3c0]">(optional)</span>
+              To
               <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="mt-1 w-full rounded-xl border border-[#cfe3f9] px-2 py-2 text-sm" />
             </label>
           </div>
@@ -659,10 +627,10 @@ const WebinarQuestionnairesPage: React.FC = () => {
                 <tr>
                   <td colSpan={canManage ? 7 : 6} className="px-4 py-10 text-center text-sm text-[#6f7b8d]">
                     {viewFilter === 'new_unread'
-                      ? 'No unopened submissions in this list. Switch filters or open answers on new rows to clear them.'
+                      ? 'No unopened submissions.'
                       : viewFilter === 'wg_linked'
-                      ? 'No form submissions linked to WebinarGeek data yet. Submit a form or click Re-match pipeline after refreshing the WG dashboard cache.'
-                      : 'No Google Form submissions yet. Submit a test on the form — it should appear here within seconds.'}
+                      ? 'No linked submissions.'
+                      : 'No submissions yet.'}
                   </td>
                 </tr>
               )}
@@ -680,11 +648,6 @@ const WebinarQuestionnairesPage: React.FC = () => {
 
       {(tab === 'awaiting' || isRecruiter) && (
         <div className="rounded-2xl border border-[#cde0f4] bg-white overflow-hidden">
-          <p className="px-4 py-3 text-xs text-[#5c7594] border-b border-[#eef2f7]">
-            {isRecruiter
-              ? 'Your booked webinar leads. Red = showed 2+ days ago without the form — call to remind them to submit.'
-              : 'WebinarGeek attendance vs Google Form for your scope. Red = showed 2+ days ago, still no form.'}
-          </p>
           <table className="w-full text-sm">
             <thead className="bg-[#f4f7fb] text-left text-[10px] uppercase tracking-wide text-[#6b7c93]">
               <tr>
@@ -742,9 +705,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
               {!followUpLoading && !(board?.rows.length) && (
                 <tr>
                   <td colSpan={5} className="px-4 py-10 text-center text-sm text-[#6f7b8d]">
-                    {isRecruiter
-                      ? 'No leads awaiting the questionnaire right now. Booked webinars will appear here until they submit the form.'
-                      : 'No follow-up rows in your scope — refresh the WebinarGeek dashboard cache if attendance looks missing.'}
+                    No awaiting leads.
                   </td>
                 </tr>
               )}
