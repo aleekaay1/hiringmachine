@@ -1104,7 +1104,9 @@ export type QuestionnaireFollowUpRow = {
   filled: boolean;
   submissionId: string | null;
   pipelineCandidateId: string | null;
+  bookedByUserId: string | null;
   bookedByLabel: string | null;
+  recruiterCustomField: string | null;
   kind: 'showed_awaiting' | 'upcoming_booked';
 };
 
@@ -1222,7 +1224,9 @@ export async function fetchQuestionnaireFollowUpBoard(
       filled,
       submissionId: filledMeta.submissionId,
       pipelineCandidateId: filledMeta.pipelineCandidateId || booking.candidateId,
+      bookedByUserId: booking.bookedByUserId,
       bookedByLabel: booking.bookedByLabel,
+      recruiterCustomField: booking.customField,
       kind: showed ? 'showed_awaiting' : 'upcoming_booked',
     });
   }
@@ -1250,32 +1254,46 @@ export async function fetchQuestionnaireFollowUpBoard(
   };
 }
 
-/** Resolve a pipeline candidate id from stored questionnaire contact fields. */
+/** Resolve a pipeline candidate id the current viewer is allowed to call. */
 export async function lookupPipelineCandidateIdByContact(
   email?: string | null,
   phone?: string | null,
 ): Promise<string | null> {
   const normalizedEmail = String(email || '').trim().toLowerCase();
+  const digits = String(phone || '').replace(/\D/g, '');
+  const phoneKey = digits.length >= 10 ? digits.slice(-10) : '';
+
+  const candidates: string[] = [];
   if (normalizedEmail) {
     const { data } = await supabase
       .from('pipeline_candidates')
       .select('id')
       .ilike('email', normalizedEmail)
       .order('updated_at', { ascending: false })
-      .limit(1);
-    if (data?.[0]?.id) return String(data[0].id);
+      .limit(5);
+    for (const row of data || []) {
+      const id = String((row as { id?: string }).id || '').trim();
+      if (id) candidates.push(id);
+    }
   }
-
-  const digits = String(phone || '').replace(/\D/g, '');
-  const phoneKey = digits.length >= 10 ? digits.slice(-10) : '';
   if (phoneKey) {
     const { data } = await supabase
       .from('pipeline_candidates')
       .select('id')
       .eq('phone_last10', phoneKey)
       .order('updated_at', { ascending: false })
-      .limit(1);
-    if (data?.[0]?.id) return String(data[0].id);
+      .limit(5);
+    for (const row of data || []) {
+      const id = String((row as { id?: string }).id || '').trim();
+      if (id && !candidates.includes(id)) candidates.push(id);
+    }
+  }
+
+  for (const candidateId of candidates) {
+    const { data: allowed, error } = await supabase.rpc('pipeline_can_access_candidate', {
+      p_candidate_id: candidateId,
+    });
+    if (!error && allowed === true) return candidateId;
   }
 
   return null;

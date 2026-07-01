@@ -970,6 +970,11 @@ function applyPipelineUploaderScope<
 
 async function canAccessPipelineCandidate(candidateId: string): Promise<boolean> {
   const scope = await resolvePipelineViewerScope();
+  const { data: rpcAllowed, error: rpcErr } = await supabase.rpc('pipeline_can_access_candidate', {
+    p_candidate_id: candidateId,
+  });
+  if (!rpcErr && rpcAllowed === true) return true;
+
   let query = supabase
     .from('pipeline_candidates')
     .select('id')
@@ -978,6 +983,10 @@ async function canAccessPipelineCandidate(candidateId: string): Promise<boolean>
   const { data, error } = await query.maybeSingle();
   if (error) throw error;
   return Boolean(data?.id);
+}
+
+export async function pipelineCandidateAccessibleToViewer(candidateId: string): Promise<boolean> {
+  return canAccessPipelineCandidate(candidateId);
 }
 
 async function listPipelineCandidatesUnscoped(): Promise<PipelineCandidate[]> {
@@ -1591,13 +1600,14 @@ export async function listSourceCandidateIdsInPipeline(): Promise<Set<string>> {
 }
 
 export async function getPipelineCandidateBundle(candidateId: string): Promise<PipelineCandidateBundle | null> {
-  const scope = await resolvePipelineViewerScope();
-  let candidateQuery = supabase
+  const allowed = await canAccessPipelineCandidate(candidateId);
+  if (!allowed) return null;
+
+  const { data: candidate, error: cErr } = await supabase
     .from('pipeline_candidates')
     .select(PIPELINE_CANDIDATE_SELECT)
-    .eq('id', candidateId);
-  candidateQuery = applyPipelineUploaderScope(candidateQuery, scope);
-  const { data: candidate, error: cErr } = await candidateQuery.maybeSingle();
+    .eq('id', candidateId)
+    .maybeSingle();
   if (cErr) throw cErr;
   if (!candidate) return null;
 

@@ -23,6 +23,7 @@ import {
   lookupPipelineCandidateIdByContact,
   markQuestionnaireSubmissionOpened,
   purgeLegacyQuestionnaireSubmissions,
+  questionnaireLeadOwnedByScope,
   rematchWebinarQuestionnaires,
   seedQuestionnaireOpenedIdsIfEmpty,
   submissionMatchesPageFilters,
@@ -35,6 +36,7 @@ import {
   type QuestionnaireViewFilter,
   type WebinarQuestionnaireSubmission,
 } from '../services/webinarGeekQuestionnaires';
+import { pipelineCandidateAccessibleToViewer } from '../services/pipelineService';
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -59,6 +61,7 @@ type QuestionnaireCallButtonProps = {
   submissionId?: string | null;
   pipelineCandidateId?: string | null;
   showForAwaiting?: boolean;
+  accessScope?: QuestionnaireAccessScope | null;
   onLinked?: (submissionId: string, pipelineCandidateId: string) => void;
   className?: string;
 };
@@ -68,6 +71,7 @@ const QuestionnaireCallButton: React.FC<QuestionnaireCallButtonProps> = ({
   submissionId,
   pipelineCandidateId,
   showForAwaiting = false,
+  accessScope,
   onLinked,
   className = '',
 }) => {
@@ -77,6 +81,12 @@ const QuestionnaireCallButton: React.FC<QuestionnaireCallButtonProps> = ({
   const canCall = showForAwaiting || submissionReadyToCall(row);
   if (!canCall) return null;
   if (!row.email && !row.phone && !pipelineCandidateId && !row.pipeline_candidate_id) return null;
+  if (
+    accessScope
+    && !questionnaireLeadOwnedByScope(accessScope, row.booked_by_user_id, row.recruiter_custom_field)
+  ) {
+    return null;
+  }
 
   const handleClick = async () => {
     setLoading(true);
@@ -97,9 +107,10 @@ const QuestionnaireCallButton: React.FC<QuestionnaireCallButtonProps> = ({
           candidateId = await lookupPipelineCandidateIdByContact(row.email, row.phone);
         }
       }
-      if (candidateId) {
-        navigate(`/pipeline/call?candidateId=${encodeURIComponent(candidateId)}`);
-      }
+      if (!candidateId) return;
+      const allowed = await pipelineCandidateAccessibleToViewer(candidateId);
+      if (!allowed) return;
+      navigate(`/pipeline/call?candidateId=${encodeURIComponent(candidateId)}`);
     } finally {
       setLoading(false);
     }
@@ -242,6 +253,9 @@ const WebinarQuestionnairesPage: React.FC = () => {
 
   const handleLiveInsert = React.useCallback((row: WebinarQuestionnaireSubmission) => {
     if (row.source_type !== 'google_form') return;
+    if (accessScope && !questionnaireLeadOwnedByScope(accessScope, row.booked_by_user_id, row.recruiter_custom_field)) {
+      return;
+    }
     if (pageFilters.dateFrom && row.submitted_at && row.submitted_at < `${pageFilters.dateFrom}T00:00:00.000Z`) {
       return;
     }
@@ -260,10 +274,13 @@ const WebinarQuestionnairesPage: React.FC = () => {
     }));
     flashRow(row.id, `New form submission: ${displayNameFromSubmission(row)}`);
     void loadFollowUp();
-  }, [flashRow, loadFollowUp, pageFilters.dateFrom, pageFilters.dateTo]);
+  }, [accessScope, flashRow, loadFollowUp, pageFilters.dateFrom, pageFilters.dateTo]);
 
   const handleLiveUpdate = React.useCallback((row: WebinarQuestionnaireSubmission) => {
     if (row.source_type !== 'google_form') return;
+    if (accessScope && !questionnaireLeadOwnedByScope(accessScope, row.booked_by_user_id, row.recruiter_custom_field)) {
+      return;
+    }
     setRows((prev) => {
       const idx = prev.findIndex((item) => item.id === row.id);
       if (idx !== -1) {
@@ -278,7 +295,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
     if (expandedId === row.id) {
       setExpandedDetail((prev) => (prev?.id === row.id ? { ...prev, ...row } : prev));
     }
-  }, [expandedId, pageFilters, filterOptions]);
+  }, [accessScope, expandedId, pageFilters, filterOptions]);
 
   const loadMeta = React.useCallback(async () => {
     setSummaryLoading(true);
@@ -309,6 +326,9 @@ const WebinarQuestionnairesPage: React.FC = () => {
         setOpenedIds(seedQuestionnaireOpenedIdsIfEmpty(userId, page.rows.map((row) => row.id)));
       }
       const visible = page.rows.filter((row) => {
+        if (accessScope && !questionnaireLeadOwnedByScope(accessScope, row.booked_by_user_id, row.recruiter_custom_field)) {
+          return false;
+        }
         if (viewFilter === 'new_unread') {
           return submissionMatchesPageFilters(row, pageFilters, filterOptions);
         }
@@ -329,7 +349,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [loadMeta, nextOffset, pageFilters, filterOptions, userId, viewFilter]);
+  }, [accessScope, loadMeta, nextOffset, pageFilters, filterOptions, userId, viewFilter]);
 
   React.useEffect(() => {
     if (!isAuthenticated || !canAccessWebinarQuestionnaires(role) || !accessScope) return;
@@ -648,7 +668,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
                         </span>
                       </td>
                       <td className="px-3 py-2">
-                        <QuestionnaireCallButton row={row} onLinked={markSubmissionLinked} />
+                        <QuestionnaireCallButton row={row} accessScope={accessScope} onLinked={markSubmissionLinked} />
                         {!submissionReadyToCall(row) && row.pipeline_candidate_id && (
                           <Link
                             to={`/pipeline/call?candidateId=${row.pipeline_candidate_id}`}
@@ -787,11 +807,14 @@ const WebinarQuestionnairesPage: React.FC = () => {
                     {(row.pipelineCandidateId || row.email) ? (
                       <QuestionnaireCallButton
                         showForAwaiting
+                        accessScope={accessScope}
                         submissionId={row.submissionId}
                         pipelineCandidateId={row.pipelineCandidateId}
                         row={{
                           id: row.submissionId || row.key,
                           pipeline_candidate_id: row.pipelineCandidateId,
+                          booked_by_user_id: row.bookedByUserId,
+                          recruiter_custom_field: row.recruiterCustomField,
                           hiring_stage: row.filled ? 'ready_for_followup' : 'questionnaire_submitted',
                           email: row.email,
                           phone: null,
