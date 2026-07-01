@@ -51,6 +51,8 @@ type PipelineCandidateLookupRow = {
   email?: string | null;
   phone?: string | null;
   full_name?: string | null;
+  uploader_user_id?: string | null;
+  uploader_label?: string | null;
 };
 
 function personNameKeyFromFullName(fullName: unknown): string | null {
@@ -64,6 +66,7 @@ function indexPipelineCandidateRow(
   pipelineByEmail: Map<string, string>,
   pipelineByPhone: Map<string, string>,
   pipelineByName: Map<string, string>,
+  pipelineUploaderById?: Map<string, { user_id: string | null; label: string | null }>,
 ): void {
   const id = String(row.id);
   const email = normalizeEmail(row.email);
@@ -72,6 +75,15 @@ function indexPipelineCandidateRow(
   if (phone && !pipelineByPhone.has(phone)) pipelineByPhone.set(phone, id);
   const nameKey = personNameKeyFromFullName(row.full_name);
   if (nameKey && !pipelineByName.has(nameKey)) pipelineByName.set(nameKey, id);
+  if (pipelineUploaderById) {
+    const uploaderId = pickString(row.uploader_user_id);
+    if (uploaderId || row.uploader_label) {
+      pipelineUploaderById.set(id, {
+        user_id: uploaderId,
+        label: pickString(row.uploader_label),
+      });
+    }
+  }
 }
 
 function pipelineNameSearchOrFilter(
@@ -106,7 +118,7 @@ async function fetchPipelineCandidatesByEmail(
 ): Promise<PipelineCandidateLookupRow[]> {
   const { data } = await admin
     .from('pipeline_candidates')
-    .select('id, email, phone, full_name')
+    .select('id, email, phone, full_name, uploader_user_id, uploader_label')
     .ilike('email', email)
     .limit(10);
   return (data || []) as PipelineCandidateLookupRow[];
@@ -121,7 +133,7 @@ async function fetchPipelineCandidatesByPhone(
   if (!last10) return [];
   const { data } = await admin
     .from('pipeline_candidates')
-    .select('id, email, phone, full_name')
+    .select('id, email, phone, full_name, uploader_user_id, uploader_label')
     .or(`phone_last10.eq.${last10},phone.ilike.%${last10}%`)
     .limit(10);
   return (data || []) as PipelineCandidateLookupRow[];
@@ -138,7 +150,7 @@ async function fetchPipelineCandidatesByName(
   if (!orFilter) return [];
   const { data } = await admin
     .from('pipeline_candidates')
-    .select('id, email, phone, full_name')
+    .select('id, email, phone, full_name, uploader_user_id, uploader_label')
     .or(orFilter)
     .limit(10);
   return (data || []) as PipelineCandidateLookupRow[];
@@ -149,9 +161,10 @@ function indexPipelineCandidateRows(
   pipelineByEmail: Map<string, string>,
   pipelineByPhone: Map<string, string>,
   pipelineByName: Map<string, string>,
+  pipelineUploaderById?: Map<string, { user_id: string | null; label: string | null }>,
 ): void {
   for (const row of rows) {
-    indexPipelineCandidateRow(row, pipelineByEmail, pipelineByPhone, pipelineByName);
+    indexPipelineCandidateRow(row, pipelineByEmail, pipelineByPhone, pipelineByName, pipelineUploaderById);
   }
 }
 
@@ -987,64 +1000,19 @@ export type QuestionnaireMatchContext = {
   bookingByEmail: Map<string, Record<string, unknown>>;
   bookingByName: Map<string, Record<string, unknown>>;
   settingsByTag: Map<string, { user_id: string; label: string | null }>;
+  pipelineUploaderById: Map<string, { user_id: string | null; label: string | null }>;
   wgBestRow: WgSnapshotRow | null;
 };
 
-export async function buildQuestionnaireMatchContext(
+async function loadBaseRecruiterSettingsByTag(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   admin: any,
-): Promise<QuestionnaireMatchContext> {
-  const pipelineByEmail = new Map<string, string>();
-  const journeyByEmail = new Map<string, string>();
-  const pipelineByPhone = new Map<string, string>();
-  const journeyByPhone = new Map<string, string>();
-  const pipelineByName = new Map<string, string>();
-  const journeyByName = new Map<string, string>();
-  const bookingByEmailBroadcast = new Map<string, Record<string, unknown>>();
-  const bookingByEmail = new Map<string, Record<string, unknown>>();
-  const bookingByName = new Map<string, Record<string, unknown>>();
+): Promise<Map<string, { user_id: string; label: string | null }>> {
   const settingsByTag = new Map<string, { user_id: string; label: string | null }>();
-
-  const [
-    { data: pipelineRows },
-    { data: journeyRows },
-    { data: bookingRows },
-    { data: settingsRows },
-    { data: profileRows },
-  ] = await Promise.all([
-    admin.from('pipeline_candidates').select('id, email, phone, full_name').limit(8000),
-    admin.from('candidates').select('id, email, phone, first_name, last_name').not('email', 'is', null).limit(8000),
-    admin.from('webinar_geek_portal_bookings').select('candidate_email, candidate_first_name, candidate_last_name, candidate_id, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at').eq('status', 'booked').order('created_at', { ascending: false }).limit(8000),
+  const [{ data: settingsRows }, { data: profileRows }] = await Promise.all([
     admin.from('pipeline_user_call_settings').select('user_id, webinar_geek_custom_field').not('webinar_geek_custom_field', 'is', null),
     admin.from('user_profiles').select('user_id, full_name, email'),
   ]);
-
-  for (const row of pipelineRows || []) {
-    indexPipelineCandidateRow(
-      row as PipelineCandidateLookupRow,
-      pipelineByEmail,
-      pipelineByPhone,
-      pipelineByName,
-    );
-  }
-  for (const row of journeyRows || []) {
-    const email = normalizeEmail(row.email);
-    if (email && !journeyByEmail.has(email)) journeyByEmail.set(email, String(row.id));
-    const phone = normalizePhoneDigits(row.phone);
-    if (phone && !journeyByPhone.has(phone)) journeyByPhone.set(phone, String(row.id));
-    const nameKey = normalizePersonNameKey(row.first_name, row.last_name);
-    if (nameKey && !journeyByName.has(nameKey)) journeyByName.set(nameKey, String(row.id));
-  }
-  for (const row of bookingRows || []) {
-    const email = normalizeEmail(row.candidate_email);
-    if (!email) continue;
-    if (!bookingByEmail.has(email)) bookingByEmail.set(email, row);
-    const broadcastId = pickString(row.broadcast_id);
-    const key = broadcastId ? `${email}|${broadcastId}` : email;
-    if (!bookingByEmailBroadcast.has(key)) bookingByEmailBroadcast.set(key, row);
-    const nameKey = normalizePersonNameKey(row.candidate_first_name, row.candidate_last_name);
-    if (nameKey && !bookingByName.has(nameKey)) bookingByName.set(nameKey, row);
-  }
 
   const profileByUserId = new Map<string, { full_name?: string; email?: string }>();
   for (const profile of profileRows || []) {
@@ -1071,6 +1039,146 @@ export async function buildQuestionnaireMatchContext(
     const slug = bookingLinkFirstNameSlug(profile.full_name, profile.email);
     if (slug && !settingsByTag.has(slug)) settingsByTag.set(slug, { user_id: userId, label });
   }
+  return settingsByTag;
+}
+
+function recruiterTagLookupKeys(rawTag: string): Set<string> {
+  const tag = rawTag.trim().toLowerCase();
+  const keys = new Set<string>([tag, tag.replace(/^(cooper|rms)[_\-]+/i, '')]);
+  const parsed = parseBookingLinkTag(rawTag);
+  if (parsed) {
+    keys.add(parsed.tag.toLowerCase());
+    keys.add(parsed.slug.toLowerCase());
+    keys.add(parsed.slugKey.toLowerCase().replace(/\s+/g, '_'));
+  }
+  return keys;
+}
+
+function labelFromRecruiterCustomField(rawTag: string | null | undefined): string | null {
+  const tag = pickString(rawTag);
+  if (!tag) return null;
+  const parsed = parseBookingLinkTag(tag);
+  if (parsed) return parsed.label;
+  const stripped = tag.replace(/^(cooper|rms)[_\-]+/i, '').trim();
+  if (!stripped) return tag;
+  return stripped
+    .split(/[_\-\s]+/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
+async function mergeSettingsByTagForCustomField(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  rawTag: string | null | undefined,
+  settingsByTag: Map<string, { user_id: string; label: string | null }>,
+): Promise<void> {
+  const tag = pickString(rawTag);
+  if (!tag) return;
+
+  const keys = recruiterTagLookupKeys(tag);
+  for (const key of keys) {
+    if (settingsByTag.has(key)) return;
+  }
+
+  const { data: settingsRows } = await admin
+    .from('pipeline_user_call_settings')
+    .select('user_id, webinar_geek_custom_field')
+    .not('webinar_geek_custom_field', 'is', null);
+
+  const profileIds = new Set<string>();
+  for (const settings of settingsRows || []) {
+    const settingsTag = pickString(settings.webinar_geek_custom_field);
+    if (!settingsTag) continue;
+    const settingsKeys = recruiterTagLookupKeys(settingsTag);
+    let matched = false;
+    for (const key of keys) {
+      if (settingsKeys.has(key) || settingsTag.toLowerCase() === key) {
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) continue;
+    const userId = String(settings.user_id || '');
+    if (!userId) continue;
+    profileIds.add(userId);
+    settingsByTag.set(settingsTag.toLowerCase(), { user_id: userId, label: null });
+    for (const key of keys) {
+      if (!settingsByTag.has(key)) settingsByTag.set(key, { user_id: userId, label: null });
+    }
+  }
+
+  if (profileIds.size) {
+    const { data: profileRows } = await admin
+      .from('user_profiles')
+      .select('user_id, full_name, email')
+      .in('user_id', [...profileIds]);
+    for (const profile of profileRows || []) {
+      const userId = String(profile.user_id || '');
+      if (!userId) continue;
+      const label = pickString(profile.full_name, profile.email);
+      for (const [mapKey, entry] of settingsByTag.entries()) {
+        if (entry.user_id === userId) settingsByTag.set(mapKey, { user_id: userId, label });
+      }
+    }
+  }
+}
+
+export async function buildQuestionnaireMatchContext(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+): Promise<QuestionnaireMatchContext> {
+  const pipelineByEmail = new Map<string, string>();
+  const journeyByEmail = new Map<string, string>();
+  const pipelineByPhone = new Map<string, string>();
+  const journeyByPhone = new Map<string, string>();
+  const pipelineByName = new Map<string, string>();
+  const journeyByName = new Map<string, string>();
+  const bookingByEmailBroadcast = new Map<string, Record<string, unknown>>();
+  const bookingByEmail = new Map<string, Record<string, unknown>>();
+  const bookingByName = new Map<string, Record<string, unknown>>();
+  const pipelineUploaderById = new Map<string, { user_id: string | null; label: string | null }>();
+
+  const [
+    { data: pipelineRows },
+    { data: journeyRows },
+    { data: bookingRows },
+    settingsByTag,
+  ] = await Promise.all([
+    admin.from('pipeline_candidates').select('id, email, phone, full_name, uploader_user_id, uploader_label').limit(8000),
+    admin.from('candidates').select('id, email, phone, first_name, last_name').not('email', 'is', null).limit(8000),
+    admin.from('webinar_geek_portal_bookings').select('candidate_email, candidate_first_name, candidate_last_name, candidate_id, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at').eq('status', 'booked').order('created_at', { ascending: false }).limit(8000),
+    loadBaseRecruiterSettingsByTag(admin),
+  ]);
+
+  for (const row of pipelineRows || []) {
+    indexPipelineCandidateRow(
+      row as PipelineCandidateLookupRow,
+      pipelineByEmail,
+      pipelineByPhone,
+      pipelineByName,
+      pipelineUploaderById,
+    );
+  }
+  for (const row of journeyRows || []) {
+    const email = normalizeEmail(row.email);
+    if (email && !journeyByEmail.has(email)) journeyByEmail.set(email, String(row.id));
+    const phone = normalizePhoneDigits(row.phone);
+    if (phone && !journeyByPhone.has(phone)) journeyByPhone.set(phone, String(row.id));
+    const nameKey = normalizePersonNameKey(row.first_name, row.last_name);
+    if (nameKey && !journeyByName.has(nameKey)) journeyByName.set(nameKey, String(row.id));
+  }
+  for (const row of bookingRows || []) {
+    const email = normalizeEmail(row.candidate_email);
+    if (!email) continue;
+    if (!bookingByEmail.has(email)) bookingByEmail.set(email, row);
+    const broadcastId = pickString(row.broadcast_id);
+    const key = broadcastId ? `${email}|${broadcastId}` : email;
+    if (!bookingByEmailBroadcast.has(key)) bookingByEmailBroadcast.set(key, row);
+    const nameKey = normalizePersonNameKey(row.candidate_first_name, row.candidate_last_name);
+    if (nameKey && !bookingByName.has(nameKey)) bookingByName.set(nameKey, row);
+  }
 
   return {
     pipelineByEmail,
@@ -1083,6 +1191,7 @@ export async function buildQuestionnaireMatchContext(
     bookingByEmail,
     bookingByName,
     settingsByTag,
+    pipelineUploaderById,
     wgBestRow: null,
   };
 }
@@ -1102,7 +1211,8 @@ export async function buildQuestionnaireMatchContextForRow(
   const bookingByEmailBroadcast = new Map<string, Record<string, unknown>>();
   const bookingByEmail = new Map<string, Record<string, unknown>>();
   const bookingByName = new Map<string, Record<string, unknown>>();
-  const settingsByTag = new Map<string, { user_id: string; label: string | null }>();
+  const settingsByTag = await loadBaseRecruiterSettingsByTag(admin);
+  const pipelineUploaderById = new Map<string, { user_id: string | null; label: string | null }>();
 
   const email = normalizeEmail(row.email);
   const phone = normalizePhoneDigits(row.phone);
@@ -1121,7 +1231,7 @@ export async function buildQuestionnaireMatchContextForRow(
         .limit(10),
       fetchPipelineCandidatesByEmail(admin, email),
     ]);
-    indexPipelineCandidateRows(pipelineRows, pipelineByEmail, pipelineByPhone, pipelineByName);
+    indexPipelineCandidateRows(pipelineRows, pipelineByEmail, pipelineByPhone, pipelineByName, pipelineUploaderById);
     for (const journeyRow of journeyRows || []) {
       const em = normalizeEmail(journeyRow.email);
       if (em && !journeyByEmail.has(em)) journeyByEmail.set(em, String(journeyRow.id));
@@ -1149,6 +1259,7 @@ export async function buildQuestionnaireMatchContextForRow(
         pipelineByEmail,
         pipelineByPhone,
         pipelineByName,
+        pipelineUploaderById,
       );
     }
     if (!journeyByPhone.has(phone)) {
@@ -1175,6 +1286,7 @@ export async function buildQuestionnaireMatchContextForRow(
         pipelineByEmail,
         pipelineByPhone,
         pipelineByName,
+        pipelineUploaderById,
       );
     }
     if (!journeyByName.has(nameKey)) {
@@ -1205,41 +1317,8 @@ export async function buildQuestionnaireMatchContextForRow(
     }
   }
 
-  const recruiterTag = pickString(row.recruiter_custom_field);
-  if (recruiterTag) {
-    const tagKeys = new Set<string>([
-      recruiterTag.toLowerCase(),
-      recruiterTag.toLowerCase().replace(/^(cooper|rms)[_\-]+/i, ''),
-    ]);
-    const parsed = parseBookingLinkTag(recruiterTag);
-    if (parsed) tagKeys.add(parsed.tag.toLowerCase());
-    const { data: settingsRows } = await admin
-      .from('pipeline_user_call_settings')
-      .select('user_id, webinar_geek_custom_field')
-      .not('webinar_geek_custom_field', 'is', null);
-    const profileIds = new Set<string>();
-    for (const settings of settingsRows || []) {
-      const settingsTag = pickString(settings.webinar_geek_custom_field);
-      if (!settingsTag || !tagKeys.has(settingsTag.toLowerCase())) continue;
-      const userId = String(settings.user_id || '');
-      if (!userId) continue;
-      profileIds.add(userId);
-      settingsByTag.set(settingsTag.toLowerCase(), { user_id: userId, label: null });
-    }
-    if (profileIds.size) {
-      const { data: profileRows } = await admin
-        .from('user_profiles')
-        .select('user_id, full_name, email')
-        .in('user_id', [...profileIds]);
-      for (const profile of profileRows || []) {
-        const userId = String(profile.user_id || '');
-        if (!userId) continue;
-        const label = pickString(profile.full_name, profile.email);
-        for (const [tag, entry] of settingsByTag.entries()) {
-          if (entry.user_id === userId) settingsByTag.set(tag, { user_id: userId, label });
-        }
-      }
-    }
+  if (pickString(row.recruiter_custom_field)) {
+    await mergeSettingsByTagForCustomField(admin, row.recruiter_custom_field, settingsByTag);
   }
 
   const wgSubs = await loadWgSnapshotSubscriptions(admin);
@@ -1272,6 +1351,7 @@ export async function buildQuestionnaireMatchContextForRow(
         pipelineByEmail,
         pipelineByPhone,
         pipelineByName,
+        pipelineUploaderById,
       );
     }
     if (wgPhone && !pipelineByPhone.has(wgPhone)) {
@@ -1280,6 +1360,7 @@ export async function buildQuestionnaireMatchContextForRow(
         pipelineByEmail,
         pipelineByPhone,
         pipelineByName,
+        pipelineUploaderById,
       );
     }
     const wgNameKey = wgNameKeyFromSnapshotRow(wgBestRow);
@@ -1291,11 +1372,13 @@ export async function buildQuestionnaireMatchContextForRow(
         pipelineByEmail,
         pipelineByPhone,
         pipelineByName,
+        pipelineUploaderById,
       );
     }
     const wgCustomField = pickString(wgBestRow.custom_field);
-    if (wgCustomField && !row.recruiter_custom_field) {
-      row.recruiter_custom_field = wgCustomField;
+    if (wgCustomField) {
+      row.recruiter_custom_field = row.recruiter_custom_field || wgCustomField;
+      await mergeSettingsByTagForCustomField(admin, wgCustomField, settingsByTag);
     }
   }
 
@@ -1310,6 +1393,7 @@ export async function buildQuestionnaireMatchContextForRow(
     bookingByEmail,
     bookingByName,
     settingsByTag,
+    pipelineUploaderById,
     wgBestRow,
   };
 }
@@ -1482,21 +1566,27 @@ export function matchQuestionnaireRowWithContext(
   }
 
   if (!bookedByUserId && recruiterCustomField) {
-    const tagKeys = new Set<string>([
-      recruiterCustomField.toLowerCase(),
-      recruiterCustomField.toLowerCase().replace(/^(cooper|rms)[_\-]+/i, ''),
-    ]);
-    const parsed = parseBookingLinkTag(recruiterCustomField);
-    if (parsed) tagKeys.add(parsed.tag.toLowerCase());
-    for (const key of tagKeys) {
-      if (!key) continue;
+    for (const key of recruiterTagLookupKeys(recruiterCustomField)) {
       const settings = context.settingsByTag.get(key);
       if (!settings) continue;
       bookedByUserId = settings.user_id;
       bookedByLabel = settings.label;
-      matchMethod = matchMethod ? `${matchMethod}+booking_tag` : 'booking_tag';
+      matchMethod = appendMatchMethod(matchMethod, 'booking_tag');
       break;
     }
+  }
+
+  if (!bookedByUserId && pipelineCandidateId) {
+    const uploader = context.pipelineUploaderById.get(pipelineCandidateId);
+    if (uploader?.user_id) {
+      bookedByUserId = uploader.user_id;
+      bookedByLabel = pickString(uploader.label, bookedByLabel);
+      matchMethod = appendMatchMethod(matchMethod, 'pipeline_uploader');
+    }
+  }
+
+  if (!bookedByLabel && recruiterCustomField) {
+    bookedByLabel = labelFromRecruiterCustomField(recruiterCustomField);
   }
 
   return {
@@ -1588,6 +1678,7 @@ export async function upsertQuestionnaireRowsBatched(
     bookingByEmail: new Map(),
     bookingByName: new Map(),
     settingsByTag: new Map(),
+    pipelineUploaderById: new Map(),
     wgBestRow: null,
   };
   const matchContext = input.match === false

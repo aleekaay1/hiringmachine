@@ -229,7 +229,25 @@ export function wgLinkedEmailForSubmission(row: WebinarQuestionnaireSubmission):
 }
 
 export function bookedByLabelForSubmission(row: WebinarQuestionnaireSubmission): string | null {
-  return row.booked_by_label?.trim() || null;
+  const direct = row.booked_by_label?.trim();
+  if (direct) return direct;
+
+  const tag = String(row.recruiter_custom_field || '').trim();
+  if (!tag) return null;
+
+  const parsed = tag.match(/^(cooper|rms)[_\-\s]+(.+)$/i);
+  if (parsed) {
+    const channel = parsed[1].toUpperCase() === 'RMS' ? 'RMS' : 'Cooper';
+    const slug = parsed[2]
+      .trim()
+      .split(/[_\-\s]+/g)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+      .join(' ');
+    return `${channel} · ${slug}`;
+  }
+
+  return tag;
 }
 
 export function sourceTypeLabel(sourceType: string | null | undefined): string {
