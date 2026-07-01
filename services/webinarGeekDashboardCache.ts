@@ -39,6 +39,24 @@ export async function loadWebinarGeekDashboardCache(): Promise<{
   error: string | null;
   tableMissing: boolean;
 }> {
+  if (inflightCacheLoad) return inflightCacheLoad;
+  inflightCacheLoad = loadWebinarGeekDashboardCacheUncached().finally(() => {
+    inflightCacheLoad = null;
+  });
+  return inflightCacheLoad;
+}
+
+let inflightCacheLoad: Promise<{
+  data: WebinarGeekDashboardCachePayload | null;
+  error: string | null;
+  tableMissing: boolean;
+}> | null = null;
+
+async function loadWebinarGeekDashboardCacheUncached(): Promise<{
+  data: WebinarGeekDashboardCachePayload | null;
+  error: string | null;
+  tableMissing: boolean;
+}> {
   const { data, error } = await supabase
     .from(TABLE)
     .select('subscriptions, broadcasts, fetch_since, fetch_until, fetch_label, subscription_count, fetched_at')

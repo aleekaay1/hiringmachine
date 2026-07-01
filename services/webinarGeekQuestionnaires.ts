@@ -6,6 +6,20 @@ import { loadWebinarGeekDashboardCache } from './webinarGeekDashboardCache';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
+const QUERY_TIMEOUT_MS = 12_000;
+
+async function withQueryTimeout<T>(promise: PromiseLike<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out`)), QUERY_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export const QUESTIONNAIRE_PAGE_SIZE = 50;
 
 const LIST_SELECT =
@@ -372,9 +386,13 @@ export async function fetchWebinarQuestionnairePage(
     query = query
       .is('pipeline_candidate_id', null)
       .eq('hiring_stage', 'questionnaire_submitted');
+  } else if (viewFilter === 'wg_linked') {
+    query = query.or(
+      'subscription_id.not.is.null,watched.eq.true,watch_duration_seconds.gt.0,match_method.ilike.%wg_%',
+    );
   }
 
-  const { data, error } = await query;
+  const { data, error } = await withQueryTimeout(query, 'Questionnaire list');
   if (error) {
     if (error.code === 'PGRST205' || /schema cache|does not exist/i.test(error.message)) {
       throw new Error(
@@ -432,37 +450,54 @@ export async function fetchWebinarQuestionnaireSummary(input?: {
   attendedOnly: number;
   matchedPipeline: number;
 }> {
-  const { data, error } = await supabase.rpc('wg_questionnaire_summary_counts', {
-    p_date_from: input?.dateFrom ? ymdStartIso(input.dateFrom) : null,
-    p_date_to: input?.dateTo ? ymdEndIso(input.dateTo) : null,
-  });
-  if (!error && data && typeof data === 'object') {
-    const counts = data as Record<string, unknown>;
+  const dateFrom = input?.dateFrom ? ymdStartIso(input.dateFrom) : questionnaireGoLiveIso();
+  const dateTo = input?.dateTo ? ymdEndIso(input.dateTo) : null;
+
+  try {
+    let totalQ = supabase
+      .from('webinar_geek_questionnaire_submissions')
+      .select('id', { count: 'exact', head: true })
+      .eq('source_type', 'google_form')
+      .gte('submitted_at', dateFrom);
+    let withAnswersQ = supabase
+      .from('webinar_geek_questionnaire_submissions')
+      .select('id', { count: 'exact', head: true })
+      .eq('source_type', 'google_form')
+      .eq('hiring_stage', 'questionnaire_submitted')
+      .gte('submitted_at', dateFrom);
+    let attendedOnlyQ = supabase
+      .from('webinar_geek_questionnaire_submissions')
+      .select('id', { count: 'exact', head: true })
+      .eq('source_type', 'google_form')
+      .eq('hiring_stage', 'attended_only')
+      .gte('submitted_at', dateFrom);
+    let matchedPipelineQ = supabase
+      .from('webinar_geek_questionnaire_submissions')
+      .select('id', { count: 'exact', head: true })
+      .eq('source_type', 'google_form')
+      .not('pipeline_candidate_id', 'is', null)
+      .gte('submitted_at', dateFrom);
+    if (dateTo) {
+      totalQ = totalQ.lte('submitted_at', dateTo);
+      withAnswersQ = withAnswersQ.lte('submitted_at', dateTo);
+      attendedOnlyQ = attendedOnlyQ.lte('submitted_at', dateTo);
+      matchedPipelineQ = matchedPipelineQ.lte('submitted_at', dateTo);
+    }
+
+    const [totalRes, withAnswersRes, attendedOnlyRes, matchedPipelineRes] = await withQueryTimeout(
+      Promise.all([totalQ, withAnswersQ, attendedOnlyQ, matchedPipelineQ]),
+      'Questionnaire summary',
+    );
+
     return {
-      total: Number(counts.total || 0),
-      withAnswers: Number(counts.withAnswers || 0),
-      attendedOnly: Number(counts.attendedOnly || 0),
-      matchedPipeline: Number(counts.matchedPipeline || 0),
+      total: totalRes.count ?? 0,
+      withAnswers: withAnswersRes.count ?? 0,
+      attendedOnly: attendedOnlyRes.count ?? 0,
+      matchedPipeline: matchedPipelineRes.count ?? 0,
     };
-  }
-
-  let query = supabase
-    .from('webinar_geek_questionnaire_submissions')
-    .select('hiring_stage, pipeline_candidate_id', { count: 'exact', head: true });
-  if (input?.dateFrom) query = query.gte('submitted_at', ymdStartIso(input.dateFrom));
-  if (input?.dateTo) query = query.lte('submitted_at', ymdEndIso(input.dateTo));
-
-  const { count, error: countError } = await query;
-  if (countError) {
+  } catch {
     return { total: 0, withAnswers: 0, attendedOnly: 0, matchedPipeline: 0 };
   }
-
-  return {
-    total: count ?? 0,
-    withAnswers: 0,
-    attendedOnly: 0,
-    matchedPipeline: 0,
-  };
 }
 
 export async function fetchDashboardCacheMetaForQuestionnaires(): Promise<{
@@ -928,13 +963,16 @@ async function loadScopedPortalBookings(): Promise<PortalBookingMaps> {
   if (portalBookingsTableUnavailable) return { byEmail, byName };
 
   const goLiveIso = questionnaireGoLiveIso();
-  const { data, error } = await supabase
-    .from('webinar_geek_portal_bookings')
-    .select('candidate_email, candidate_first_name, candidate_last_name, booked_by_user_id, booked_by_label, custom_field, candidate_id, broadcast_id, created_at')
-    .eq('status', 'booked')
-    .gte('created_at', goLiveIso)
-    .order('created_at', { ascending: false })
-    .limit(3000);
+  const { data, error } = await withQueryTimeout(
+    supabase
+      .from('webinar_geek_portal_bookings')
+      .select('candidate_email, candidate_first_name, candidate_last_name, booked_by_user_id, booked_by_label, custom_field, candidate_id, broadcast_id, created_at')
+      .eq('status', 'booked')
+      .gte('created_at', goLiveIso)
+      .order('created_at', { ascending: false })
+      .limit(3000),
+    'Portal bookings',
+  );
   if (error) {
     if (isMissingSupabaseTableError(error)) portalBookingsTableUnavailable = true;
     return { byEmail, byName };
@@ -958,6 +996,29 @@ async function loadScopedPortalBookings(): Promise<PortalBookingMaps> {
     if (nameKey && !byName.has(nameKey)) byName.set(nameKey, { ...meta, email });
   }
   return { byEmail, byName };
+}
+
+let wgShowedIndexUnavailable = false;
+
+async function fetchWgShowedIndexRows(sinceIso: string): Promise<Array<Record<string, unknown>>> {
+  if (wgShowedIndexUnavailable) return [];
+  try {
+    const { data, error } = await withQueryTimeout(
+      supabase.rpc('wg_questionnaire_showed_index', { p_since: sinceIso }),
+      'WG showed index',
+    );
+    if (error) {
+      if (error.code === 'PGRST202' || isMissingSupabaseTableError(error)) {
+        wgShowedIndexUnavailable = true;
+      }
+      return [];
+    }
+    if (!Array.isArray(data)) return [];
+    return data as Array<Record<string, unknown>>;
+  } catch {
+    wgShowedIndexUnavailable = true;
+    return [];
+  }
 }
 
 function buildWgShowIndexes(wgRows: Array<Record<string, unknown>>): {
@@ -1101,13 +1162,13 @@ export function questionnaireLeadOwnedByScope(
 export async function fetchQuestionnaireFollowUpBoard(
   scope: QuestionnaireAccessScope,
 ): Promise<QuestionnaireFollowUpBoard> {
-  const [filledIdentities, bookingMaps, cache] = await Promise.all([
+  const sinceIso = questionnaireGoLiveIso();
+  const [filledIdentities, bookingMaps, wgRows] = await Promise.all([
     fetchQuestionnaireFilledIdentities(scope),
     loadScopedPortalBookings(),
-    loadWebinarGeekDashboardCache(),
+    fetchWgShowedIndexRows(sinceIso),
   ]);
 
-  const wgRows = (cache.data?.subscriptions || []) as Array<Record<string, unknown>>;
   const wgIndexes = buildWgShowIndexes(wgRows);
   const rows: QuestionnaireFollowUpRow[] = [];
 

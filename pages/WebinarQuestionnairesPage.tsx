@@ -12,7 +12,6 @@ import {
   defaultQuestionnaireDateFrom,
   deleteWebinarQuestionnaireSubmission,
   displayNameFromSubmission,
-  enrichSubmissionFromWgCache,
   fetchQuestionnaireFollowUpBoard,
   fetchWebinarQuestionnaireDetail,
   fetchWebinarQuestionnairePage,
@@ -35,7 +34,6 @@ import {
   type QuestionnaireViewFilter,
   type WebinarQuestionnaireSubmission,
 } from '../services/webinarGeekQuestionnaires';
-import { loadWebinarGeekDashboardCache } from '../services/webinarGeekDashboardCache';
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -225,20 +223,15 @@ const WebinarQuestionnairesPage: React.FC = () => {
         ...pageFilters,
         offset,
       });
-      const cache = await loadWebinarGeekDashboardCache();
-      const wgRows = (cache.data?.subscriptions || []) as Array<Record<string, unknown>>;
       if (mode === 'reset' && userId) {
         setOpenedIds(seedQuestionnaireOpenedIdsIfEmpty(userId, page.rows.map((row) => row.id)));
       }
-      const enriched = page.rows
-        .map((row) => enrichSubmissionFromWgCache(row, wgRows))
-        .filter((row) => submissionMatchesPageFilters(row, pageFilters, filterOptions));
-      setRows((prev) => (mode === 'more' ? [...prev, ...enriched] : enriched));
+      const visible = page.rows.filter((row) => submissionMatchesPageFilters(row, pageFilters, filterOptions));
+      setRows((prev) => (mode === 'more' ? [...prev, ...visible] : visible));
       setHasMore(page.hasMore);
       setNextOffset(page.nextOffset);
       if (mode === 'reset') {
         void loadMeta();
-        void loadFollowUp();
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -246,14 +239,14 @@ const WebinarQuestionnairesPage: React.FC = () => {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [loadFollowUp, loadMeta, nextOffset, pageFilters, filterOptions, userId]);
+  }, [loadMeta, nextOffset, pageFilters, filterOptions, userId]);
 
   React.useEffect(() => {
     if (!isAuthenticated || !canAccessWebinarQuestionnaires(role) || !accessScope) return;
     if (isRecruiter || tab === 'awaiting') void loadFollowUp();
     else void loadPage('reset');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated, role, accessScope, tab, debouncedSearch, dateFrom, dateTo, viewFilter, isRecruiter, openedIds]);
+  }, [isAuthenticated, role, accessScope, tab, debouncedSearch, dateFrom, dateTo, viewFilter, isRecruiter]);
 
   React.useEffect(() => {
     if (!isAuthenticated || !canAccessWebinarQuestionnaires(role) || isRecruiter) return;
@@ -403,17 +396,21 @@ const WebinarQuestionnairesPage: React.FC = () => {
         <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3">
           <p className="text-[10px] uppercase tracking-wide text-amber-900">Awaiting form</p>
           <p className="text-xl font-bold text-amber-950">
-            {board?.awaitingCount ?? '…'}
+            {board?.awaitingCount ?? (tab === 'awaiting' || followUpLoading ? '…' : '—')}
           </p>
         </div>
         <div className="rounded-xl border border-rose-200 bg-rose-50/50 p-3">
           <p className="text-[10px] uppercase tracking-wide text-rose-800">Urgent (&gt;2 days)</p>
-          <p className="text-xl font-bold text-rose-900">{board?.urgentCount ?? '…'}</p>
+          <p className="text-xl font-bold text-rose-900">
+            {board?.urgentCount ?? (tab === 'awaiting' || followUpLoading ? '…' : '—')}
+          </p>
         </div>
         {!isRecruiter && (
           <div className="rounded-xl border border-violet-200 bg-violet-50/50 p-3">
             <p className="text-[10px] uppercase tracking-wide text-violet-800">Ready for follow-up</p>
-            <p className="text-xl font-bold text-violet-900">{board?.readyForFollowUpCount ?? '…'}</p>
+            <p className="text-xl font-bold text-violet-900">
+              {board?.readyForFollowUpCount ?? (tab === 'awaiting' || followUpLoading ? '…' : '—')}
+            </p>
           </div>
         )}
       </div>
