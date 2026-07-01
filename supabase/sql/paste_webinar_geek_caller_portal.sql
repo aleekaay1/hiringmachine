@@ -1,4 +1,5 @@
--- Run in Supabase SQL Editor for recruiter webinar verify + book portal.
+-- Run in Supabase SQL Editor (required for Webinar Questionnaire awaiting board).
+-- Creates portal booking audit table used by the questionnaire page and WG caller portal.
 
 alter table if exists public.pipeline_user_call_settings
   add column if not exists webinar_geek_custom_field text;
@@ -44,7 +45,7 @@ using (
   or exists (
     select 1 from public.user_profiles up
     where up.user_id = auth.uid()
-      and up.role in ('admin', 'leadership', 'hr')
+      and up.role in ('admin', 'leadership', 'hr', 'webinar')
   )
 );
 
@@ -54,3 +55,5 @@ on public.webinar_geek_portal_bookings
 for insert
 to authenticated
 with check (booked_by_user_id = auth.uid());
+
+grant select, insert on public.webinar_geek_portal_bookings to authenticated;

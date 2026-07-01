@@ -914,7 +914,19 @@ type PortalBookingMaps = {
   byName: Map<string, PortalBookingMeta>;
 };
 
+let portalBookingsTableUnavailable = false;
+
+function isMissingSupabaseTableError(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  if (error.code === 'PGRST205' || error.code === '42P01') return true;
+  return /relation|does not exist|schema cache|not found/i.test(String(error.message || ''));
+}
+
 async function loadScopedPortalBookings(): Promise<PortalBookingMaps> {
+  const byEmail = new Map<string, PortalBookingMeta>();
+  const byName = new Map<string, PortalBookingMeta>();
+  if (portalBookingsTableUnavailable) return { byEmail, byName };
+
   const goLiveIso = questionnaireGoLiveIso();
   const { data, error } = await supabase
     .from('webinar_geek_portal_bookings')
@@ -923,9 +935,10 @@ async function loadScopedPortalBookings(): Promise<PortalBookingMaps> {
     .gte('created_at', goLiveIso)
     .order('created_at', { ascending: false })
     .limit(3000);
-  const byEmail = new Map<string, PortalBookingMeta>();
-  const byName = new Map<string, PortalBookingMeta>();
-  if (error) return { byEmail, byName };
+  if (error) {
+    if (isMissingSupabaseTableError(error)) portalBookingsTableUnavailable = true;
+    return { byEmail, byName };
+  }
 
   for (const row of data || []) {
     const email = normalizeQuestionnaireEmail((row as { candidate_email?: string }).candidate_email);

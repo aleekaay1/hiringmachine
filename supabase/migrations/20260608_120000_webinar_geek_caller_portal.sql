@@ -47,7 +47,7 @@ using (
   or exists (
     select 1 from public.user_profiles up
     where up.user_id = auth.uid()
-      and up.role in ('admin', 'leadership', 'hr')
+      and up.role in ('admin', 'leadership', 'hr', 'webinar')
   )
 );
 
@@ -57,3 +57,5 @@ on public.webinar_geek_portal_bookings
 for insert
 to authenticated
 with check (booked_by_user_id = auth.uid());
+
+grant select, insert on public.webinar_geek_portal_bookings to authenticated;
