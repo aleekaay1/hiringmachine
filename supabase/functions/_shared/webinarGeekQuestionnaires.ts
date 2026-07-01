@@ -46,6 +46,115 @@ function normalizePersonNameKey(first: unknown, last: unknown): string | null {
   return parts.join(' ').replace(/\s+/g, ' ');
 }
 
+type PipelineCandidateLookupRow = {
+  id: string;
+  email?: string | null;
+  phone?: string | null;
+  full_name?: string | null;
+};
+
+function personNameKeyFromFullName(fullName: unknown): string | null {
+  const parts = String(fullName || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!parts.length) return null;
+  return parts.join(' ').replace(/\s+/g, ' ');
+}
+
+function indexPipelineCandidateRow(
+  row: PipelineCandidateLookupRow,
+  pipelineByEmail: Map<string, string>,
+  pipelineByPhone: Map<string, string>,
+  pipelineByName: Map<string, string>,
+): void {
+  const id = String(row.id);
+  const email = normalizeEmail(row.email);
+  if (email && !pipelineByEmail.has(email)) pipelineByEmail.set(email, id);
+  const phone = normalizePhoneDigits(row.phone);
+  if (phone && !pipelineByPhone.has(phone)) pipelineByPhone.set(phone, id);
+  const nameKey = personNameKeyFromFullName(row.full_name);
+  if (nameKey && !pipelineByName.has(nameKey)) pipelineByName.set(nameKey, id);
+}
+
+function pipelineNameSearchOrFilter(
+  firstName: string | null,
+  lastName: string | null,
+  nameKey: string | null,
+): string | null {
+  const clauses: string[] = [];
+  const first = String(firstName || '').trim();
+  const last = String(lastName || '').trim();
+  if (first && last) {
+    clauses.push(`full_name.ilike.%${first}%${last}%`);
+    clauses.push(`full_name.ilike.%${last}%${first}%`);
+  }
+  const key = nameKey || normalizePersonNameKey(firstName, lastName);
+  if (key) {
+    const parts = key.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      clauses.push(`full_name.ilike.%${parts[0]}%${parts.slice(1).join('%')}%`);
+    } else if (parts.length === 1) {
+      clauses.push(`full_name.ilike.%${parts[0]}%`);
+    }
+  }
+  if (!clauses.length) return null;
+  return [...new Set(clauses)].join(',');
+}
+
+async function fetchPipelineCandidatesByEmail(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  email: string,
+): Promise<PipelineCandidateLookupRow[]> {
+  const { data } = await admin
+    .from('pipeline_candidates')
+    .select('id, email, phone, full_name')
+    .ilike('email', email)
+    .limit(10);
+  return (data || []) as PipelineCandidateLookupRow[];
+}
+
+async function fetchPipelineCandidatesByPhone(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  phone: string,
+): Promise<PipelineCandidateLookupRow[]> {
+  const last10 = normalizePhoneDigits(phone);
+  if (!last10) return [];
+  const { data } = await admin
+    .from('pipeline_candidates')
+    .select('id, email, phone, full_name')
+    .or(`phone_last10.eq.${last10},phone.ilike.%${last10}%`)
+    .limit(10);
+  return (data || []) as PipelineCandidateLookupRow[];
+}
+
+async function fetchPipelineCandidatesByName(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  firstName: string | null,
+  lastName: string | null,
+  nameKey: string | null,
+): Promise<PipelineCandidateLookupRow[]> {
+  const orFilter = pipelineNameSearchOrFilter(firstName, lastName, nameKey);
+  if (!orFilter) return [];
+  const { data } = await admin
+    .from('pipeline_candidates')
+    .select('id, email, phone, full_name')
+    .or(orFilter)
+    .limit(10);
+  return (data || []) as PipelineCandidateLookupRow[];
+}
+
+function indexPipelineCandidateRows(
+  rows: PipelineCandidateLookupRow[],
+  pipelineByEmail: Map<string, string>,
+  pipelineByPhone: Map<string, string>,
+  pipelineByName: Map<string, string>,
+): void {
+  for (const row of rows) {
+    indexPipelineCandidateRow(row, pipelineByEmail, pipelineByPhone, pipelineByName);
+  }
+}
+
 const QUESTIONNAIRE_WG_GO_LIVE_ISO = '2026-06-16T00:00:00.000Z';
 
 type WgSnapshotRow = Record<string, unknown>;
@@ -903,7 +1012,7 @@ export async function buildQuestionnaireMatchContext(
     { data: settingsRows },
     { data: profileRows },
   ] = await Promise.all([
-    admin.from('pipeline_candidates').select('id, email, phone, first_name, last_name').not('email', 'is', null).limit(8000),
+    admin.from('pipeline_candidates').select('id, email, phone, full_name').limit(8000),
     admin.from('candidates').select('id, email, phone, first_name, last_name').not('email', 'is', null).limit(8000),
     admin.from('webinar_geek_portal_bookings').select('candidate_email, candidate_first_name, candidate_last_name, candidate_id, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at').eq('status', 'booked').order('created_at', { ascending: false }).limit(8000),
     admin.from('pipeline_user_call_settings').select('user_id, webinar_geek_custom_field').not('webinar_geek_custom_field', 'is', null),
@@ -911,12 +1020,12 @@ export async function buildQuestionnaireMatchContext(
   ]);
 
   for (const row of pipelineRows || []) {
-    const email = normalizeEmail(row.email);
-    if (email && !pipelineByEmail.has(email)) pipelineByEmail.set(email, String(row.id));
-    const phone = normalizePhoneDigits(row.phone);
-    if (phone && !pipelineByPhone.has(phone)) pipelineByPhone.set(phone, String(row.id));
-    const nameKey = normalizePersonNameKey(row.first_name, row.last_name);
-    if (nameKey && !pipelineByName.has(nameKey)) pipelineByName.set(nameKey, String(row.id));
+    indexPipelineCandidateRow(
+      row as PipelineCandidateLookupRow,
+      pipelineByEmail,
+      pipelineByPhone,
+      pipelineByName,
+    );
   }
   for (const row of journeyRows || []) {
     const email = normalizeEmail(row.email);
@@ -1002,8 +1111,7 @@ export async function buildQuestionnaireMatchContextForRow(
   const nameKey = normalizePersonNameKey(row.first_name, row.last_name);
 
   if (email) {
-    const [{ data: pipelineRows }, { data: journeyRows }, { data: bookingRows }] = await Promise.all([
-      admin.from('pipeline_candidates').select('id, email, phone, first_name, last_name').ilike('email', email).limit(5),
+    const [{ data: journeyRows }, { data: bookingRows }, pipelineRows] = await Promise.all([
       admin.from('candidates').select('id, email, phone, first_name, last_name').ilike('email', email).limit(5),
       admin.from('webinar_geek_portal_bookings')
         .select('candidate_email, candidate_first_name, candidate_last_name, candidate_id, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at')
@@ -1011,15 +1119,9 @@ export async function buildQuestionnaireMatchContextForRow(
         .ilike('candidate_email', email)
         .order('created_at', { ascending: false })
         .limit(10),
+      fetchPipelineCandidatesByEmail(admin, email),
     ]);
-    for (const pipelineRow of pipelineRows || []) {
-      const em = normalizeEmail(pipelineRow.email);
-      if (em && !pipelineByEmail.has(em)) pipelineByEmail.set(em, String(pipelineRow.id));
-      const ph = normalizePhoneDigits(pipelineRow.phone);
-      if (ph && !pipelineByPhone.has(ph)) pipelineByPhone.set(ph, String(pipelineRow.id));
-      const nk = normalizePersonNameKey(pipelineRow.first_name, pipelineRow.last_name);
-      if (nk && !pipelineByName.has(nk)) pipelineByName.set(nk, String(pipelineRow.id));
-    }
+    indexPipelineCandidateRows(pipelineRows, pipelineByEmail, pipelineByPhone, pipelineByName);
     for (const journeyRow of journeyRows || []) {
       const em = normalizeEmail(journeyRow.email);
       if (em && !journeyByEmail.has(em)) journeyByEmail.set(em, String(journeyRow.id));
@@ -1042,19 +1144,12 @@ export async function buildQuestionnaireMatchContextForRow(
 
   if (phone) {
     if (!pipelineByPhone.has(phone)) {
-      const { data: pipelineRows } = await admin
-        .from('pipeline_candidates')
-        .select('id, email, phone, first_name, last_name')
-        .ilike('phone', `%${phone.slice(-10)}%`)
-        .limit(5);
-      for (const pipelineRow of pipelineRows || []) {
-        const ph = normalizePhoneDigits(pipelineRow.phone);
-        if (ph && !pipelineByPhone.has(ph)) pipelineByPhone.set(ph, String(pipelineRow.id));
-        const em = normalizeEmail(pipelineRow.email);
-        if (em && !pipelineByEmail.has(em)) pipelineByEmail.set(em, String(pipelineRow.id));
-        const nk = normalizePersonNameKey(pipelineRow.first_name, pipelineRow.last_name);
-        if (nk && !pipelineByName.has(nk)) pipelineByName.set(nk, String(pipelineRow.id));
-      }
+      indexPipelineCandidateRows(
+        await fetchPipelineCandidatesByPhone(admin, phone),
+        pipelineByEmail,
+        pipelineByPhone,
+        pipelineByName,
+      );
     }
     if (!journeyByPhone.has(phone)) {
       const { data: journeyRows } = await admin
@@ -1073,18 +1168,14 @@ export async function buildQuestionnaireMatchContextForRow(
     }
   }
 
-  if (nameKey && firstName && lastName) {
+  if (nameKey) {
     if (!pipelineByName.has(nameKey)) {
-      const { data: pipelineRows } = await admin
-        .from('pipeline_candidates')
-        .select('id, email, phone, first_name, last_name')
-        .ilike('first_name', firstName)
-        .ilike('last_name', lastName)
-        .limit(5);
-      for (const pipelineRow of pipelineRows || []) {
-        const nk = normalizePersonNameKey(pipelineRow.first_name, pipelineRow.last_name);
-        if (nk && !pipelineByName.has(nk)) pipelineByName.set(nk, String(pipelineRow.id));
-      }
+      indexPipelineCandidateRows(
+        await fetchPipelineCandidatesByName(admin, firstName, lastName, nameKey),
+        pipelineByEmail,
+        pipelineByPhone,
+        pipelineByName,
+      );
     }
     if (!journeyByName.has(nameKey)) {
       const { data: journeyRows } = await admin
@@ -1176,32 +1267,31 @@ export async function buildQuestionnaireMatchContextForRow(
       }
     }
     if (wgEmail && !pipelineByEmail.has(wgEmail)) {
-      const { data: pipelineRows } = await admin
-        .from('pipeline_candidates')
-        .select('id, email, phone, first_name, last_name')
-        .ilike('email', wgEmail)
-        .limit(5);
-      for (const pipelineRow of pipelineRows || []) {
-        const em = normalizeEmail(pipelineRow.email);
-        if (em && !pipelineByEmail.has(em)) pipelineByEmail.set(em, String(pipelineRow.id));
-        const ph = normalizePhoneDigits(pipelineRow.phone);
-        if (ph && !pipelineByPhone.has(ph)) pipelineByPhone.set(ph, String(pipelineRow.id));
-        const nk = normalizePersonNameKey(pipelineRow.first_name, pipelineRow.last_name);
-        if (nk && !pipelineByName.has(nk)) pipelineByName.set(nk, String(pipelineRow.id));
-      }
+      indexPipelineCandidateRows(
+        await fetchPipelineCandidatesByEmail(admin, wgEmail),
+        pipelineByEmail,
+        pipelineByPhone,
+        pipelineByName,
+      );
     }
     if (wgPhone && !pipelineByPhone.has(wgPhone)) {
-      const { data: pipelineRows } = await admin
-        .from('pipeline_candidates')
-        .select('id, email, phone, first_name, last_name')
-        .ilike('phone', `%${wgPhone.slice(-10)}%`)
-        .limit(5);
-      for (const pipelineRow of pipelineRows || []) {
-        const ph = normalizePhoneDigits(pipelineRow.phone);
-        if (ph && !pipelineByPhone.has(ph)) pipelineByPhone.set(ph, String(pipelineRow.id));
-        const em = normalizeEmail(pipelineRow.email);
-        if (em && !pipelineByEmail.has(em)) pipelineByEmail.set(em, String(pipelineRow.id));
-      }
+      indexPipelineCandidateRows(
+        await fetchPipelineCandidatesByPhone(admin, wgPhone),
+        pipelineByEmail,
+        pipelineByPhone,
+        pipelineByName,
+      );
+    }
+    const wgNameKey = wgNameKeyFromSnapshotRow(wgBestRow);
+    const wgFirst = pickString(wgBestRow.firstname, wgBestRow.first_name);
+    const wgLast = pickString(wgBestRow.surname, wgBestRow.last_name);
+    if (wgNameKey && !pipelineByName.has(wgNameKey)) {
+      indexPipelineCandidateRows(
+        await fetchPipelineCandidatesByName(admin, wgFirst, wgLast, wgNameKey),
+        pipelineByEmail,
+        pipelineByPhone,
+        pipelineByName,
+      );
     }
     const wgCustomField = pickString(wgBestRow.custom_field);
     if (wgCustomField && !row.recruiter_custom_field) {
@@ -1361,6 +1451,16 @@ export function matchQuestionnaireRowWithContext(
       if (pipelineId) {
         pipelineCandidateId = pipelineId;
         matchMethod = appendMatchMethod(matchMethod, 'pipeline_wg_phone');
+      }
+    }
+    if (!pipelineCandidateId) {
+      const wgNameKey = wgNameKeyFromSnapshotRow(wgRow);
+      if (wgNameKey) {
+        const pipelineId = context.pipelineByName.get(wgNameKey);
+        if (pipelineId) {
+          pipelineCandidateId = pipelineId;
+          matchMethod = appendMatchMethod(matchMethod, 'pipeline_wg_name');
+        }
       }
     }
     if (!bookedByUserId && wgEmail) {
