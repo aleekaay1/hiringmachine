@@ -1624,7 +1624,8 @@ Deno.serve(async (req) => {
       }
 
       const daysBack = Math.min(Math.max(Number(body.days_back || 15) || 15, 1), 90);
-      const sinceIso = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+      const goLiveMs = Date.parse('2026-06-16T00:00:00.000Z');
+      const sinceIso = new Date(Math.max(goLiveMs, Date.now() - daysBack * 24 * 60 * 60 * 1000)).toISOString();
       try {
         const rematch = await rematchStoredQuestionnaireRows(admin, { sinceIso, limit: 800 });
         return new Response(JSON.stringify({

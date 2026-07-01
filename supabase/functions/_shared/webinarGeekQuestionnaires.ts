@@ -662,25 +662,6 @@ export async function rematchStoredQuestionnaireRows(
   }
   if (!rows.length) return { updated: 0, matchedPipeline: 0, newlyMatched: 0 };
 
-  const matchContext = (input.email || input.phone) && input.onlyUnmatched
-    ? await buildQuestionnaireMatchContextForRow(admin, {
-      wg_submission_key: 'rematch',
-      subscription_id: null,
-      webinar_id: null,
-      broadcast_id: null,
-      webinar_title: null,
-      broadcast_title: null,
-      email: input.email ?? null,
-      first_name: null,
-      last_name: null,
-      phone: input.phone ?? null,
-      submitted_at: null,
-      answers: [],
-      raw_payload: {},
-      recruiter_custom_field: null,
-      source: 'rematch',
-    })
-    : await buildQuestionnaireMatchContext(admin);
   let updated = 0;
   let matchedPipeline = 0;
   let newlyMatched = 0;
@@ -689,7 +670,10 @@ export async function rematchStoredQuestionnaireRows(
   for (const stored of rows) {
     const hadPipeline = Boolean(stored.pipeline_candidate_id);
     const normalized = normalizedRowFromStoredSubmission(stored);
-    const match = matchQuestionnaireRowWithContext(normalized, matchContext);
+    const match = matchQuestionnaireRowWithContext(
+      normalized,
+      await buildQuestionnaireMatchContextForRow(admin, normalized),
+    );
     const { error: upErr } = await admin
       .from('webinar_geek_questionnaire_submissions')
       .update({
@@ -829,7 +813,7 @@ export async function buildQuestionnaireMatchContext(
   ] = await Promise.all([
     admin.from('pipeline_candidates').select('id, email, phone, first_name, last_name').not('email', 'is', null).limit(8000),
     admin.from('candidates').select('id, email, phone, first_name, last_name').not('email', 'is', null).limit(8000),
-    admin.from('webinar_geek_portal_bookings').select('candidate_email, candidate_first_name, candidate_last_name, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at').eq('status', 'booked').order('created_at', { ascending: false }).limit(8000),
+    admin.from('webinar_geek_portal_bookings').select('candidate_email, candidate_first_name, candidate_last_name, candidate_id, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at').eq('status', 'booked').order('created_at', { ascending: false }).limit(8000),
     admin.from('pipeline_user_call_settings').select('user_id, webinar_geek_custom_field').not('webinar_geek_custom_field', 'is', null),
     admin.from('user_profiles').select('user_id, full_name, email'),
   ]);
@@ -929,7 +913,7 @@ export async function buildQuestionnaireMatchContextForRow(
       admin.from('pipeline_candidates').select('id, email, phone, first_name, last_name').ilike('email', email).limit(5),
       admin.from('candidates').select('id, email, phone, first_name, last_name').ilike('email', email).limit(5),
       admin.from('webinar_geek_portal_bookings')
-        .select('candidate_email, candidate_first_name, candidate_last_name, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at')
+        .select('candidate_email, candidate_first_name, candidate_last_name, candidate_id, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at')
         .eq('status', 'booked')
         .ilike('candidate_email', email)
         .order('created_at', { ascending: false })
@@ -1170,6 +1154,21 @@ export function matchQuestionnaireRowWithContext(
       bookedByLabel = pickString(booking.booked_by_label);
       recruiterCustomField = recruiterCustomField || pickString(booking.custom_field);
       matchMethod = matchMethod ? `${matchMethod}+portal_booking_name` : 'portal_booking_name';
+      if (!pipelineCandidateId) {
+        const bookingEmail = normalizeEmail(booking.candidate_email);
+        if (bookingEmail) {
+          const pipelineFromBookingEmail = context.pipelineByEmail.get(bookingEmail);
+          if (pipelineFromBookingEmail) {
+            pipelineCandidateId = pipelineFromBookingEmail;
+            matchMethod = matchMethod ? `${matchMethod}+pipeline_booking_email` : 'pipeline_booking_email';
+          }
+        }
+        const bookingCandidateId = pickString(booking.candidate_id);
+        if (!pipelineCandidateId && bookingCandidateId) {
+          pipelineCandidateId = bookingCandidateId;
+          matchMethod = matchMethod ? `${matchMethod}+booking_candidate` : 'booking_candidate';
+        }
+      }
     }
   }
 

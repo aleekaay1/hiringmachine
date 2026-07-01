@@ -476,6 +476,23 @@ export function defaultQuestionnaireDateFrom(): string {
   return QUESTIONNAIRE_GO_LIVE_YMD;
 }
 
+export function questionnaireGoLiveIso(): string {
+  return ymdStartIso(QUESTIONNAIRE_GO_LIVE_YMD);
+}
+
+export function normalizeQuestionnaireNameKey(
+  first: unknown,
+  last?: unknown,
+): string | null {
+  if (last === undefined) {
+    const single = String(first || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    return single || null;
+  }
+  const parts = [first, last].map((v) => String(v || '').trim().toLowerCase()).filter(Boolean);
+  if (!parts.length) return null;
+  return parts.join(' ').replace(/\s+/g, ' ');
+}
+
 export const QUESTIONNAIRE_DEFAULT_DAYS_BACK = 15;
 
 export function todayYmd(): string {
@@ -591,18 +608,219 @@ function showedFromWgRow(row: Record<string, unknown>): boolean {
   return Number.isFinite(sec) && sec >= HALF_WATCH_SECONDS;
 }
 
-function showedAtFromWgRow(row: Record<string, unknown>): string | null {
-  const pick = [
-    row.watched_true_set_at,
-    row.watch_end,
-    row.updated_at,
-    row.created_at,
-  ];
-  for (const value of pick) {
+function showedAtFromWgRowForBoard(row: Record<string, unknown>): string | null {
+  for (const value of [row.watched_true_set_at, row.watch_end]) {
     const ms = Date.parse(String(value || ''));
     if (Number.isFinite(ms)) return new Date(ms).toISOString();
   }
+  const createdMs = Date.parse(String(row.created_at || ''));
+  if (Number.isFinite(createdMs)) return new Date(createdMs).toISOString();
   return null;
+}
+
+function isOnOrAfterGoLive(iso: string | null | undefined): boolean {
+  if (!iso) return false;
+  return iso >= questionnaireGoLiveIso();
+}
+
+type FilledIdentityIndex = {
+  emails: Set<string>;
+  nameKeys: Set<string>;
+  byName: Map<string, {
+    email: string;
+    submissionId: string | null;
+    pipelineCandidateId: string | null;
+  }>;
+};
+
+function filledIdentityIndexIsFilled(
+  email: string,
+  nameKey: string | null,
+  index: FilledIdentityIndex,
+): boolean {
+  if (email && index.emails.has(email)) return true;
+  if (nameKey && index.nameKeys.has(nameKey)) return true;
+  return false;
+}
+
+function filledIdentityForRow(
+  email: string,
+  nameKey: string | null,
+  index: FilledIdentityIndex,
+): { submissionId: string | null; pipelineCandidateId: string | null } {
+  if (nameKey && index.byName.has(nameKey)) {
+    const hit = index.byName.get(nameKey)!;
+    return { submissionId: hit.submissionId, pipelineCandidateId: hit.pipelineCandidateId };
+  }
+  return { submissionId: null, pipelineCandidateId: null };
+}
+
+async function fetchQuestionnaireFilledIdentities(
+  scope: QuestionnaireAccessScope,
+): Promise<FilledIdentityIndex> {
+  const goLiveIso = questionnaireGoLiveIso();
+  const index: FilledIdentityIndex = {
+    emails: new Set(),
+    nameKeys: new Set(),
+    byName: new Map(),
+  };
+
+  const { data: rpcData, error: rpcErr } = await supabase.rpc('questionnaire_filled_identities_for_viewer');
+  if (!rpcErr && rpcData) {
+    for (const row of rpcData as Array<{
+      email?: string;
+      name_key?: string;
+      submission_id?: string;
+      pipeline_candidate_id?: string;
+    }>) {
+      const email = normalizeQuestionnaireEmail(row.email);
+      const nameKey = normalizeQuestionnaireNameKey(row.name_key || '');
+      if (email) index.emails.add(email);
+      if (nameKey) {
+        index.nameKeys.add(nameKey);
+        if (!index.byName.has(nameKey)) {
+          index.byName.set(nameKey, {
+            email: email || '',
+            submissionId: row.submission_id ? String(row.submission_id) : null,
+            pipelineCandidateId: row.pipeline_candidate_id ? String(row.pipeline_candidate_id) : null,
+          });
+        }
+      }
+    }
+    return index;
+  }
+
+  const { data: rpcEmails, error: emailRpcErr } = await supabase.rpc('questionnaire_filled_emails_for_viewer');
+  if (!emailRpcErr && rpcEmails) {
+    for (const row of rpcEmails as Array<{ email?: string }>) {
+      const email = normalizeQuestionnaireEmail(row.email);
+      if (email) index.emails.add(email);
+    }
+    return index;
+  }
+
+  if (isQuestionnaireRecruiterRole(scope.role)) {
+    return index;
+  }
+
+  const { data: submissions, error: subErr } = await supabase
+    .from('webinar_geek_questionnaire_submissions')
+    .select('id, email, first_name, last_name, pipeline_candidate_id, submitted_at')
+    .eq('source_type', 'google_form')
+    .in('hiring_stage', ['questionnaire_submitted', 'ready_for_followup'])
+    .gte('submitted_at', goLiveIso)
+    .limit(5000);
+  if (subErr) return index;
+
+  for (const row of submissions || []) {
+    const email = normalizeQuestionnaireEmail((row as { email?: string }).email);
+    const nameKey = normalizeQuestionnaireNameKey(
+      (row as { first_name?: string }).first_name,
+      (row as { last_name?: string }).last_name,
+    );
+    if (email) index.emails.add(email);
+    if (nameKey) {
+      index.nameKeys.add(nameKey);
+      if (!index.byName.has(nameKey)) {
+        index.byName.set(nameKey, {
+          email: email || '',
+          submissionId: String((row as { id?: string }).id || '') || null,
+          pipelineCandidateId: String((row as { pipeline_candidate_id?: string }).pipeline_candidate_id || '') || null,
+        });
+      }
+    }
+  }
+  return index;
+}
+
+type PortalBookingMeta = {
+  email?: string;
+  bookedByUserId: string | null;
+  bookedByLabel: string | null;
+  customField: string | null;
+  candidateId: string | null;
+  candidateFirstName: string | null;
+  candidateLastName: string | null;
+  webinarTitle: string | null;
+  createdAt: string | null;
+};
+
+type PortalBookingMaps = {
+  byEmail: Map<string, PortalBookingMeta>;
+  byName: Map<string, PortalBookingMeta>;
+};
+
+async function loadScopedPortalBookings(): Promise<PortalBookingMaps> {
+  const goLiveIso = questionnaireGoLiveIso();
+  const { data, error } = await supabase
+    .from('webinar_geek_portal_bookings')
+    .select('candidate_email, candidate_first_name, candidate_last_name, booked_by_user_id, booked_by_label, custom_field, candidate_id, broadcast_id, created_at')
+    .eq('status', 'booked')
+    .gte('created_at', goLiveIso)
+    .order('created_at', { ascending: false })
+    .limit(3000);
+  const byEmail = new Map<string, PortalBookingMeta>();
+  const byName = new Map<string, PortalBookingMeta>();
+  if (error) return { byEmail, byName };
+
+  for (const row of data || []) {
+    const email = normalizeQuestionnaireEmail((row as { candidate_email?: string }).candidate_email);
+    if (!email) continue;
+    const meta: PortalBookingMeta = {
+      bookedByUserId: String((row as { booked_by_user_id?: string }).booked_by_user_id || '').trim() || null,
+      bookedByLabel: String((row as { booked_by_label?: string }).booked_by_label || '').trim() || null,
+      customField: String((row as { custom_field?: string }).custom_field || '').trim() || null,
+      candidateId: String((row as { candidate_id?: string }).candidate_id || '').trim() || null,
+      candidateFirstName: String((row as { candidate_first_name?: string }).candidate_first_name || '').trim() || null,
+      candidateLastName: String((row as { candidate_last_name?: string }).candidate_last_name || '').trim() || null,
+      webinarTitle: null,
+      createdAt: String((row as { created_at?: string }).created_at || '').trim() || null,
+    };
+    if (!byEmail.has(email)) byEmail.set(email, { ...meta, email });
+    const nameKey = normalizeQuestionnaireNameKey(meta.candidateFirstName, meta.candidateLastName);
+    if (nameKey && !byName.has(nameKey)) byName.set(nameKey, { ...meta, email });
+  }
+  return { byEmail, byName };
+}
+
+function buildWgShowIndexes(wgRows: Array<Record<string, unknown>>): {
+  byEmail: Map<string, Record<string, unknown>>;
+  byName: Map<string, Record<string, unknown>>;
+} {
+  const byEmail = new Map<string, Record<string, unknown>>();
+  const byName = new Map<string, Record<string, unknown>>();
+  const goLiveIso = questionnaireGoLiveIso();
+
+  for (const row of wgRows) {
+    if (!showedFromWgRow(row)) continue;
+    const showedAt = showedAtFromWgRowForBoard(row);
+    if (!isOnOrAfterGoLive(showedAt)) continue;
+
+    const email = normalizeQuestionnaireEmail(row.email);
+    if (email) {
+      const existing = byEmail.get(email);
+      const existingAt = existing ? Date.parse(String(showedAtFromWgRowForBoard(existing) || '')) : 0;
+      const nextAt = Date.parse(String(showedAt || ''));
+      if (!existing || (Number.isFinite(nextAt) && nextAt > existingAt)) {
+        byEmail.set(email, row);
+      }
+    }
+
+    const nameKey = normalizeQuestionnaireNameKey(
+      row.firstname || row.first_name,
+      row.surname || row.last_name,
+    );
+    if (nameKey) {
+      const existing = byName.get(nameKey);
+      const existingAt = existing ? Date.parse(String(showedAtFromWgRowForBoard(existing) || '')) : 0;
+      const nextAt = Date.parse(String(showedAt || ''));
+      if (!existing || (Number.isFinite(nextAt) && nextAt > existingAt)) {
+        byName.set(nameKey, row);
+      }
+    }
+  }
+
+  return { byEmail, byName };
 }
 
 export function formatSinceShowLabel(showedAt: string | null): { label: string; urgent: boolean } {
@@ -681,15 +899,6 @@ export async function buildQuestionnaireAccessScope(profile: UserProfile): Promi
   };
 }
 
-type PortalBookingMeta = {
-  bookedByUserId: string | null;
-  bookedByLabel: string | null;
-  customField: string | null;
-  candidateId: string | null;
-  webinarTitle: string | null;
-  createdAt: string | null;
-};
-
 function customFieldOwnedByScope(scope: QuestionnaireAccessScope, customField: string | null | undefined): boolean {
   const tag = String(customField || '').trim().toLowerCase();
   if (!tag || scope.scopeTokens.size === 0) return false;
@@ -712,140 +921,52 @@ export function questionnaireLeadOwnedByScope(
   return customFieldOwnedByScope(scope, recruiterCustomField);
 }
 
-async function fetchQuestionnaireFilledEmails(scope: QuestionnaireAccessScope): Promise<Set<string>> {
-  const { data, error } = await supabase.rpc('questionnaire_filled_emails_for_viewer');
-  if (!error) {
-    return new Set(
-      (data || [])
-        .map((row: { email?: string }) => normalizeQuestionnaireEmail(row.email))
-        .filter(Boolean) as string[],
-    );
-  }
-
-  if (isQuestionnaireRecruiterRole(scope.role)) {
-    return new Set();
-  }
-
-  const { data: submissions, error: subErr } = await supabase
-    .from('webinar_geek_questionnaire_submissions')
-    .select('email')
-    .eq('source_type', 'google_form')
-    .in('hiring_stage', ['questionnaire_submitted', 'ready_for_followup'])
-    .limit(5000);
-  if (subErr) return new Set();
-  return new Set(
-    (submissions || [])
-      .map((row) => normalizeQuestionnaireEmail((row as { email?: string }).email))
-      .filter(Boolean) as string[],
-  );
-}
-
-async function loadScopedPortalBookings(): Promise<Map<string, PortalBookingMeta>> {
-  const { data, error } = await supabase
-    .from('webinar_geek_portal_bookings')
-    .select('candidate_email, candidate_first_name, candidate_last_name, booked_by_user_id, booked_by_label, custom_field, candidate_id, broadcast_id, created_at')
-    .eq('status', 'booked')
-    .order('created_at', { ascending: false })
-    .limit(3000);
-  if (error) return new Map();
-
-  const byEmail = new Map<string, PortalBookingMeta>();
-  for (const row of data || []) {
-    const email = normalizeQuestionnaireEmail((row as { candidate_email?: string }).candidate_email);
-    if (!email || byEmail.has(email)) continue;
-    byEmail.set(email, {
-      bookedByUserId: String((row as { booked_by_user_id?: string }).booked_by_user_id || '').trim() || null,
-      bookedByLabel: String((row as { booked_by_label?: string }).booked_by_label || '').trim() || null,
-      customField: String((row as { custom_field?: string }).custom_field || '').trim() || null,
-      candidateId: String((row as { candidate_id?: string }).candidate_id || '').trim() || null,
-      webinarTitle: null,
-      createdAt: String((row as { created_at?: string }).created_at || '').trim() || null,
-    });
-  }
-  return byEmail;
-}
-
 export async function fetchQuestionnaireFollowUpBoard(
   scope: QuestionnaireAccessScope,
 ): Promise<QuestionnaireFollowUpBoard> {
-  const [filledEmails, bookingByEmail, cache] = await Promise.all([
-    fetchQuestionnaireFilledEmails(scope),
+  const [filledIdentities, bookingMaps, cache] = await Promise.all([
+    fetchQuestionnaireFilledIdentities(scope),
     loadScopedPortalBookings(),
     loadWebinarGeekDashboardCache(),
   ]);
 
   const wgRows = (cache.data?.subscriptions || []) as Array<Record<string, unknown>>;
-  const showedByEmail = new Map<string, Record<string, unknown>>();
-  for (const row of wgRows) {
-    if (!showedFromWgRow(row)) continue;
-    const email = normalizeQuestionnaireEmail(row.email);
-    if (!email) continue;
-    const existing = showedByEmail.get(email);
-    const existingAt = existing ? Date.parse(String(showedAtFromWgRow(existing) || '')) : 0;
-    const nextAt = Date.parse(String(showedAtFromWgRow(row) || ''));
-    if (!existing || (Number.isFinite(nextAt) && nextAt > existingAt)) {
-      showedByEmail.set(email, row);
-    }
-  }
-
+  const wgIndexes = buildWgShowIndexes(wgRows);
   const rows: QuestionnaireFollowUpRow[] = [];
-  const seenKeys = new Set<string>();
 
-  for (const [email, wgRow] of showedByEmail.entries()) {
-    const booking = bookingByEmail.get(email);
-    const customField = booking?.customField || String(wgRow.custom_field || '').trim() || null;
-    if (!questionnaireLeadOwnedByScope(scope, booking?.bookedByUserId, customField)) continue;
+  for (const [email, booking] of bookingMaps.byEmail.entries()) {
+    if (!questionnaireLeadOwnedByScope(scope, booking.bookedByUserId, booking.customField)) continue;
 
-    const filled = filledEmails.has(email);
+    const nameKey = normalizeQuestionnaireNameKey(booking.candidateFirstName, booking.candidateLastName);
+    const wgRow = wgIndexes.byEmail.get(email) || (nameKey ? wgIndexes.byName.get(nameKey) : null);
+    const showed = Boolean(wgRow && showedFromWgRow(wgRow));
+    const showedAt = wgRow ? showedAtFromWgRowForBoard(wgRow) : null;
+    const filled = filledIdentityIndexIsFilled(email, nameKey, filledIdentities);
     if (isQuestionnaireRecruiterRole(scope.role) && filled) continue;
 
-    const showedAt = showedAtFromWgRow(wgRow);
-    const since = formatSinceShowLabel(showedAt);
-    const wgFirst = String(wgRow.firstname || wgRow.first_name || '').trim();
-    const wgLast = String(wgRow.surname || wgRow.last_name || '').trim();
-    const name = [wgFirst, wgLast].filter(Boolean).join(' ') || email;
+    const filledMeta = filledIdentityForRow(email, nameKey, filledIdentities);
+    const displayName = nameKey
+      ? nameKey.split(' ').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+      : email;
+    const since = showed && showedAt
+      ? formatSinceShowLabel(showedAt)
+      : formatSinceShowLabel(booking.createdAt);
 
-    const key = `showed:${email}`;
-    seenKeys.add(key);
     rows.push({
-      key,
+      key: `${showed ? 'showed' : 'upcoming'}:${email}`,
       email,
-      name,
-      webinarTitle: String(wgRow.webinar_title || wgRow.webinar_name || '').trim() || null,
-      showedAt,
-      sinceLabel: since.label,
-      urgent: !filled && since.urgent,
+      name: displayName,
+      webinarTitle: wgRow
+        ? String(wgRow.webinar_title || wgRow.webinar_name || '').trim() || null
+        : booking.webinarTitle,
+      showedAt: showed ? showedAt : booking.createdAt,
+      sinceLabel: showed ? since.label : (booking.createdAt ? `Booked ${since.label}` : 'Booked'),
+      urgent: showed && !filled && since.urgent,
       filled,
-      submissionId: null,
-      pipelineCandidateId: booking?.candidateId ?? null,
-      bookedByLabel: booking?.bookedByLabel ?? null,
-      kind: 'showed_awaiting',
-    });
-  }
-
-  for (const [email, booking] of bookingByEmail.entries()) {
-    if (!questionnaireLeadOwnedByScope(scope, booking.bookedByUserId, booking.customField)) continue;
-    if (filledEmails.has(email)) continue;
-    if (showedByEmail.has(email)) continue;
-
-    const key = `upcoming:${email}`;
-    if (seenKeys.has(key)) continue;
-    seenKeys.add(key);
-
-    const since = formatSinceShowLabel(booking.createdAt);
-    rows.push({
-      key,
-      email,
-      name: email,
-      webinarTitle: booking.webinarTitle,
-      showedAt: booking.createdAt,
-      sinceLabel: booking.createdAt ? `Booked ${since.label}` : 'Booked',
-      urgent: false,
-      filled: false,
-      submissionId: null,
-      pipelineCandidateId: booking.candidateId,
+      submissionId: filledMeta.submissionId,
+      pipelineCandidateId: filledMeta.pipelineCandidateId || booking.candidateId,
       bookedByLabel: booking.bookedByLabel,
-      kind: 'upcoming_booked',
+      kind: showed ? 'showed_awaiting' : 'upcoming_booked',
     });
   }
 
@@ -858,12 +979,11 @@ export async function fetchQuestionnaireFollowUpBoard(
 
   const visible = isQuestionnaireRecruiterRole(scope.role) ? rows.filter((row) => !row.filled) : rows;
   const awaiting = visible.filter((row) => !row.filled);
-  const filledCount = isQuestionnaireRecruiterRole(scope.role)
-    ? 0
-    : visible.filter((row) => row.filled).length;
 
   return {
-    filledCount,
+    filledCount: isQuestionnaireRecruiterRole(scope.role)
+      ? 0
+      : visible.filter((row) => row.filled).length,
     awaitingCount: awaiting.length,
     urgentCount: awaiting.filter((row) => row.urgent).length,
     readyForFollowUpCount: isQuestionnaireRecruiterRole(scope.role)

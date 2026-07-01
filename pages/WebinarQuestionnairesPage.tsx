@@ -250,7 +250,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
     setRematching(true);
     setError(null);
     try {
-      const result = await rematchWebinarQuestionnaires(30);
+      const result = await rematchWebinarQuestionnaires(90);
       if (!result.ok) throw new Error(result.error);
       setMessage(result.data.message || 'Pipeline links updated.');
       await loadPage('reset');
