@@ -6,11 +6,13 @@ import { useStaffAuthenticated } from '../hooks/useStaffAuthenticated';
 import { getCurrentUserProfile, type AppRole } from '../services/accessControl';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import {
+  bookedByLabelForSubmission,
   buildQuestionnaireAccessScope,
   canManageQuestionnaireRows,
   defaultQuestionnaireDateFrom,
   deleteWebinarQuestionnaireSubmission,
   displayNameFromSubmission,
+  enrichSubmissionFromWgCache,
   fetchQuestionnaireFollowUpBoard,
   fetchWebinarQuestionnaireDetail,
   fetchWebinarQuestionnairePage,
@@ -21,12 +23,15 @@ import {
   rematchWebinarQuestionnaires,
   submissionMatchesPageFilters,
   subscribeWebinarQuestionnaireSubmissions,
+  watchMinutesFromSubmission,
+  wgLinkedEmailForSubmission,
   type QuestionnaireAccessScope,
   type QuestionnaireFollowUpBoard,
   type QuestionnaireFollowUpRow,
   type QuestionnaireViewFilter,
   type WebinarQuestionnaireSubmission,
 } from '../services/webinarGeekQuestionnaires';
+import { loadWebinarGeekDashboardCache } from '../services/webinarGeekDashboardCache';
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -43,7 +48,8 @@ function stageTone(stage: string): string {
 }
 
 const VIEW_FILTERS: Array<{ id: QuestionnaireViewFilter; label: string }> = [
-  { id: 'all', label: 'All' },
+  { id: 'wg_linked', label: 'WG linked only' },
+  { id: 'all', label: 'All forms' },
   { id: 'needs_pipeline_match', label: 'Needs pipeline match' },
   { id: 'matched_pipeline', label: 'Matched to pipeline' },
 ];
@@ -70,7 +76,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
   const [debouncedSearch, setDebouncedSearch] = React.useState('');
   const [dateFrom, setDateFrom] = React.useState(defaultQuestionnaireDateFrom());
   const [dateTo, setDateTo] = React.useState('');
-  const [viewFilter, setViewFilter] = React.useState<QuestionnaireViewFilter>('all');
+  const [viewFilter, setViewFilter] = React.useState<QuestionnaireViewFilter>('wg_linked');
   const [expandedId, setExpandedId] = React.useState<string | null>(null);
   const [expandedDetail, setExpandedDetail] = React.useState<WebinarQuestionnaireSubmission | null>(null);
   const [detailLoadingId, setDetailLoadingId] = React.useState<string | null>(null);
@@ -193,7 +199,12 @@ const WebinarQuestionnairesPage: React.FC = () => {
         ...pageFilters,
         offset,
       });
-      setRows((prev) => (mode === 'more' ? [...prev, ...page.rows] : page.rows));
+      const cache = await loadWebinarGeekDashboardCache();
+      const wgRows = (cache.data?.subscriptions || []) as Array<Record<string, unknown>>;
+      const enriched = page.rows
+        .map((row) => enrichSubmissionFromWgCache(row, wgRows))
+        .filter((row) => submissionMatchesPageFilters(row, pageFilters));
+      setRows((prev) => (mode === 'more' ? [...prev, ...enriched] : enriched));
       setHasMore(page.hasMore);
       setNextOffset(page.nextOffset);
       if (mode === 'reset') {
@@ -485,6 +496,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
               <tr>
                 <th className="px-3 py-2">Submitted</th>
                 <th className="px-3 py-2">Candidate</th>
+                <th className="px-3 py-2">WebinarGeek</th>
                 <th className="px-3 py-2">Booked by</th>
                 <th className="px-3 py-2">Stage</th>
                 <th className="px-3 py-2">Pipeline</th>
@@ -496,6 +508,10 @@ const WebinarQuestionnairesPage: React.FC = () => {
                 const expanded = expandedId === row.id;
                 const detail = expanded && expandedDetail?.id === row.id ? expandedDetail : null;
                 const answers = detail?.answers || [];
+                const wgEmail = wgLinkedEmailForSubmission(row);
+                const formEmail = String(row.email || '').trim().toLowerCase() || null;
+                const watchMin = watchMinutesFromSubmission(row);
+                const bookedBy = bookedByLabelForSubmission(row);
 
                 return (
                   <React.Fragment key={row.id}>
@@ -507,9 +523,22 @@ const WebinarQuestionnairesPage: React.FC = () => {
                       </td>
                       <td className="px-3 py-2">
                         <div className="font-medium text-[#0B1B34]">{displayNameFromSubmission(row)}</div>
-                        <div className="text-[11px] text-[#6b84a8]">{row.email || '—'}</div>
+                        <div className="text-[11px] text-[#6b84a8]">Form: {formEmail || '—'}</div>
+                        {row.phone && <div className="text-[11px] text-[#6b84a8]">{row.phone}</div>}
                       </td>
-                      <td className="px-3 py-2 text-xs">{row.booked_by_label || '—'}</td>
+                      <td className="px-3 py-2 text-xs">
+                        <div className="text-[#0B1B34]">{row.webinar_title || row.broadcast_title || '—'}</div>
+                        {wgEmail && wgEmail !== formEmail && (
+                          <div className="text-[10px] text-[#6b84a8]">WG email: {wgEmail}</div>
+                        )}
+                        <div className="text-[10px] text-[#6b84a8]">
+                          {row.watched === true ? `Watched${watchMin ? ` · ${watchMin}m` : ''}` : row.watched === false ? 'Registered' : watchMin ? `${watchMin}m` : '—'}
+                        </div>
+                        {row.match_method && (
+                          <div className="text-[9px] text-[#8aa3c0] mt-0.5">{row.match_method}</div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs">{bookedBy || '—'}</td>
                       <td className="px-3 py-2">
                         <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${stageTone(row.hiring_stage)}`}>
                           {hiringStageLabel(row.hiring_stage)}
@@ -539,7 +568,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
                       )}
                     </tr>
                     <tr className="border-t border-[#eef2f7] bg-[#f8fbff]">
-                      <td colSpan={canManage ? 6 : 5} className="px-3 py-1">
+                      <td colSpan={canManage ? 7 : 6} className="px-3 py-1">
                         <button
                           type="button"
                           onClick={() => void toggleExpanded(row)}
@@ -552,7 +581,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
                     </tr>
                     {expanded && (
                       <tr className="border-t border-[#eef2f7] bg-[#f8fbff]">
-                        <td colSpan={canManage ? 6 : 5} className="px-4 py-3">
+                        <td colSpan={canManage ? 7 : 6} className="px-4 py-3">
                           {detailLoadingId === row.id && <p className="text-sm text-[#6b84a8]">Loading answers…</p>}
                           {!detailLoadingId && (
                             <div className="grid gap-2 md:grid-cols-2">
@@ -573,8 +602,10 @@ const WebinarQuestionnairesPage: React.FC = () => {
               })}
               {!loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={canManage ? 6 : 5} className="px-4 py-10 text-center text-sm text-[#6f7b8d]">
-                    No Google Form submissions yet. Submit a test on the form — it should appear here within seconds.
+                  <td colSpan={canManage ? 7 : 6} className="px-4 py-10 text-center text-sm text-[#6f7b8d]">
+                    {viewFilter === 'wg_linked'
+                      ? 'No form submissions linked to WebinarGeek data yet. Submit a form or click Re-match pipeline after refreshing the WG dashboard cache.'
+                      : 'No Google Form submissions yet. Submit a test on the form — it should appear here within seconds.'}
                   </td>
                 </tr>
               )}

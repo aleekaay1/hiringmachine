@@ -9,7 +9,7 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | und
 export const QUESTIONNAIRE_PAGE_SIZE = 50;
 
 const LIST_SELECT =
-  'id, wg_submission_key, subscription_id, webinar_id, broadcast_id, webinar_title, broadcast_title, email, first_name, last_name, phone, submitted_at, pipeline_candidate_id, journey_candidate_id, booked_by_user_id, booked_by_label, recruiter_custom_field, match_method, hiring_stage, source_type, watched, watch_duration_seconds, synced_at, created_at, updated_at';
+  'id, wg_submission_key, subscription_id, webinar_id, broadcast_id, webinar_title, broadcast_title, email, first_name, last_name, phone, submitted_at, pipeline_candidate_id, journey_candidate_id, booked_by_user_id, booked_by_label, recruiter_custom_field, match_method, hiring_stage, source_type, watched, watch_duration_seconds, synced_at, created_at, updated_at, raw_payload';
 
 export type WebinarQuestionnaireAnswer = {
   question: string;
@@ -44,9 +44,12 @@ export type WebinarQuestionnaireSubmission = {
   synced_at: string;
   created_at: string;
   updated_at: string;
+  raw_payload?: Record<string, unknown>;
+  /** Client-side WG cache link when DB row not yet rematched. */
+  wg_linked_email?: string | null;
 };
 
-export type QuestionnaireViewFilter = 'all' | 'with_answers' | 'attended_only' | 'matched_pipeline' | 'needs_pipeline_match';
+export type QuestionnaireViewFilter = 'all' | 'with_answers' | 'attended_only' | 'matched_pipeline' | 'needs_pipeline_match' | 'wg_linked';
 
 export type WebinarQuestionnairePageQuery = {
   search?: string | null;
@@ -115,6 +118,97 @@ export function watchMinutesFromSubmission(row: WebinarQuestionnaireSubmission):
   const sec = Number(row.watch_duration_seconds || 0);
   if (!Number.isFinite(sec) || sec <= 0) return null;
   return Math.round(sec / 60);
+}
+
+function wgPhoneDigits(value: unknown): string | null {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length < 10) return null;
+  return digits.slice(-10);
+}
+
+function findWgRowForSubmission(
+  row: WebinarQuestionnaireSubmission,
+  wgRows: Array<Record<string, unknown>>,
+): Record<string, unknown> | null {
+  const email = normalizeQuestionnaireEmail(row.email);
+  const phone = wgPhoneDigits(row.phone);
+  const nameKey = normalizeQuestionnaireNameKey(row.first_name, row.last_name);
+  const goLiveIso = questionnaireGoLiveIso();
+  const matches: Array<Record<string, unknown>> = [];
+
+  for (const wgRow of wgRows) {
+    const wgEmail = normalizeQuestionnaireEmail(wgRow.email);
+    const wgPhone = wgPhoneDigits(wgRow.phone ?? wgRow.telephone ?? wgRow.mobile);
+    const wgName = normalizeQuestionnaireNameKey(wgRow.firstname ?? wgRow.first_name, wgRow.surname ?? wgRow.last_name);
+    const hit = (email && wgEmail === email)
+      || (phone && wgPhone && phone === wgPhone)
+      || (nameKey && wgName && nameKey === wgName);
+    if (!hit) continue;
+    const activity = String(wgRow.watched_true_set_at || wgRow.watch_end || wgRow.updated_at || wgRow.created_at || '');
+    if (activity && activity < goLiveIso) continue;
+    matches.push(wgRow);
+  }
+
+  if (!matches.length) return null;
+  matches.sort((a, b) => {
+    const aw = a.watched === true ? 1 : 0;
+    const bw = b.watched === true ? 1 : 0;
+    if (bw !== aw) return bw - aw;
+    return Date.parse(String(b.updated_at || b.created_at || '')) - Date.parse(String(a.updated_at || a.created_at || ''));
+  });
+  return matches[0] ?? null;
+}
+
+export function submissionHasWgLink(row: WebinarQuestionnaireSubmission): boolean {
+  const storedWgEmail = normalizeQuestionnaireEmail(
+    row.wg_linked_email
+    || (row.raw_payload?.wg_linked_email as string | undefined),
+  );
+  return Boolean(
+    row.subscription_id
+    || row.watched === true
+    || (row.watch_duration_seconds && row.watch_duration_seconds > 0)
+    || row.match_method?.includes('wg_')
+    || storedWgEmail
+  );
+}
+
+export function enrichSubmissionFromWgCache(
+  row: WebinarQuestionnaireSubmission,
+  wgRows: Array<Record<string, unknown>>,
+): WebinarQuestionnaireSubmission {
+  if (submissionHasWgLink(row) && row.booked_by_label && row.webinar_title) return row;
+  const wgRow = findWgRowForSubmission(row, wgRows);
+  if (!wgRow) return row;
+
+  const wgEmail = normalizeQuestionnaireEmail(wgRow.email);
+  const watchSec = Number(wgRow.watch_duration ?? wgRow.watch_duration_seconds ?? 0);
+
+  return {
+    ...row,
+    subscription_id: row.subscription_id || String(wgRow.id || wgRow.subscription_id || '') || null,
+    webinar_title: row.webinar_title || String(wgRow.webinar_title || wgRow.webinar_name || wgRow.title || '').trim() || null,
+    broadcast_title: row.broadcast_title || String(wgRow.broadcast_title || wgRow.broadcast_name || '').trim() || null,
+    watched: row.watched ?? (wgRow.watched === true ? true : wgRow.watched === false ? false : null),
+    watch_duration_seconds: row.watch_duration_seconds
+      ?? (Number.isFinite(watchSec) && watchSec > 0 ? watchSec : null),
+    wg_linked_email: row.wg_linked_email || wgEmail || null,
+    phone: row.phone || String(wgRow.phone || wgRow.telephone || wgRow.mobile || '').trim() || null,
+    recruiter_custom_field: row.recruiter_custom_field || String(wgRow.custom_field || '').trim() || null,
+    match_method: row.match_method?.includes('wg_')
+      ? row.match_method
+      : [row.match_method, 'wg_snapshot_client'].filter(Boolean).join('+') || 'wg_snapshot_client',
+  };
+}
+
+export function wgLinkedEmailForSubmission(row: WebinarQuestionnaireSubmission): string | null {
+  return normalizeQuestionnaireEmail(
+    row.wg_linked_email || (row.raw_payload?.wg_linked_email as string | undefined) || row.email,
+  ) || null;
+}
+
+export function bookedByLabelForSubmission(row: WebinarQuestionnaireSubmission): string | null {
+  return row.booked_by_label?.trim() || null;
 }
 
 export function sourceTypeLabel(sourceType: string | null | undefined): string {
@@ -535,6 +629,7 @@ export function submissionMatchesPageFilters(
     if (row.pipeline_candidate_id) return false;
     if (row.hiring_stage !== 'questionnaire_submitted') return false;
   }
+  if (viewFilter === 'wg_linked' && !submissionHasWgLink(row)) return false;
 
   if (input.sourceType && input.sourceType !== 'all' && row.source_type !== input.sourceType) return false;
   if (input.webinarTitle && input.webinarTitle !== 'all' && row.webinar_title !== input.webinarTitle) return false;

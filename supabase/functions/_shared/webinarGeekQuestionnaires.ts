@@ -46,6 +46,83 @@ function normalizePersonNameKey(first: unknown, last: unknown): string | null {
   return parts.join(' ').replace(/\s+/g, ' ');
 }
 
+const QUESTIONNAIRE_WG_GO_LIVE_ISO = '2026-06-16T00:00:00.000Z';
+
+type WgSnapshotRow = Record<string, unknown>;
+
+function wgNameKeyFromSnapshotRow(row: WgSnapshotRow): string | null {
+  return normalizePersonNameKey(row.firstname ?? row.first_name, row.surname ?? row.last_name);
+}
+
+function wgPhoneFromSnapshotRow(row: WgSnapshotRow): string | null {
+  return normalizePhoneDigits(row.phone ?? row.telephone ?? row.mobile);
+}
+
+function wgWatchSecondsFromSnapshotRow(row: WgSnapshotRow): number | null {
+  const sec = Number(row.watch_duration ?? row.watch_duration_seconds ?? 0);
+  return Number.isFinite(sec) && sec > 0 ? sec : null;
+}
+
+async function loadWgSnapshotSubscriptions(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+): Promise<WgSnapshotRow[]> {
+  const { data } = await admin
+    .from('webinar_geek_dashboard_snapshots')
+    .select('subscriptions')
+    .eq('id', 'latest')
+    .maybeSingle();
+  const raw = data?.subscriptions;
+  if (Array.isArray(raw)) return raw as WgSnapshotRow[];
+  if (raw && typeof raw === 'object' && Array.isArray((raw as WgSnapshotRow).subscriptions)) {
+    return (raw as WgSnapshotRow).subscriptions as WgSnapshotRow[];
+  }
+  return [];
+}
+
+function findBestWgSubscriptionForRow(
+  subs: WgSnapshotRow[],
+  row: NormalizedWgQuestionnaireRow,
+): WgSnapshotRow | null {
+  const email = normalizeEmail(row.email);
+  const phone = normalizePhoneDigits(row.phone);
+  const nameKey = normalizePersonNameKey(row.first_name, row.last_name);
+  const goLiveMs = Date.parse(QUESTIONNAIRE_WG_GO_LIVE_ISO);
+  const matches: WgSnapshotRow[] = [];
+
+  for (const sub of subs) {
+    const subEmail = normalizeEmail(sub.email);
+    const subPhone = wgPhoneFromSnapshotRow(sub);
+    const subName = wgNameKeyFromSnapshotRow(sub);
+    const touched = (email && subEmail === email)
+      || (phone && subPhone && phone === subPhone)
+      || (nameKey && subName && nameKey === subName);
+    if (!touched) continue;
+
+    const activityMs = Date.parse(String(sub.watched_true_set_at || sub.watch_end || sub.updated_at || sub.created_at || ''));
+    if (Number.isFinite(activityMs) && activityMs < goLiveMs) continue;
+    matches.push(sub);
+  }
+
+  if (!matches.length) return null;
+  matches.sort((a, b) => {
+    const aw = a.watched === true ? 1 : 0;
+    const bw = b.watched === true ? 1 : 0;
+    if (bw !== aw) return bw - aw;
+    const aSec = wgWatchSecondsFromSnapshotRow(a) || 0;
+    const bSec = wgWatchSecondsFromSnapshotRow(b) || 0;
+    if (bSec !== aSec) return bSec - aSec;
+    return Date.parse(String(b.updated_at || b.created_at || '')) - Date.parse(String(a.updated_at || a.created_at || ''));
+  });
+  return matches[0] ?? null;
+}
+
+function appendMatchMethod(current: string | null, next: string): string {
+  if (!current) return next;
+  if (current.includes(next)) return current;
+  return `${current}+${next}`;
+}
+
 function pickString(...values: unknown[]): string | null {
   for (const value of values) {
     const str = String(value ?? '').trim();
@@ -683,6 +760,20 @@ export async function rematchStoredQuestionnaireRows(
         booked_by_label: match.booked_by_label,
         recruiter_custom_field: match.recruiter_custom_field,
         match_method: match.match_method,
+        subscription_id: match.subscription_id,
+        webinar_id: match.webinar_id,
+        broadcast_id: match.broadcast_id,
+        webinar_title: match.webinar_title,
+        broadcast_title: match.broadcast_title,
+        watched: match.watched,
+        watch_duration_seconds: match.watch_duration_seconds,
+        hiring_stage: match.pipeline_candidate_id && normalized.answers.length
+          ? 'ready_for_followup'
+          : stored.hiring_stage,
+        raw_payload: {
+          ...(stored.raw_payload && typeof stored.raw_payload === 'object' ? stored.raw_payload as Record<string, unknown> : {}),
+          wg_linked_email: match.wg_linked_email ?? null,
+        },
         updated_at: syncedAt,
       })
       .eq('id', stored.id);
@@ -787,6 +878,7 @@ export type QuestionnaireMatchContext = {
   bookingByEmail: Map<string, Record<string, unknown>>;
   bookingByName: Map<string, Record<string, unknown>>;
   settingsByTag: Map<string, { user_id: string; label: string | null }>;
+  wgBestRow: WgSnapshotRow | null;
 };
 
 export async function buildQuestionnaireMatchContext(
@@ -882,6 +974,7 @@ export async function buildQuestionnaireMatchContext(
     bookingByEmail,
     bookingByName,
     settingsByTag,
+    wgBestRow: null,
   };
 }
 
@@ -1058,6 +1151,64 @@ export async function buildQuestionnaireMatchContextForRow(
     }
   }
 
+  const wgSubs = await loadWgSnapshotSubscriptions(admin);
+  const wgBestRow = findBestWgSubscriptionForRow(wgSubs, row);
+  if (wgBestRow) {
+    const wgEmail = normalizeEmail(wgBestRow.email);
+    const wgPhone = wgPhoneFromSnapshotRow(wgBestRow);
+    if (wgEmail && !bookingByEmail.has(wgEmail)) {
+      const { data: bookingRows } = await admin
+        .from('webinar_geek_portal_bookings')
+        .select('candidate_email, candidate_first_name, candidate_last_name, candidate_id, broadcast_id, booked_by_user_id, booked_by_label, custom_field, created_at')
+        .eq('status', 'booked')
+        .ilike('candidate_email', wgEmail)
+        .order('created_at', { ascending: false })
+        .limit(5);
+      for (const bookingRow of bookingRows || []) {
+        const em = normalizeEmail(bookingRow.candidate_email);
+        if (!em) continue;
+        if (!bookingByEmail.has(em)) bookingByEmail.set(em, bookingRow);
+        const broadcastId = pickString(bookingRow.broadcast_id);
+        const key = broadcastId ? `${em}|${broadcastId}` : em;
+        if (!bookingByEmailBroadcast.has(key)) bookingByEmailBroadcast.set(key, bookingRow);
+        const nk = normalizePersonNameKey(bookingRow.candidate_first_name, bookingRow.candidate_last_name);
+        if (nk && !bookingByName.has(nk)) bookingByName.set(nk, bookingRow);
+      }
+    }
+    if (wgEmail && !pipelineByEmail.has(wgEmail)) {
+      const { data: pipelineRows } = await admin
+        .from('pipeline_candidates')
+        .select('id, email, phone, first_name, last_name')
+        .ilike('email', wgEmail)
+        .limit(5);
+      for (const pipelineRow of pipelineRows || []) {
+        const em = normalizeEmail(pipelineRow.email);
+        if (em && !pipelineByEmail.has(em)) pipelineByEmail.set(em, String(pipelineRow.id));
+        const ph = normalizePhoneDigits(pipelineRow.phone);
+        if (ph && !pipelineByPhone.has(ph)) pipelineByPhone.set(ph, String(pipelineRow.id));
+        const nk = normalizePersonNameKey(pipelineRow.first_name, pipelineRow.last_name);
+        if (nk && !pipelineByName.has(nk)) pipelineByName.set(nk, String(pipelineRow.id));
+      }
+    }
+    if (wgPhone && !pipelineByPhone.has(wgPhone)) {
+      const { data: pipelineRows } = await admin
+        .from('pipeline_candidates')
+        .select('id, email, phone, first_name, last_name')
+        .ilike('phone', `%${wgPhone.slice(-10)}%`)
+        .limit(5);
+      for (const pipelineRow of pipelineRows || []) {
+        const ph = normalizePhoneDigits(pipelineRow.phone);
+        if (ph && !pipelineByPhone.has(ph)) pipelineByPhone.set(ph, String(pipelineRow.id));
+        const em = normalizeEmail(pipelineRow.email);
+        if (em && !pipelineByEmail.has(em)) pipelineByEmail.set(em, String(pipelineRow.id));
+      }
+    }
+    const wgCustomField = pickString(wgBestRow.custom_field);
+    if (wgCustomField && !row.recruiter_custom_field) {
+      row.recruiter_custom_field = wgCustomField;
+    }
+  }
+
   return {
     pipelineByEmail,
     journeyByEmail,
@@ -1069,6 +1220,7 @@ export async function buildQuestionnaireMatchContextForRow(
     bookingByEmail,
     bookingByName,
     settingsByTag,
+    wgBestRow,
   };
 }
 
@@ -1172,6 +1324,63 @@ export function matchQuestionnaireRowWithContext(
     }
   }
 
+  let subscriptionId: string | null = null;
+  let webinarId: string | null = null;
+  let broadcastId: string | null = null;
+  let webinarTitle: string | null = null;
+  let broadcastTitle: string | null = null;
+  let watched: boolean | null = null;
+  let watchDurationSeconds: number | null = null;
+  let wgLinkedEmail: string | null = null;
+
+  const wgRow = context.wgBestRow;
+  if (wgRow) {
+    wgLinkedEmail = normalizeEmail(wgRow.email) || null;
+    subscriptionId = pickString(wgRow.id, wgRow.subscription_id);
+    webinarId = pickString(wgRow.webinar_id);
+    broadcastId = pickString(wgRow.broadcast_id);
+    webinarTitle = pickString(wgRow.webinar_title, wgRow.webinar_name, wgRow.title);
+    broadcastTitle = pickString(wgRow.broadcast_title, wgRow.broadcast_name);
+    watched = wgRow.watched === true ? true : wgRow.watched === false ? false : null;
+    watchDurationSeconds = wgWatchSecondsFromSnapshotRow(wgRow);
+    matchMethod = appendMatchMethod(matchMethod, 'wg_snapshot');
+
+    const wgEmail = wgLinkedEmail;
+    const wgPhone = wgPhoneFromSnapshotRow(wgRow);
+    recruiterCustomField = recruiterCustomField || pickString(wgRow.custom_field);
+
+    if (!pipelineCandidateId && wgEmail) {
+      const pipelineId = context.pipelineByEmail.get(wgEmail);
+      if (pipelineId) {
+        pipelineCandidateId = pipelineId;
+        matchMethod = appendMatchMethod(matchMethod, 'pipeline_wg_email');
+      }
+    }
+    if (!pipelineCandidateId && wgPhone) {
+      const pipelineId = context.pipelineByPhone.get(wgPhone);
+      if (pipelineId) {
+        pipelineCandidateId = pipelineId;
+        matchMethod = appendMatchMethod(matchMethod, 'pipeline_wg_phone');
+      }
+    }
+    if (!bookedByUserId && wgEmail) {
+      const booking = context.bookingByEmail.get(wgEmail) || null;
+      if (booking) {
+        bookedByUserId = booking.booked_by_user_id ? String(booking.booked_by_user_id) : null;
+        bookedByLabel = pickString(booking.booked_by_label);
+        recruiterCustomField = recruiterCustomField || pickString(booking.custom_field);
+        matchMethod = appendMatchMethod(matchMethod, 'portal_booking_wg_email');
+        if (!pipelineCandidateId) {
+          const bookingCandidateId = pickString(booking.candidate_id);
+          if (bookingCandidateId) {
+            pipelineCandidateId = bookingCandidateId;
+            matchMethod = appendMatchMethod(matchMethod, 'booking_candidate_wg');
+          }
+        }
+      }
+    }
+  }
+
   if (!bookedByUserId && recruiterCustomField) {
     const tagKeys = new Set<string>([
       recruiterCustomField.toLowerCase(),
@@ -1197,6 +1406,14 @@ export function matchQuestionnaireRowWithContext(
     booked_by_label: bookedByLabel,
     match_method: matchMethod,
     recruiter_custom_field: recruiterCustomField,
+    subscription_id: subscriptionId,
+    webinar_id: webinarId,
+    broadcast_id: broadcastId,
+    webinar_title: webinarTitle,
+    broadcast_title: broadcastTitle,
+    watched,
+    watch_duration_seconds: watchDurationSeconds,
+    wg_linked_email: wgLinkedEmail,
   };
 }
 
@@ -1205,30 +1422,38 @@ export function buildQuestionnaireUpsertPayload(
   match: QuestionnaireMatchResult,
   input: { sourceType: string; syncedAt: string },
 ): Record<string, unknown> {
+  const hiringStage = row.answers.length > 0
+    ? (match.pipeline_candidate_id ? 'ready_for_followup' : 'questionnaire_submitted')
+    : hiringStageForQuestionnaireRow(row);
+
   return {
     wg_submission_key: row.wg_submission_key,
-    subscription_id: row.subscription_id,
-    webinar_id: row.webinar_id,
-    broadcast_id: row.broadcast_id,
-    webinar_title: row.webinar_title,
-    broadcast_title: row.broadcast_title,
+    subscription_id: match.subscription_id ?? row.subscription_id,
+    webinar_id: match.webinar_id ?? row.webinar_id,
+    broadcast_id: match.broadcast_id ?? row.broadcast_id,
+    webinar_title: match.webinar_title ?? row.webinar_title,
+    broadcast_title: match.broadcast_title ?? row.broadcast_title,
     email: row.email,
     first_name: row.first_name,
     last_name: row.last_name,
-    phone: row.phone,
+    phone: row.phone || null,
     submitted_at: row.submitted_at,
     answers: row.answers,
-    raw_payload: { ...row.raw_payload, _source: row.source },
+    raw_payload: {
+      ...row.raw_payload,
+      _source: row.source,
+      wg_linked_email: match.wg_linked_email ?? null,
+    },
     pipeline_candidate_id: match.pipeline_candidate_id,
     journey_candidate_id: match.journey_candidate_id,
     booked_by_user_id: match.booked_by_user_id,
     booked_by_label: match.booked_by_label,
     recruiter_custom_field: match.recruiter_custom_field,
     match_method: match.match_method,
-    hiring_stage: hiringStageForQuestionnaireRow(row),
+    hiring_stage: hiringStage,
     source_type: input.sourceType,
-    watched: row.watched ?? null,
-    watch_duration_seconds: row.watch_duration_seconds ?? null,
+    watched: match.watched ?? row.watched ?? null,
+    watch_duration_seconds: match.watch_duration_seconds ?? row.watch_duration_seconds ?? null,
     synced_at: input.syncedAt,
     updated_at: input.syncedAt,
   };
@@ -1263,6 +1488,7 @@ export async function upsertQuestionnaireRowsBatched(
     bookingByEmail: new Map(),
     bookingByName: new Map(),
     settingsByTag: new Map(),
+    wgBestRow: null,
   };
   const matchContext = input.match === false
     ? emptyContext
@@ -1570,6 +1796,14 @@ export type QuestionnaireMatchResult = {
   booked_by_label: string | null;
   match_method: string | null;
   recruiter_custom_field: string | null;
+  subscription_id?: string | null;
+  webinar_id?: string | null;
+  broadcast_id?: string | null;
+  webinar_title?: string | null;
+  broadcast_title?: string | null;
+  watched?: boolean | null;
+  watch_duration_seconds?: number | null;
+  wg_linked_email?: string | null;
 };
 
 export async function matchQuestionnaireRow(
