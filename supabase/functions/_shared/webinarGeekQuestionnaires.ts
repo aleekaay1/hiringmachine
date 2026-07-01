@@ -702,6 +702,39 @@ function questionnaireDisplayName(row: NormalizedWgQuestionnaireRow): string {
   return 'Questionnaire lead';
 }
 
+function buildQuestionnairePipelineMetadata(
+  row: NormalizedWgQuestionnaireRow,
+  match: QuestionnaireMatchResult,
+  sourceType: string,
+  currentMeta?: Record<string, unknown>,
+): Record<string, unknown> {
+  const base = currentMeta && typeof currentMeta === 'object' ? { ...currentMeta } : {};
+  const watched = match.watched ?? row.watched ?? base.wg_watched ?? null;
+  const watchSeconds = match.watch_duration_seconds ?? row.watch_duration_seconds ?? base.wg_watch_duration_seconds ?? null;
+  const nowIso = new Date().toISOString();
+
+  return {
+    ...base,
+    questionnaire_linked_at: nowIso,
+    questionnaire_source_type: sourceType,
+    wg_submission_key: row.wg_submission_key,
+    webinar_title: match.webinar_title ?? row.webinar_title ?? base.webinar_title ?? null,
+    broadcast_title: match.broadcast_title ?? row.broadcast_title ?? base.broadcast_title ?? null,
+    questionnaire_submitted_at: row.submitted_at ?? base.questionnaire_submitted_at ?? null,
+    questionnaire_answers: row.answers.slice(0, 40),
+    recruiter_custom_field: match.recruiter_custom_field ?? row.recruiter_custom_field ?? base.recruiter_custom_field ?? null,
+    wg_webinar_id: match.webinar_id ?? row.webinar_id ?? base.wg_webinar_id ?? null,
+    wg_broadcast_id: match.broadcast_id ?? row.broadcast_id ?? base.wg_broadcast_id ?? null,
+    wg_subscription_id: match.subscription_id ?? row.subscription_id ?? base.wg_subscription_id ?? null,
+    wg_linked_email: match.wg_linked_email ?? base.wg_linked_email ?? null,
+    wg_watched: watched,
+    wg_watch_duration_seconds: watchSeconds,
+    wg_match_method: match.match_method ?? base.wg_match_method ?? null,
+    questionnaire_booked_by_user_id: match.booked_by_user_id ?? base.questionnaire_booked_by_user_id ?? null,
+    questionnaire_booked_by_label: match.booked_by_label ?? base.questionnaire_booked_by_label ?? null,
+  };
+}
+
 async function resolveExistingPipelineCandidateId(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   admin: any,
@@ -750,16 +783,7 @@ async function enrichPipelineCandidateFromQuestionnaire(
     : {};
   const displayName = questionnaireDisplayName(row);
   const updates: Record<string, unknown> = {
-    metadata: {
-      ...currentMeta,
-      questionnaire_linked_at: new Date().toISOString(),
-      questionnaire_source_type: sourceType,
-      wg_submission_key: row.wg_submission_key,
-      webinar_title: row.webinar_title ?? currentMeta.webinar_title ?? null,
-      questionnaire_submitted_at: row.submitted_at ?? currentMeta.questionnaire_submitted_at ?? null,
-      questionnaire_answers: row.answers.slice(0, 40),
-      recruiter_custom_field: match.recruiter_custom_field ?? row.recruiter_custom_field ?? null,
-    },
+    metadata: buildQuestionnairePipelineMetadata(row, match, sourceType, currentMeta),
     updated_at: new Date().toISOString(),
   };
 
@@ -804,15 +828,9 @@ async function createPipelineCandidateFromQuestionnaire(
     uploader_user_id: match.booked_by_user_id ?? null,
     uploader_label: match.booked_by_label ?? null,
     metadata: {
+      ...buildQuestionnairePipelineMetadata(row, match, sourceType),
       questionnaire_auto_created: true,
       questionnaire_auto_created_at: nowIso,
-      questionnaire_source_type: sourceType,
-      wg_submission_key: row.wg_submission_key,
-      webinar_title: row.webinar_title ?? null,
-      broadcast_title: row.broadcast_title ?? null,
-      questionnaire_submitted_at: row.submitted_at ?? null,
-      questionnaire_answers: row.answers.slice(0, 40),
-      recruiter_custom_field: match.recruiter_custom_field ?? row.recruiter_custom_field ?? null,
     },
     updated_at: nowIso,
   };

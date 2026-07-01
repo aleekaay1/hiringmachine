@@ -103,6 +103,61 @@ export function readPipelineCandidateTextExcerpt(candidate: PipelineCandidate | 
   return typeof raw === 'string' ? raw : '';
 }
 
+export type PipelineQuestionnaireWebinarContext = {
+  webinarTitle: string | null;
+  broadcastTitle: string | null;
+  submittedAt: string | null;
+  watched: boolean | null;
+  watchMinutes: number | null;
+  bookedByLabel: string | null;
+  recruiterField: string | null;
+  matchMethod: string | null;
+  linkedEmail: string | null;
+  answerCount: number;
+};
+
+export function readPipelineQuestionnaireWebinarContext(
+  candidate: PipelineCandidate | null,
+): PipelineQuestionnaireWebinarContext | null {
+  const meta = candidate?.metadata && typeof candidate.metadata === 'object'
+    ? (candidate.metadata as Record<string, unknown>)
+    : {};
+  const hasQuestionnaire = Boolean(
+    meta.questionnaire_linked_at
+    || meta.questionnaire_auto_created
+    || meta.wg_submission_key
+    || String(candidate?.source || '').toLowerCase() === 'webinar_questionnaire',
+  );
+  if (!hasQuestionnaire) return null;
+
+  const watchSecondsRaw = meta.wg_watch_duration_seconds;
+  const watchSeconds = typeof watchSecondsRaw === 'number'
+    ? watchSecondsRaw
+    : Number(String(watchSecondsRaw || '').trim());
+  const watchedRaw = meta.wg_watched;
+  const watched = typeof watchedRaw === 'boolean'
+    ? watchedRaw
+    : watchedRaw === 'true'
+      ? true
+      : watchedRaw === 'false'
+        ? false
+        : null;
+  const answers = Array.isArray(meta.questionnaire_answers) ? meta.questionnaire_answers : [];
+
+  return {
+    webinarTitle: String(meta.webinar_title || '').trim() || null,
+    broadcastTitle: String(meta.broadcast_title || '').trim() || null,
+    submittedAt: String(meta.questionnaire_submitted_at || '').trim() || null,
+    watched,
+    watchMinutes: Number.isFinite(watchSeconds) && watchSeconds > 0 ? Math.round(watchSeconds / 60) : null,
+    bookedByLabel: String(meta.questionnaire_booked_by_label || '').trim() || null,
+    recruiterField: String(meta.recruiter_custom_field || '').trim() || null,
+    matchMethod: String(meta.wg_match_method || '').trim() || null,
+    linkedEmail: String(meta.wg_linked_email || '').trim() || null,
+    answerCount: answers.length,
+  };
+}
+
 export interface PipelineResume {
   id: string;
   candidate_id: string;

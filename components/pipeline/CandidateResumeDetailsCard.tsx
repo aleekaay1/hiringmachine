@@ -5,9 +5,11 @@ import {
   readPipelineCandidateEmail,
   readPipelineCandidateProfile,
   readPipelineCandidatePhone,
+  readPipelineQuestionnaireWebinarContext,
   type PipelineCandidate,
   type PipelineResume,
 } from '../../services/pipelineService';
+import { formatDateTimeCanadaEastern } from '../../services/dateDisplay';
 
 export type CandidateResumeDetailsTone = {
   subtle: string;
@@ -53,6 +55,7 @@ const CandidateResumeDetailsCard: React.FC<CandidateResumeDetailsCardProps> = ({
   const profile = readPipelineCandidateProfile(candidate);
   const phoneInfo = readPipelineCandidatePhone(candidate);
   const emailInfo = readPipelineCandidateEmail(candidate);
+  const questionnaireCtx = readPipelineQuestionnaireWebinarContext(candidate);
   const metadata = candidate.metadata && typeof candidate.metadata === 'object' ? candidate.metadata : {};
   const sourceFile = String((metadata as Record<string, unknown>).original_file_name || '').trim();
   const hasProfile =
@@ -77,6 +80,43 @@ const CandidateResumeDetailsCard: React.FC<CandidateResumeDetailsCardProps> = ({
           </span>
         )}
       </div>
+
+      {questionnaireCtx && (
+        <div className={`mb-3 rounded-xl border border-violet-200/80 bg-violet-50/40 p-3`}>
+          <p className={`text-[10px] font-semibold uppercase tracking-wide text-violet-900`}>Webinar questionnaire</p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            {questionnaireCtx.webinarTitle && (
+              <p className={`text-sm font-medium ${tone.panelTitle}`}>{questionnaireCtx.webinarTitle}</p>
+            )}
+            {questionnaireCtx.broadcastTitle && (
+              <p className={`text-xs ${tone.panelMuted}`}>{questionnaireCtx.broadcastTitle}</p>
+            )}
+            {questionnaireCtx.submittedAt && (
+              <p className={`text-xs ${tone.panelMuted}`}>
+                Form submitted {formatDateTimeCanadaEastern(questionnaireCtx.submittedAt)}
+              </p>
+            )}
+            <p className={`text-xs font-semibold ${tone.panelTitle}`}>
+              {questionnaireCtx.watched === true
+                ? `Watched${questionnaireCtx.watchMinutes ? ` · ${questionnaireCtx.watchMinutes} min` : ''}`
+                : questionnaireCtx.watched === false
+                  ? 'Registered · did not watch'
+                  : questionnaireCtx.watchMinutes
+                    ? `Watch time · ${questionnaireCtx.watchMinutes} min`
+                    : 'Watch status unknown'}
+            </p>
+            {questionnaireCtx.bookedByLabel && (
+              <p className={`text-xs ${tone.panelMuted}`}>Booked by {questionnaireCtx.bookedByLabel}</p>
+            )}
+            {questionnaireCtx.linkedEmail && questionnaireCtx.linkedEmail !== emailInfo.effectiveEmail && (
+              <p className={`text-xs ${tone.panelMuted}`}>WG email: {questionnaireCtx.linkedEmail}</p>
+            )}
+            {questionnaireCtx.answerCount > 0 && (
+              <p className={`text-xs ${tone.panelMuted}`}>{questionnaireCtx.answerCount} questionnaire answers on file</p>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="mb-3 grid gap-2 sm:grid-cols-2">
         <DetailItem icon={Briefcase} label="Current title" value={profile.current_title} tone={tone} />
