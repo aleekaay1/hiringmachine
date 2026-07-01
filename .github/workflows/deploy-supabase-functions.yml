@@ -22,8 +22,11 @@ jobs:
           FUNCTIONS=(
             integrations-zoom-calendly
             sync-live-session-pipeline
+            live-session-auto-assessment
+            live-session-registrants
             integrations-webinar-geek
             webinar-geek-questionnaire-webhook
+            google-form-questionnaire-webhook
             send-email
             send-candidate-email
             live-session-calendar
@@ -37,14 +40,18 @@ jobs:
             hr-automation-runner
             email-inbox-sync
             staff-notifications
+            coaching-hub-data
+            dashboard-team-metrics
+            ops-console
+            support-tickets
             threecx-call-control
             threecx-call-webhook
             threecx-call-admin
             sync-live-session-outcomes
             pipeline-candidate-emails
             sync-recruiter-coins
-            live-session-auto-assessment
             pipeline-convert-resume
+            pipeline-hr-leads
             send-weekly-leaderboard-email
           )
           for fn in "${FUNCTIONS[@]}"; do

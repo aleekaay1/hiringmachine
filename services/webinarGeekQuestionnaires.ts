@@ -49,7 +49,14 @@ export type WebinarQuestionnaireSubmission = {
   wg_linked_email?: string | null;
 };
 
-export type QuestionnaireViewFilter = 'all' | 'with_answers' | 'attended_only' | 'matched_pipeline' | 'needs_pipeline_match' | 'wg_linked';
+export type QuestionnaireViewFilter =
+  | 'all'
+  | 'with_answers'
+  | 'attended_only'
+  | 'matched_pipeline'
+  | 'needs_pipeline_match'
+  | 'wg_linked'
+  | 'new_unread';
 
 export type WebinarQuestionnairePageQuery = {
   search?: string | null;
@@ -574,6 +581,60 @@ export function questionnaireGoLiveIso(): string {
   return ymdStartIso(QUESTIONNAIRE_GO_LIVE_YMD);
 }
 
+const QUESTIONNAIRE_OPENED_STORAGE_KEY = 'paz_questionnaire_opened_v1';
+
+export function questionnaireOpenedStorageKey(userId: string): string {
+  return `${QUESTIONNAIRE_OPENED_STORAGE_KEY}_${userId}`;
+}
+
+export function loadOpenedQuestionnaireIds(userId: string): Set<string> {
+  if (!userId) return new Set();
+  try {
+    const raw = localStorage.getItem(questionnaireOpenedStorageKey(userId));
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((id): id is string => typeof id === 'string' && id.length > 0));
+  } catch {
+    return new Set();
+  }
+}
+
+function persistOpenedQuestionnaireIds(userId: string, ids: Set<string>): void {
+  try {
+    localStorage.setItem(questionnaireOpenedStorageKey(userId), JSON.stringify([...ids]));
+  } catch {
+    // quota / private mode
+  }
+}
+
+export function markQuestionnaireSubmissionOpened(
+  userId: string,
+  submissionId: string,
+  current: Set<string>,
+): Set<string> {
+  if (!userId || !submissionId || current.has(submissionId)) return current;
+  const next = new Set(current);
+  next.add(submissionId);
+  persistOpenedQuestionnaireIds(userId, next);
+  return next;
+}
+
+export function isQuestionnaireSubmissionUnread(submissionId: string, openedIds: Set<string>): boolean {
+  return Boolean(submissionId) && !openedIds.has(submissionId);
+}
+
+/** On first visit, treat current list as already seen so only future submissions show as new. */
+export function seedQuestionnaireOpenedIdsIfEmpty(userId: string, submissionIds: string[]): Set<string> {
+  if (!userId) return new Set();
+  if (localStorage.getItem(questionnaireOpenedStorageKey(userId)) !== null) {
+    return loadOpenedQuestionnaireIds(userId);
+  }
+  const seeded = new Set(submissionIds.filter(Boolean));
+  persistOpenedQuestionnaireIds(userId, seeded);
+  return seeded;
+}
+
 export function normalizeQuestionnaireNameKey(
   first: unknown,
   last?: unknown,
@@ -617,9 +678,14 @@ function submissionMatchesSearch(row: WebinarQuestionnaireSubmission, search: st
   return hay.includes(q);
 }
 
+export type QuestionnairePageFilterOptions = {
+  openedIds?: Set<string>;
+};
+
 export function submissionMatchesPageFilters(
   row: WebinarQuestionnaireSubmission,
   input: WebinarQuestionnairePageFilters,
+  options?: QuestionnairePageFilterOptions,
 ): boolean {
   const viewFilter = input.viewFilter || 'all';
   if (viewFilter === 'with_answers' && row.hiring_stage !== 'questionnaire_submitted') return false;
@@ -630,6 +696,9 @@ export function submissionMatchesPageFilters(
     if (row.hiring_stage !== 'questionnaire_submitted') return false;
   }
   if (viewFilter === 'wg_linked' && !submissionHasWgLink(row)) return false;
+  if (viewFilter === 'new_unread' && !isQuestionnaireSubmissionUnread(row.id, options?.openedIds || new Set())) {
+    return false;
+  }
 
   if (input.sourceType && input.sourceType !== 'all' && row.source_type !== input.sourceType) return false;
   if (input.webinarTitle && input.webinarTitle !== 'all' && row.webinar_title !== input.webinarTitle) return false;

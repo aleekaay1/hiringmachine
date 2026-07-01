@@ -19,8 +19,12 @@ import {
   fetchWebinarQuestionnaireSummary,
   hiringStageLabel,
   isQuestionnaireRecruiterRole,
+  isQuestionnaireSubmissionUnread,
+  loadOpenedQuestionnaireIds,
+  markQuestionnaireSubmissionOpened,
   purgeLegacyQuestionnaireSubmissions,
   rematchWebinarQuestionnaires,
+  seedQuestionnaireOpenedIdsIfEmpty,
   submissionMatchesPageFilters,
   subscribeWebinarQuestionnaireSubmissions,
   watchMinutesFromSubmission,
@@ -48,6 +52,7 @@ function stageTone(stage: string): string {
 }
 
 const VIEW_FILTERS: Array<{ id: QuestionnaireViewFilter; label: string }> = [
+  { id: 'new_unread', label: 'New (unopened)' },
   { id: 'wg_linked', label: 'WG linked only' },
   { id: 'all', label: 'All forms' },
   { id: 'needs_pipeline_match', label: 'Needs pipeline match' },
@@ -84,6 +89,8 @@ const WebinarQuestionnairesPage: React.FC = () => {
   const [followUp, setFollowUp] = React.useState<QuestionnaireFollowUpBoard | null>(null);
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [accessScope, setAccessScope] = React.useState<QuestionnaireAccessScope | null>(null);
+  const [userId, setUserId] = React.useState<string | null>(null);
+  const [openedIds, setOpenedIds] = React.useState<Set<string>>(() => new Set());
 
   const canManage = canManageQuestionnaireRows(role);
   const isRecruiter = isQuestionnaireRecruiterRole(role);
@@ -93,11 +100,31 @@ const WebinarQuestionnairesPage: React.FC = () => {
     void getCurrentUserProfile().then(async (profile) => {
       if (!profile) return;
       setRole(profile.role);
+      setUserId(profile.user_id);
+      setOpenedIds(loadOpenedQuestionnaireIds(profile.user_id));
       const scope = await buildQuestionnaireAccessScope(profile);
       setAccessScope(scope);
       if (profile.role === 'recruiter') setTab('awaiting');
     });
   }, [isAuthenticated]);
+
+  const filterOptions = React.useMemo(
+    () => ({ openedIds: viewFilter === 'new_unread' ? openedIds : undefined }),
+    [viewFilter, openedIds],
+  );
+
+  const unreadCount = React.useMemo(
+    () => rows.filter((row) => isQuestionnaireSubmissionUnread(row.id, openedIds)).length,
+    [rows, openedIds],
+  );
+
+  const markSubmissionOpened = React.useCallback((submissionId: string) => {
+    if (!userId) return;
+    setOpenedIds((prev) => markQuestionnaireSubmissionOpened(userId, submissionId, prev));
+    if (viewFilter === 'new_unread') {
+      setRows((prev) => prev.filter((row) => row.id !== submissionId));
+    }
+  }, [userId, viewFilter]);
 
   React.useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS);
@@ -140,7 +167,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
 
   const handleLiveInsert = React.useCallback((row: WebinarQuestionnaireSubmission) => {
     if (row.source_type !== 'google_form') return;
-    if (!submissionMatchesPageFilters(row, pageFilters)) return;
+    if (!submissionMatchesPageFilters(row, pageFilters, filterOptions)) return;
     setRows((prev) => {
       if (prev.some((item) => item.id === row.id)) return prev;
       return [row, ...prev];
@@ -153,13 +180,13 @@ const WebinarQuestionnairesPage: React.FC = () => {
     }));
     flashRow(row.id, `New form submission: ${displayNameFromSubmission(row)}`);
     void loadFollowUp();
-  }, [flashRow, loadFollowUp, pageFilters]);
+  }, [flashRow, loadFollowUp, pageFilters, filterOptions]);
 
   const handleLiveUpdate = React.useCallback((row: WebinarQuestionnaireSubmission) => {
     if (row.source_type !== 'google_form') return;
     setRows((prev) => {
       const idx = prev.findIndex((item) => item.id === row.id);
-      const matches = submissionMatchesPageFilters(row, pageFilters);
+      const matches = submissionMatchesPageFilters(row, pageFilters, filterOptions);
       if (idx === -1) {
         if (!matches) return prev;
         return [row, ...prev];
@@ -172,7 +199,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
     if (expandedId === row.id) {
       setExpandedDetail((prev) => (prev?.id === row.id ? { ...prev, ...row } : prev));
     }
-  }, [expandedId, pageFilters]);
+  }, [expandedId, pageFilters, filterOptions]);
 
   const loadMeta = React.useCallback(async () => {
     setSummaryLoading(true);
@@ -201,9 +228,12 @@ const WebinarQuestionnairesPage: React.FC = () => {
       });
       const cache = await loadWebinarGeekDashboardCache();
       const wgRows = (cache.data?.subscriptions || []) as Array<Record<string, unknown>>;
+      if (mode === 'reset' && userId) {
+        setOpenedIds(seedQuestionnaireOpenedIdsIfEmpty(userId, page.rows.map((row) => row.id)));
+      }
       const enriched = page.rows
         .map((row) => enrichSubmissionFromWgCache(row, wgRows))
-        .filter((row) => submissionMatchesPageFilters(row, pageFilters));
+        .filter((row) => submissionMatchesPageFilters(row, pageFilters, filterOptions));
       setRows((prev) => (mode === 'more' ? [...prev, ...enriched] : enriched));
       setHasMore(page.hasMore);
       setNextOffset(page.nextOffset);
@@ -217,14 +247,14 @@ const WebinarQuestionnairesPage: React.FC = () => {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [loadFollowUp, loadMeta, nextOffset, pageFilters]);
+  }, [loadFollowUp, loadMeta, nextOffset, pageFilters, filterOptions, userId]);
 
   React.useEffect(() => {
     if (!isAuthenticated || !canAccessWebinarQuestionnaires(role) || !accessScope) return;
     if (isRecruiter || tab === 'awaiting') void loadFollowUp();
     else void loadPage('reset');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated, role, accessScope, tab, debouncedSearch, dateFrom, dateTo, viewFilter, isRecruiter]);
+  }, [isAuthenticated, role, accessScope, tab, debouncedSearch, dateFrom, dateTo, viewFilter, isRecruiter, openedIds]);
 
   React.useEffect(() => {
     if (!isAuthenticated || !canAccessWebinarQuestionnaires(role) || isRecruiter) return;
@@ -302,6 +332,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
     try {
       const detail = await fetchWebinarQuestionnaireDetail(row.id);
       setExpandedDetail(detail);
+      markSubmissionOpened(row.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -381,13 +412,20 @@ const WebinarQuestionnairesPage: React.FC = () => {
         </div>
       </div>
 
-      <div className={`grid gap-3 ${isRecruiter ? 'grid-cols-2' : 'grid-cols-2 md:grid-cols-4'}`}>
+      <div className={`grid gap-3 ${isRecruiter ? 'grid-cols-2' : 'grid-cols-2 md:grid-cols-5'}`}>
         {!isRecruiter && (
           <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3">
             <p className="text-[10px] uppercase tracking-wide text-emerald-800">Form filled</p>
             <p className="text-xl font-bold text-emerald-900">
               {board?.filledCount ?? (summaryLoading ? '…' : summary.withAnswers)}
             </p>
+          </div>
+        )}
+        {!isRecruiter && (
+          <div className="rounded-xl border border-sky-200 bg-sky-50/50 p-3">
+            <p className="text-[10px] uppercase tracking-wide text-sky-800">New unopened</p>
+            <p className="text-xl font-bold text-sky-900">{unreadCount}</p>
+            <p className="text-[10px] text-sky-800">Open answers to clear</p>
           </div>
         )}
         <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3">
@@ -422,6 +460,9 @@ const WebinarQuestionnairesPage: React.FC = () => {
             }`}
           >
             Form submissions
+            {unreadCount > 0 && (
+              <span className="ml-1.5 rounded-full bg-sky-100 px-1.5 text-[10px] font-bold text-sky-900">{unreadCount}</span>
+            )}
           </button>
         )}
         <button
@@ -512,14 +553,21 @@ const WebinarQuestionnairesPage: React.FC = () => {
                 const formEmail = String(row.email || '').trim().toLowerCase() || null;
                 const watchMin = watchMinutesFromSubmission(row);
                 const bookedBy = bookedByLabelForSubmission(row);
+                const isUnread = isQuestionnaireSubmissionUnread(row.id, openedIds);
+                const isLiveFlash = highlightIds.has(row.id);
 
                 return (
                   <React.Fragment key={row.id}>
                     <tr className={`border-t border-[#eef2f7] hover:bg-[#fafcff] align-top ${
-                      highlightIds.has(row.id) ? 'bg-emerald-50/80 ring-1 ring-inset ring-emerald-200' : ''
-                    }`}>
+                      isLiveFlash ? 'bg-emerald-50/80 ring-1 ring-inset ring-emerald-200' : ''
+                    } ${isUnread ? 'bg-sky-50/90 ring-1 ring-inset ring-sky-300' : ''}`}>
                       <td className="px-3 py-2 whitespace-nowrap text-[#5c6b82] tabular-nums">
                         {row.submitted_at ? formatDateTimeCanadaEastern(row.submitted_at) : '—'}
+                        {isUnread && (
+                          <span className="mt-1 block w-fit rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide bg-sky-200 text-sky-950">
+                            New
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-2">
                         <div className="font-medium text-[#0B1B34]">{displayNameFromSubmission(row)}</div>
@@ -567,26 +615,33 @@ const WebinarQuestionnairesPage: React.FC = () => {
                         </td>
                       )}
                     </tr>
-                    <tr className="border-t border-[#eef2f7] bg-[#f8fbff]">
+                    <tr className={`border-t border-[#eef2f7] ${isUnread ? 'bg-sky-50/60' : 'bg-[#f8fbff]'}`}>
                       <td colSpan={canManage ? 7 : 6} className="px-3 py-1">
                         <button
                           type="button"
                           onClick={() => void toggleExpanded(row)}
-                          className="inline-flex items-center gap-1 text-[#005EB8] text-xs font-medium hover:underline"
+                          className={`inline-flex items-center gap-1 text-xs font-medium hover:underline ${
+                            isUnread ? 'text-sky-800' : 'text-[#005EB8]'
+                          }`}
                         >
                           <ChevronDown size={14} className={expanded ? 'rotate-180' : ''} />
-                          {expanded ? 'Hide answers' : 'Show answers'}
+                          {expanded ? 'Hide answers' : isUnread ? 'Show answers (new)' : 'Show answers'}
                         </button>
                       </td>
                     </tr>
                     {expanded && (
-                      <tr className="border-t border-[#eef2f7] bg-[#f8fbff]">
+                      <tr className={`border-t border-[#eef2f7] ${isUnread ? 'bg-sky-50/60' : 'bg-[#f8fbff]'}`}>
                         <td colSpan={canManage ? 7 : 6} className="px-4 py-3">
                           {detailLoadingId === row.id && <p className="text-sm text-[#6b84a8]">Loading answers…</p>}
                           {!detailLoadingId && (
                             <div className="grid gap-2 md:grid-cols-2">
                               {answers.map((answer, idx) => (
-                                <div key={`${row.id}-${idx}`} className="rounded-lg border border-[#dbe8f5] bg-white p-3">
+                                <div
+                                  key={`${row.id}-${idx}`}
+                                  className={`rounded-lg border bg-white p-3 ${
+                                    isUnread ? 'border-sky-300 ring-1 ring-sky-100' : 'border-[#dbe8f5]'
+                                  }`}
+                                >
                                   <p className="text-[10px] uppercase tracking-wide text-[#6b84a8]">{answer.question}</p>
                                   <p className="mt-1 text-sm text-[#0B1B34] whitespace-pre-wrap">{answer.answer}</p>
                                 </div>
@@ -603,7 +658,9 @@ const WebinarQuestionnairesPage: React.FC = () => {
               {!loading && rows.length === 0 && (
                 <tr>
                   <td colSpan={canManage ? 7 : 6} className="px-4 py-10 text-center text-sm text-[#6f7b8d]">
-                    {viewFilter === 'wg_linked'
+                    {viewFilter === 'new_unread'
+                      ? 'No unopened submissions in this list. Switch filters or open answers on new rows to clear them.'
+                      : viewFilter === 'wg_linked'
                       ? 'No form submissions linked to WebinarGeek data yet. Submit a form or click Re-match pipeline after refreshing the WG dashboard cache.'
                       : 'No Google Form submissions yet. Submit a test on the form — it should appear here within seconds.'}
                   </td>
