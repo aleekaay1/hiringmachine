@@ -166,10 +166,12 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
     }
   };
 
-  const onDismissItem = async (item: StaffNotification) => {
+  const onDismissItem = async (e: React.MouseEvent, item: StaffNotification) => {
+    e.preventDefault();
+    e.stopPropagation();
     setDismissingId(item.id);
     try {
-      await dismissStaffNotification(item.id);
+      await dismissStaffNotification(item.id, { ownerUserId: item.user_id });
       setNotifications((prev) => prev.filter((n) => n.id !== item.id));
       if (!item.read_at) setUnread((c) => Math.max(0, c - 1));
     } catch {
@@ -301,7 +303,7 @@ const NotificationBell: React.FC<NotificationBellProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => void onDismissItem(item)}
+                  onClick={(e) => void onDismissItem(e, item)}
                   disabled={dismissing || clearing}
                   aria-label={`Dismiss ${item.title}`}
                   title="Dismiss"

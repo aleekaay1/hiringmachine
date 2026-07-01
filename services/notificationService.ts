@@ -130,21 +130,56 @@ export async function markAllStaffNotificationsRead(): Promise<void> {
   });
 }
 
-export async function dismissStaffNotification(id: string): Promise<void> {
+export async function dismissStaffNotification(
+  id: string,
+  opts?: { ownerUserId?: string | null },
+): Promise<void> {
+  const { data: auth } = await supabase.auth.getUser();
+  const userId = auth.user?.id;
+  if (!userId) throw new Error('Not signed in.');
+
+  // Personal notifications: dismiss directly in DB (avoids edge action/version issues).
+  if (opts?.ownerUserId && opts.ownerUserId === userId) {
+    const nowIso = new Date().toISOString();
+    const { error } = await supabase
+      .from('staff_notifications')
+      .update({ dismissed_at: nowIso })
+      .eq('id', id)
+      .eq('user_id', userId);
+    if (!error) return;
+  }
+
   const json = await callStaffNotifications({
     method: 'POST',
     body: JSON.stringify({ action: 'dismiss', id }),
   });
-  if (json.ok !== true && typeof json.error === 'string') {
-    throw new Error(json.error);
+  if (json.ok !== true) {
+    throw new Error(typeof json.error === 'string' ? json.error : 'Failed to dismiss notification');
   }
 }
 
 export async function dismissAllStaffNotifications(): Promise<void> {
-  await callStaffNotifications({
+  const { data: auth } = await supabase.auth.getUser();
+  const userId = auth.user?.id;
+  if (!userId) throw new Error('Not signed in.');
+
+  const nowIso = new Date().toISOString();
+  const { error: personalErr } = await supabase
+    .from('staff_notifications')
+    .update({ dismissed_at: nowIso })
+    .eq('user_id', userId)
+    .is('dismissed_at', null);
+  if (personalErr) {
+    // Fall through to edge function for broadcast + any schema issues.
+  }
+
+  const json = await callStaffNotifications({
     method: 'POST',
     body: JSON.stringify({ action: 'dismiss_all' }),
   });
+  if (json.ok !== true) {
+    throw new Error(typeof json.error === 'string' ? json.error : 'Failed to clear notifications');
+  }
 }
 
 export async function createStaffNotification(input: {

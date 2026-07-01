@@ -106,19 +106,73 @@ async function upsertNotification(
   await admin.from('staff_notifications').insert(row);
 }
 
+async function loadProfileDismissedNotificationIds(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+): Promise<Set<string>> {
+  const { data, error } = await admin
+    .from('user_profiles')
+    .select('metadata')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error || !data?.metadata || typeof data.metadata !== 'object') return new Set();
+  const dismissed = (data.metadata as Record<string, unknown>).staff_notification_dismissals;
+  if (!Array.isArray(dismissed)) return new Set();
+  return new Set(dismissed.map((value) => String(value)).filter(Boolean));
+}
+
+async function addProfileDismissedNotificationIds(
+  admin: ReturnType<typeof createClient>,
+  userId: string,
+  notificationIds: string[],
+): Promise<void> {
+  const uniqueIds = [...new Set(notificationIds.map((value) => String(value)).filter(Boolean))];
+  if (!uniqueIds.length) return;
+
+  const { data, error } = await admin
+    .from('user_profiles')
+    .select('metadata')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw error;
+
+  const currentMeta = data?.metadata && typeof data.metadata === 'object'
+    ? data.metadata as Record<string, unknown>
+    : {};
+  const existing = Array.isArray(currentMeta.staff_notification_dismissals)
+    ? currentMeta.staff_notification_dismissals.map((value) => String(value)).filter(Boolean)
+    : [];
+  const merged = [...new Set([...existing, ...uniqueIds])];
+
+  const { error: updateErr } = await admin
+    .from('user_profiles')
+    .update({
+      metadata: {
+        ...currentMeta,
+        staff_notification_dismissals: merged,
+      },
+    })
+    .eq('user_id', userId);
+  if (updateErr) throw updateErr;
+}
+
 async function loadDismissedBroadcastIds(
   admin: ReturnType<typeof createClient>,
   userId: string,
 ): Promise<Set<string>> {
+  const fromProfile = await loadProfileDismissedNotificationIds(admin, userId);
   const { data, error } = await admin
     .from('staff_notification_dismissals')
     .select('notification_id')
     .eq('user_id', userId);
   if (error) {
-    if (/does not exist|schema cache|relation/i.test(String(error.message || ''))) return new Set();
+    if (/does not exist|schema cache|relation/i.test(String(error.message || ''))) {
+      return fromProfile;
+    }
     throw error;
   }
-  return new Set((data || []).map((row) => String((row as { notification_id: string }).notification_id)));
+  const fromTable = new Set((data || []).map((row) => String((row as { notification_id: string }).notification_id)));
+  return new Set([...fromProfile, ...fromTable]);
 }
 
 function isNotificationActive(row: NotificationRow, nowMs = Date.now()): boolean {
@@ -367,7 +421,18 @@ async function dismissNotificationForUser(
       .update({ dismissed_at: nowIso })
       .eq('id', notificationId)
       .eq('user_id', userId);
-    if (updateErr) throw updateErr;
+    if (updateErr) {
+      if (/dismissed_at|column/i.test(String(updateErr.message || ''))) {
+        const { error: deleteErr } = await admin
+          .from('staff_notifications')
+          .delete()
+          .eq('id', notificationId)
+          .eq('user_id', userId);
+        if (deleteErr) throw deleteErr;
+        return { ok: true };
+      }
+      throw updateErr;
+    }
     return { ok: true };
   }
 
@@ -378,16 +443,13 @@ async function dismissNotificationForUser(
         { user_id: userId, notification_id: notificationId },
         { onConflict: 'user_id,notification_id' },
       );
-    if (dismissErr) {
-      if (/does not exist|schema cache|relation/i.test(String(dismissErr.message || ''))) {
-        return {
-          ok: false,
-          error: 'Dismissals table not installed. Run paste_staff_notification_dismissals.sql in Supabase.',
-        };
-      }
-      throw dismissErr;
+    if (!dismissErr) return { ok: true };
+
+    if (/does not exist|schema cache|relation/i.test(String(dismissErr.message || ''))) {
+      await addProfileDismissedNotificationIds(admin, userId, [notificationId]);
+      return { ok: true };
     }
-    return { ok: true };
+    throw dismissErr;
   }
 
   return { ok: false, error: 'Forbidden' };
@@ -419,12 +481,15 @@ async function dismissAllNotificationsForUser(
   }));
   if (!dismissRows.length) return;
 
+  const broadcastIds = dismissRows.map((row) => row.notification_id);
   const { error: dismissErr } = await admin
     .from('staff_notification_dismissals')
     .upsert(dismissRows, { onConflict: 'user_id,notification_id' });
-  if (dismissErr && !/does not exist|schema cache|relation/i.test(String(dismissErr.message || ''))) {
-    throw dismissErr;
+  if (dismissErr && /does not exist|schema cache|relation/i.test(String(dismissErr.message || ''))) {
+    await addProfileDismissedNotificationIds(admin, userId, broadcastIds);
+    return;
   }
+  if (dismissErr) throw dismissErr;
 }
 
 Deno.serve(async (req) => {
@@ -487,7 +552,8 @@ Deno.serve(async (req) => {
     }
 
     const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-    const action = String(body.action || '').trim();
+    const url = new URL(req.url);
+    const action = String(body.action || url.searchParams.get('action') || '').trim();
 
     if (action === 'sync') {
       const synced = await syncPipelineNotifications(admin, user.id, role);
@@ -533,18 +599,18 @@ Deno.serve(async (req) => {
       });
     }
 
-    if (action === 'dismiss') {
-      const id = String(body.id || '').trim();
+    if (action === 'dismiss' || action === 'delete') {
+      const id = String(body.id || url.searchParams.get('id') || '').trim();
       if (!id) {
-        return new Response(JSON.stringify({ error: 'id required' }), {
-          status: 400,
+        return new Response(JSON.stringify({ ok: false, error: 'id required' }), {
+          status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
       const result = await dismissNotificationForUser(admin, user.id, id);
       if (!result.ok) {
-        return new Response(JSON.stringify({ error: result.error || 'Forbidden' }), {
-          status: result.error?.includes('not installed') ? 200 : 403,
+        return new Response(JSON.stringify({ ok: false, error: result.error || 'Forbidden' }), {
+          status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
@@ -554,7 +620,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    if (action === 'dismiss_all') {
+    if (action === 'dismiss_all' || action === 'clear_all' || action === 'delete_all') {
       await dismissAllNotificationsForUser(admin, user.id, role);
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
