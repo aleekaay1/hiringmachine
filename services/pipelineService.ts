@@ -1143,6 +1143,61 @@ export async function listPipelineManualCandidates(): Promise<PipelineCandidate[
   return rows.filter((c) => String(c.source || '').toLowerCase() !== 'journey_upload');
 }
 
+export const PIPELINE_CALL_QUEUE_PAGE_SIZE = 10;
+
+export type PipelineManualCandidatesPage = {
+  candidates: PipelineCandidate[];
+  hasMore: boolean;
+  nextOffset: number;
+};
+
+/** Paginated manual (non-journey) leads for the call workspace queue. */
+export async function listPipelineManualCandidatesPage(input?: {
+  limit?: number;
+  offset?: number;
+}): Promise<PipelineManualCandidatesPage> {
+  const limit = Math.min(Math.max(input?.limit ?? PIPELINE_CALL_QUEUE_PAGE_SIZE, 1), 50);
+  const offset = Math.max(input?.offset ?? 0, 0);
+  const scope = await resolvePipelineViewerScope();
+  const fetchLimit = limit + 1;
+
+  let query = supabase
+    .from('pipeline_candidates')
+    .select(PIPELINE_CANDIDATE_SELECT)
+    .or('source.is.null,source.neq.journey_upload')
+    .order('created_at', { ascending: true })
+    .range(offset, offset + fetchLimit - 1);
+  query = applyPipelineUploaderScope(query, scope);
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const rows = (data || []) as PipelineCandidate[];
+  const hasMore = rows.length > limit;
+  const candidates = hasMore ? rows.slice(0, limit) : rows;
+  return {
+    candidates,
+    hasMore,
+    nextOffset: offset + candidates.length,
+  };
+}
+
+/** Today's dispositions for KPI chips without loading every candidate's history. */
+export async function listPipelineCallRecordsToday(
+  recruiterUserId?: string | null,
+): Promise<PipelineCallRecord[]> {
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(todayStart);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  return listPipelineCallRecordsQuery({
+    recruiterUserId: recruiterUserId ?? null,
+    fromIso: todayStart.toISOString(),
+    toIso: tomorrow.toISOString(),
+    limit: 500,
+    primaryOnly: true,
+  });
+}
+
 export async function listPipelineAdminPushedJourneyCandidates(): Promise<PipelineCandidate[]> {
   const rows = await listPipelineCandidates();
   return rows.filter((c) => {

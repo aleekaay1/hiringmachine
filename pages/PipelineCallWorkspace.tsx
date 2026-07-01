@@ -28,7 +28,9 @@ import {
   getPipelineUserCallSettings,
   isPipelinePhoneInputClean,
   listPipelineCallRecordsForCandidates,
-  listPipelineManualCandidates,
+  listPipelineManualCandidatesPage,
+  listPipelineCallRecordsToday,
+  PIPELINE_CALL_QUEUE_PAGE_SIZE,
   listPipelineResumesForCandidates,
   logPipelineCallAction,
   normalizeDialDestination,
@@ -54,7 +56,7 @@ import {
 } from '../services/pipelineCallDispositions';
 import { buildThreeCxWebclientUrl } from '../services/threeCxService';
 import { supabase } from '../services/supabaseClient';
-import { getCurrentUserProfile } from '../services/accessControl';
+import { getCurrentUserProfile, type UserProfile } from '../services/accessControl';
 import {
   buildLiveSessionRowsByEmail,
   loadLiveSessionRegistrantsForMatching,
@@ -77,7 +79,7 @@ import {
   applyDialQueueStartMode,
 } from '../services/pipelineDialQueue';
 import { consumeDialQueueIntent } from '../services/recruiterLeadPackAnalytics';
-import { buildCallHistoryRows } from '../services/callHistoryRows';
+import { buildCallHistoryRows, queueLeadCategory, type QueueLeadCategory } from '../services/callHistoryRows';
 import {
   listPipelineCallScripts,
   loadOrSeedPipelineCallScripts,
@@ -205,6 +207,37 @@ function latestRecordByCandidate(records: PipelineCallRecord[]): Map<string, Pip
   return map;
 }
 
+function mergeCallRecords(
+  prev: PipelineCallRecord[],
+  next: PipelineCallRecord[],
+): PipelineCallRecord[] {
+  const map = new Map(prev.map((row) => [row.id, row]));
+  for (const row of next) map.set(row.id, row);
+  return [...map.values()].sort(
+    (a, b) => new Date(b.disposed_at).getTime() - new Date(a.disposed_at).getTime(),
+  );
+}
+
+function mergeResumeMap(
+  prev: Map<string, PipelineResume[]>,
+  resumeRows: PipelineResume[],
+): Map<string, PipelineResume[]> {
+  const next = new Map(prev);
+  for (const resume of resumeRows) {
+    const list = next.get(resume.candidate_id) || [];
+    if (!list.some((row) => row.id === resume.id)) list.push(resume);
+    next.set(resume.candidate_id, list);
+  }
+  return next;
+}
+
+function mergeQuestionnaireMap(
+  prev: Map<string, WebinarQuestionnaireSubmission>,
+  incoming: Map<string, WebinarQuestionnaireSubmission>,
+): Map<string, WebinarQuestionnaireSubmission> {
+  return new Map([...prev, ...incoming]);
+}
+
 const PipelineCallWorkspace: React.FC = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -232,6 +265,11 @@ const PipelineCallWorkspace: React.FC = () => {
   const [dispositionModalMode, setDispositionModalMode] = React.useState<'call' | 'edit'>('call');
   const [submitAttempted, setSubmitAttempted] = React.useState(false);
   const [candidates, setCandidates] = React.useState<PipelineCandidate[]>([]);
+  const [hasMoreCandidates, setHasMoreCandidates] = React.useState(false);
+  const [nextCandidateOffset, setNextCandidateOffset] = React.useState(0);
+  const [loadingMoreCandidates, setLoadingMoreCandidates] = React.useState(false);
+  const [legendFilter, setLegendFilter] = React.useState<QueueLeadCategory | null>(null);
+  const viewerProfileRef = React.useRef<UserProfile | null>(null);
   const [resumesByCandidate, setResumesByCandidate] = React.useState<Map<string, PipelineResume[]>>(new Map());
   const [records, setRecords] = React.useState<PipelineCallRecord[]>([]);
   const [bookedOutcomeByCandidate, setBookedOutcomeByCandidate] = React.useState<CandidateBookedOutcomeMap>(new Map());
@@ -309,84 +347,166 @@ const PipelineCallWorkspace: React.FC = () => {
     setShowCallScriptViewer(true);
   }, [callScripts, currentUserId]);
 
+  const hydrateCandidateSlice = React.useCallback(async (
+    candidateSlice: PipelineCandidate[],
+    uid: string | null,
+    rowsByEmail: Map<string, Array<Record<string, unknown>>>,
+    liveSessionByEmail: Map<string, LiveSessionRegistrantRow[]>,
+  ) => {
+    const candidateIds = candidateSlice.map((candidate) => candidate.id);
+    if (!candidateIds.length) {
+      return {
+        resumeRows: [] as PipelineResume[],
+        callRecordRows: [] as PipelineCallRecord[],
+        questionnaireMap: new Map<string, WebinarQuestionnaireSubmission>(),
+        bookedMap: new Map<string, BookedOutcomeClassification>(),
+      };
+    }
+
+    const [resumeRows, callRecordRowsRaw, questionnaireMap] = await Promise.all([
+      listPipelineResumesForCandidates(candidateIds),
+      uid
+        ? listPipelineCallRecordsForCandidates(candidateIds, { recruiterUserId: uid })
+        : listPipelineCallRecordsForCandidates(candidateIds),
+      loadQuestionnaireMapForCandidateIds(candidateIds).catch(
+        () => new Map<string, WebinarQuestionnaireSubmission>(),
+      ),
+    ]);
+
+    const latest = latestRecordByCandidate(callRecordRowsRaw);
+    const bookedMap = new Map<string, BookedOutcomeClassification>();
+    for (const candidate of candidateSlice) {
+      const latestRecord = latest.get(candidate.id);
+      if (!latestRecord || String(latestRecord.disposition || '').toLowerCase() !== 'booked') continue;
+      const meta = readCallRecordMeta(latestRecord);
+      const disposedMs = Date.parse(latestRecord.disposed_at || latestRecord.created_at);
+      const classification = classifyBookedOutcome({
+        bookedSubtype: meta.bookedSubtype || latestRecord.booked_subtype,
+        candidateEmail: candidate.email,
+        rowsByEmail,
+        liveSessionByEmail,
+        disposedAtMs: Number.isFinite(disposedMs) ? disposedMs : null,
+      });
+      bookedMap.set(candidate.id, classification);
+    }
+
+    return {
+      resumeRows,
+      callRecordRows: callRecordRowsRaw,
+      questionnaireMap,
+      bookedMap,
+    };
+  }, []);
+
+  const applyHydratedSlice = React.useCallback((hydrated: Awaited<ReturnType<typeof hydrateCandidateSlice>>) => {
+    setResumesByCandidate((prev) => mergeResumeMap(prev, hydrated.resumeRows));
+    setRecords((prev) => mergeCallRecords(prev, hydrated.callRecordRows));
+    setQuestionnaireByCandidate((prev) => mergeQuestionnaireMap(prev, hydrated.questionnaireMap));
+    setBookedOutcomeByCandidate((prev) => new Map([...prev, ...hydrated.bookedMap]));
+  }, []);
+
+  const loadMoreCandidates = React.useCallback(async () => {
+    if (loadingMoreCandidates || !hasMoreCandidates) return;
+    setLoadingMoreCandidates(true);
+    try {
+      const page = await listPipelineManualCandidatesPage({
+        limit: PIPELINE_CALL_QUEUE_PAGE_SIZE,
+        offset: nextCandidateOffset,
+      });
+      if (!page.candidates.length) {
+        setHasMoreCandidates(false);
+        return;
+      }
+
+      setCandidates((prev) => {
+        const seen = new Set(prev.map((row) => row.id));
+        const appended = page.candidates.filter((row) => !seen.has(row.id));
+        return appended.length ? [...prev, ...appended] : prev;
+      });
+      setHasMoreCandidates(page.hasMore);
+      setNextCandidateOffset(page.nextOffset);
+
+      const hydrated = await hydrateCandidateSlice(
+        page.candidates,
+        currentUserId,
+        webinarRowsByEmailRef.current,
+        liveSessionByEmailRef.current,
+      );
+      applyHydratedSlice(hydrated);
+    } catch (e) {
+      setError(stringifySupabaseError(e));
+    } finally {
+      setLoadingMoreCandidates(false);
+    }
+  }, [
+    applyHydratedSlice,
+    currentUserId,
+    hasMoreCandidates,
+    hydrateCandidateSlice,
+    loadingMoreCandidates,
+    nextCandidateOffset,
+  ]);
+
   const loadWorkspace = React.useCallback(async (mode: 'initial' | 'refresh' | 'silent' = 'silent') => {
     if (mode === 'initial') setInitialLoading(true);
     if (mode === 'refresh') setRefreshing(true);
     setError(null);
     try {
-      const [{ data: auth }, profile, settings, candidateRows] = await Promise.all([
+      const [{ data: auth }, profile, settings, candidatePage, todayRecords] = await Promise.all([
         supabase.auth.getUser(),
         getCurrentUserProfile().catch(() => null),
         getPipelineUserCallSettings().catch(() => null),
-        listPipelineManualCandidates(),
+        listPipelineManualCandidatesPage({ limit: PIPELINE_CALL_QUEUE_PAGE_SIZE, offset: 0 }),
+        supabase.auth.getUser().then(async ({ data }) => {
+          const uid = data.user?.id ?? null;
+          return listPipelineCallRecordsToday(uid).catch(() => [] as PipelineCallRecord[]);
+        }),
       ]);
       const uid = auth.user?.id ?? null;
+      viewerProfileRef.current = profile;
       setCurrentUserId(uid);
       setAgentExtension(settings?.extension || '');
       setDailyUploadTarget(settings?.daily_upload_target ?? '');
       setDailyWebinarBookingTarget(settings?.daily_webinar_booking_target ?? '');
-      const sortedCandidates = [...candidateRows].sort((a, b) => new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime());
-      setCandidates(sortedCandidates);
+      setLegendFilter(null);
+      setHasMoreCandidates(candidatePage.hasMore);
+      setNextCandidateOffset(candidatePage.nextOffset);
 
-      const candidateIds = sortedCandidates.map((c) => c.id);
-      if (candidateIds.length === 0) {
-        setResumesByCandidate(new Map());
-        setRecords([]);
+      const sortedCandidates = [...candidatePage.candidates].sort(
+        (a, b) => new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime(),
+      );
+      setCandidates(sortedCandidates);
+      setResumesByCandidate(new Map());
+      setBookedOutcomeByCandidate(new Map());
+      setQuestionnaireByCandidate(new Map());
+
+      if (sortedCandidates.length === 0) {
+        setRecords(todayRecords);
         setSelectedCandidateId(null);
-        setBookedOutcomeByCandidate(new Map());
-        setQuestionnaireByCandidate(new Map());
+        setLiveRegistrants([]);
         return;
       }
 
-      const webinarRowsPromise = loadScopedWebinarRowsForViewer({
-        role: profile?.role ?? null,
-        viewerEmail: auth.user?.email ?? profile?.email ?? null,
-        viewerFullName: profile?.full_name ?? null,
-      }).catch(() => null);
-      const liveRegistrantsPromise = loadLiveSessionRegistrantsForMatching().catch(() => [] as LiveSessionRegistrantRow[]);
-
-      const candidateIdSet = new Set(candidateIds);
-      const [resumeRows, callRecordRowsRaw, webinarRows, liveRegRows, questionnaireMap] = await Promise.all([
-        listPipelineResumesForCandidates(candidateIds),
-        uid
-          ? listPipelineCallRecordsForCandidates(candidateIds, { recruiterUserId: uid })
-          : listPipelineCallRecordsForCandidates(candidateIds),
-        webinarRowsPromise,
-        liveRegistrantsPromise,
-        loadQuestionnaireMapForCandidateIds(candidateIds).catch(() => new Map<string, WebinarQuestionnaireSubmission>()),
+      const [webinarRows, liveRegRows] = await Promise.all([
+        loadScopedWebinarRowsForViewer({
+          role: profile?.role ?? null,
+          viewerEmail: auth.user?.email ?? profile?.email ?? null,
+          viewerFullName: profile?.full_name ?? null,
+        }).catch(() => null),
+        loadLiveSessionRegistrantsForMatching().catch(() => [] as LiveSessionRegistrantRow[]),
       ]);
-      const callRecordRows = callRecordRowsRaw.filter((row) => candidateIdSet.has(row.candidate_id));
-      const nextMap = new Map<string, PipelineResume[]>();
-      for (const resume of resumeRows) {
-        const list = nextMap.get(resume.candidate_id) || [];
-        list.push(resume);
-        nextMap.set(resume.candidate_id, list);
-      }
-      setResumesByCandidate(nextMap);
-      setRecords(callRecordRows);
       setLiveRegistrants(liveRegRows);
       const rowsByEmail = webinarRows ? buildWebinarRowsByEmail(webinarRows) : new Map();
       const liveSessionByEmail = buildLiveSessionRowsByEmail(liveRegRows);
       webinarRowsByEmailRef.current = rowsByEmail;
       liveSessionByEmailRef.current = liveSessionByEmail;
-      const latest = latestRecordByCandidate(callRecordRows);
-      const bookedMap = new Map<string, BookedOutcomeClassification>();
-      for (const candidate of sortedCandidates) {
-        const latestRecord = latest.get(candidate.id);
-        if (!latestRecord || String(latestRecord.disposition || '').toLowerCase() !== 'booked') continue;
-        const meta = readCallRecordMeta(latestRecord);
-        const disposedMs = Date.parse(latestRecord.disposed_at || latestRecord.created_at);
-        const classification = classifyBookedOutcome({
-          bookedSubtype: meta.bookedSubtype || latestRecord.booked_subtype,
-          candidateEmail: candidate.email,
-          rowsByEmail,
-          liveSessionByEmail,
-          disposedAtMs: Number.isFinite(disposedMs) ? disposedMs : null,
-        });
-        bookedMap.set(candidate.id, classification);
-      }
-      setBookedOutcomeByCandidate(bookedMap);
-      setQuestionnaireByCandidate(questionnaireMap);
+
+      const hydrated = await hydrateCandidateSlice(sortedCandidates, uid, rowsByEmail, liveSessionByEmail);
+      setRecords(mergeCallRecords(todayRecords, hydrated.callRecordRows));
+      setResumesByCandidate(mergeResumeMap(new Map(), hydrated.resumeRows));
+      setQuestionnaireByCandidate(mergeQuestionnaireMap(new Map(), hydrated.questionnaireMap));
+      setBookedOutcomeByCandidate(hydrated.bookedMap);
+
       const activeSelectedId = selectedCandidateIdRef.current;
       if (!activeSelectedId || !sortedCandidates.some((row) => row.id === activeSelectedId)) {
         setSelectedCandidateId(sortedCandidates[0]?.id ?? null);
@@ -397,7 +517,7 @@ const PipelineCallWorkspace: React.FC = () => {
       setInitialLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [applyHydratedSlice, hydrateCandidateSlice]);
 
   React.useEffect(() => {
     void loadWorkspace('initial');
@@ -530,8 +650,18 @@ const PipelineCallWorkspace: React.FC = () => {
     return [...scope].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   }, [loadedDialQueue, dialScopeCandidates, filteredCandidates]);
 
-  /** Full batch list for prev/next — every lead stays visible after disposition. */
+  /** Full batch list for prev/next — every loaded lead stays visible after disposition. */
   const focusNavigationList = orderedScopeCandidates;
+
+  const legendFilteredFocusList = React.useMemo(() => {
+    if (!legendFilter) return focusNavigationList;
+    return focusNavigationList.filter((candidate) => {
+      const latest = latestByCandidate.get(candidate.id);
+      return queueLeadCategory(latest?.disposition ?? null, Boolean(latest)) === legendFilter;
+    });
+  }, [focusNavigationList, legendFilter, latestByCandidate]);
+
+  const navigationList = legendFilter ? legendFilteredFocusList : focusNavigationList;
 
   const undisposedQueue = React.useMemo(
     () =>
@@ -634,15 +764,40 @@ const PipelineCallWorkspace: React.FC = () => {
 
   const currentFocusIndex = React.useMemo(() => {
     if (!selectedCandidateId) return -1;
-    return focusNavigationList.findIndex((c) => c.id === selectedCandidateId);
-  }, [focusNavigationList, selectedCandidateId]);
+    return navigationList.findIndex((c) => c.id === selectedCandidateId);
+  }, [navigationList, selectedCandidateId]);
+
+  const handleLegendFilterChange = React.useCallback((filter: QueueLeadCategory | null) => {
+    setLegendFilter(filter);
+    if (!filter) return;
+    const first = focusNavigationList.find((candidate) => {
+      const latest = latestByCandidate.get(candidate.id);
+      return queueLeadCategory(latest?.disposition ?? null, Boolean(latest)) === filter;
+    });
+    if (first) setSelectedCandidateId(first.id);
+  }, [focusNavigationList, latestByCandidate]);
+
+  React.useEffect(() => {
+    if (initialLoading || loadingMoreCandidates || !hasMoreCandidates) return;
+    if (currentFocusIndex < 0) return;
+    if (currentFocusIndex >= navigationList.length - 2) {
+      void loadMoreCandidates();
+    }
+  }, [
+    currentFocusIndex,
+    navigationList.length,
+    hasMoreCandidates,
+    initialLoading,
+    loadMoreCandidates,
+    loadingMoreCandidates,
+  ]);
 
   const goToFocusIndex = React.useCallback(
     (index: number) => {
-      const target = focusNavigationList[index];
+      const target = navigationList[index];
       if (target) setSelectedCandidateId(target.id);
     },
-    [focusNavigationList],
+    [navigationList],
   );
 
   const goToPreviousLead = React.useCallback(() => {
@@ -650,10 +805,10 @@ const PipelineCallWorkspace: React.FC = () => {
   }, [currentFocusIndex, goToFocusIndex]);
 
   const goToNextLead = React.useCallback(() => {
-    if (currentFocusIndex >= 0 && currentFocusIndex < focusNavigationList.length - 1) {
+    if (currentFocusIndex >= 0 && currentFocusIndex < navigationList.length - 1) {
       goToFocusIndex(currentFocusIndex + 1);
     }
-  }, [currentFocusIndex, focusNavigationList.length, goToFocusIndex]);
+  }, [currentFocusIndex, navigationList.length, goToFocusIndex]);
 
   const batchTitleByKey = React.useMemo(() => {
     const map = new Map<string, string>();
@@ -1307,7 +1462,7 @@ const PipelineCallWorkspace: React.FC = () => {
           <div className="grid gap-3 md:grid-cols-3">
             <div className={`rounded-xl border p-2.5 ${tone.subtle}`}>
               <p className={`text-[11px] font-semibold uppercase tracking-wide ${tone.panelLabel}`}>Queue progress</p>
-              <p className={`text-xs ${tone.panelMuted}`}>{disposedInFilteredCount} disposed / {filteredCandidates.length} total</p>
+              <p className={`text-xs ${tone.panelMuted}`}>{disposedInFilteredCount} disposed / {filteredCandidates.length} loaded{hasMoreCandidates ? '+' : ''}</p>
               <div className={`mt-1.5 h-2 overflow-hidden rounded-full ${tone.progressTrack}`}>
                 <div className="h-full rounded-full bg-[#3182ce]" style={{ width: `${queueProgressPct}%` }} />
               </div>
@@ -1348,9 +1503,11 @@ const PipelineCallWorkspace: React.FC = () => {
                   {loadedDialQueue ? loadedDialQueue.batchTitle : 'Dial queue'}
                 </p>
                 <p className={`text-xs ${tone.panelMuted}`}>
-                  {queueList.length} next to call · {doneList.length} disposed · {focusNavigationList.length} in batch
-                  {currentFocusIndex >= 0 && focusNavigationList.length > 0
-                    ? ` · lead ${currentFocusIndex + 1} of ${focusNavigationList.length}`
+                  {queueList.length} next to call · {doneList.length} disposed · {navigationList.length} in view
+                  {hasMoreCandidates ? ` · ${candidates.length}+ loaded` : ` · ${candidates.length} loaded`}
+                  {loadingMoreCandidates ? ' · loading more…' : ''}
+                  {currentFocusIndex >= 0 && navigationList.length > 0
+                    ? ` · lead ${currentFocusIndex + 1} of ${navigationList.length}`
                     : ''}
                 </p>
               </div>
@@ -1406,12 +1563,14 @@ const PipelineCallWorkspace: React.FC = () => {
               </div>
             )}
 
-            {focusNavigationList.length > 0 && (
+            {(candidates.length > 0 || legendFilter) && (
               <CallQueueLeadRail
-                leads={focusNavigationList}
+                leads={navigationList}
                 selectedId={selectedCandidateId}
                 latestByCandidate={latestByCandidate}
                 webinarStageByCandidate={webinarStageByCandidate}
+                legendFilter={legendFilter}
+                onLegendFilterChange={handleLegendFilterChange}
                 onSelect={setSelectedCandidateId}
                 tone={tone}
               />
@@ -1441,7 +1600,7 @@ const PipelineCallWorkspace: React.FC = () => {
                         <p className={`text-[10px] uppercase tracking-[0.2em] ${tone.panelLabel}`}>Current lead</p>
                         {currentFocusIndex >= 0 && (
                           <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tone.subtle}`}>
-                            {currentFocusIndex + 1} / {focusNavigationList.length}
+                            {currentFocusIndex + 1} / {navigationList.length}
                           </span>
                         )}
                         {latestByCandidate.get(currentCandidate.id) && (
@@ -1496,7 +1655,7 @@ const PipelineCallWorkspace: React.FC = () => {
                     <button type="button" onClick={goToPreviousLead} disabled={currentFocusIndex <= 0} className={`flex-1 rounded-xl border py-2 text-xs font-semibold ${tone.actionButton} ${currentFocusIndex <= 0 ? 'opacity-40' : ''}`}>
                       ← Previous
                     </button>
-                    <button type="button" onClick={goToNextLead} disabled={currentFocusIndex >= focusNavigationList.length - 1} className={`flex-1 rounded-xl border py-2 text-xs font-semibold ${tone.actionButton} ${currentFocusIndex >= focusNavigationList.length - 1 ? 'opacity-40' : ''}`}>
+                    <button type="button" onClick={goToNextLead} disabled={currentFocusIndex >= navigationList.length - 1} className={`flex-1 rounded-xl border py-2 text-xs font-semibold ${tone.actionButton} ${currentFocusIndex >= navigationList.length - 1 ? 'opacity-40' : ''}`}>
                       Next →
                     </button>
                   </div>
@@ -1605,9 +1764,9 @@ const PipelineCallWorkspace: React.FC = () => {
             <button
               type="button"
               onClick={goToNextLead}
-              disabled={currentFocusIndex < 0 || currentFocusIndex >= focusNavigationList.length - 1}
+              disabled={currentFocusIndex < 0 || currentFocusIndex >= navigationList.length - 1}
               className={`hidden shrink-0 self-center rounded-2xl border p-3 transition sm:inline-flex sm:flex-col sm:items-center sm:justify-center sm:min-h-[120px] ${
-                currentFocusIndex < 0 || currentFocusIndex >= focusNavigationList.length - 1
+                currentFocusIndex < 0 || currentFocusIndex >= navigationList.length - 1
                   ? 'cursor-not-allowed opacity-40'
                   : tone.actionButton
               }`}

@@ -156,3 +156,18 @@ export function queueLeadChipLabel(disposition: string | null | undefined, hasDi
   if (!hasDisposition) return 'New';
   return String(disposition || 'Called').trim() || 'Called';
 }
+
+export type QueueLeadCategory = 'new' | 'retry' | 'callback' | 'booked' | 'declined' | 'other';
+
+export function queueLeadCategory(
+  disposition: string | null | undefined,
+  hasDisposition: boolean,
+): QueueLeadCategory {
+  if (!hasDisposition) return 'new';
+  const d = String(disposition || '').trim().toLowerCase();
+  if (d === 'booked') return 'booked';
+  if (d === 'callback requested') return 'callback';
+  if (d === 'no answer' || d === 'voicemail left' || d === 'busy / line busy') return 'retry';
+  if (d === 'not interested' || d === 'do not call' || d === 'wrong number') return 'declined';
+  return 'other';
+}
