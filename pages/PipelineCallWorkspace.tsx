@@ -86,6 +86,7 @@ import {
 } from '../services/pipelineCallScripts';
 import {
   loadQuestionnaireMapForCandidateIds,
+  rematchWebinarQuestionnairesForContact,
   type WebinarQuestionnaireSubmission,
 } from '../services/webinarGeekQuestionnaires';
 
@@ -1084,6 +1085,14 @@ const PipelineCallWorkspace: React.FC = () => {
           const next = new Map(prev);
           next.delete(currentCandidate.id);
           return next;
+        });
+      }
+      const rematchEmail = savedEmail || currentCandidate.email;
+      const rematchPhone = currentCandidate.phone;
+      if (rematchEmail || rematchPhone) {
+        void rematchWebinarQuestionnairesForContact({
+          email: rematchEmail || undefined,
+          phone: rematchPhone || undefined,
         });
       }
       if (AUTO_ADVANCE) {

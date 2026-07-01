@@ -44,7 +44,7 @@ export type WebinarQuestionnaireSubmission = {
   updated_at: string;
 };
 
-export type QuestionnaireViewFilter = 'all' | 'with_answers' | 'attended_only' | 'matched_pipeline';
+export type QuestionnaireViewFilter = 'all' | 'with_answers' | 'attended_only' | 'matched_pipeline' | 'needs_pipeline_match';
 
 export type WebinarQuestionnairePageQuery = {
   search?: string | null;
@@ -77,6 +77,7 @@ export type WebinarQuestionnaireSyncResult = {
   subscriptions_loaded?: number;
   subscriptions_with_evaluation_form_answers?: number;
   rematched_count?: number;
+  newly_matched_count?: number;
   days_back?: number;
   message?: string;
 };
@@ -133,7 +134,7 @@ async function getAccessToken(): Promise<string | null> {
 }
 
 async function postQuestionnaireMode(
-  mode: 'questionnaire-sync' | 'questionnaire-backfill' | 'questionnaire-recent-import' | 'questionnaire-rematch',
+  mode: 'questionnaire-sync' | 'questionnaire-backfill' | 'questionnaire-recent-import' | 'questionnaire-rematch' | 'questionnaire-rematch-contact',
   body?: Record<string, unknown>,
 ): Promise<{ ok: true; data: WebinarQuestionnaireSyncResult } | { ok: false; error: string }> {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
@@ -171,6 +172,7 @@ async function postQuestionnaireMode(
       subscriptions_loaded: Number(json.subscriptions_loaded || 0) || undefined,
       subscriptions_with_evaluation_form_answers: Number(json.subscriptions_with_evaluation_form_answers || 0) || undefined,
       rematched_count: Number(json.rematched_count || 0) || undefined,
+      newly_matched_count: Number(json.newly_matched_count || 0) || undefined,
       days_back: Number(json.days_back || 0) || undefined,
       message: json.message ? String(json.message) : undefined,
     },
@@ -198,6 +200,19 @@ export async function rematchWebinarQuestionnaires(daysBack = 15): Promise<
   { ok: true; data: WebinarQuestionnaireSyncResult } | { ok: false; error: string }
 > {
   return postQuestionnaireMode('questionnaire-rematch', { days_back: daysBack });
+}
+
+/** Link stored questionnaire rows to pipeline when email/phone later appears in Paz. */
+export async function rematchWebinarQuestionnairesForContact(input: {
+  email?: string | null;
+  phone?: string | null;
+  daysBack?: number;
+}): Promise<{ ok: true; data: WebinarQuestionnaireSyncResult } | { ok: false; error: string }> {
+  return postQuestionnaireMode('questionnaire-rematch-contact', {
+    email: input.email || undefined,
+    phone: input.phone || undefined,
+    days_back: input.daysBack,
+  });
 }
 
 /** Import from webinar_geek_dashboard_snapshots — no WebinarGeek API calls. */
@@ -249,6 +264,10 @@ export async function fetchWebinarQuestionnairePage(
     query = query.eq('hiring_stage', 'attended_only');
   } else if (viewFilter === 'matched_pipeline') {
     query = query.not('pipeline_candidate_id', 'is', null);
+  } else if (viewFilter === 'needs_pipeline_match') {
+    query = query
+      .is('pipeline_candidate_id', null)
+      .eq('hiring_stage', 'questionnaire_submitted');
   }
 
   const { data, error } = await query;
@@ -472,6 +491,10 @@ export function submissionMatchesPageFilters(
   if (viewFilter === 'with_answers' && row.hiring_stage !== 'questionnaire_submitted') return false;
   if (viewFilter === 'attended_only' && row.hiring_stage !== 'attended_only') return false;
   if (viewFilter === 'matched_pipeline' && !row.pipeline_candidate_id) return false;
+  if (viewFilter === 'needs_pipeline_match') {
+    if (row.pipeline_candidate_id) return false;
+    if (row.hiring_stage !== 'questionnaire_submitted') return false;
+  }
 
   if (input.sourceType && input.sourceType !== 'all' && row.source_type !== input.sourceType) return false;
   if (input.webinarTitle && input.webinarTitle !== 'all' && row.webinar_title !== input.webinarTitle) return false;

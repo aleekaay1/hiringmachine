@@ -19,6 +19,7 @@ import {
   subscribeWebinarQuestionnaireSubmissions,
   importRecentWebinarQuestionnaires,
   rematchWebinarQuestionnaires,
+  rematchWebinarQuestionnairesForContact,
   todayYmd,
   watchMinutesFromSubmission,
   type QuestionnaireViewFilter,
@@ -41,6 +42,7 @@ function stageTone(stage: string): string {
 const VIEW_FILTERS: Array<{ id: QuestionnaireViewFilter; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'with_answers', label: 'With questionnaire' },
+  { id: 'needs_pipeline_match', label: 'Needs pipeline match' },
   { id: 'attended_only', label: 'Attended only' },
   { id: 'matched_pipeline', label: 'Matched to pipeline' },
 ];
@@ -67,7 +69,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
   const [dateTo, setDateTo] = React.useState(todayYmd());
   const [webinarTitle, setWebinarTitle] = React.useState('all');
   const [sourceType, setSourceType] = React.useState('all');
-  const [viewFilter, setViewFilter] = React.useState<QuestionnaireViewFilter>('with_answers');
+  const [viewFilter, setViewFilter] = React.useState<QuestionnaireViewFilter>('all');
   const [webinarTitles, setWebinarTitles] = React.useState<string[]>([]);
   const [expandedId, setExpandedId] = React.useState<string | null>(null);
   const [expandedDetail, setExpandedDetail] = React.useState<WebinarQuestionnaireSubmission | null>(null);
@@ -201,11 +203,23 @@ const WebinarQuestionnairesPage: React.FC = () => {
     }
   }, [loadMeta, nextOffset, pageFilters]);
 
+  const autoRematchDoneRef = React.useRef(false);
+
   React.useEffect(() => {
     if (!isAuthenticated || !canAccessWebinarQuestionnaires(role)) return;
     void loadPage('reset');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, role, debouncedSearch, dateFrom, dateTo, webinarTitle, sourceType, viewFilter]);
+
+  React.useEffect(() => {
+    if (!isAuthenticated || !canAccessWebinarQuestionnaires(role) || autoRematchDoneRef.current) return;
+    autoRematchDoneRef.current = true;
+    void rematchWebinarQuestionnaires(30).then((result) => {
+      if (!result.ok || !result.data.newly_matched_count) return;
+      void loadPage('reset');
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, role]);
 
   React.useEffect(() => {
     if (!isAuthenticated || !canAccessWebinarQuestionnaires(role)) return;
@@ -553,7 +567,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
             {!loading && rows.length === 0 && (
               <tr>
                 <td colSpan={8} className="px-4 py-10 text-center text-sm text-[#6f7b8d]">
-                  No submissions match these filters. Try <strong>Import last 15 days</strong> to pull recent forms from WebinarGeek.
+                  No submissions match these filters. Google Form responses are saved even before a pipeline match — try <strong>All</strong> or <strong>Needs pipeline match</strong>.
                 </td>
               </tr>
             )}

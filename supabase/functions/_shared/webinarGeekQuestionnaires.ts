@@ -592,53 +592,79 @@ export async function fetchRecentQuestionnaireRowsFromSubscriptions(
   return { rows: [...merged.values()], sources, scanned: candidates.length };
 }
 
+function normalizedRowFromStoredSubmission(stored: Record<string, unknown>): NormalizedWgQuestionnaireRow {
+  const answers = Array.isArray(stored.answers) ? stored.answers as WgQuestionnaireAnswer[] : [];
+  return {
+    wg_submission_key: String(stored.wg_submission_key || stored.id),
+    subscription_id: pickString(stored.subscription_id),
+    webinar_id: pickString(stored.webinar_id),
+    broadcast_id: pickString(stored.broadcast_id),
+    webinar_title: pickString(stored.webinar_title),
+    broadcast_title: pickString(stored.broadcast_title),
+    email: pickString(stored.email),
+    first_name: pickString(stored.first_name),
+    last_name: pickString(stored.last_name),
+    phone: pickString(stored.phone),
+    submitted_at: pickString(stored.submitted_at),
+    answers,
+    raw_payload: (stored.raw_payload && typeof stored.raw_payload === 'object'
+      ? stored.raw_payload
+      : {}) as Record<string, unknown>,
+    recruiter_custom_field: pickString(stored.recruiter_custom_field),
+    source: String(stored.source_type || 'rematch'),
+    watched: stored.watched === true ? true : stored.watched === false ? false : null,
+    watch_duration_seconds: Number.isFinite(Number(stored.watch_duration_seconds))
+      ? Number(stored.watch_duration_seconds)
+      : null,
+  };
+}
+
 export async function rematchStoredQuestionnaireRows(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   admin: any,
-  input: { sinceIso: string; limit?: number },
-): Promise<{ updated: number; matchedPipeline: number }> {
+  input: {
+    sinceIso: string;
+    limit?: number;
+    onlyUnmatched?: boolean;
+    email?: string | null;
+    phone?: string | null;
+    notifyOnNewMatch?: boolean;
+  },
+): Promise<{ updated: number; matchedPipeline: number; newlyMatched: number }> {
   const limit = Math.min(Math.max(input.limit ?? 500, 1), 1000);
-  const { data, error } = await admin
+  let query = admin
     .from('webinar_geek_questionnaire_submissions')
     .select('*')
     .gte('submitted_at', input.sinceIso)
     .order('submitted_at', { ascending: false })
     .limit(limit);
+  if (input.onlyUnmatched) {
+    query = query.is('pipeline_candidate_id', null);
+  }
+  const emailFilter = normalizeEmail(input.email);
+  if (emailFilter) {
+    query = query.ilike('email', emailFilter);
+  }
+
+  const { data, error } = await query;
   if (error) throw new Error(error.message);
 
-  const rows = (data || []) as Array<Record<string, unknown>>;
-  if (!rows.length) return { updated: 0, matchedPipeline: 0 };
+  let rows = (data || []) as Array<Record<string, unknown>>;
+  const phoneFilter = normalizePhoneDigits(input.phone);
+  if (phoneFilter) {
+    rows = rows.filter((stored) => normalizePhoneDigits(pickString(stored.phone)) === phoneFilter);
+  }
+  if (!rows.length) return { updated: 0, matchedPipeline: 0, newlyMatched: 0 };
 
   const matchContext = await buildQuestionnaireMatchContext(admin);
   let updated = 0;
   let matchedPipeline = 0;
+  let newlyMatched = 0;
   const syncedAt = new Date().toISOString();
 
   for (const stored of rows) {
-    const answers = Array.isArray(stored.answers) ? stored.answers as WgQuestionnaireAnswer[] : [];
-    const normalized: NormalizedWgQuestionnaireRow = {
-      wg_submission_key: String(stored.wg_submission_key || stored.id),
-      subscription_id: pickString(stored.subscription_id),
-      webinar_id: pickString(stored.webinar_id),
-      broadcast_id: pickString(stored.broadcast_id),
-      webinar_title: pickString(stored.webinar_title),
-      broadcast_title: pickString(stored.broadcast_title),
-      email: pickString(stored.email),
-      first_name: pickString(stored.first_name),
-      last_name: pickString(stored.last_name),
-      phone: pickString(stored.phone),
-      submitted_at: pickString(stored.submitted_at),
-      answers,
-      raw_payload: (stored.raw_payload && typeof stored.raw_payload === 'object'
-        ? stored.raw_payload
-        : {}) as Record<string, unknown>,
-      recruiter_custom_field: pickString(stored.recruiter_custom_field),
-      source: String(stored.source_type || 'rematch'),
-      watched: stored.watched === true ? true : stored.watched === false ? false : null,
-      watch_duration_seconds: Number.isFinite(Number(stored.watch_duration_seconds))
-        ? Number(stored.watch_duration_seconds)
-        : null,
-    };
+    const hadPipeline = Boolean(stored.pipeline_candidate_id);
+    const normalized = normalizedRowFromStoredSubmission(stored);
     const match = matchQuestionnaireRowWithContext(normalized, matchContext);
     const { error: upErr } = await admin
       .from('webinar_geek_questionnaire_submissions')
@@ -655,9 +681,13 @@ export async function rematchStoredQuestionnaireRows(
     if (upErr) continue;
     updated += 1;
     if (match.pipeline_candidate_id) matchedPipeline += 1;
+    if (input.notifyOnNewMatch && !hadPipeline && match.pipeline_candidate_id) {
+      newlyMatched += 1;
+      await notifyQuestionnaireSubmission(admin, normalized, match, String(stored.id));
+    }
   }
 
-  return { updated, matchedPipeline };
+  return { updated, matchedPipeline, newlyMatched };
 }
 
 const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
@@ -1127,7 +1157,9 @@ export async function notifyQuestionnaireSubmission(
     target_roles: ['admin', 'leadership', 'hr', 'webinar'],
     category: 'system',
     title: 'New webinar questionnaire',
-    body: `${name}${match.booked_by_label ? ` · booked by ${match.booked_by_label}` : ''} submitted evaluation responses.`,
+    body: `${name}${match.booked_by_label ? ` · booked by ${match.booked_by_label}` : ''}${
+      match.pipeline_candidate_id ? '' : ' · not yet linked to pipeline'
+    } submitted evaluation responses.`,
     link_route: '/webinar-questionnaires',
     link_label: 'Review answers',
     dedupe_key: `wg_questionnaire_broadcast:${dedupeBase}`,
@@ -1135,6 +1167,7 @@ export async function notifyQuestionnaireSubmission(
       wg_submission_key: row.wg_submission_key,
       submission_id: submissionId ?? null,
       booked_by_user_id: match.booked_by_user_id,
+      matched_pipeline: Boolean(match.pipeline_candidate_id),
     },
   });
 }

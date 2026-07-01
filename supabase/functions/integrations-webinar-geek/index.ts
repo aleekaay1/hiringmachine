@@ -1632,9 +1632,67 @@ Deno.serve(async (req) => {
           days_back: daysBack,
           rematched_count: rematch.updated,
           matched_pipeline_count: rematch.matchedPipeline,
+          newly_matched_count: rematch.newlyMatched,
           message: rematch.updated > 0
-            ? `Re-matched ${rematch.updated} submission(s); ${rematch.matchedPipeline} linked to pipeline.`
+            ? `Re-matched ${rematch.updated} submission(s); ${rematch.matchedPipeline} linked to pipeline${
+              rematch.newlyMatched > 0 ? ` (${rematch.newlyMatched} newly linked)` : ''
+            }.`
             : 'No stored submissions to re-match in this date range.',
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      } catch (rematchErr) {
+        const message = rematchErr instanceof Error ? rematchErr.message : String(rematchErr);
+        return new Response(JSON.stringify({ error: message }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
+    if (req.method === 'POST' && mode === 'questionnaire-rematch-contact') {
+      const body = (await req.json().catch(() => ({}))) as { email?: string; phone?: string; days_back?: number };
+      const profileRes = await admin
+        .from('user_profiles')
+        .select('role')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      const role = String((profileRes.data as { role?: string } | null)?.role || '').trim();
+      const allowedRoles = new Set(['admin', 'leadership', 'hr', 'webinar', 'recruiter']);
+      if (!allowedRoles.has(role)) {
+        return new Response(JSON.stringify({ error: 'Forbidden' }), {
+          status: 403,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const email = String(body.email || '').trim();
+      const phone = String(body.phone || '').trim();
+      if (!email && !phone) {
+        return new Response(JSON.stringify({ error: 'email or phone is required' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const daysBack = Math.min(Math.max(Number(body.days_back || 90) || 90, 1), 180);
+      const sinceIso = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
+      try {
+        const rematch = await rematchStoredQuestionnaireRows(admin, {
+          sinceIso,
+          limit: 100,
+          onlyUnmatched: true,
+          email: email || null,
+          phone: phone || null,
+          notifyOnNewMatch: true,
+        });
+        return new Response(JSON.stringify({
+          ok: true,
+          days_back: daysBack,
+          rematched_count: rematch.updated,
+          matched_pipeline_count: rematch.matchedPipeline,
+          newly_matched_count: rematch.newlyMatched,
         }), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },

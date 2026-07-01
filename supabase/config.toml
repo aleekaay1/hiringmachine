@@ -402,6 +402,9 @@ verify_jwt = false
 [functions.webinar-geek-questionnaire-webhook]
 verify_jwt = false
 
+[functions.google-form-questionnaire-webhook]
+verify_jwt = false
+
 [functions.hr-dashboard-data]
 verify_jwt = false
 
