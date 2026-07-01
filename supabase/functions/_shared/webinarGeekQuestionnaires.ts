@@ -666,6 +666,224 @@ function normalizePhoneDigits(value: unknown): string | null {
   return digits.slice(-10);
 }
 
+function answerLooksLikeNameField(question: string): 'first' | 'last' | 'full' | null {
+  const q = String(question || '').trim().toLowerCase();
+  if (!q) return null;
+  if (/full\s*name/.test(q) || q === 'name') return 'full';
+  if (/first\s*name|given\s*name/.test(q)) return 'first';
+  if (/last\s*name|surname|family\s*name/.test(q)) return 'last';
+  return null;
+}
+
+function questionnaireDisplayName(row: NormalizedWgQuestionnaireRow): string {
+  let firstName = pickString(row.first_name);
+  let lastName = pickString(row.last_name);
+  let fullFromAnswers = '';
+
+  for (const answer of row.answers) {
+    const kind = answerLooksLikeNameField(answer.question);
+    const value = pickString(answer.answer);
+    if (!value || !kind) continue;
+    if (kind === 'full') fullFromAnswers = value;
+    if (kind === 'first' && !firstName) firstName = value;
+    if (kind === 'last' && !lastName) lastName = value;
+  }
+
+  const fromFields = [firstName, lastName].map((part) => String(part || '').trim()).filter(Boolean).join(' ');
+  if (fromFields) return fromFields;
+  if (fullFromAnswers) return fullFromAnswers;
+
+  const email = normalizeEmail(row.email);
+  if (email) {
+    const local = email.split('@')[0]?.replace(/[._+-]+/g, ' ').trim();
+    if (local) return local.replace(/\b\w/g, (ch) => ch.toUpperCase());
+  }
+
+  return 'Questionnaire lead';
+}
+
+async function resolveExistingPipelineCandidateId(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  row: NormalizedWgQuestionnaireRow,
+): Promise<string | null> {
+  const email = normalizeEmail(row.email);
+  if (email) {
+    const byEmail = await fetchPipelineCandidatesByEmail(admin, email);
+    if (byEmail[0]?.id) return String(byEmail[0].id);
+  }
+
+  const phoneDigits = normalizePhoneDigits(row.phone);
+  if (phoneDigits) {
+    const byPhone = await fetchPipelineCandidatesByPhone(admin, phoneDigits);
+    if (byPhone[0]?.id) return String(byPhone[0].id);
+  }
+
+  const byName = await fetchPipelineCandidatesByName(
+    admin,
+    row.first_name,
+    row.last_name,
+    normalizePersonNameKey(row.first_name, row.last_name),
+  );
+  if (byName[0]?.id) return String(byName[0].id);
+
+  return null;
+}
+
+async function enrichPipelineCandidateFromQuestionnaire(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  candidateId: string,
+  row: NormalizedWgQuestionnaireRow,
+  match: QuestionnaireMatchResult,
+  sourceType: string,
+): Promise<void> {
+  const { data: existing, error } = await admin
+    .from('pipeline_candidates')
+    .select('email, phone, full_name, metadata, uploader_user_id, uploader_label')
+    .eq('id', candidateId)
+    .maybeSingle();
+  if (error || !existing) return;
+
+  const currentMeta = existing.metadata && typeof existing.metadata === 'object'
+    ? existing.metadata as Record<string, unknown>
+    : {};
+  const displayName = questionnaireDisplayName(row);
+  const updates: Record<string, unknown> = {
+    metadata: {
+      ...currentMeta,
+      questionnaire_linked_at: new Date().toISOString(),
+      questionnaire_source_type: sourceType,
+      wg_submission_key: row.wg_submission_key,
+      webinar_title: row.webinar_title ?? currentMeta.webinar_title ?? null,
+      questionnaire_submitted_at: row.submitted_at ?? currentMeta.questionnaire_submitted_at ?? null,
+      questionnaire_answers: row.answers.slice(0, 40),
+      recruiter_custom_field: match.recruiter_custom_field ?? row.recruiter_custom_field ?? null,
+    },
+    updated_at: new Date().toISOString(),
+  };
+
+  if (!pickString(existing.email) && normalizeEmail(row.email)) {
+    updates.email = normalizeEmail(row.email);
+  }
+  if (!pickString(existing.phone) && pickString(row.phone)) {
+    updates.phone = pickString(row.phone);
+  }
+  if (!pickString(existing.full_name) && displayName) {
+    updates.full_name = displayName;
+  }
+  if (!existing.uploader_user_id && match.booked_by_user_id) {
+    updates.uploader_user_id = match.booked_by_user_id;
+    updates.uploader_label = match.booked_by_label ?? null;
+  }
+
+  await admin.from('pipeline_candidates').update(updates).eq('id', candidateId);
+}
+
+async function createPipelineCandidateFromQuestionnaire(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  row: NormalizedWgQuestionnaireRow,
+  match: QuestionnaireMatchResult,
+  sourceType: string,
+): Promise<string | null> {
+  const email = normalizeEmail(row.email) || null;
+  const phone = pickString(row.phone);
+  const phoneDigits = normalizePhoneDigits(phone);
+  if (!email && !phoneDigits) return null;
+
+  const fullName = questionnaireDisplayName(row);
+  const nowIso = new Date().toISOString();
+  const insertRow = {
+    full_name: fullName,
+    email,
+    phone: phone || null,
+    source: 'webinar_questionnaire',
+    journey_stage: 'new',
+    status: 'open',
+    uploader_user_id: match.booked_by_user_id ?? null,
+    uploader_label: match.booked_by_label ?? null,
+    metadata: {
+      questionnaire_auto_created: true,
+      questionnaire_auto_created_at: nowIso,
+      questionnaire_source_type: sourceType,
+      wg_submission_key: row.wg_submission_key,
+      webinar_title: row.webinar_title ?? null,
+      broadcast_title: row.broadcast_title ?? null,
+      questionnaire_submitted_at: row.submitted_at ?? null,
+      questionnaire_answers: row.answers.slice(0, 40),
+      recruiter_custom_field: match.recruiter_custom_field ?? row.recruiter_custom_field ?? null,
+    },
+    updated_at: nowIso,
+  };
+
+  const { data, error } = await admin
+    .from('pipeline_candidates')
+    .insert(insertRow)
+    .select('id')
+    .single();
+
+  if (error) {
+    const duplicate = /duplicate|unique/i.test(String(error.message || ''));
+    if (duplicate) {
+      return resolveExistingPipelineCandidateId(admin, row);
+    }
+    throw new Error(`create pipeline candidate from questionnaire: ${error.message}`);
+  }
+
+  return data?.id ? String(data.id) : null;
+}
+
+export async function ensureQuestionnairePipelineLink(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any,
+  row: NormalizedWgQuestionnaireRow,
+  match: QuestionnaireMatchResult,
+  sourceType: string,
+): Promise<QuestionnaireMatchResult> {
+  if (match.pipeline_candidate_id) {
+    await enrichPipelineCandidateFromQuestionnaire(admin, match.pipeline_candidate_id, row, match, sourceType);
+    return match;
+  }
+
+  const email = normalizeEmail(row.email);
+  const phoneDigits = normalizePhoneDigits(row.phone);
+  if (!email && !phoneDigits) return match;
+
+  let pipelineCandidateId = await resolveExistingPipelineCandidateId(admin, row);
+  let matchMethod = match.match_method;
+
+  if (pipelineCandidateId) {
+    matchMethod = appendMatchMethod(matchMethod, 'pipeline_existing_lookup');
+  } else {
+    pipelineCandidateId = await createPipelineCandidateFromQuestionnaire(admin, row, match, sourceType);
+    if (!pipelineCandidateId) return match;
+    matchMethod = appendMatchMethod(matchMethod, 'pipeline_auto_created');
+  }
+
+  const linkedMatch: QuestionnaireMatchResult = {
+    ...match,
+    pipeline_candidate_id: pipelineCandidateId,
+    match_method: matchMethod,
+  };
+
+  if (!linkedMatch.booked_by_user_id && linkedMatch.pipeline_candidate_id) {
+    const { data: candidate } = await admin
+      .from('pipeline_candidates')
+      .select('uploader_user_id, uploader_label')
+      .eq('id', linkedMatch.pipeline_candidate_id)
+      .maybeSingle();
+    if (candidate?.uploader_user_id) {
+      linkedMatch.booked_by_user_id = String(candidate.uploader_user_id);
+      linkedMatch.booked_by_label = pickString(candidate.uploader_label, linkedMatch.booked_by_label);
+      linkedMatch.match_method = appendMatchMethod(linkedMatch.match_method, 'pipeline_uploader');
+    }
+  }
+
+  await enrichPipelineCandidateFromQuestionnaire(admin, pipelineCandidateId, row, linkedMatch, sourceType);
+  return linkedMatch;
+}
+
 /** Pull evaluation answers per recent watched subscription (WebinarGeek bulk endpoints are often empty). */
 export async function fetchRecentQuestionnaireRowsFromSubscriptions(
   wgGet: WgGetFn,
@@ -869,9 +1087,15 @@ export async function rematchStoredQuestionnaireRows(
   for (const stored of rows) {
     const hadPipeline = Boolean(stored.pipeline_candidate_id);
     const normalized = normalizedRowFromStoredSubmission(stored);
-    const match = matchQuestionnaireRowWithContext(
+    let match = matchQuestionnaireRowWithContext(
       normalized,
       await buildQuestionnaireMatchContextForRow(admin, normalized),
+    );
+    match = await ensureQuestionnairePipelineLink(
+      admin,
+      normalized,
+      match,
+      String(stored.source_type || 'rematch'),
     );
     const { error: upErr } = await admin
       .from('webinar_geek_questionnaire_submissions')
@@ -1685,8 +1909,9 @@ export async function upsertQuestionnaireRowsBatched(
     ? emptyContext
     : await buildQuestionnaireMatchContext(admin);
 
-  const payloads = withAnswers.map((row) => {
-    const match = input.match === false
+  const payloads: Record<string, unknown>[] = [];
+  for (const row of withAnswers) {
+    let match: QuestionnaireMatchResult = input.match === false
       ? {
         pipeline_candidate_id: null,
         journey_candidate_id: null,
@@ -1696,8 +1921,11 @@ export async function upsertQuestionnaireRowsBatched(
         recruiter_custom_field: row.recruiter_custom_field,
       }
       : matchQuestionnaireRowWithContext(row, matchContext);
-    return buildQuestionnaireUpsertPayload(row, match, input);
-  });
+    if (input.match !== false) {
+      match = await ensureQuestionnairePipelineLink(admin, row, match, input.sourceType);
+    }
+    payloads.push(buildQuestionnaireUpsertPayload(row, match, input));
+  }
 
   let upserted = 0;
   let matchedPipeline = 0;
@@ -1911,7 +2139,8 @@ async function processIncomingQuestionnaireRow(
   const matchContext = sourceType === 'google_form' || sourceType === 'wg_webhook'
     ? await buildQuestionnaireMatchContextForRow(admin, row)
     : await buildQuestionnaireMatchContext(admin);
-  const match = matchQuestionnaireRowWithContext(row, matchContext);
+  let match = matchQuestionnaireRowWithContext(row, matchContext);
+  match = await ensureQuestionnairePipelineLink(admin, row, match, sourceType);
   const syncedAt = new Date().toISOString();
   const payload = buildQuestionnaireUpsertPayload(row, match, {
     sourceType,
@@ -2001,7 +2230,9 @@ export async function matchQuestionnaireRow(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   admin: any,
   row: NormalizedWgQuestionnaireRow,
+  sourceType = 'rematch',
 ): Promise<QuestionnaireMatchResult> {
   const context = await buildQuestionnaireMatchContextForRow(admin, row);
-  return matchQuestionnaireRowWithContext(row, context);
+  const match = matchQuestionnaireRowWithContext(row, context);
+  return ensureQuestionnairePipelineLink(admin, row, match, sourceType);
 }
