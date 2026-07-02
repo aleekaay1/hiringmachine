@@ -10,6 +10,7 @@ import {
 } from './pipelineLeadGrouping';
 
 export const DIAL_QUEUE_INTENT_KEY = 'pipeline-dial-queue-intent';
+export const ACTIVE_DIAL_QUEUE_KEY = 'pipeline-active-dial-queue';
 export const CALL_HOUR_START = 10;
 export const CALL_HOUR_END = 17;
 
@@ -354,6 +355,35 @@ export function consumeDialQueueIntent(): DialQueueIntent | null {
   } catch {
     return null;
   }
+}
+
+export function saveActiveDialQueue(intent: DialQueueIntent): void {
+  if (typeof window === 'undefined') return;
+  window.sessionStorage.setItem(ACTIVE_DIAL_QUEUE_KEY, JSON.stringify(intent));
+}
+
+export function readActiveDialQueue(): DialQueueIntent | null {
+  if (typeof window === 'undefined') return null;
+  const raw = window.sessionStorage.getItem(ACTIVE_DIAL_QUEUE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as DialQueueIntent;
+    if (!parsed?.batchKey || !parsed?.batchTitle) return null;
+    const candidateId = String(parsed.candidateId || '').trim();
+    return {
+      batchKey: String(parsed.batchKey),
+      batchTitle: String(parsed.batchTitle),
+      startMode: parsed.startMode === 'resume' ? 'resume' : 'first',
+      ...(candidateId ? { candidateId } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function clearActiveDialQueue(): void {
+  if (typeof window === 'undefined') return;
+  window.sessionStorage.removeItem(ACTIVE_DIAL_QUEUE_KEY);
 }
 
 export function filterRecordsForPack(

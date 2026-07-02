@@ -79,7 +79,7 @@ import {
   type LoadedDialQueue,
   applyDialQueueStartMode,
 } from '../services/pipelineDialQueue';
-import { consumeDialQueueIntent } from '../services/recruiterLeadPackAnalytics';
+import { consumeDialQueueIntent, clearActiveDialQueue, readActiveDialQueue, saveActiveDialQueue } from '../services/recruiterLeadPackAnalytics';
 import { buildCallHistoryRows, queueLeadCategory, type QueueLeadCategory } from '../services/callHistoryRows';
 import {
   listPipelineCallScripts,
@@ -909,40 +909,57 @@ const PipelineCallWorkspace: React.FC = () => {
   }, [loadedDialQueue, candidates, orderedScopeCandidates, queueList]);
 
   React.useEffect(() => {
-    if (appliedDialIntentRef.current || initialLoading || !loadableBatchGroups.length) return;
+    if (appliedDialIntentRef.current || initialLoading || !loadableBatchGroups.length || loadedDialQueue) return;
 
     const intent = consumeDialQueueIntent();
-    const batchKey = searchParams.get('batch') || intent?.batchKey || '';
+    const saved = readActiveDialQueue();
+    const batchKey = searchParams.get('batch') || intent?.batchKey || saved?.batchKey || '';
     const modeParam = searchParams.get('mode');
     const candidateId =
-      searchParams.get('candidateId') || searchParams.get('candidate') || intent?.candidateId || '';
+      searchParams.get('candidateId') || searchParams.get('candidate') || intent?.candidateId || saved?.candidateId || '';
     const startMode: DialQueueStartMode =
-      modeParam === 'resume' || intent?.startMode === 'resume' ? 'resume' : 'first';
+      modeParam === 'resume' || intent?.startMode === 'resume' || saved?.startMode === 'resume'
+        ? 'resume'
+        : 'first';
 
-    if (!batchKey) return;
+    if (!batchKey) {
+      if (loadableBatchGroups.length > 0) setShowQueueSetup(true);
+      return;
+    }
     const group =
       loadableBatchGroups.find((row) => row.key === batchKey) ||
       (intent?.batchTitle
         ? loadableBatchGroups.find((row) => row.title === intent.batchTitle)
+        : undefined) ||
+      (saved?.batchTitle
+        ? loadableBatchGroups.find((row) => row.title === saved.batchTitle)
         : undefined);
     if (!group) return;
 
-    appliedDialIntentRef.current = true;
-    setLoadedDialQueue({
+    const queueState = {
       batchKey: group.key,
       batchTitle: group.title,
       startMode,
       ...(candidateId.trim() ? { candidateId: candidateId.trim() } : {}),
-    });
+    };
+
+    appliedDialIntentRef.current = true;
+    setLoadedDialQueue(queueState);
+    saveActiveDialQueue(queueState);
     setSelectedLoadBatchKey(group.key);
     setActiveBatchKey(group.key);
     setDialStartMode(startMode);
-    setActionMsg(
-      candidateId.trim()
-        ? `Loaded ${group.title} from Lead Manager — selected lead ready to call.`
-        : `Loaded ${group.title} from Lead Manager.`,
-    );
-  }, [initialLoading, loadableBatchGroups, searchParams]);
+    setShowQueueSetup(false);
+    if (intent) {
+      setActionMsg(
+        candidateId.trim()
+          ? `Loaded ${group.title} from Lead Manager — selected lead ready to call.`
+          : `Loaded ${group.title} from Lead Manager.`,
+      );
+    } else if (saved) {
+      setActionMsg(`Restored ${group.title} dial queue.`);
+    }
+  }, [initialLoading, loadableBatchGroups, loadedDialQueue, searchParams]);
 
   const loadDialQueue = () => {
     const group = loadableBatchGroups.find((row) => row.key === selectedLoadBatchKey);
@@ -951,11 +968,13 @@ const PipelineCallWorkspace: React.FC = () => {
       return;
     }
     setError(null);
-    setLoadedDialQueue({
+    const loaded = {
       batchKey: group.key,
       batchTitle: group.title,
       startMode: dialStartMode,
-    });
+    };
+    setLoadedDialQueue(loaded);
+    saveActiveDialQueue(loaded);
     setActiveBatchKey(group.key);
     setShowQueueSetup(false);
     setActionMsg(`Loaded ${group.title} into the dial queue.`);
@@ -963,7 +982,9 @@ const PipelineCallWorkspace: React.FC = () => {
 
   const resetDialQueue = () => {
     setLoadedDialQueue(null);
+    clearActiveDialQueue();
     setActiveBatchKey('all');
+    if (loadableBatchGroups.length > 0) setShowQueueSetup(true);
     setActionMsg('Dial queue reset — showing all batches again.');
   };
 
@@ -1536,6 +1557,9 @@ const PipelineCallWorkspace: React.FC = () => {
                 <p className={`text-xs ${tone.panelMuted}`}>
                   {queueList.length} next to call · {doneList.length} disposed · {navigationList.length} in view
                   · {candidates.length} leads
+                  {loadableBatchGroups.length > 0
+                    ? ` · ${loadableBatchGroups.length} lead pack${loadableBatchGroups.length === 1 ? '' : 's'}`
+                    : ''}
                   {loadingMoreDetails ? ' · loading details…' : ''}
                   {currentFocusIndex >= 0 && navigationList.length > 0
                     ? ` · lead ${currentFocusIndex + 1} of ${navigationList.length}`
@@ -1553,7 +1577,7 @@ const PipelineCallWorkspace: React.FC = () => {
                     className="!min-h-0 h-8 px-3 text-xs"
                     onClick={() => setShowQueueSetup((v) => !v)}
                   >
-                    {showQueueSetup ? 'Hide setup' : 'Load batch'}
+                    {showQueueSetup ? 'Hide setup' : loadableBatchGroups.length ? `Load batch (${loadableBatchGroups.length})` : 'Load batch'}
                   </Button>
                 )}
               </div>

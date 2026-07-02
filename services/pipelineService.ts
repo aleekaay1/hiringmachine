@@ -1180,17 +1180,30 @@ export function readCallRecordCandidateSnapshot(
   return { fullName, email };
 }
 
+const PIPELINE_CANDIDATES_FETCH_PAGE = 1000;
+const PIPELINE_CANDIDATES_FETCH_MAX = 10000;
+
 export async function listPipelineCandidates(): Promise<PipelineCandidate[]> {
   const scope = await resolvePipelineViewerScope();
-  let query = supabase
-    .from('pipeline_candidates')
-    .select(PIPELINE_CANDIDATE_SELECT)
-    .order('updated_at', { ascending: false })
-    .limit(capSupabaseLimit(1000));
-  query = applyPipelineUploaderScope(query, scope);
-  const { data, error } = await query;
-  if (error) throw error;
-  return (data || []) as PipelineCandidate[];
+  const all: PipelineCandidate[] = [];
+  let offset = 0;
+
+  while (offset < PIPELINE_CANDIDATES_FETCH_MAX) {
+    let query = supabase
+      .from('pipeline_candidates')
+      .select(PIPELINE_CANDIDATE_SELECT)
+      .order('updated_at', { ascending: false })
+      .range(offset, offset + PIPELINE_CANDIDATES_FETCH_PAGE - 1);
+    query = applyPipelineUploaderScope(query, scope);
+    const { data, error } = await query;
+    if (error) throw error;
+    const batch = (data || []) as PipelineCandidate[];
+    all.push(...batch);
+    if (batch.length < PIPELINE_CANDIDATES_FETCH_PAGE) break;
+    offset += PIPELINE_CANDIDATES_FETCH_PAGE;
+  }
+
+  return all;
 }
 
 export async function listPipelineManualCandidates(): Promise<PipelineCandidate[]> {
