@@ -29,6 +29,10 @@ interface LayoutProps {
   hideHeader?: boolean;
   isAdmin?: boolean;
   headerBannerSrc?: string;
+  /** Smaller logo + tighter padding (candidate forms). */
+  compactHeader?: boolean;
+  /** Hide the site header while scrolling down; show again when scrolling up. */
+  hideHeaderOnScroll?: boolean;
 }
 
 const Layout: React.FC<LayoutProps> = ({
@@ -36,6 +40,8 @@ const Layout: React.FC<LayoutProps> = ({
   hideHeader = false,
   isAdmin = false,
   headerBannerSrc,
+  compactHeader = false,
+  hideHeaderOnScroll = false,
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -127,6 +133,68 @@ const Layout: React.FC<LayoutProps> = ({
 
   const roleLabel = getStaffRoleLabel(role, userEmail, displayName);
 
+  const headerRef = React.useRef<HTMLElement | null>(null);
+  const [headerHeight, setHeaderHeight] = React.useState(0);
+  const [headerVisible, setHeaderVisible] = React.useState(true);
+  const lastScrollYRef = React.useRef(0);
+
+  const showCandidateHeader = !hideHeader && !isAdmin;
+
+  React.useLayoutEffect(() => {
+    if (!showCandidateHeader || !headerRef.current) return;
+    const el = headerRef.current;
+    const measure = () => setHeaderHeight(el.offsetHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [showCandidateHeader, compactHeader, headerBannerSrc]);
+
+  React.useEffect(() => {
+    if (!showCandidateHeader || !hideHeaderOnScroll) return;
+
+    lastScrollYRef.current = window.scrollY;
+    const onScroll = () => {
+      const y = window.scrollY;
+      if (y <= 24) {
+        setHeaderVisible(true);
+      } else if (y > lastScrollYRef.current + 6) {
+        setHeaderVisible(false);
+      } else if (y < lastScrollYRef.current - 6) {
+        setHeaderVisible(true);
+      }
+      lastScrollYRef.current = y;
+    };
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, [showCandidateHeader, hideHeaderOnScroll]);
+
+  const headerLogoClass = compactHeader
+    ? 'h-12 sm:h-14 w-auto max-w-[min(100%,18rem)] object-contain object-center'
+    : 'h-[min(11.25rem,32vh)] sm:h-[min(12.5rem,28vh)] md:h-[12.5rem] lg:h-[13.75rem] w-auto max-w-[min(100%,42rem)] object-contain object-center';
+
+  const headerPaddingClass = compactHeader
+    ? 'max-w-full justify-center px-3 py-2 sm:px-4 sm:py-2.5'
+    : headerBannerSrc
+      ? 'max-w-full justify-center px-0 py-0'
+      : 'max-w-full justify-center px-4 py-3 sm:py-4 md:py-5';
+
+  const headerPositionClass = hideHeaderOnScroll ? 'fixed inset-x-0 top-0' : 'sticky top-0';
+  const headerMotionClass =
+    hideHeaderOnScroll && !headerVisible
+      ? '-translate-y-full pointer-events-none'
+      : 'translate-y-0';
+
+  const spacerHeight =
+    showCandidateHeader && hideHeaderOnScroll
+      ? headerVisible
+        ? headerHeight
+        : 0
+      : showCandidateHeader && !hideHeaderOnScroll
+        ? undefined
+        : 0;
+
   return (
     <div
       className="min-h-screen flex items-start font-sans text-gray-800"
@@ -159,36 +227,46 @@ const Layout: React.FC<LayoutProps> = ({
           </div>
         )}
         {!hideHeader && !isAdmin && (
-          <header className="bg-white shadow-sm sticky top-0 z-50 safe-area-top">
-            <div
-              className={`mx-auto w-full flex items-center gap-2 ${
-                headerBannerSrc
-                  ? 'max-w-full justify-center px-0 py-0'
-                  : 'max-w-full justify-center px-4 py-3 sm:py-4 md:py-5'
-              }`}
+          <>
+            {hideHeaderOnScroll && (
+              <div
+                aria-hidden
+                className="shrink-0 transition-[height] duration-300 ease-out overflow-hidden"
+                style={{ height: spacerHeight ?? 0 }}
+              />
+            )}
+            <header
+              ref={headerRef}
+              className={`bg-white shadow-sm z-50 safe-area-top transition-transform duration-300 ease-out ${headerPositionClass} ${headerMotionClass}`}
             >
-              {!headerBannerSrc ? (
-                <img
-                  src="/logo.png"
-                  alt="Globe Life AIL Division - Paz Organization"
-                  className="h-[min(11.25rem,32vh)] sm:h-[min(12.5rem,28vh)] md:h-[12.5rem] lg:h-[13.75rem] w-auto max-w-[min(100%,42rem)] object-contain object-center"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none';
-                  }}
-                />
-              ) : (
-                <img
-                  src={headerBannerSrc}
-                  alt="Globe Life AIL Division - Paz Organization"
-                  className="w-full h-auto max-h-[min(24vh,200px)] sm:max-h-[min(22vh,220px)] lg:max-h-[240px] object-contain object-center bg-[#f8fafc]"
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = 'none';
-                  }}
-                />
-              )}
-            </div>
-            <div className="h-1 w-full bg-gradient-to-r from-[#005EB8] to-[#37B06D]" />
-          </header>
+              <div className={`mx-auto w-full flex items-center gap-2 ${headerPaddingClass}`}>
+                {!headerBannerSrc ? (
+                  <img
+                    src="/logo.png"
+                    alt="Globe Life AIL Division - Paz Organization"
+                    className={headerLogoClass}
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                ) : (
+                  <img
+                    src={headerBannerSrc}
+                    alt="Globe Life AIL Division - Paz Organization"
+                    className={
+                      compactHeader
+                        ? 'w-full h-auto max-h-16 sm:max-h-[4.5rem] object-contain object-center bg-[#f8fafc]'
+                        : 'w-full h-auto max-h-[min(24vh,200px)] sm:max-h-[min(22vh,220px)] lg:max-h-[240px] object-contain object-center bg-[#f8fafc]'
+                    }
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                )}
+              </div>
+              <div className="h-1 w-full bg-gradient-to-r from-[#005EB8] to-[#37B06D]" />
+            </header>
+          </>
         )}
         <main className={`flex-grow flex flex-col min-h-0 relative overflow-x-hidden px-safe-area ${isAdmin ? 'max-lg:pl-[4.75rem]' : ''}`}>
           {isAdmin && roleResolved && userId && <PerformanceCheckInDueBanner role={role} userId={userId} />}

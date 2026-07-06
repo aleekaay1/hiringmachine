@@ -206,7 +206,7 @@ const AssessmentRoomForm: React.FC = () => {
 
   if (alreadyCompleted && candidate) {
     return (
-      <Layout>
+      <Layout compactHeader hideHeaderOnScroll>
         <div className="flex-grow flex flex-col items-center justify-center p-6">
           <div className="w-full max-w-md bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center space-y-4">
             <h2 className="text-xl font-bold text-gray-900">You&apos;ve already completed the assessment</h2>
@@ -221,28 +221,27 @@ const AssessmentRoomForm: React.FC = () => {
   if (!candidate) return null;
 
   return (
-    <Layout>
-      <div ref={topRef} className="p-6 max-w-lg mx-auto w-full pb-32 space-y-10">
-        <div className="text-center border-b pb-5">
-          <p className="text-xs font-semibold uppercase tracking-wide text-[#005EB8]/80">Leadership & Career Assessment</p>
-          <h1 className="text-2xl font-bold text-[#0B1B34] mt-2">
+    <Layout compactHeader hideHeaderOnScroll>
+      <div ref={topRef} className="p-4 sm:p-5 max-w-lg mx-auto w-full pb-28 space-y-8">
+        <div className="text-center border-b border-gray-100 pb-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-[#005EB8]/80">Leadership & Career Assessment</p>
+          <h1 className="text-lg sm:text-xl font-bold text-[#0B1B34] mt-1">
             Welcome, {candidateWelcomeName(candidate)}
           </h1>
-          <p className="text-gray-600 text-sm mt-2 max-w-md mx-auto">
-            This short questionnaire is for you personally — please answer honestly. Your responses help
-            our Leadership Team review your fit for the next step.
+          <p className="text-gray-600 text-xs sm:text-sm mt-1 max-w-md mx-auto leading-relaxed">
+            Please answer honestly — your responses help our Leadership Team review your fit for the next step.
           </p>
         </div>
 
         <div className="space-y-4">
-          <h2 className="text-xl font-bold text-gray-900">Entrepreneurial Quotient (EQ) Test</h2>
+          <h2 className="text-lg font-bold text-gray-900">Entrepreneurial Quotient (EQ) Test</h2>
           <p className="text-sm text-gray-600">For each statement, select how true it is for you.</p>
           {EQ_QUESTIONS.map((q) => renderEq(q.id, q.question))}
         </div>
 
         <div className="space-y-4 pt-8 border-t">
           <div className="space-y-2">
-            <h2 className="text-xl font-bold text-gray-900">Career opportunity questions</h2>
+            <h2 className="text-lg font-bold text-gray-900">Career opportunity questions</h2>
             <p className="text-sm text-gray-600">Please answer the following.</p>
           </div>
 
