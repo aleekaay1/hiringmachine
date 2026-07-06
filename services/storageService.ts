@@ -418,7 +418,44 @@ export const deleteCandidate = async (id: string): Promise<void> => {
 };
 
 // Auto-scoring logic
+function isShortEqAssessment(assessment: AssessmentData): boolean {
+  return Boolean(
+    assessment.eqAnswers &&
+      Object.keys(assessment.eqAnswers).length > 0 &&
+      !assessment.personalityAnswers &&
+      !assessment.scenarioAnswers &&
+      (!assessment.openEndedAnswers || Object.keys(assessment.openEndedAnswers).length === 0),
+  );
+}
+
 export const calculateScore = (assessment: AssessmentData) => {
+  // --- Short assessment (10 EQ items only) ---
+  if (isShortEqAssessment(assessment)) {
+    let eqScore = 0;
+    let answered = 0;
+    Object.values(assessment.eqAnswers!).forEach((key) => {
+      const opt = EQ_LIKERT_OPTIONS[key];
+      if (opt) {
+        eqScore += opt.score;
+        answered += 1;
+      }
+    });
+    const maxScore = answered * 4;
+    const percentage = maxScore > 0 ? (eqScore / maxScore) * 100 : 0;
+
+    let fitCategory: 'High Fit' | 'Review' | 'Not Aligned';
+    if (percentage >= 75) fitCategory = 'High Fit';
+    else if (percentage >= 45) fitCategory = 'Review';
+    else fitCategory = 'Not Aligned';
+
+    const eqBand =
+      EQ_INTERPRETATION_THRESHOLDS.find(
+        (band) => eqScore >= band.min && eqScore <= band.max,
+      ) ?? EQ_INTERPRETATION_THRESHOLDS[EQ_INTERPRETATION_THRESHOLDS.length - 1];
+
+    return { score: eqScore, fitCategory, percentage, eqScore, eqBand: eqBand.label };
+  }
+
   // --- New 50-question assessment scoring ---
   if (assessment.personalityAnswers || assessment.eqAnswers) {
     let score = 0;

@@ -460,16 +460,23 @@ const AdminDashboard: React.FC = () => {
     const a = selectedCandidate.assessment as any;
 
     const lines: string[] = ['Candidate assessment – Q&A', ''];
-    // Core drivers
-    lines.push('Core drivers:');
-    lines.push(
-      `Q1. On a scale of 1–10, how competitive are you?\nAnswer: ${a.competitiveness}/10`,
-      '',
-    );
-    lines.push(
-      `Q2. On a scale of 1–10, how motivated are you by income growth?\nAnswer: ${a.moneyMotivation}/10`,
-      '',
-    );
+    const isShortEq =
+      a.eqAnswers &&
+      !a.personalityAnswers &&
+      !a.scenarioAnswers &&
+      (!a.openEndedAnswers || Object.keys(a.openEndedAnswers).length === 0);
+
+    if (!isShortEq) {
+      lines.push('Core drivers:');
+      lines.push(
+        `Q1. On a scale of 1–10, how competitive are you?\nAnswer: ${a.competitiveness}/10`,
+        '',
+      );
+      lines.push(
+        `Q2. On a scale of 1–10, how motivated are you by income growth?\nAnswer: ${a.moneyMotivation}/10`,
+        '',
+      );
+    }
 
     if (a.personalityAnswers || a.scenarioAnswers || a.eqAnswers || a.openEndedAnswers) {
       // Open-ended
@@ -2005,11 +2012,15 @@ const AdminDashboard: React.FC = () => {
                           </div>
                         </>
                       )}
-                      {(selectedCandidate.applicantQuestionnaire as any).whatStoodOut != null && (
+                      {(selectedCandidate.applicantQuestionnaire as any).financialInvestmentLicense != null && (
                         <>
-                          <div><p className="text-gray-500">What stood out</p><p className="text-gray-800">{(selectedCandidate.applicantQuestionnaire as any).whatStoodOut}</p></div>
-                          <div><p className="text-gray-500">Why good fit</p><p className="text-gray-800">{(selectedCandidate.applicantQuestionnaire as any).whyGoodFit}</p></div>
-                          <div><p className="text-gray-500">Financial investment for license</p><p className="font-medium capitalize">{(selectedCandidate.applicantQuestionnaire as any).financialInvestmentLicense}</p></div>
+                          {(selectedCandidate.applicantQuestionnaire as any).whatStoodOut != null && (
+                            <>
+                              <div><p className="text-gray-500">What stood out</p><p className="text-gray-800">{(selectedCandidate.applicantQuestionnaire as any).whatStoodOut}</p></div>
+                              <div><p className="text-gray-500">Why good fit</p><p className="text-gray-800">{(selectedCandidate.applicantQuestionnaire as any).whyGoodFit}</p></div>
+                            </>
+                          )}
+                          <div><p className="text-gray-500">Financial investment for license ($348)</p><p className="font-medium capitalize">{(selectedCandidate.applicantQuestionnaire as any).financialInvestmentLicense}</p></div>
                           <div><p className="text-gray-500">Legally entitled (full-time)</p><p className="font-medium capitalize">{(selectedCandidate.applicantQuestionnaire as any).legallyEntitledCanadaFullTime}</p></div>
                           <div><p className="text-gray-500">Comfortable 100% virtual</p><p className="font-medium uppercase">{(selectedCandidate.applicantQuestionnaire as any).comfortableVirtualEnvironment}</p></div>
                           <div><p className="text-gray-500">Excited about off-site social</p><p className="font-medium capitalize">{(selectedCandidate.applicantQuestionnaire as any).excitedOffSiteSocial}</p></div>
@@ -2060,7 +2071,7 @@ const AdminDashboard: React.FC = () => {
                     <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 space-y-3">
                       <h4 className="text-sm font-bold text-slate-800">Assessment summary</h4>
                       <p className="text-xs text-slate-500 mb-2">
-                        Summary of core drivers, personality traits, scenario preferences, and entrepreneurial quotient based on the completed assessment.
+                        Summary based on the completed assessment (EQ test and career opportunity responses for the short form; legacy submissions include additional personality and scenario items).
                       </p>
                       <div className="space-y-2 text-sm text-slate-700">
                         {getAssessmentSummary(selectedCandidate.assessment).map((paragraph, i) => (
@@ -2169,9 +2180,17 @@ const AdminDashboard: React.FC = () => {
                       {copyToast && (
                         <p className="text-xs text-green-600 font-medium">Copied to clipboard. Paste (Ctrl+V) in the new tab and send.</p>
                       )}
-                      {showAnswers && (
+                      {showAnswers && (() => {
+                        const a = selectedCandidate.assessment as any;
+                        const isShortEq =
+                          a.eqAnswers &&
+                          !a.personalityAnswers &&
+                          !a.scenarioAnswers &&
+                          (!a.openEndedAnswers || Object.keys(a.openEndedAnswers).length === 0);
+                        return (
                         <div className="mt-4 space-y-4 text-sm">
-                          {/* Core drivers always shown */}
+                          {!isShortEq && (
+                            <>
                           <div>
                             <p className="font-semibold text-gray-800">
                               Q1. On a scale of 1–10, how competitive are you?
@@ -2188,12 +2207,13 @@ const AdminDashboard: React.FC = () => {
                               Answer: {selectedCandidate.assessment.moneyMotivation + '/10'}
                             </p>
                           </div>
+                            </>
+                          )}
 
-                          {/* New 50-question assessment responses */}
-                          {(selectedCandidate.assessment as any).personalityAnswers ||
-                          (selectedCandidate.assessment as any).scenarioAnswers ||
-                          (selectedCandidate.assessment as any).eqAnswers ||
-                          (selectedCandidate.assessment as any).openEndedAnswers ? (
+                          {(a.personalityAnswers ||
+                          a.scenarioAnswers ||
+                          a.eqAnswers ||
+                          a.openEndedAnswers) ? (
                             <>
                               {/* Open-ended */}
                               {(selectedCandidate.assessment as any).openEndedAnswers && (
@@ -2329,7 +2349,8 @@ const AdminDashboard: React.FC = () => {
                             </>
                           )}
                         </div>
-                      )}
+                        );
+                      })()}
                     </div>
                   </div>
                 ) : (

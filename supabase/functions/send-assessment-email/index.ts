@@ -123,7 +123,17 @@ function buildCandidateProfilePdfBase64(row: Record<string, unknown>): { base64:
   addLine(`City: ${safeText(row.city)}`);
   addLine(`Status: ${safeText(row.status)}`);
   addLine('');
-  addLine('2) Applicant questionnaire', 13, true);
+  addLine('2) Career opportunity responses', 13, true);
+  addLine(`License investment ($348): ${toYesNoMaybe(aq.financialInvestmentLicense)}`);
+  addLine(`Legally entitled (full-time Canada): ${toYesNoMaybe(aq.legallyEntitledCanadaFullTime)}`);
+  addLine(`Comfortable 100% virtual: ${toYesNoMaybe(aq.comfortableVirtualEnvironment)}`);
+  addLine(`Excited about off-site social: ${toYesNoMaybe(aq.excitedOffSiteSocial)}`);
+  addLine(`Position interest: ${safeText(aq.positionInterest)}`);
+  addLine(`Questions about opportunity: ${safeText(aq.questionsAboutOpportunity)}`);
+  addLine(`Contact permission: ${toYesNoMaybe(aq.contactPermission)}`);
+  addLine(`Background check willing: ${toYesNoMaybe(aq.backgroundCheckWilling)}`);
+  addLine('');
+  addLine('3) Check-in profile (resume collected at check-in)', 13, true);
   addLine(`Occupation: ${safeText(aq.occupation)}`);
   addLine(`Current role: ${safeText(aq.currentRole)}`);
   addLine(`Background areas: ${Array.isArray(aq.backgroundAreas) ? aq.backgroundAreas.map((x) => String(x)).join(', ') : 'N/A'}`);
@@ -137,13 +147,10 @@ function buildCandidateProfilePdfBase64(row: Record<string, unknown>): { base64:
     addLine('Resume file URLs: N/A');
   }
   addLine(`LinkedIn profile: ${safeText(typeof aq.linkedinProfileUrl === 'string' ? aq.linkedinProfileUrl : '')}`);
-  addLine(`What stood out: ${safeText(aq.whatStoodOut)}`);
-  addLine(`Why good fit: ${safeText(aq.whyGoodFit)}`);
-  addLine(`Position interest: ${safeText(aq.positionInterest)}`);
-  addLine(`Contact permission: ${toYesNoMaybe(aq.contactPermission)}`);
-  addLine(`Background check willing: ${toYesNoMaybe(aq.backgroundCheckWilling)}`);
+  if (aq.whatStoodOut) addLine(`What stood out (legacy): ${safeText(aq.whatStoodOut)}`);
+  if (aq.whyGoodFit) addLine(`Why good fit (legacy): ${safeText(aq.whyGoodFit)}`);
   addLine('');
-  addLine('3) Assessment summary', 13, true);
+  addLine('4) Assessment summary', 13, true);
   summary.forEach((s) => addLine(`- ${s}`));
 
   const dataUri = doc.output('datauristring');

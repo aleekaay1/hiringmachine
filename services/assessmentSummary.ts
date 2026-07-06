@@ -173,11 +173,37 @@ function buildLegacySummary(assessment: AssessmentData): string[] {
   return [paragraph1, paragraph2, paragraph3, paragraph4, paragraph5];
 }
 
+function buildShortEqAssessmentSummary(assessment: AssessmentData): string[] {
+  const paragraphs: string[] = [];
+  const { fitCategory, eqBand } = calculateScore(assessment) as { fitCategory: string; eqBand?: string };
+
+  if (assessment.eqAnswers) {
+    let eqScore = 0;
+    Object.values(assessment.eqAnswers).forEach((key) => {
+      const opt = EQ_LIKERT_OPTIONS[key];
+      if (opt) eqScore += opt.score;
+    });
+    const band =
+      EQ_INTERPRETATION_THRESHOLDS.find(
+        (b) => eqScore >= b.min && eqScore <= b.max,
+      ) ?? EQ_INTERPRETATION_THRESHOLDS[EQ_INTERPRETATION_THRESHOLDS.length - 1];
+    paragraphs.push(
+      `Entrepreneurial Quotient (EQ): total score ${eqScore}, band "${band.label}".`,
+    );
+    if (eqBand) {
+      paragraphs.push(`EQ interpretation: ${eqBand}.`);
+    }
+  }
+
+  const closingKey = fitCategory ?? 'Review';
+  const closingPhrases =
+    FIT_CATEGORY_CLOSING[closingKey] ?? FIT_CATEGORY_CLOSING['Review'];
+  paragraphs.push(closingPhrases[0]);
+
+  return paragraphs;
+}
+
 /**
- * New-style summary for the 50-question assessment (core drivers, personality trait groups,
- * scenario preferences, and EQ band).
- */
-function buildNewAssessmentSummary(assessment: AssessmentData): string[] {
   const paragraphs: string[] = [];
 
   // Core drivers
@@ -323,6 +349,16 @@ function buildNewAssessmentSummary(assessment: AssessmentData): string[] {
  * Uses legacy phrases for the old 30-question assessment, and trait-based summary for the new one.
  */
 export function getAssessmentSummary(assessment: AssessmentData): string[] {
+  const isShortEq =
+    assessment.eqAnswers &&
+    Object.keys(assessment.eqAnswers).length > 0 &&
+    !assessment.personalityAnswers &&
+    !assessment.scenarioAnswers &&
+    (!assessment.openEndedAnswers || Object.keys(assessment.openEndedAnswers).length === 0);
+
+  if (isShortEq) {
+    return buildShortEqAssessmentSummary(assessment);
+  }
   if (assessment.personalityAnswers || assessment.scenarioAnswers || assessment.eqAnswers) {
     return buildNewAssessmentSummary(assessment);
   }

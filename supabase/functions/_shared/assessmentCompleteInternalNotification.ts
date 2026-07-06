@@ -68,6 +68,14 @@ export function buildAssessmentInternalNotificationHtml(row: AssessmentNotifyCan
   const resumeUrlsJoined = Array.isArray(aq.resumeUrls)
     ? aq.resumeUrls.map((x) => String(x || '').trim()).filter(Boolean).join('; ')
     : '';
+  const yesNo = (v: unknown) => {
+    const s = String(v ?? '').trim().toLowerCase();
+    if (!s) return '—';
+    if (s === 'yes') return 'Yes';
+    if (s === 'no') return 'No';
+    if (s === 'maybe') return 'Maybe';
+    return fmt(String(v));
+  };
 
   return `
 <p>A candidate has completed the <strong>Leadership &amp; Career Assessment</strong>. Use the details below for follow-up.</p>
@@ -80,14 +88,20 @@ export function buildAssessmentInternalNotificationHtml(row: AssessmentNotifyCan
   <tr><td><strong>Record status</strong></td><td>${fmt(row.status)}</td></tr>
   <tr><td><strong>Fit category</strong></td><td>${fmt(row.fit_category)}</td></tr>
   <tr><td><strong>Assessment score</strong></td><td>${fmtNum(row.score)}</td></tr>
-  <tr><td><strong>Occupation</strong></td><td>${fmt(aq.occupation as string | undefined)}</td></tr>
-  <tr><td><strong>Current role</strong></td><td>${fmt(aq.currentRole as string | undefined)}</td></tr>
-  <tr><td><strong>Background areas</strong></td><td>${fmt(backgroundAreas)}</td></tr>
-  <tr><td><strong>Sales experience</strong></td><td>${fmt(aq.salesExperience as string | undefined)}</td></tr>
+  <tr><td><strong>Occupation (check-in)</strong></td><td>${fmt(aq.occupation as string | undefined)}</td></tr>
+  <tr><td><strong>Current role (check-in)</strong></td><td>${fmt(aq.currentRole as string | undefined)}</td></tr>
+  <tr><td><strong>Background areas (check-in)</strong></td><td>${fmt(backgroundAreas)}</td></tr>
+  <tr><td><strong>Sales experience (check-in)</strong></td><td>${fmt(aq.salesExperience as string | undefined)}</td></tr>
   <tr><td><strong>LinkedIn (check-in)</strong></td><td>${fmt(aq.linkedinProfileUrl as string | undefined)}</td></tr>
-  <tr><td><strong>Resume file URLs</strong></td><td>${fmt(resumeUrlsJoined || undefined)}</td></tr>
-  <tr><td><strong>Competitiveness (1-10)</strong></td><td>${fmtNum(Number(assessment.competitiveness ?? NaN))}</td></tr>
-  <tr><td><strong>Money motivation (1-10)</strong></td><td>${fmtNum(Number(assessment.moneyMotivation ?? NaN))}</td></tr>
+  <tr><td><strong>Resume (check-in)</strong></td><td>${fmt(resumeUrlsJoined || undefined)}</td></tr>
+  <tr><td><strong>License investment ($348)</strong></td><td>${yesNo(aq.financialInvestmentLicense)}</td></tr>
+  <tr><td><strong>Legally entitled (full-time Canada)</strong></td><td>${yesNo(aq.legallyEntitledCanadaFullTime)}</td></tr>
+  <tr><td><strong>Comfortable 100% virtual</strong></td><td>${yesNo(aq.comfortableVirtualEnvironment)}</td></tr>
+  <tr><td><strong>Excited about off-site social</strong></td><td>${yesNo(aq.excitedOffSiteSocial)}</td></tr>
+  <tr><td><strong>Position interest</strong></td><td>${fmt(aq.positionInterest as string | undefined)}</td></tr>
+  <tr><td><strong>Questions about opportunity</strong></td><td>${fmt(aq.questionsAboutOpportunity as string | undefined)}</td></tr>
+  <tr><td><strong>Contact permission</strong></td><td>${yesNo(aq.contactPermission)}</td></tr>
+  <tr><td><strong>Background check willing</strong></td><td>${yesNo(aq.backgroundCheckWilling)}</td></tr>
   <tr><td><strong>Submitted</strong></td><td>${submitted}</td></tr>
 </table>
 <p style="font-size:12px;color:#666;">This is an automated internal notification from the hiring portal.</p>
