@@ -1,13 +1,12 @@
 import React from 'react';
 import { useLocation } from 'react-router-dom';
-import { ChevronDown, Crown, LogOut, Menu, X } from 'lucide-react';
+import { ChevronDown, LogOut, Menu, X } from 'lucide-react';
 import type { AppRole } from '../../services/accessControl';
 import { canAccessSection } from '../../services/accessControl';
 import { getStaffSessionSnapshot } from '../../services/staffSessionCache';
 import {
   isGroupActive,
   isItemActive,
-  LEADERBOARD_ROUTE,
   NAV_GROUPS,
   type NavGroup,
 } from './navigationConfig';
@@ -53,7 +52,6 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
   const [isMobile, setIsMobile] = React.useState(false);
   const [openGroups, setOpenGroups] = React.useState<Set<string>>(() => new Set());
   const [hoverGroup, setHoverGroup] = React.useState<string | null>(null);
-  const [leaderboardHover, setLeaderboardHover] = React.useState(false);
 
   React.useEffect(() => {
     const media = window.matchMedia('(max-width: 1023px)');
@@ -68,10 +66,6 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
   const sessionSnapshot = getStaffSessionSnapshot();
   const menuRole = role ?? sessionSnapshot.role;
   const menuEmail = userEmail ?? sessionSnapshot.userEmail;
-
-  const showLeaderboard = canAccessSection(menuRole, 'leaderboard', menuEmail);
-  const leaderboardActive =
-    pathname === '/calls-analytics/leaderboard' || pathname === '/leaderboard';
 
   const menuName = displayName || sessionSnapshot.displayName;
 
@@ -300,35 +294,6 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
         })}
       </nav>
 
-      {showLeaderboard && (
-        <div
-          className={`relative shrink-0 ${isRailView ? 'px-1.5 pb-1' : 'px-3 pb-2'}`}
-          data-tour="leaderboard-fab"
-          onMouseEnter={() => setLeaderboardHover(true)}
-          onMouseLeave={() => setLeaderboardHover(false)}
-        >
-          <NavMenuLink
-            to={LEADERBOARD_ROUTE}
-            active={leaderboardActive}
-            onNavigate={closeMobileMenu}
-            className={`flex w-full items-center justify-center gap-2 rounded-xl border py-2.5 transition ${
-              leaderboardActive
-                ? 'border-amber-200/40 bg-amber-400/10 text-amber-100'
-                : 'border-white/10 bg-white/[0.04] text-white/90 hover:border-white/20 hover:bg-white/[0.08]'
-            } ${isRailView ? 'px-2' : 'px-3'}`}
-            aria-label="Leadership board"
-          >
-            <Crown size={isRailView ? 20 : 18} className="shrink-0" strokeWidth={1.75} />
-            {!isRailView && <span className="text-sm font-medium tracking-wide">Leadership board</span>}
-          </NavMenuLink>
-          {isRailView && leaderboardHover && !isMobile && (
-            <div className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 -translate-y-1/2 whitespace-nowrap rounded-lg border border-white/10 bg-[#1d1b31] px-3 py-1.5 text-xs font-medium text-white shadow-xl">
-              Leadership board
-            </div>
-          )}
-        </div>
-      )}
-
       <div className={`mt-auto shrink-0 border-t border-white/10 ${isRailView ? 'p-2' : 'p-3'}`}>
         <NavMenuLink
           to="/account"
@@ -389,7 +354,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
       <aside
         data-tour="app-sidebar"
-        className={`fixed inset-y-0 left-0 z-50 flex flex-col bg-[#11101d] text-white shadow-2xl transition-[width] duration-300 translate-x-0 lg:sticky lg:top-0 lg:z-auto lg:h-auto lg:min-h-screen lg:self-start lg:overflow-visible ${
+        className={`fixed inset-y-0 left-0 z-50 flex flex-col bg-[#1c1915] text-white shadow-2xl transition-[width] duration-300 translate-x-0 lg:sticky lg:top-0 lg:z-auto lg:h-auto lg:min-h-screen lg:self-start lg:overflow-visible ${
           isMobile ? (mobileOpen ? 'w-[17.5rem]' : 'w-[4.75rem]') : collapsed ? 'w-[4.75rem]' : 'w-[17.5rem]'
         }`}
       >

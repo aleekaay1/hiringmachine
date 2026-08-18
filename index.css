@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -82,4 +82,49 @@ body {
 
 .admin-route-enter {
   animation: admin-route-enter 180ms ease-out;
+}
+
+.hm-shell {
+  font-family: 'IBM Plex Sans', Inter, system-ui, sans-serif;
+  color: #1c1915;
+}
+
+.hm-shell .font-display,
+.font-display {
+  font-family: Fraunces, Georgia, serif;
+  font-optical-sizing: auto;
+  letter-spacing: -0.02em;
+}
+
+.hm-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #b08d57;
+}
+
+.hm-card {
+  background: #faf6ef;
+  border: 1px solid #eadfce;
+  box-shadow: 0 18px 40px -32px rgba(28, 25, 21, 0.55);
+}
+
+.hm-btn-brass {
+  background: #b08d57;
+  color: #1c1915;
+}
+
+.hm-btn-brass:hover {
+  background: #c4a46e;
+}
+
+.hm-btn-ghost {
+  border: 1px solid #d9cfc0;
+  background: transparent;
+  color: #1c1915;
+}
+
+.hm-btn-ghost:hover {
+  background: #eadfce;
 }

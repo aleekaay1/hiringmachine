@@ -1,6 +1,5 @@
 import type { User } from '@supabase/supabase-js';
 import { fetchDashboardTeamMetricsViaFunction } from './dashboardTeamMetricsService';
-import { MID_WEEK_COACHING_ENABLED, MID_WEEK_COACHING_HUB_ENABLED } from './midWeekCoachingConfig';
 import { supabase } from './supabaseClient';
 
 export type AppRole = 'admin' | 'leadership' | 'recruiter' | 'webinar' | 'hr' | 'viewer';
@@ -35,7 +34,8 @@ export type AppSection =
   | 'superdashboard'
   | 'pipeline-hr-leads'
   | 'account'
-  | 'staff-directory';
+  | 'staff-directory'
+  | 'sent-ahead';
 
 export interface UserProfile {
   user_id: string;
@@ -212,38 +212,6 @@ export async function getCurrentUserProfile(force = false): Promise<UserProfile 
   return currentProfileInflight;
 }
 
-const ADMIN_DATA_SECTIONS: AppSection[] = [
-  'home',
-  'overview',
-  'candidates',
-  'qr',
-  'live-sessions',
-  'webinar-geek',
-  'webinar-questionnaires',
-  'calls-analytics',
-  'leaderboard',
-  'analytics',
-  'settings',
-  'email-log',
-  'reports',
-  'hr-dashboard',
-  'pipeline-performance',
-  'pipeline-settings',
-  'staff-directory',
-];
-
-/** Recruiter-style pipeline: dialer + email. Resume uploads are HR-only (see canAccessResumeUploads). */
-const PIPELINE_OPERATIONAL_SECTIONS: AppSection[] = [
-  'pipeline',
-  'pipeline-call',
-  'pipeline-email',
-  'pipeline-webinar-verify',
-  'pipeline-performance',
-  'pipeline-lead-manager',
-  'pipeline-settings',
-];
-
-/** Hidden ops console — ali@globelife-paz.com only (auth email, not role-based). */
 export const OPS_CONSOLE_EMAIL = 'ali@globelife-paz.com';
 
 /** HR weekly CSV import + lead assignment to recruiters. */
@@ -336,89 +304,25 @@ export function adminHasPipelineOperationalAccess(
   return normalized.length > 0 && ADMIN_PIPELINE_OPERATIONAL_EMAILS.has(normalized);
 }
 
+const HIRING_MACHINE_SECTIONS: AppSection[] = [
+  'home',
+  'overview',
+  'pipeline-call',
+  'sent-ahead',
+  'account',
+  'pipeline-settings',
+];
+
 export function canAccessSection(
   role: AppRole | null,
   section: AppSection,
-  email?: string | null,
-  fullName?: string | null,
+  _email?: string | null,
+  _fullName?: string | null,
 ): boolean {
-  if (section === 'ops-console') return isOpsConsoleEmail(email);
-  if (section === 'call-log') return canAccessCallLog(role, email);
-  if (section === 'staff-directory') return canAccessStaffDirectory(role);
-  if (section === 'pipeline-hr-leads') return canAccessHrLeadDistribution(role, email, fullName);
-  if (section === 'pipeline-uploads') return canAccessResumeUploads(role, email);
-  if (section === 'reports') return canAccessReports(role, email);
-  if (section === 'account') return Boolean(role);
-  if (section === 'support') return Boolean(role);
-  if (section === 'performance-check-in') {
-    if (!MID_WEEK_COACHING_ENABLED) return false;
-    return role === 'recruiter' || role === 'leadership' || role === 'webinar' || role === 'admin';
-  }
-  if (section === 'performance-check-ins') {
-    if (!MID_WEEK_COACHING_HUB_ENABLED) return false;
-    return canAccessReports(role, email);
-  }
+  void _email;
+  void _fullName;
   if (!role) return section === 'overview' || section === 'home';
-  if (role === 'admin') {
-    if (ADMIN_DATA_SECTIONS.includes(section)) return true;
-    if (canAccessHrLeadDistribution(role, email, fullName) && section === 'pipeline-hr-leads') return true;
-    if (adminHasDirectorOperationalAccess(role, email, fullName) && PIPELINE_OPERATIONAL_SECTIONS.includes(section)) {
-      return true;
-    }
-    return false;
-  }
-  if (role === 'leadership') {
-    return (
-      ADMIN_DATA_SECTIONS.includes(section) ||
-      PIPELINE_OPERATIONAL_SECTIONS.includes(section) ||
-      (canAccessHrLeadDistribution(role, email, fullName) && section === 'pipeline-hr-leads') ||
-      section === 'support' ||
-      section === 'performance-check-in'
-    );
-  }
-  if (role === 'recruiter') {
-    return (
-      section === 'home' ||
-      section === 'overview' ||
-      section === 'settings' ||
-      section === 'account' ||
-      section === 'support' ||
-      section === 'performance-check-in' ||
-      PIPELINE_OPERATIONAL_SECTIONS.includes(section) ||
-      section === 'webinar-geek' ||
-      section === 'webinar-questionnaires' ||
-      section === 'leaderboard'
-    );
-  }
-  if (role === 'webinar') {
-    return (
-      section === 'home' ||
-      section === 'overview' ||
-      section === 'webinar-geek' ||
-      section === 'webinar-questionnaires' ||
-      section === 'pipeline-webinar-verify' ||
-      section === 'leaderboard' ||
-      section === 'support' ||
-      section === 'performance-check-in'
-    );
-  }
-  if (role === 'hr') {
-    return (
-      section === 'home' ||
-      section === 'overview' ||
-      section === 'account' ||
-      section === 'support' ||
-      section === 'candidates' ||
-      section === 'hr-dashboard' ||
-      section === 'pipeline-hr-leads' ||
-      section === 'live-sessions' ||
-      section === 'email-log' ||
-      section === 'leaderboard' ||
-      section === 'webinar-geek' ||
-      section === 'webinar-questionnaires'
-    );
-  }
-  return section === 'overview' || section === 'leaderboard' || section === 'home' || section === 'support';
+  return HIRING_MACHINE_SECTIONS.includes(section);
 }
 
 /** Post-login landing: role-based workspace at /home (not legacy CRM overview). */
@@ -481,6 +385,7 @@ export function canAccessCandidatesCrm(
 export function resolveAppSectionFromLocation(pathname: string, search: string): AppSection {
   if (pathname === '/home') return 'home';
   if (pathname === '/account') return 'account';
+  if (pathname === '/sent-ahead') return 'sent-ahead';
   if (pathname === '/pipeline') return 'pipeline';
   if (pathname === '/pipeline/lead-manager' || pathname.startsWith('/pipeline/lead-manager/')) {
     return 'pipeline-lead-manager';

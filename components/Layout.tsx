@@ -12,11 +12,6 @@ import {
 } from '../services/accessControl';
 import AppSidebar from './navigation/AppSidebar';
 import NotificationBell from './NotificationBell';
-import PortalTour from './tour/PortalTour';
-import TaskWalkthrough from './tour/TaskWalkthrough';
-import PageHintBulb from './tour/PageHintBulb';
-import WeekWinnerAnnouncement from './WeekWinnerAnnouncement';
-import PerformanceCheckInDueBanner from './PerformanceCheckInDueBanner';
 import {
   clearStaffSessionCache,
   getStaffSessionSnapshot,
@@ -198,11 +193,8 @@ const Layout: React.FC<LayoutProps> = ({
   return (
     <div
       className="min-h-screen flex items-start font-sans text-gray-800"
-      style={{ backgroundColor: isAdmin ? '#eef2f7' : COLORS.background }}
+      style={{ backgroundColor: isAdmin ? '#f4efe6' : COLORS.background }}
     >
-      {isAdmin && <PortalTour userId={userId} enabled={roleResolved} />}
-      {isAdmin && <TaskWalkthrough />}
-      {isAdmin && roleResolved && userId && <WeekWinnerAnnouncement userId={userId} />}
       {isAdmin && (
         <AppSidebar
           role={role}
@@ -269,9 +261,7 @@ const Layout: React.FC<LayoutProps> = ({
           </>
         )}
         <main className={`flex-grow flex flex-col min-h-0 relative overflow-x-hidden px-safe-area ${isAdmin ? 'max-lg:pl-[4.75rem]' : ''}`}>
-          {isAdmin && roleResolved && userId && <PerformanceCheckInDueBanner role={role} userId={userId} />}
           {children}
-          {isAdmin && <PageHintBulb section={currentSection} />}
         </main>
         {!isAdmin && (
           <footer className="py-4 sm:py-6 text-center text-xs text-gray-400 safe-area-bottom px-4">

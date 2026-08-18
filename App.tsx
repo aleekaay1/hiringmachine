@@ -25,7 +25,8 @@ const HRDashboard = React.lazy(() => import('./pages/HRDashboard'));
 const EmailLog = React.lazy(() => import('./pages/EmailLog'));
 const CallLog = React.lazy(() => import('./pages/CallLog'));
 const Pipeline = React.lazy(() => import('./pages/Pipeline'));
-const PipelineCallWorkspace = React.lazy(() => import('./pages/PipelineCallWorkspace'));
+const HmCallWorkspace = React.lazy(() => import('./pages/HmCallWorkspace'));
+const SentAheadPage = React.lazy(() => import('./pages/SentAheadPage'));
 const PipelinePerformance = React.lazy(() => import('./pages/PipelinePerformance'));
 const PipelineEmailWorkspace = React.lazy(() => import('./pages/PipelineEmailWorkspace'));
 const PipelineUploadsWorkspace = React.lazy(() => import('./pages/PipelineUploadsWorkspace'));
@@ -66,6 +67,7 @@ const App: React.FC = () => {
 
         <Route element={<AdminShell />}>
           <Route path="/home" element={<Lazy><RoleHome /></Lazy>} />
+          <Route path="/sent-ahead" element={<Lazy><SentAheadPage /></Lazy>} />
           <Route path="/dashboard" element={<Lazy><AdminDashboard /></Lazy>} />
           <Route path="/admin" element={<Navigate to="/home" replace />} />
           <Route path="/live-sessions" element={<Lazy><LiveSessionsDashboard /></Lazy>} />
@@ -84,7 +86,7 @@ const App: React.FC = () => {
             <Route index element={<Lazy><LeadManagerPacksPage /></Lazy>} />
             <Route path="leads" element={<Lazy><LeadManagerLeadsPage /></Lazy>} />
           </Route>
-          <Route path="/pipeline/call" element={<Lazy><PipelineCallWorkspace /></Lazy>} />
+          <Route path="/pipeline/call" element={<Lazy><HmCallWorkspace /></Lazy>} />
           <Route path="/pipeline/performance" element={<Lazy><PipelinePerformance /></Lazy>} />
           <Route path="/pipeline/email" element={<Lazy><PipelineEmailWorkspace /></Lazy>} />
           <Route path="/pipeline/webinar-verify" element={<Lazy><WebinarVerifyPage /></Lazy>} />

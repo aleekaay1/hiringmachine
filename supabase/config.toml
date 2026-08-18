@@ -441,6 +441,18 @@ verify_jwt = false
 [functions.send-weekly-leaderboard-email]
 verify_jwt = false
 
+[functions.instantly-webhook]
+verify_jwt = false
+
+[functions.hm-qualify-reply]
+verify_jwt = false
+
+[functions.hm-instantly-send]
+verify_jwt = false
+
+[functions.hm-instantly-metrics]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

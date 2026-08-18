@@ -11,7 +11,19 @@ export const PIPELINE_CALL_DISPOSITIONS = [
   'Interested – next step',
   'Scheduled interview',
   'Do not call',
+  'Send to AO Hub',
 ] as const;
+
+export const HM_CALL_DISPOSITIONS = [
+  'No answer',
+  'Voicemail left',
+  'Callback requested',
+  'Not interested',
+  'Send to AO Hub',
+  'Do not call',
+] as const;
+
+export type HmCallDisposition = (typeof HM_CALL_DISPOSITIONS)[number];
 
 export type PipelineCallDisposition = (typeof PIPELINE_CALL_DISPOSITIONS)[number];
 export const PIPELINE_BOOKED_SUBTYPES = ['Live Session', 'Webinar'] as const;
@@ -53,6 +65,8 @@ export function journeyStageForCallDisposition(disposition: PipelineCallDisposit
     case 'Connected':
       return 'connected';
     case 'Interested – next step':
+      return 'qualified';
+    case 'Send to AO Hub':
       return 'qualified';
     case 'Scheduled interview':
       return 'follow_up';
