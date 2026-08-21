@@ -29,7 +29,7 @@ const HomeLoadingScreen: React.FC<HomeLoadingScreenProps> = ({
     >
       <div className="flex flex-col items-center text-center">
         <div className="relative mb-4 flex h-20 w-20 items-center justify-center rounded-3xl border border-[#c8ddf4] bg-white shadow-[0_12px_32px_-20px_rgba(0,94,184,0.45)]">
-          <img src="/logo.png" alt="Paz Organization" className="h-14 w-14 object-contain" />
+          <img src="/logo.png" alt="AO Paz Globelife" className="h-14 w-auto max-w-[12rem] object-contain" />
           <motion.div
             className="absolute -inset-1 rounded-3xl border-2 border-[#67b5ff]/40"
             animate={{ scale: [1, 1.06, 1], opacity: [0.35, 0.7, 0.35] }}

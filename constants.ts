@@ -7,7 +7,7 @@ export const COLORS = {
 };
 
 export const BRANDING = {
-  companyName: 'Globe Life',
-  divisionName: 'AIL Division',
-  subBrand: 'Paz Organization',
+  companyName: 'AO Paz Globelife',
+  divisionName: 'Globe Life',
+  subBrand: 'AO Paz',
 };

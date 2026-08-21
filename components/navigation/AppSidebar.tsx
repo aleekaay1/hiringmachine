@@ -21,15 +21,15 @@ type AppSidebarProps = {
   onLogout: () => void;
 };
 
-const SIDEBAR_LOGO_SRC = '/white%20logo.png';
+const SIDEBAR_LOGO_SRC = '/logo.png';
 
 function SidebarBrand() {
   return (
     <div className="min-w-0 flex-1 overflow-hidden pr-2">
       <img
         src={SIDEBAR_LOGO_SRC}
-        alt="Paz Organization"
-        className="block h-16 w-auto max-w-full object-contain object-left"
+        alt="AO Paz Globelife"
+        className="block h-12 w-auto max-w-full object-contain object-left"
       />
     </div>
   );

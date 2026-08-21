@@ -99,18 +99,8 @@ const InterviewForm: React.FC = () => {
   return (
     <Layout compactHeader hideHeaderOnScroll>
       <div className="mx-auto flex w-full max-w-lg flex-grow flex-col items-center px-4 py-8 pb-24 text-center sm:p-6">
-        <div className="mb-5 flex w-full justify-center">
-          <img
-            src="/header.PNG"
-            alt="Globe Life AIL Division"
-            className="mx-auto h-auto w-full max-w-md object-contain"
-            onError={(ev) => {
-              (ev.target as HTMLImageElement).style.display = 'none';
-            }}
-          />
-        </div>
-
         <h2 className="mb-2 w-full text-2xl font-bold text-gray-900">Check in</h2>
+        <p className="mb-1 text-sm font-medium text-[#005EB8]">AO Paz Globelife</p>
         <p className="mb-6 max-w-md text-sm text-gray-600">
           Tell us a little about yourself so we can follow up if you are shortlisted for the next step.
         </p>

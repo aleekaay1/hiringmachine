@@ -11,13 +11,14 @@ const ThankYou: React.FC = () => {
   } | null) || null;
 
   return (
-    <Layout>
+    <Layout compactHeader>
       <div className="flex flex-grow flex-col items-center justify-center p-6 text-center animate-fade-in">
         <div className="mb-6 flex h-24 w-24 animate-bounce-slow items-center justify-center rounded-full bg-green-50 text-[#37B06D]">
           <CheckCircle size={48} />
         </div>
 
-        <h2 className="mb-6 text-3xl font-bold text-gray-900">Thank You</h2>
+        <h2 className="mb-2 text-3xl font-bold text-gray-900">Thank You</h2>
+        <p className="mb-6 text-sm font-medium text-[#005EB8]">AO Paz Globelife</p>
 
         <div className="max-w-md space-y-4 text-gray-600">
           {state?.fromCheckin ? (

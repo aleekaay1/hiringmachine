@@ -31,7 +31,7 @@ export function defaultAoHubEmailTemplate(): CheckInEmailTemplate {
       `You're invited to continue to our interview hub and grab a spot on the next info session.\n\n` +
       `{{aoHubUrl}}\n\n` +
       `It takes less than 2 minutes.\n\n` +
-      `Best,\nAO Globe Life recruiting`,
+      `Best,\nAO Paz Globelife`,
   };
 }
 

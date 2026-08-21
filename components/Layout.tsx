@@ -229,13 +229,13 @@ const Layout: React.FC<LayoutProps> = ({
             )}
             <header
               ref={headerRef}
-              className={`bg-white shadow-sm z-50 safe-area-top transition-transform duration-300 ease-out ${headerPositionClass} ${headerMotionClass}`}
+              className={`bg-[#0a0a0a] shadow-sm z-50 safe-area-top transition-transform duration-300 ease-out ${headerPositionClass} ${headerMotionClass}`}
             >
               <div className={`mx-auto w-full flex items-center gap-2 ${headerPaddingClass}`}>
                 {!headerBannerSrc ? (
                   <img
                     src="/logo.png"
-                    alt="Globe Life AIL Division - Paz Organization"
+                    alt="AO Paz Globelife"
                     className={headerLogoClass}
                     onError={(e) => {
                       (e.target as HTMLImageElement).style.display = 'none';
@@ -244,7 +244,7 @@ const Layout: React.FC<LayoutProps> = ({
                 ) : (
                   <img
                     src={headerBannerSrc}
-                    alt="Globe Life AIL Division - Paz Organization"
+                    alt="AO Paz Globelife"
                     className={
                       compactHeader
                         ? 'w-full h-auto max-h-16 sm:max-h-[4.5rem] object-contain object-center bg-[#f8fafc]'
@@ -265,7 +265,7 @@ const Layout: React.FC<LayoutProps> = ({
         </main>
         {!isAdmin && (
           <footer className="py-4 sm:py-6 text-center text-xs text-gray-400 safe-area-bottom px-4">
-            <p>&copy; {new Date().getFullYear()} Paz Organization | Globe Life AIL Division</p>
+            <p>&copy; {new Date().getFullYear()} AO Paz Globelife</p>
           </footer>
         )}
       </div>
