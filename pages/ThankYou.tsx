@@ -5,32 +5,43 @@ import { CheckCircle } from 'lucide-react';
 
 const ThankYou: React.FC = () => {
   const location = useLocation();
-  const fromMergedAssessment = (location.state as { fromMergedAssessment?: boolean } | null)?.fromMergedAssessment;
+  const state = (location.state as {
+    fromMergedAssessment?: boolean;
+    fromCheckin?: boolean;
+  } | null) || null;
 
   return (
     <Layout>
-      <div className="flex-grow flex flex-col items-center justify-center p-6 text-center animate-fade-in">
-        <div className="bg-green-50 w-24 h-24 rounded-full flex items-center justify-center mb-6 text-[#37B06D] animate-bounce-slow">
+      <div className="flex flex-grow flex-col items-center justify-center p-6 text-center animate-fade-in">
+        <div className="mb-6 flex h-24 w-24 animate-bounce-slow items-center justify-center rounded-full bg-green-50 text-[#37B06D]">
           <CheckCircle size={48} />
         </div>
 
-        <h2 className="text-3xl font-bold text-gray-900 mb-6">Thank You</h2>
+        <h2 className="mb-6 text-3xl font-bold text-gray-900">Thank You</h2>
 
         <div className="max-w-md space-y-4 text-gray-600">
-          {fromMergedAssessment ? (
+          {state?.fromCheckin ? (
+            <>
+              <p className="text-lg">Your check-in was received.</p>
+              <p>
+                You will receive an email with the webinar details if you are shortlisted.
+              </p>
+              <p className="mt-8 text-sm text-gray-400">Thank you for your time.</p>
+            </>
+          ) : state?.fromMergedAssessment ? (
             <>
               <p className="text-lg">Thank you for your submission.</p>
               <p>
                 Your application will be reviewed by our management team, and you will be contacted if you are selected.
               </p>
-              <p className="text-sm text-gray-400 mt-8">Thank you for your time and professionalism.</p>
+              <p className="mt-8 text-sm text-gray-400">Thank you for your time and professionalism.</p>
             </>
           ) : (
             <>
               <p className="text-lg">Your information has been submitted.</p>
-              <div className="h-px bg-gray-200 w-1/2 mx-auto my-6"></div>
+              <div className="mx-auto my-6 h-px w-1/2 bg-gray-200" />
               <p>If you have just checked in, please wait for further instructions from our team.</p>
-              <p className="text-sm text-gray-400 mt-8">Thank you for your time and professionalism.</p>
+              <p className="mt-8 text-sm text-gray-400">Thank you for your time and professionalism.</p>
             </>
           )}
         </div>

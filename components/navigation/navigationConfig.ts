@@ -1,5 +1,6 @@
 import type { LucideIcon } from 'lucide-react';
 import {
+  ClipboardList,
   Home,
   PhoneCall,
   Send,
@@ -31,6 +32,13 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: Home,
     tourId: 'nav-home',
     items: [{ name: 'Home', route: '/home', icon: Home, section: 'home' }],
+  },
+  {
+    id: 'check-ins',
+    label: 'Check-ins',
+    icon: ClipboardList,
+    tourId: 'nav-check-ins',
+    items: [{ name: 'Check-ins', route: '/check-ins', icon: ClipboardList, section: 'check-ins' }],
   },
   {
     id: 'call',

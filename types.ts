@@ -219,6 +219,8 @@ export interface AdminData {
   questionnaireDisqualified: QuestionnaireDisqualified | null;
   /** ISO — first successful reception check-in (eligible path). Used for 24h leadership reminder scheduling. */
   checkedInAt?: string | null;
+  /** ISO — staff sent AO Interview Hub invite from check-ins list. */
+  aoHubInviteSentAt?: string | null;
   /** ISO — automated 24h post–check-in leadership assessment reminder email was sent (at most once). */
   leadershipAssessmentReminder24hSentAt?: string | null;
   finalDecision?: 'Hired' | 'Not Hired';

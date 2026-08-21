@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { PhoneCall, RefreshCw, Send } from 'lucide-react';
+import { ClipboardList, PhoneCall, RefreshCw, Send } from 'lucide-react';
 import { getCurrentUserProfile, type UserProfile } from '../services/accessControl';
 import {
   displayName,
@@ -9,6 +9,7 @@ import {
   type HmDashboardData,
   type InstantlyDailyPoint,
 } from '../services/hiringMachineService';
+import { listCheckInEntries } from '../services/checkInService';
 
 function formatWhen(iso: string | null): string {
   if (!iso) return 'Not synced yet';
@@ -77,14 +78,23 @@ function DailyChart({ points }: { points: InstantlyDailyPoint[] }) {
 
 const HiringMachineHome: React.FC<{ profile: UserProfile | null }> = ({ profile }) => {
   const [data, setData] = React.useState<HmDashboardData | null>(null);
+  const [checkInCount, setCheckInCount] = React.useState({ total: 0, pending: 0, sent: 0 });
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
 
   const load = React.useCallback(async () => {
     setError(null);
     try {
-      const next = await loadHmDashboard();
+      const [next, checkIns] = await Promise.all([
+        loadHmDashboard(),
+        listCheckInEntries().catch(() => []),
+      ]);
       setData(next);
+      setCheckInCount({
+        total: checkIns.length,
+        pending: checkIns.filter((r) => !r.aoHubInviteSentAt).length,
+        sent: checkIns.filter((r) => r.aoHubInviteSentAt).length,
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load dashboard');
     } finally {
@@ -105,7 +115,7 @@ const HiringMachineHome: React.FC<{ profile: UserProfile | null }> = ({ profile 
           <p className="hm-kicker">Hiring machine</p>
           <h1 className="font-display text-4xl text-[#1c1915] sm:text-5xl">Good day, {first}.</h1>
           <p className="mt-2 max-w-xl text-sm text-[#5c554c]">
-            Instantly runs outreach. Positive replies land here, Edlyn calls, then we send them to AO Interview Hub.
+            Instantly links to your check-in form. Track who showed up, then send the AO Interview Hub invite when you shortlist them.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -137,6 +147,20 @@ const HiringMachineHome: React.FC<{ profile: UserProfile | null }> = ({ profile 
           <KpiCard label="Interested" value={data?.instantly.interested ?? '—'} />
           <KpiCard label="Bounced" value={data?.instantly.bounced ?? '—'} />
           <KpiCard label="Unsubs" value={data?.instantly.unsubscribed ?? '—'} />
+        </div>
+      </section>
+
+      <section>
+        <p className="hm-kicker mb-3">Check-ins</p>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiCard label="Form submissions" value={checkInCount.total} hint="Opened Instantly → checked in" />
+          <KpiCard label="Awaiting AO Hub" value={checkInCount.pending} />
+          <KpiCard label="AO Hub sent" value={checkInCount.sent} />
+          <div className="hm-card flex items-center justify-center rounded-2xl px-4 py-4">
+            <Link to="/check-ins" className="hm-btn-brass inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs">
+              <ClipboardList size={14} /> Open check-ins
+            </Link>
+          </div>
         </div>
       </section>
 
