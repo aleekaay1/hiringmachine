@@ -1,8 +1,12 @@
 import React from 'react';
-import { RefreshCw, Send } from 'lucide-react';
+import { RefreshCw, RotateCcw, Send } from 'lucide-react';
 import {
+  AO_HUB_URL,
+  applyCheckInEmailMerge,
+  defaultAoHubEmailTemplate,
   listCheckInEntries,
   sendAoHubInviteForCheckIn,
+  type CheckInEmailTemplate,
   type CheckInRow,
 } from '../services/checkInService';
 
@@ -21,16 +25,24 @@ function formatWhen(iso: string | null | undefined): string {
 }
 
 const CheckInsPage: React.FC = () => {
+  const defaults = React.useMemo(() => defaultAoHubEmailTemplate(), []);
   const [rows, setRows] = React.useState<CheckInRow[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [sendingId, setSendingId] = React.useState<string | null>(null);
   const [actionMsg, setActionMsg] = React.useState<string | null>(null);
+  const [subject, setSubject] = React.useState(defaults.subject);
+  const [body, setBody] = React.useState(defaults.body);
+  const [previewId, setPreviewId] = React.useState<string | null>(null);
+
+  const template: CheckInEmailTemplate = { subject, body };
 
   const load = React.useCallback(async () => {
     setError(null);
     try {
-      setRows(await listCheckInEntries());
+      const next = await listCheckInEntries();
+      setRows(next);
+      setPreviewId((prev) => prev || next[0]?.id || null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load check-ins');
     } finally {
@@ -44,15 +56,33 @@ const CheckInsPage: React.FC = () => {
 
   const pending = rows.filter((r) => !r.aoHubInviteSentAt).length;
   const sent = rows.filter((r) => r.aoHubInviteSentAt).length;
+  const previewRow = rows.find((r) => r.id === previewId) || rows[0] || null;
+  const preview = previewRow
+    ? applyCheckInEmailMerge(template, {
+        firstName: previewRow.firstName,
+        email: previewRow.email,
+        aoHubUrl: AO_HUB_URL,
+      })
+    : applyCheckInEmailMerge(template, { firstName: 'Alex', aoHubUrl: AO_HUB_URL });
+
+  const resetTemplate = () => {
+    const d = defaultAoHubEmailTemplate();
+    setSubject(d.subject);
+    setBody(d.body);
+  };
 
   const sendOne = async (row: CheckInRow) => {
+    if (!subject.trim() || !body.trim()) {
+      setError('Subject and body are required before sending.');
+      return;
+    }
     setSendingId(row.id);
     setError(null);
     setActionMsg(null);
     try {
-      const result = await sendAoHubInviteForCheckIn(row.id);
+      const result = await sendAoHubInviteForCheckIn(row.id, template);
       setActionMsg(
-        `AO Hub invite sent to ${row.firstName} ${row.lastName} via ${result.channel === 'instantly' ? 'Instantly' : 'email'}.`,
+        `Email sent to ${row.firstName} ${row.lastName} via ${result.channel === 'instantly' ? 'Instantly' : 'email'}.`,
       );
       await load();
     } catch (err) {
@@ -69,7 +99,7 @@ const CheckInsPage: React.FC = () => {
           <p className="hm-kicker">Tracking</p>
           <h1 className="font-display text-4xl text-[#1c1915]">Check-ins</h1>
           <p className="mt-2 max-w-xl text-sm text-[#5c554c]">
-            People who opened your Instantly link and submitted the form. Send the AO Interview Hub invite when you shortlist them.
+            Edit the email below, then send it to any entry. Tokens: {'{{firstName}}'}, {'{{aoHubUrl}}'}, {'{{email}}'}.
           </p>
         </div>
         <button
@@ -99,6 +129,62 @@ const CheckInsPage: React.FC = () => {
           <p className="mt-2 font-display text-3xl tabular-nums text-[#1c1915]">{sent}</p>
         </div>
       </div>
+
+      <section className="hm-card space-y-4 rounded-2xl p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="hm-kicker">Email template</p>
+            <h2 className="font-display text-2xl text-[#1c1915]">Shortlist / AO Hub invite</h2>
+          </div>
+          <button
+            type="button"
+            onClick={resetTemplate}
+            className="hm-btn-ghost inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs"
+          >
+            <RotateCcw size={12} /> Reset to default
+          </button>
+        </div>
+
+        <label className="block text-sm">
+          <span className="text-[#6f675c]">Subject</span>
+          <input
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            className="mt-1 w-full rounded-xl border border-[#d9cfc0] bg-white px-3 py-2.5 text-[#1c1915]"
+          />
+        </label>
+
+        <label className="block text-sm">
+          <span className="text-[#6f675c]">Body</span>
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={10}
+            className="mt-1 w-full rounded-xl border border-[#d9cfc0] bg-white px-3 py-2.5 font-mono text-sm leading-6 text-[#1c1915]"
+          />
+        </label>
+
+        <div className="rounded-xl border border-[#eadfce] bg-[#faf6ef] px-4 py-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="hm-kicker">Preview</p>
+            {rows.length > 0 && (
+              <select
+                value={previewRow?.id || ''}
+                onChange={(e) => setPreviewId(e.target.value)}
+                className="rounded-lg border border-[#d9cfc0] bg-white px-2 py-1 text-xs text-[#1c1915]"
+              >
+                {rows.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.firstName} {r.lastName} · {r.email}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <p className="text-sm font-semibold text-[#1c1915]">{preview.subject}</p>
+          <pre className="mt-2 whitespace-pre-wrap font-sans text-sm leading-6 text-[#4a453e]">{preview.text}</pre>
+        </div>
+      </section>
 
       {error && (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
@@ -157,7 +243,7 @@ const CheckInsPage: React.FC = () => {
                         className="hm-btn-brass inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         <Send size={12} />
-                        {already ? 'Sent' : sendingId === row.id ? 'Sending…' : 'Send AO Hub'}
+                        {already ? 'Sent' : sendingId === row.id ? 'Sending…' : 'Send email'}
                       </button>
                     </td>
                   </tr>

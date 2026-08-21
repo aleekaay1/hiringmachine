@@ -2,7 +2,7 @@ import { supabase } from './supabaseClient';
 import { getCandidateById, saveCandidate } from './storageService';
 import { DEFAULT_ADMIN_DATA, type Candidate } from '../types';
 
-const AO_HUB_URL =
+export const AO_HUB_URL =
   (import.meta.env.VITE_AO_INTERVIEW_HUB_URL as string | undefined)?.trim() ||
   'https://www.aointerview.com/apply/chris-hintz';
 
@@ -16,6 +16,58 @@ export type CheckInRow = Candidate & {
   aoHubInviteSentAt: string | null;
   currentRole: string;
 };
+
+export type CheckInEmailTemplate = {
+  subject: string;
+  body: string;
+};
+
+/** Prefill for the Check-ins email editor. Use {{firstName}} and {{aoHubUrl}}. */
+export function defaultAoHubEmailTemplate(): CheckInEmailTemplate {
+  return {
+    subject: 'Next step: AO Interview Hub',
+    body:
+      `Hi {{firstName}},\n\n` +
+      `You're invited to continue to our interview hub and grab a spot on the next info session.\n\n` +
+      `{{aoHubUrl}}\n\n` +
+      `It takes less than 2 minutes.\n\n` +
+      `Best,\nAO Globe Life recruiting`,
+  };
+}
+
+export function applyCheckInEmailMerge(
+  template: CheckInEmailTemplate,
+  vars: { firstName?: string; email?: string; aoHubUrl?: string },
+): { subject: string; text: string; html: string } {
+  const first = String(vars.firstName || '').trim() || 'there';
+  const email = String(vars.email || '').trim();
+  const hub = String(vars.aoHubUrl || AO_HUB_URL).trim() || AO_HUB_URL;
+  const replaceAll = (raw: string) =>
+    raw
+      .replaceAll('{{firstName}}', first)
+      .replaceAll('{{FirstName}}', first)
+      .replaceAll('{{email}}', email)
+      .replaceAll('{{aoHubUrl}}', hub)
+      .replaceAll('{{AO_HUB_URL}}', hub);
+
+  const subject = replaceAll(template.subject).trim() || 'Next step: AO Interview Hub';
+  const text = replaceAll(template.body);
+  const html = text
+    .split(/\n/)
+    .map((line) => {
+      const escaped = line
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      // Autolink bare AO hub URL
+      return escaped.replace(
+        /(https?:\/\/[^\s<]+)/g,
+        '<a href="$1">$1</a>',
+      );
+    })
+    .join('<br/>');
+  return { subject, text, html };
+}
 
 function asCheckInRow(c: Candidate): CheckInRow {
   const ao =
@@ -34,7 +86,6 @@ export async function listCheckInEntries(limit = 500): Promise<CheckInRow[]> {
   if (error) throw error;
 
   const rows = (data || []).map((row) => {
-    // storageService fromRow is not exported; map lightly then hydrate via get path if needed
     const admin = (row as { admin_data?: Record<string, unknown> }).admin_data || {};
     const q = (row as { applicant_questionnaire?: Record<string, unknown> }).applicant_questionnaire || {};
     const candidate: Candidate = {
@@ -71,33 +122,11 @@ export async function listCheckInEntries(limit = 500): Promise<CheckInRow[]> {
     return asCheckInRow(candidate);
   });
 
-  // Prefer rows that completed check-in (have checkedInAt or instantly_checkin tag)
   const filtered = rows.filter((r) => {
     const tags = r.adminData?.tags || [];
     return Boolean(r.adminData?.checkedInAt) || tags.includes('instantly_checkin');
   });
   return filtered.length ? filtered : rows;
-}
-
-function aoHubEmailBodies(firstName: string): { subject: string; html: string; text: string } {
-  const first = firstName.trim() || 'there';
-  const hub = AO_HUB_URL;
-  const text =
-    `Hi ${first},\n\n` +
-    `You're invited to continue to our interview hub and grab a spot on the next info session.\n\n` +
-    `${hub}\n\n` +
-    `It takes less than 2 minutes.\n\n` +
-    `Best,\nAO Globe Life recruiting`;
-  return {
-    subject: 'Next step: AO Interview Hub',
-    text,
-    html:
-      `Hi ${first},<br/><br/>` +
-      `You're invited to continue to our interview hub and grab a spot on the next info session.<br/><br/>` +
-      `<a href="${hub}">Register here → ${hub}</a><br/><br/>` +
-      `It takes less than 2 minutes.<br/><br/>` +
-      `Best,<br/>AO Globe Life recruiting`,
-  };
 }
 
 async function getAccessToken(): Promise<string> {
@@ -108,13 +137,20 @@ async function getAccessToken(): Promise<string> {
 }
 
 /** Prefer Instantly thread reply when we have a matching hm_people row; else SMTP. */
-export async function sendAoHubInviteForCheckIn(candidateId: string): Promise<{ channel: 'instantly' | 'smtp' }> {
+export async function sendAoHubInviteForCheckIn(
+  candidateId: string,
+  template: CheckInEmailTemplate = defaultAoHubEmailTemplate(),
+): Promise<{ channel: 'instantly' | 'smtp' }> {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) throw new Error('Missing Supabase env');
   const full = await getCandidateById(candidateId);
   if (!full) throw new Error('Check-in not found.');
   const email = full.email.trim().toLowerCase();
   const token = await getAccessToken();
-  const bodies = aoHubEmailBodies(full.firstName);
+  const bodies = applyCheckInEmailMerge(template, {
+    firstName: full.firstName,
+    email,
+    aoHubUrl: AO_HUB_URL,
+  });
 
   const { data: hmPerson } = await supabase
     .from('hm_people')
@@ -132,7 +168,12 @@ export async function sendAoHubInviteForCheckIn(candidateId: string): Promise<{ 
         apikey: SUPABASE_ANON_KEY,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ person_id: hmPerson.id, template_key: 'ao_hub' }),
+      body: JSON.stringify({
+        person_id: hmPerson.id,
+        subject: bodies.subject,
+        body_text: bodies.text,
+        body_html: bodies.html,
+      }),
     });
     const json = (await res.json().catch(() => ({}))) as { error?: string };
     if (!res.ok) throw new Error(json.error || `Instantly send failed (${res.status})`);
