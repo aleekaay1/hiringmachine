@@ -79,7 +79,17 @@ const InterviewForm: React.FC = () => {
       if (err instanceof DuplicateApplicationError) {
         setErrors({ _form: err.message });
       } else {
-        setErrors({ _form: 'There was an issue saving. Please try again.' });
+        const msg =
+          err && typeof err === 'object' && 'message' in err
+            ? String((err as { message?: string }).message || '')
+            : err instanceof Error
+              ? err.message
+              : '';
+        setErrors({
+          _form: msg
+            ? `Could not save: ${msg}`
+            : 'There was an issue saving. Please try again (or open this page in a private window if you are logged into staff).',
+        });
       }
     } finally {
       setSubmitting(false);
