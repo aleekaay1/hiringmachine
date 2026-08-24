@@ -1,9 +1,10 @@
 import React from 'react';
-import { RefreshCw, RotateCcw, Send } from 'lucide-react';
+import { RefreshCw, RotateCcw, Send, Trash2 } from 'lucide-react';
 import {
   AO_HUB_URL,
   applyCheckInEmailMerge,
   defaultAoHubEmailTemplate,
+  deleteCheckInEntry,
   listCheckInEntries,
   sendAoHubInviteForCheckIn,
   type CheckInEmailTemplate,
@@ -30,6 +31,7 @@ const CheckInsPage: React.FC = () => {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [sendingId, setSendingId] = React.useState<string | null>(null);
+  const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [actionMsg, setActionMsg] = React.useState<string | null>(null);
   const [subject, setSubject] = React.useState(defaults.subject);
   const [body, setBody] = React.useState(defaults.body);
@@ -89,6 +91,26 @@ const CheckInsPage: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Send failed');
     } finally {
       setSendingId(null);
+    }
+  };
+
+  const deleteOne = async (row: CheckInRow) => {
+    const label = `${row.firstName} ${row.lastName}`.trim() || row.email;
+    if (!window.confirm(`Delete check-in for ${label}? This removes it from stats and cannot be undone.`)) {
+      return;
+    }
+    setDeletingId(row.id);
+    setError(null);
+    setActionMsg(null);
+    try {
+      await deleteCheckInEntry(row.id);
+      setActionMsg(`Deleted ${label}.`);
+      if (previewId === row.id) setPreviewId(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Delete failed');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -236,15 +258,26 @@ const CheckInsPage: React.FC = () => {
                       {already ? formatWhen(row.aoHubInviteSentAt) : 'Not sent'}
                     </td>
                     <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        disabled={already || sendingId === row.id}
-                        onClick={() => void sendOne(row)}
-                        className="hm-btn-brass inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <Send size={12} />
-                        {already ? 'Sent' : sendingId === row.id ? 'Sending…' : 'Send email'}
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={already || sendingId === row.id || deletingId === row.id}
+                          onClick={() => void sendOne(row)}
+                          className="hm-btn-brass inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <Send size={12} />
+                          {already ? 'Sent' : sendingId === row.id ? 'Sending…' : 'Send email'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={deletingId === row.id || sendingId === row.id}
+                          onClick={() => void deleteOne(row)}
+                          className="hm-btn-ghost inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-red-800 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          <Trash2 size={12} />
+                          {deletingId === row.id ? 'Deleting…' : 'Delete'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );

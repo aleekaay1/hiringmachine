@@ -223,3 +223,20 @@ export async function sendAoHubInviteForCheckIn(
 
   return { channel };
 }
+
+/** Remove a check-in so Home / Call workspace / Sent ahead stats drop it. */
+export async function deleteCheckInEntry(candidateId: string): Promise<void> {
+  const full = await getCandidateById(candidateId);
+  const email = String(full?.email || '').trim().toLowerCase();
+
+  const { error } = await supabase.from('candidates').delete().eq('id', candidateId);
+  if (error) throw error;
+
+  if (email) {
+    await supabase
+      .from('hm_people')
+      .delete()
+      .ilike('email', email)
+      .is('instantly_email_id', null);
+  }
+}
