@@ -140,12 +140,37 @@ export function sumInstantlyAnalytics(rows: unknown[]): InstantlyAnalyticsTotals
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue;
     const obj = row as Record<string, unknown>;
-    totals.sent += num(obj, ['emails_sent_count', 'sent', 'email_sent', 'emails_sent']);
-    totals.opened += num(obj, ['open_count', 'unique_open_count', 'opened', 'opens']);
-    totals.replies += num(obj, ['reply_count', 'unique_reply_count', 'replies', 'replied']);
-    totals.interested += num(obj, ['interested', 'lead_interested', 'interested_count']);
-    totals.bounced += num(obj, ['bounced_count', 'bounce_count', 'bounced', 'email_bounced']);
-    totals.unsubscribed += num(obj, ['unsubscribed_count', 'unsubscribe_count', 'unsubscribed']);
+    totals.sent += Math.max(
+      num(obj, ['emails_sent_count', 'emails_sent_count', 'sent', 'email_sent', 'emails_sent']),
+      num(obj, ['contacted_count']),
+    );
+    totals.opened += num(obj, [
+      'open_count',
+      'open_count_unique',
+      'unique_open_count',
+      'opened',
+      'opens',
+    ]);
+    totals.replies += num(obj, [
+      'reply_count',
+      'reply_count_unique',
+      'unique_reply_count',
+      'replies',
+      'replied',
+    ]);
+    totals.interested += num(obj, [
+      'interested',
+      'lead_interested',
+      'interested_count',
+      'total_opportunities',
+    ]);
+    totals.bounced += num(obj, ['bounced_count', 'bounced_count', 'bounce_count', 'bounced', 'email_bounced']);
+    totals.unsubscribed += num(obj, [
+      'unsubscribed_count',
+      'unsubscribed_count',
+      'unsubscribe_count',
+      'unsubscribed',
+    ]);
   }
   return totals;
 }

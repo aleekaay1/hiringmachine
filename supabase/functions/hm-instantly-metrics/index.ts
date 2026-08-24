@@ -5,6 +5,7 @@ import {
   json,
   serviceClient,
   sumInstantlyAnalytics,
+  userIsAuthenticated,
 } from '../_shared/hiringMachine.ts';
 
 type DailyPoint = { date: string; sent: number; opened: number; replies: number };
@@ -30,16 +31,23 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
   if (req.method === 'GET') return json(200, { ok: true, service: 'hm-instantly-metrics' });
   if (req.method !== 'POST') return json(405, { error: 'Method not allowed' });
-  if (!cronSecretOk(req)) return json(401, { error: 'Invalid cron secret' });
 
   const admin = serviceClient();
+  const cronOk = cronSecretOk(req);
+  const userOk = await userIsAuthenticated(req, admin);
+  if (!cronOk && !userOk) return json(401, { error: 'Unauthorized' });
+
   const campaignIds = (Deno.env.get('INSTANTLY_CAMPAIGN_IDS') || '')
     .split(',')
     .map((v) => v.trim())
     .filter(Boolean);
 
   const qs = new URLSearchParams();
-  for (const id of campaignIds) qs.append('ids', id);
+  for (const id of campaignIds) {
+    qs.append('id', id);
+    qs.append('ids', id);
+    qs.append('campaign_id', id);
+  }
 
   const analyticsPath = `/api/v2/campaigns/analytics${qs.toString() ? `?${qs}` : ''}`;
   const dailyPath = `/api/v2/campaigns/analytics/daily${qs.toString() ? `?${qs}` : ''}`;

@@ -6,6 +6,7 @@ import {
   displayName,
   displayPhone,
   loadHmDashboard,
+  refreshInstantlyMetrics,
   type HmDashboardData,
   type InstantlyDailyPoint,
 } from '../services/hiringMachineService';
@@ -123,8 +124,17 @@ const HiringMachineHome: React.FC<{ profile: UserProfile | null }> = ({ profile 
           <button
             type="button"
             onClick={() => {
-              setLoading(true);
-              void load();
+              void (async () => {
+                setLoading(true);
+                setError(null);
+                try {
+                  await refreshInstantlyMetrics();
+                  await load();
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : 'Could not refresh Instantly metrics');
+                  setLoading(false);
+                }
+              })();
             }}
             className="hm-btn-ghost inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-medium"
           >
