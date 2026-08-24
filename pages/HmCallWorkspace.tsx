@@ -158,7 +158,7 @@ const HmCallWorkspace: React.FC = () => {
         <div>
           <p className="hm-kicker">Call workspace</p>
           <h1 className="font-display text-3xl text-[#1c1915]">One lead. Call. Tag.</h1>
-          <p className="mt-1 text-sm text-[#5c554c]">AI-qualified Instantly replies with a phone number.</p>
+          <p className="mt-1 text-sm text-[#5c554c]">Check-ins and Instantly leads with a phone number. Call, then tag the outcome.</p>
         </div>
         <div className="flex items-center gap-2">
           <button type="button" onClick={() => setShowHistory(true)} className="hm-btn-ghost inline-flex items-center gap-1.5 rounded-full px-3 py-2 text-xs">
@@ -188,7 +188,7 @@ const HmCallWorkspace: React.FC = () => {
         <aside className="hm-card max-h-[72vh] overflow-y-auto rounded-2xl p-3">
           <p className="hm-kicker px-2 py-2">{people.length} in queue</p>
           {people.length === 0 && (
-            <p className="px-2 py-6 text-sm text-[#6f675c]">Queue is empty. When Instantly gets a positive reply and AI finds a phone, they show up here.</p>
+            <p className="px-2 py-6 text-sm text-[#6f675c]">Queue is empty. Check-ins with a phone number, and Instantly leads marked call-ready, appear here.</p>
           )}
           <ul className="space-y-1">
             {people.map((person) => {

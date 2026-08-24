@@ -221,6 +221,8 @@ export interface AdminData {
   checkedInAt?: string | null;
   /** ISO — staff sent AO Interview Hub invite from check-ins list. */
   aoHubInviteSentAt?: string | null;
+  /** ISO — last time this check-in was dialed from the hiring-machine call workspace. */
+  lastCalledAt?: string | null;
   /** ISO — automated 24h post–check-in leadership assessment reminder email was sent (at most once). */
   leadershipAssessmentReminder24hSentAt?: string | null;
   finalDecision?: 'Hired' | 'Not Hired';

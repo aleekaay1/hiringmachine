@@ -44,7 +44,7 @@ const SentAheadPage: React.FC = () => {
           <p className="hm-kicker">Output</p>
           <h1 className="font-display text-4xl text-[#1c1915]">Sent ahead</h1>
           <p className="mt-2 max-w-xl text-sm text-[#5c554c]">
-            People Edlyn tagged after a call. Each received the AO Interview Hub link.
+            People who already got the AO Interview Hub invite — from Check-ins or after a call.
           </p>
         </div>
         <button
@@ -77,7 +77,7 @@ const SentAheadPage: React.FC = () => {
             {people.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-12 text-center text-[#6f675c]">
-                  Nobody has been sent to AO Interview Hub yet.
+                  Nobody has been sent the AO Interview Hub invite yet. Send it from Check-ins or the call workspace.
                 </td>
               </tr>
             )}
