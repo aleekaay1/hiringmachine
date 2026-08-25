@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ClipboardList, PhoneCall, RefreshCw, Send } from 'lucide-react';
+import { ClipboardList, Mail, PhoneCall, RefreshCw, Send } from 'lucide-react';
 import { getCurrentUserProfile, type UserProfile } from '../services/accessControl';
 import {
   displayName,
@@ -158,6 +158,11 @@ const HiringMachineHome: React.FC<{ profile: UserProfile | null }> = ({ profile 
           <KpiCard label="Bounced" value={data?.instantly.bounced ?? '—'} />
           <KpiCard label="Unsubs" value={data?.instantly.unsubscribed ?? '—'} />
         </div>
+        <div className="mt-3">
+          <Link to="/replies" className="hm-btn-brass inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs">
+            <Mail size={14} /> Open Instantly replies
+          </Link>
+        </div>
       </section>
 
       <section>
@@ -177,7 +182,7 @@ const HiringMachineHome: React.FC<{ profile: UserProfile | null }> = ({ profile 
       <section>
         <p className="hm-kicker mb-3">Our funnel</p>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <KpiCard label="Shortlisted emails" value={data?.funnel.shortlisted ?? '—'} hint="Auto replies sent" />
+          <KpiCard label="Instantly replies" value={data?.funnel.replies ?? '—'} hint="Open Replies to read them" />
           <KpiCard label="Call ready" value={data?.funnel.callReady ?? '—'} hint="Phone extracted" />
           <KpiCard label="Called today" value={data?.funnel.calledToday ?? '—'} />
           <KpiCard label="Sent to AO Hub" value={data?.funnel.sentToHub ?? '—'} />

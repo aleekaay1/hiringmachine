@@ -36,7 +36,8 @@ export type AppSection =
   | 'account'
   | 'staff-directory'
   | 'sent-ahead'
-  | 'check-ins';
+  | 'check-ins'
+  | 'replies';
 
 export interface UserProfile {
   user_id: string;
@@ -311,6 +312,7 @@ const HIRING_MACHINE_SECTIONS: AppSection[] = [
   'pipeline-call',
   'sent-ahead',
   'check-ins',
+  'replies',
   'account',
   'pipeline-settings',
 ];
@@ -389,6 +391,7 @@ export function resolveAppSectionFromLocation(pathname: string, search: string):
   if (pathname === '/account') return 'account';
   if (pathname === '/sent-ahead') return 'sent-ahead';
   if (pathname === '/check-ins') return 'check-ins';
+  if (pathname === '/replies') return 'replies';
   if (pathname === '/pipeline') return 'pipeline';
   if (pathname === '/pipeline/lead-manager' || pathname.startsWith('/pipeline/lead-manager/')) {
     return 'pipeline-lead-manager';

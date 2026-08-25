@@ -63,12 +63,13 @@ export type HmDashboardData = {
   instantly: InstantlyTotals;
   daily: InstantlyDailyPoint[];
   pulledAt: string | null;
-  funnel: {
-    shortlisted: number;
-    callReady: number;
-    calledToday: number;
-    sentToHub: number;
-  };
+    funnel: {
+      shortlisted: number;
+      callReady: number;
+      calledToday: number;
+      sentToHub: number;
+      replies: number;
+    };
   needsCall: HmPerson[];
   sentAhead: HmPerson[];
 };
@@ -260,6 +261,7 @@ export async function loadHmDashboard(): Promise<HmDashboardData> {
       callReady: people.filter((p) => p.stage === 'call_ready' || p.stage === 'called').length,
       calledToday: people.filter((p) => p.last_called_at && p.last_called_at >= today).length,
       sentToHub: people.filter((p) => p.stage === 'sent_to_hub' || p.sent_to_hub_at).length,
+      replies: people.filter((p) => Boolean(p.last_reply_text || p.reply_snippet)).length,
     },
     needsCall: people.filter((p) => displayPhone(p) && p.stage !== 'not_interested').slice(0, 8),
     sentAhead: people.filter((p) => p.stage === 'sent_to_hub' || p.sent_to_hub_at).slice(0, 8),
@@ -278,6 +280,21 @@ export async function listHmSentAhead(): Promise<HmPerson[]> {
   return people
     .filter((p) => p.stage === 'sent_to_hub' || Boolean(p.sent_to_hub_at))
     .sort((a, b) => String(b.sent_to_hub_at || '').localeCompare(String(a.sent_to_hub_at || '')));
+}
+
+export async function listHmReplies(): Promise<HmPerson[]> {
+  const people = await loadMergedPeople();
+  return people
+    .filter((p) => Boolean(p.last_reply_text || p.reply_snippet))
+    .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+}
+
+export async function syncInstantlyReplies(): Promise<{ fetched: number; upserted: number }> {
+  const json = await invokeHmFunction('hm-instantly-replies', {});
+  return {
+    fetched: Number(json.fetched) || 0,
+    upserted: Number(json.upserted) || 0,
+  };
 }
 
 export async function updateHmPersonPhone(personId: string, phone: string, pipelineCandidateId?: string | null): Promise<void> {
