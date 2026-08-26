@@ -6,7 +6,14 @@ import {
   type PipelineCallRecord,
 } from './pipelineService';
 import type { PipelineCallDisposition } from './pipelineCallDispositions';
-import { listCheckInEntries, sendAoHubInviteForCheckIn, type CheckInRow } from './checkInService';
+import {
+  AO_HUB_URL,
+  applyCheckInEmailMerge,
+  defaultAoHubEmailTemplate,
+  listCheckInEntries,
+  sendAoHubInviteForCheckIn,
+  type CheckInRow,
+} from './checkInService';
 import { getCandidateById, saveCandidate } from './storageService';
 import { DEFAULT_ADMIN_DATA } from '../types';
 
@@ -432,20 +439,40 @@ export async function sendAoHubEmail(personId: string): Promise<void> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
   const anon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
   if (!supabaseUrl || !anon) throw new Error('Missing Supabase env');
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token;
   if (!token) throw new Error('Sign in again to send email.');
-  const res = await fetch(`${supabaseUrl}/functions/v1/hm-instantly-send`, {
+  const { data: person } = await supabase.from('hm_people').select('email, full_name').eq('id', personId).maybeSingle();
+  if (!person?.email) throw new Error('Person not found.');
+  const first = String(person.full_name || '').trim().split(/\s+/)[0] || 'there';
+  const bodies = applyCheckInEmailMerge(defaultAoHubEmailTemplate(), {
+    firstName: first,
+    email: String(person.email),
+    aoHubUrl: AO_HUB_URL,
+  });
+  const res = await fetch(`${supabaseUrl}/functions/v1/send-email`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
       apikey: anon,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ person_id: personId, template_key: 'ao_hub' }),
+    body: JSON.stringify({
+      to: String(person.email).trim().toLowerCase(),
+      subject: bodies.subject,
+      bodyHtml: bodies.html,
+      bodyText: bodies.text,
+      trigger: 'ao_hub_portal',
+    }),
   });
   const json = (await res.json().catch(() => ({}))) as { error?: string };
   if (!res.ok) throw new Error(json.error || `Send failed (${res.status})`);
+  const now = new Date().toISOString();
+  await supabase.from('hm_people').update({
+    sent_to_hub_at: now,
+    stage: 'sent_to_hub',
+    updated_at: now,
+  }).eq('id', personId);
 }
 
 export async function listHmCallRecords(people: HmPerson[]): Promise<PipelineCallRecord[]> {

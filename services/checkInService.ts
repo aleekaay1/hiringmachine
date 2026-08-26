@@ -139,11 +139,11 @@ async function getAccessToken(): Promise<string> {
   return token;
 }
 
-/** Prefer Instantly thread reply when we have a matching hm_people row; else SMTP. */
+/** Always send AO Hub invites from the portal via Gmail SMTP (never Instantly). */
 export async function sendAoHubInviteForCheckIn(
   candidateId: string,
   template: CheckInEmailTemplate = defaultAoHubEmailTemplate(),
-): Promise<{ channel: 'instantly' | 'smtp' }> {
+): Promise<{ channel: 'smtp' }> {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) throw new Error('Missing Supabase env');
   const full = await getCandidateById(candidateId);
   if (!full) throw new Error('Check-in not found.');
@@ -155,53 +155,24 @@ export async function sendAoHubInviteForCheckIn(
     aoHubUrl: AO_HUB_URL,
   });
 
-  const { data: hmPerson } = await supabase
-    .from('hm_people')
-    .select('id, instantly_email_id')
-    .ilike('email', email)
-    .maybeSingle();
-
-  let channel: 'instantly' | 'smtp' = 'smtp';
-
-  if (hmPerson?.id && hmPerson.instantly_email_id) {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/hm-instantly-send`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        apikey: SUPABASE_ANON_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        person_id: hmPerson.id,
-        subject: bodies.subject,
-        body_text: bodies.text,
-        body_html: bodies.html,
-      }),
-    });
-    const json = (await res.json().catch(() => ({}))) as { error?: string };
-    if (!res.ok) throw new Error(json.error || `Instantly send failed (${res.status})`);
-    channel = 'instantly';
-  } else {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/send-email`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        apikey: SUPABASE_ANON_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        to: email,
-        subject: bodies.subject,
-        bodyHtml: bodies.html,
-        bodyText: bodies.text,
-        trigger: 'ao_hub_checkin',
-        candidateId: full.id,
-      }),
-    });
-    const json = (await res.json().catch(() => ({}))) as { error?: string };
-    if (!res.ok) throw new Error(json.error || `Email send failed (${res.status})`);
-    channel = 'smtp';
-  }
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/send-email`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: SUPABASE_ANON_KEY,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      to: email,
+      subject: bodies.subject,
+      bodyHtml: bodies.html,
+      bodyText: bodies.text,
+      trigger: 'ao_hub_checkin',
+      candidateId: full.id,
+    }),
+  });
+  const json = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) throw new Error(json.error || `Email send failed (${res.status})`);
 
   const now = new Date().toISOString();
   const tags = Array.from(new Set([...(full.adminData?.tags || []), 'ao_hub_sent', 'instantly_checkin']));
@@ -224,7 +195,7 @@ export async function sendAoHubInviteForCheckIn(
     },
   });
 
-  return { channel };
+  return { channel: 'smtp' };
 }
 
 /** Remove a check-in so Home / Call workspace / Sent ahead stats drop it. */
