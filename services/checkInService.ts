@@ -116,6 +116,8 @@ export async function listCheckInEntries(limit = 500): Promise<CheckInRow[]> {
         salesExperience: String(q.salesExperience || ''),
         somethingAboutYourself: String(q.somethingAboutYourself || ''),
         legallyEntitledCanada: (q.legallyEntitledCanada as 'yes' | 'no') || 'yes',
+        province: String(q.province || ''),
+        comfortableVirtualEnvironment: (q.comfortableVirtualEnvironment as 'yes' | 'no') || undefined,
         resumeUrls: Array.isArray(q.resumeUrls) ? (q.resumeUrls as string[]) : [],
       },
     };

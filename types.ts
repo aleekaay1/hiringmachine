@@ -6,6 +6,8 @@ export interface ApplicantQuestionnaire {
   salesExperience: string;
   somethingAboutYourself: string;
   legallyEntitledCanada: 'yes' | 'no';
+  /** Check-in: province / territory */
+  province?: string;
   resumeUrls: string[];
   /** Normalized public profile URL (https://www.linkedin.com/in/…), optional alongside or instead of resumes */
   linkedinProfileUrl?: string;

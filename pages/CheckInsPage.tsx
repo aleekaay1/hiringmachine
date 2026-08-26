@@ -225,7 +225,8 @@ const CheckInsPage: React.FC = () => {
                 <th className="px-4 py-3 font-medium">Name</th>
                 <th className="px-4 py-3 font-medium">Email</th>
                 <th className="px-4 py-3 font-medium">Phone</th>
-                <th className="px-4 py-3 font-medium">City / role</th>
+                <th className="px-4 py-3 font-medium">Location</th>
+                <th className="px-4 py-3 font-medium">Eligible</th>
                 <th className="px-4 py-3 font-medium">Checked in</th>
                 <th className="px-4 py-3 font-medium">AO Hub</th>
                 <th className="px-4 py-3 font-medium">Action</th>
@@ -234,7 +235,7 @@ const CheckInsPage: React.FC = () => {
             <tbody>
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-[#6f675c]">
+                  <td colSpan={8} className="px-4 py-12 text-center text-[#6f675c]">
                     No check-ins yet. Put your site check-in URL in Instantly instead of the AO Hub link.
                   </td>
                 </tr>
@@ -249,7 +250,23 @@ const CheckInsPage: React.FC = () => {
                     <td className="px-4 py-3 text-[#5c554c]">{row.email}</td>
                     <td className="px-4 py-3 tabular-nums text-[#5c554c]">{row.phone || '—'}</td>
                     <td className="px-4 py-3 text-[#5c554c]">
-                      {[row.city, row.currentRole].filter(Boolean).join(' · ') || '—'}
+                      {[row.city, row.applicantQuestionnaire?.province].filter(Boolean).join(', ') || '—'}
+                    </td>
+                    <td className="px-4 py-3 text-[#5c554c]">
+                      {[
+                        row.applicantQuestionnaire?.legallyEntitledCanada === 'yes'
+                          ? 'Work-eligible'
+                          : row.applicantQuestionnaire?.legallyEntitledCanada === 'no'
+                            ? 'Not eligible'
+                            : null,
+                        row.applicantQuestionnaire?.comfortableVirtualEnvironment === 'yes'
+                          ? 'Remote OK'
+                          : row.applicantQuestionnaire?.comfortableVirtualEnvironment === 'no'
+                            ? 'Not remote'
+                            : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ') || '—'}
                     </td>
                     <td className="px-4 py-3 text-[#5c554c]">
                       {formatWhen(row.adminData?.checkedInAt || row.timestamp)}

@@ -1,13 +1,34 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
-import { Button, Input } from '../components/UI';
+import { Button, Input, Select } from '../components/UI';
 import {
   createCandidate,
   saveCandidate,
   DuplicateApplicationError,
 } from '../services/storageService';
 import { DEFAULT_ADMIN_DATA, PIPELINE_STAGE_AFTER_CHECK_IN } from '../types';
+
+const PROVINCE_OPTIONS = [
+  { value: 'AB', label: 'Alberta' },
+  { value: 'BC', label: 'British Columbia' },
+  { value: 'MB', label: 'Manitoba' },
+  { value: 'NB', label: 'New Brunswick' },
+  { value: 'NL', label: 'Newfoundland and Labrador' },
+  { value: 'NS', label: 'Nova Scotia' },
+  { value: 'NT', label: 'Northwest Territories' },
+  { value: 'NU', label: 'Nunavut' },
+  { value: 'ON', label: 'Ontario' },
+  { value: 'PE', label: 'Prince Edward Island' },
+  { value: 'QC', label: 'Quebec' },
+  { value: 'SK', label: 'Saskatchewan' },
+  { value: 'YT', label: 'Yukon' },
+];
+
+const YES_NO = [
+  { value: 'yes', label: 'Yes' },
+  { value: 'no', label: 'No' },
+];
 
 /**
  * Instantly campaign landing form — short tracking check-in only.
@@ -23,7 +44,9 @@ const InterviewForm: React.FC = () => {
     email: '',
     phone: '',
     city: '',
-    currentRole: '',
+    province: '',
+    legallyEntitledCanada: '' as '' | 'yes' | 'no',
+    comfortableRemote: '' as '' | 'yes' | 'no',
   });
 
   const validate = (): boolean => {
@@ -33,6 +56,10 @@ const InterviewForm: React.FC = () => {
     if (!form.email.trim()) e.email = 'Required';
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = 'Invalid email';
     if (!form.phone.trim()) e.phone = 'Required';
+    if (!form.city.trim()) e.city = 'Required';
+    if (!form.province) e.province = 'Required';
+    if (!form.legallyEntitledCanada) e.legallyEntitledCanada = 'Required';
+    if (!form.comfortableRemote) e.comfortableRemote = 'Required';
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -52,11 +79,13 @@ const InterviewForm: React.FC = () => {
         city: form.city.trim(),
         applicantQuestionnaire: {
           occupation: '',
-          currentRole: form.currentRole.trim(),
+          currentRole: '',
           backgroundAreas: [],
           salesExperience: '',
           somethingAboutYourself: '',
-          legallyEntitledCanada: 'yes',
+          legallyEntitledCanada: form.legallyEntitledCanada as 'yes' | 'no',
+          province: form.province,
+          comfortableVirtualEnvironment: form.comfortableRemote as 'yes' | 'no',
           resumeUrls: [],
         },
       });
@@ -150,14 +179,39 @@ const InterviewForm: React.FC = () => {
             required
           />
           <Input
-            label="City (optional)"
+            label="City"
             value={form.city}
             onChange={(ev) => setForm({ ...form, city: ev.target.value })}
+            error={errors.city}
+            required
           />
-          <Input
-            label="Current role / company (optional)"
-            value={form.currentRole}
-            onChange={(ev) => setForm({ ...form, currentRole: ev.target.value })}
+          <Select
+            label="Province / Territory"
+            value={form.province}
+            onChange={(ev) => setForm({ ...form, province: ev.target.value })}
+            options={PROVINCE_OPTIONS}
+            error={errors.province}
+            required
+          />
+          <Select
+            label="Are you legally entitled to work in Canada?"
+            value={form.legallyEntitledCanada}
+            onChange={(ev) =>
+              setForm({ ...form, legallyEntitledCanada: ev.target.value as 'yes' | 'no' })
+            }
+            options={YES_NO}
+            error={errors.legallyEntitledCanada}
+            required
+          />
+          <Select
+            label="Are you comfortable working in a 100% remote environment (work from home)?"
+            value={form.comfortableRemote}
+            onChange={(ev) =>
+              setForm({ ...form, comfortableRemote: ev.target.value as 'yes' | 'no' })
+            }
+            options={YES_NO}
+            error={errors.comfortableRemote}
+            required
           />
 
           {errors._form && (
