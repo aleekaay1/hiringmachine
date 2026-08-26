@@ -48,17 +48,24 @@ Deno.serve(async (req) => {
     qs.append('ids', id);
     qs.append('campaign_id', id);
   }
+  // Instantly UI "Last 4 weeks" — without start_date the API can return a shorter default window.
+  const start = new Date();
+  start.setUTCDate(start.getUTCDate() - 90);
+  qs.set('start_date', start.toISOString().slice(0, 10));
 
   const analyticsPath = `/api/v2/campaigns/analytics${qs.toString() ? `?${qs}` : ''}`;
   const dailyPath = `/api/v2/campaigns/analytics/daily${qs.toString() ? `?${qs}` : ''}`;
+  const overviewPath = `/api/v2/campaigns/analytics/overview${qs.toString() ? `?${qs}` : ''}`;
 
-  const [analyticsRes, dailyRes] = await Promise.all([
+  const [analyticsRes, dailyRes, overviewRes] = await Promise.all([
     instantlyFetch(analyticsPath),
     instantlyFetch(dailyPath),
+    instantlyFetch(overviewPath),
   ]);
 
   const analyticsJson = await analyticsRes.json().catch(() => null);
   const dailyJson = await dailyRes.json().catch(() => null);
+  const overviewJson = await overviewRes.json().catch(() => null);
   if (!analyticsRes.ok) {
     return json(502, { error: 'Instantly analytics failed', detail: analyticsJson });
   }
@@ -75,8 +82,18 @@ Deno.serve(async (req) => {
     : Array.isArray((dailyJson as { items?: unknown[] })?.items)
       ? (dailyJson as { items: unknown[] }).items
       : [];
+  const overviewRows = Array.isArray(overviewJson)
+    ? overviewJson
+    : overviewJson && typeof overviewJson === 'object'
+      ? [overviewJson]
+      : [];
 
   const totals = sumInstantlyAnalytics(analyticsRows);
+  const overviewTotals = overviewRes.ok ? sumInstantlyAnalytics(overviewRows) : totals;
+  totals.sent = Math.max(totals.sent, overviewTotals.sent);
+  totals.opened = Math.max(totals.opened, overviewTotals.opened);
+  totals.replies = Math.max(totals.replies, overviewTotals.replies);
+  totals.interested = Math.max(totals.interested, overviewTotals.interested);
   const daily = parseDaily(dailyRows);
   const payload = {
     totals,

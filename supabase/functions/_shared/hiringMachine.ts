@@ -140,9 +140,10 @@ export function sumInstantlyAnalytics(rows: unknown[]): InstantlyAnalyticsTotals
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue;
     const obj = row as Record<string, unknown>;
+    // Instantly's campaign "Sent" card follows sequence started (contacted), not only emails_sent_count.
     totals.sent += Math.max(
-      num(obj, ['emails_sent_count', 'emails_sent_count', 'sent', 'email_sent', 'emails_sent']),
-      num(obj, ['contacted_count']),
+      num(obj, ['contacted_count', 'new_leads_contacted_count', 'leads_contacted']),
+      num(obj, ['emails_sent_count', 'emails_sent_count', 'emails_sent', 'email_sent', 'sent']),
     );
     totals.opened += num(obj, [
       'open_count',
@@ -159,10 +160,10 @@ export function sumInstantlyAnalytics(rows: unknown[]): InstantlyAnalyticsTotals
       'replied',
     ]);
     totals.interested += num(obj, [
+      'total_opportunities',
       'interested',
       'lead_interested',
       'interested_count',
-      'total_opportunities',
     ]);
     totals.bounced += num(obj, ['bounced_count', 'bounced_count', 'bounce_count', 'bounced', 'email_bounced']);
     totals.unsubscribed += num(obj, [

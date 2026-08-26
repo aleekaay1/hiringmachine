@@ -116,7 +116,7 @@ const HiringMachineHome: React.FC<{ profile: UserProfile | null }> = ({ profile 
           <p className="hm-kicker">Hiring machine</p>
           <h1 className="font-display text-4xl text-[#1c1915] sm:text-5xl">Good day, {first}.</h1>
           <p className="mt-2 max-w-xl text-sm text-[#5c554c]">
-            Instantly links to your check-in form. Track who showed up, then send the AO Interview Hub invite when you shortlist them.
+            Instantly numbers come from campaign analytics (same as Instantly). Check-ins are people who filled your form — that can be fewer than replies.
           </p>
         </div>
         <div className="flex items-center gap-3">
