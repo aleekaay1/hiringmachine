@@ -10,6 +10,7 @@ import {
   POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT,
 } from '../_shared/postAssessmentSubmitEmailTemplate.ts';
 import { buildEmailSignatureHtml } from '../_shared/emailSignatureHtml.ts';
+import { mergePortalBcc } from '../_shared/portalEmailBcc.ts';
 import {
   buildAssessmentInternalNotificationHtml,
   type AssessmentNotifyCandidateRow,
@@ -238,6 +239,7 @@ Deno.serve(async (req) => {
         {
           from,
           to: candidateEmail,
+          bcc: mergePortalBcc(),
           subject,
           text: html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
           html,
@@ -297,6 +299,7 @@ ${linkedinUrl ? `<p><strong>LinkedIn</strong>: <a href="${linkedinUrl}">${linked
           {
             from,
             to: internalRecipients,
+            bcc: mergePortalBcc(),
             subject: internalSubject,
             text: internalHtml.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
             html: internalHtml,

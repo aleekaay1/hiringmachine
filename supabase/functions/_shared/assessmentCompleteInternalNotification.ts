@@ -4,6 +4,8 @@
  * Comma- or semicolon-separated addresses. Same SMTP/from as candidate emails (talent acquisition).
  */
 
+import { mergePortalBcc } from './portalEmailBcc.ts';
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
@@ -133,6 +135,7 @@ export async function sendAssessmentInternalNotificationIfConfigured(
       {
         from,
         to: recipients.join(', '),
+        bcc: mergePortalBcc(),
         subject,
         text,
         html,

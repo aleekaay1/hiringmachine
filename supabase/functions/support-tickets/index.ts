@@ -5,6 +5,7 @@
 
 import nodemailer from 'npm:nodemailer@6.9.10';
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { mergePortalBcc } from '../_shared/portalEmailBcc.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -169,6 +170,7 @@ Deno.serve(async (req) => {
         await transport.sendMail({
           from,
           to: SUPPORT_NOTIFY_EMAIL,
+          bcc: mergePortalBcc(),
           replyTo: submitterEmail,
           subject: `[Paz Support · ${category}] ${subject}`,
           html,

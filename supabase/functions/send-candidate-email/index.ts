@@ -10,6 +10,7 @@ import {
   POST_ASSESSMENT_SUBMIT_EMAIL_SUBJECT,
 } from '../_shared/postAssessmentSubmitEmailTemplate.ts';
 import { buildEmailSignatureHtml } from '../_shared/emailSignatureHtml.ts';
+import { mergePortalBcc } from '../_shared/portalEmailBcc.ts';
 import { ZOOM_MEETING_URL } from '../_shared/hiringUrls.ts';
 import { buildAddToCalendarEmailHtml, buildGoogleCalendarUrlForEmail } from '../_shared/calendarInvite.ts';
 import {
@@ -182,6 +183,7 @@ Deno.serve(async (req) => {
         {
           from,
           to: candidateEmail,
+          bcc: mergePortalBcc(),
           subject,
           ...(isPostCheckin ? { html } : { html, text: html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() }),
         },

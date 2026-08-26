@@ -6,6 +6,7 @@ import nodemailer from 'npm:nodemailer@6.9.10';
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import { wrapTransactionalEmailHtml } from './emailHtmlShell.ts';
 import { insertEmailSendLog } from './emailSendLog.ts';
+import { mergePortalBcc } from './portalEmailBcc.ts';
 import {
   buildStage3AssessmentLinkHtml,
   getAssessmentLookupUrlForEdge,
@@ -78,7 +79,7 @@ export async function sendStage3AssessmentLinkEmail(input: {
       {
         from,
         to,
-        ...(bccList.length ? { bcc: bccList } : {}),
+        bcc: mergePortalBcc(bccList),
         subject,
         html,
         text: html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),

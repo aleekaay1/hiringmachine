@@ -7,6 +7,7 @@ import nodemailer from 'npm:nodemailer@6.9.10';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { appendCandidateEmailLog } from '../_shared/candidateEmailLog.ts';
 import { insertEmailSendLog } from '../_shared/emailSendLog.ts';
+import { mergePortalBcc } from '../_shared/portalEmailBcc.ts';
 import {
   buildLeadershipAssessmentReminder24hHtml,
   LEADERSHIP_ASSESSMENT_REMINDER_24H_SUBJECT,
@@ -160,6 +161,7 @@ Deno.serve(async (req) => {
               {
                 from,
                 to: email,
+                bcc: mergePortalBcc(),
                 subject,
                 text: html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
                 html,

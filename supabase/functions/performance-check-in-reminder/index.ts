@@ -7,6 +7,7 @@
 import nodemailer from 'npm:nodemailer@6.9.10';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { insertEmailSendLog } from '../_shared/emailSendLog.ts';
+import { mergePortalBcc } from '../_shared/portalEmailBcc.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -366,6 +367,7 @@ Deno.serve(async (req) => {
           await transport.sendMail({
             from: fromEmail,
             to: email,
+            bcc: mergePortalBcc(),
             subject,
             html: buildEmailHtml({
               firstName,
