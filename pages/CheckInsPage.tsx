@@ -25,6 +25,35 @@ function formatWhen(iso: string | null | undefined): string {
   }
 }
 
+const PROVINCE_LABELS: Record<string, string> = {
+  AB: 'Alberta',
+  BC: 'British Columbia',
+  MB: 'Manitoba',
+  NB: 'New Brunswick',
+  NL: 'Newfoundland and Labrador',
+  NS: 'Nova Scotia',
+  NT: 'Northwest Territories',
+  NU: 'Nunavut',
+  ON: 'Ontario',
+  PE: 'Prince Edward Island',
+  QC: 'Quebec',
+  SK: 'Saskatchewan',
+  YT: 'Yukon',
+};
+
+function yesNo(value?: string | null): string {
+  if (value === 'yes') return 'Yes';
+  if (value === 'no') return 'No';
+  return '—';
+}
+
+function isNotEligibleCanada(row: CheckInRow): boolean {
+  return (
+    row.applicantQuestionnaire?.legallyEntitledCanada === 'no' ||
+    (row.adminData?.tags || []).includes('not_eligible_canada')
+  );
+}
+
 const CheckInsPage: React.FC = () => {
   const defaults = React.useMemo(() => defaultAoHubEmailTemplate(), []);
   const [rows, setRows] = React.useState<CheckInRow[]>([]);
@@ -36,6 +65,7 @@ const CheckInsPage: React.FC = () => {
   const [subject, setSubject] = React.useState(defaults.subject);
   const [body, setBody] = React.useState(defaults.body);
   const [previewId, setPreviewId] = React.useState<string | null>(null);
+  const [openId, setOpenId] = React.useState<string | null>(null);
 
   const template: CheckInEmailTemplate = { subject, body };
 
@@ -56,8 +86,9 @@ const CheckInsPage: React.FC = () => {
     void load();
   }, [load]);
 
-  const pending = rows.filter((r) => !r.aoHubInviteSentAt).length;
+  const pending = rows.filter((r) => !r.aoHubInviteSentAt && !isNotEligibleCanada(r)).length;
   const sent = rows.filter((r) => r.aoHubInviteSentAt).length;
+  const notEligible = rows.filter((r) => isNotEligibleCanada(r)).length;
   const previewRow = rows.find((r) => r.id === previewId) || rows[0] || null;
   const preview = previewRow
     ? applyCheckInEmailMerge(template, {
@@ -121,7 +152,7 @@ const CheckInsPage: React.FC = () => {
           <p className="hm-kicker">Tracking</p>
           <h1 className="font-display text-4xl text-[#1c1915]">Check-ins</h1>
           <p className="mt-2 max-w-xl text-sm text-[#5c554c]">
-            Edit the email below, then send it to any entry. Tokens: {'{{firstName}}'}, {'{{aoHubUrl}}'}, {'{{email}}'}.
+            Click a name to see the full form. People who are not eligible to work in Canada are flagged and cannot be sent the AO Hub invite.
           </p>
         </div>
         <button
@@ -137,7 +168,7 @@ const CheckInsPage: React.FC = () => {
         </button>
       </header>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-4">
         <div className="hm-card rounded-2xl px-4 py-4">
           <p className="hm-kicker">Total check-ins</p>
           <p className="mt-2 font-display text-3xl tabular-nums text-[#1c1915]">{rows.length}</p>
@@ -149,6 +180,10 @@ const CheckInsPage: React.FC = () => {
         <div className="hm-card rounded-2xl px-4 py-4">
           <p className="hm-kicker">AO Hub sent</p>
           <p className="mt-2 font-display text-3xl tabular-nums text-[#1c1915]">{sent}</p>
+        </div>
+        <div className="hm-card rounded-2xl px-4 py-4">
+          <p className="hm-kicker">Not eligible (Canada)</p>
+          <p className="mt-2 font-display text-3xl tabular-nums text-[#1c1915]">{notEligible}</p>
         </div>
       </div>
 
@@ -242,26 +277,38 @@ const CheckInsPage: React.FC = () => {
               )}
               {rows.map((row) => {
                 const already = Boolean(row.aoHubInviteSentAt);
+                const notEligible = isNotEligibleCanada(row);
+                const open = openId === row.id;
+                const province = row.applicantQuestionnaire?.province || '';
+                const q = row.applicantQuestionnaire;
                 return (
-                  <tr key={row.id} className="border-t border-[#eadfce]">
+                  <React.Fragment key={row.id}>
+                  <tr className={`border-t border-[#eadfce] ${notEligible ? 'bg-red-50/70' : ''}`}>
                     <td className="px-4 py-3 font-medium text-[#1c1915]">
-                      {row.firstName} {row.lastName}
+                      <button type="button" onClick={() => setOpenId(open ? null : row.id)} className="text-left">
+                        {row.firstName} {row.lastName}
+                      </button>
+                      {notEligible && (
+                        <span className="ml-2 inline-flex rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-800">
+                          Not eligible
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-[#5c554c]">{row.email}</td>
                     <td className="px-4 py-3 tabular-nums text-[#5c554c]">{row.phone || '—'}</td>
                     <td className="px-4 py-3 text-[#5c554c]">
-                      {[row.city, row.applicantQuestionnaire?.province].filter(Boolean).join(', ') || '—'}
+                      {[row.city, PROVINCE_LABELS[province] || province].filter(Boolean).join(', ') || '—'}
                     </td>
                     <td className="px-4 py-3 text-[#5c554c]">
                       {[
-                        row.applicantQuestionnaire?.legallyEntitledCanada === 'yes'
+                        q?.legallyEntitledCanada === 'yes'
                           ? 'Work-eligible'
-                          : row.applicantQuestionnaire?.legallyEntitledCanada === 'no'
+                          : q?.legallyEntitledCanada === 'no'
                             ? 'Not eligible'
                             : null,
-                        row.applicantQuestionnaire?.comfortableVirtualEnvironment === 'yes'
+                        q?.comfortableVirtualEnvironment === 'yes'
                           ? 'Remote OK'
-                          : row.applicantQuestionnaire?.comfortableVirtualEnvironment === 'no'
+                          : q?.comfortableVirtualEnvironment === 'no'
                             ? 'Not remote'
                             : null,
                       ]
@@ -272,18 +319,18 @@ const CheckInsPage: React.FC = () => {
                       {formatWhen(row.adminData?.checkedInAt || row.timestamp)}
                     </td>
                     <td className="px-4 py-3 text-[#5c554c]">
-                      {already ? formatWhen(row.aoHubInviteSentAt) : 'Not sent'}
+                      {already ? formatWhen(row.aoHubInviteSentAt) : notEligible ? 'Blocked' : 'Not sent'}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <button
                           type="button"
-                          disabled={already || sendingId === row.id || deletingId === row.id}
+                          disabled={already || notEligible || sendingId === row.id || deletingId === row.id}
                           onClick={() => void sendOne(row)}
                           className="hm-btn-brass inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           <Send size={12} />
-                          {already ? 'Sent' : sendingId === row.id ? 'Sending…' : 'Send email'}
+                          {already ? 'Sent' : notEligible ? 'Blocked' : sendingId === row.id ? 'Sending…' : 'Send email'}
                         </button>
                         <button
                           type="button"
@@ -297,6 +344,24 @@ const CheckInsPage: React.FC = () => {
                       </div>
                     </td>
                   </tr>
+                  {open && (
+                    <tr className="border-t border-[#eadfce] bg-[#faf6ef]">
+                      <td colSpan={8} className="px-4 py-4">
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 text-sm text-[#3f3a34]">
+                          <p><span className="hm-kicker">First name</span><br />{row.firstName || '—'}</p>
+                          <p><span className="hm-kicker">Last name</span><br />{row.lastName || '—'}</p>
+                          <p><span className="hm-kicker">Email</span><br />{row.email || '—'}</p>
+                          <p><span className="hm-kicker">Phone</span><br />{row.phone || '—'}</p>
+                          <p><span className="hm-kicker">City</span><br />{row.city || '—'}</p>
+                          <p><span className="hm-kicker">Province</span><br />{PROVINCE_LABELS[province] || province || '—'}</p>
+                          <p><span className="hm-kicker">Legally entitled to work in Canada</span><br />{yesNo(q?.legallyEntitledCanada)}</p>
+                          <p><span className="hm-kicker">Comfortable 100% remote</span><br />{yesNo(q?.comfortableVirtualEnvironment)}</p>
+                          <p><span className="hm-kicker">Checked in</span><br />{formatWhen(row.adminData?.checkedInAt || row.timestamp)}</p>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 );
               })}
             </tbody>

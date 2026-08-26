@@ -48,22 +48,7 @@ const InstantlyRepliesPage: React.FC = () => {
   }, []);
 
   React.useEffect(() => {
-    void (async () => {
-      setSyncing(true);
-      try {
-        const result = await syncInstantlyReplies();
-        setActionMsg(
-          result.upserted
-            ? `Synced ${result.upserted} Instantly ${result.upserted === 1 ? 'reply' : 'replies'}.`
-            : 'No new Instantly replies.',
-        );
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Could not sync Instantly replies');
-      } finally {
-        setSyncing(false);
-        await load();
-      }
-    })();
+    void load();
   }, [load]);
 
   const refresh = async () => {
@@ -92,7 +77,7 @@ const InstantlyRepliesPage: React.FC = () => {
           <p className="hm-kicker">Instantly</p>
           <h1 className="font-display text-4xl text-[#1c1915]">Replies</h1>
           <p className="mt-2 max-w-xl text-sm text-[#5c554c]">
-            Pulled from Instantly Unibox via API — name, email, phone, campaign, and what they wrote.
+            Saved in your database. Opening this page is instant; Sync replies pulls the latest from Instantly.
           </p>
         </div>
         <button
@@ -115,7 +100,7 @@ const InstantlyRepliesPage: React.FC = () => {
           <p className="hm-kicker px-2 py-2">{people.length} replies</p>
           {people.length === 0 && (
             <p className="px-2 py-6 text-sm text-[#6f675c]">
-              No Instantly replies yet. Click Sync, or wait until someone replies to the campaign.
+              No Instantly replies saved yet. Click Sync replies to pull the latest from Instantly.
             </p>
           )}
           <ul className="space-y-1">

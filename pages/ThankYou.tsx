@@ -8,6 +8,7 @@ const ThankYou: React.FC = () => {
   const state = (location.state as {
     fromMergedAssessment?: boolean;
     fromCheckin?: boolean;
+    notEligibleCanada?: boolean;
   } | null) || null;
 
   return (
@@ -21,7 +22,15 @@ const ThankYou: React.FC = () => {
         <p className="mb-6 text-sm font-medium text-[#005EB8]">AO Paz Globelife</p>
 
         <div className="max-w-md space-y-4 text-gray-600">
-          {state?.fromCheckin ? (
+          {state?.fromCheckin && state?.notEligibleCanada ? (
+            <>
+              <p className="text-lg text-gray-900">We received your check-in.</p>
+              <p>
+                This role requires that you are legally entitled to work in Canada. Because you indicated you are not, we are not able to move you forward in this process.
+              </p>
+              <p className="mt-8 text-sm text-gray-400">Thank you for your interest and your time.</p>
+            </>
+          ) : state?.fromCheckin ? (
             <>
               <p className="text-lg">Your check-in was received.</p>
               <p>

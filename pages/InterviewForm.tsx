@@ -97,12 +97,32 @@ const InterviewForm: React.FC = () => {
           pipelineStage: PIPELINE_STAGE_AFTER_CHECK_IN,
           checkedInAt: now,
           tags: Array.from(
-            new Set([...(created.adminData?.tags || []), 'instantly_checkin']),
+            new Set([
+              ...(created.adminData?.tags || []),
+              'instantly_checkin',
+              ...(form.legallyEntitledCanada === 'no' ? ['not_eligible_canada'] : []),
+            ]),
           ),
-          nextStep: 'Awaiting shortlist / AO Hub invite',
+          nextStep:
+            form.legallyEntitledCanada === 'no'
+              ? 'Not eligible — not legally entitled to work in Canada'
+              : 'Awaiting shortlist / AO Hub invite',
+          questionnaireDisqualified:
+            form.legallyEntitledCanada === 'no'
+              ? {
+                  at: now,
+                  questionKey: 'legallyEntitledCanada',
+                  reason: 'Not legally entitled to work in Canada.',
+                }
+              : created.adminData?.questionnaireDisqualified || null,
         },
       });
-      navigate('/thank-you', { state: { fromCheckin: true } });
+      navigate('/thank-you', {
+        state: {
+          fromCheckin: true,
+          notEligibleCanada: form.legallyEntitledCanada === 'no',
+        },
+      });
     } catch (err) {
       console.error(err);
       if (err instanceof DuplicateApplicationError) {

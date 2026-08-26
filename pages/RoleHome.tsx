@@ -7,6 +7,7 @@ import {
   displayPhone,
   loadHmDashboard,
   refreshInstantlyMetrics,
+  syncInstantlyReplies,
   type HmDashboardData,
   type InstantlyDailyPoint,
 } from '../services/hiringMachineService';
@@ -128,7 +129,7 @@ const HiringMachineHome: React.FC<{ profile: UserProfile | null }> = ({ profile 
                 setLoading(true);
                 setError(null);
                 try {
-                  await refreshInstantlyMetrics();
+                  await Promise.all([refreshInstantlyMetrics(), syncInstantlyReplies()]);
                   await load();
                 } catch (err) {
                   setError(err instanceof Error ? err.message : 'Could not refresh Instantly metrics');

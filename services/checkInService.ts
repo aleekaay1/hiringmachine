@@ -108,6 +108,7 @@ export async function listCheckInEntries(limit = 500): Promise<CheckInRow[]> {
           : [],
         checkedInAt: typeof admin.checkedInAt === 'string' ? admin.checkedInAt : null,
         aoHubInviteSentAt: typeof admin.aoHubInviteSentAt === 'string' ? admin.aoHubInviteSentAt : null,
+        questionnaireDisqualified: (admin.questionnaireDisqualified as Candidate['adminData'] extends { questionnaireDisqualified?: infer T } ? T : never) || null,
       },
       applicantQuestionnaire: {
         occupation: String(q.occupation || ''),
