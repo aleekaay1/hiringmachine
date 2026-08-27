@@ -7,6 +7,7 @@ import {
   saveCandidate,
   DuplicateApplicationError,
 } from '../services/storageService';
+import { notifyCheckInStaff } from '../services/checkInService';
 import { DEFAULT_ADMIN_DATA, PIPELINE_STAGE_AFTER_CHECK_IN } from '../types';
 
 const PROVINCE_OPTIONS = [
@@ -117,6 +118,7 @@ const InterviewForm: React.FC = () => {
               : created.adminData?.questionnaireDisqualified || null,
         },
       });
+      await notifyCheckInStaff(created.id);
       navigate('/thank-you', {
         state: {
           fromCheckin: true,

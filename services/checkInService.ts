@@ -198,6 +198,28 @@ export async function sendAoHubInviteForCheckIn(
   return { channel: 'smtp' };
 }
 
+/** Fire-and-forget staff email when someone submits check-in. Never throws. */
+export async function notifyCheckInStaff(candidateId: string): Promise<void> {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !candidateId) return;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/checkin-staff-notify`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        apikey: SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ candidateId }),
+    });
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      console.warn('check-in staff notify failed', json.error || res.status);
+    }
+  } catch (err) {
+    console.warn('check-in staff notify failed', err);
+  }
+}
+
 /** Remove a check-in so Home / Call workspace / Sent ahead stats drop it. */
 export async function deleteCheckInEntry(candidateId: string): Promise<void> {
   const full = await getCandidateById(candidateId);
