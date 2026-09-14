@@ -456,6 +456,9 @@ verify_jwt = false
 [functions.hm-instantly-replies]
 verify_jwt = false
 
+[functions.hm-bulk-email]
+verify_jwt = false
+
 [functions.checkin-staff-notify]
 verify_jwt = false
 

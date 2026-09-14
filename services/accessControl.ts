@@ -37,7 +37,8 @@ export type AppSection =
   | 'staff-directory'
   | 'sent-ahead'
   | 'check-ins'
-  | 'replies';
+  | 'replies'
+  | 'bulk-email';
 
 export interface UserProfile {
   user_id: string;
@@ -313,6 +314,7 @@ const HIRING_MACHINE_SECTIONS: AppSection[] = [
   'sent-ahead',
   'check-ins',
   'replies',
+  'bulk-email',
   'account',
   'pipeline-settings',
 ];
@@ -392,6 +394,7 @@ export function resolveAppSectionFromLocation(pathname: string, search: string):
   if (pathname === '/sent-ahead') return 'sent-ahead';
   if (pathname === '/check-ins') return 'check-ins';
   if (pathname === '/replies') return 'replies';
+  if (pathname === '/bulk-email') return 'bulk-email';
   if (pathname === '/pipeline') return 'pipeline';
   if (pathname === '/pipeline/lead-manager' || pathname.startsWith('/pipeline/lead-manager/')) {
     return 'pipeline-lead-manager';

@@ -3,6 +3,7 @@ import {
   ClipboardList,
   Home,
   Mail,
+  Mails,
   PhoneCall,
   Send,
   User,
@@ -47,6 +48,13 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: Mail,
     tourId: 'nav-replies',
     items: [{ name: 'Replies', route: '/replies', icon: Mail, section: 'replies' }],
+  },
+  {
+    id: 'bulk-email',
+    label: 'Bulk email',
+    icon: Mails,
+    tourId: 'nav-bulk-email',
+    items: [{ name: 'Bulk email', route: '/bulk-email', icon: Mails, section: 'bulk-email' }],
   },
   {
     id: 'call',
