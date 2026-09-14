@@ -160,6 +160,102 @@ Deno.serve(async (req) => {
   const userId = userOk ? await getAuthUserId(req) : null;
 
   try {
+    if (action === 'test_send' || action === 'send_test') {
+      const to = normalizeEmail(body.to || body.email);
+      const displayName = str(body.name || body.full_name || body.fullName) || 'there';
+      const subjectTpl = str(body.subject);
+      const bodyTextTpl = str(body.body_text || body.bodyText || body.text);
+      const bodyHtmlTpl = str(body.body_html || body.bodyHtml || body.html);
+      if (!to || !to.includes('@')) return json(400, { error: 'Valid test email is required' });
+      if (!subjectTpl || (!bodyTextTpl && !bodyHtmlTpl)) {
+        return json(400, { error: 'Subject and body are required' });
+      }
+
+      const fromEmail = normalizeEmail(body.from_email || body.fromEmail) || normalizeEmail(defaultFromEmail());
+      const sendDate = todayUtcDate();
+      const { data: dailyRow } = await admin
+        .from('hm_bulk_daily_counts')
+        .select('sent_count')
+        .eq('send_date', sendDate)
+        .eq('from_email', fromEmail)
+        .maybeSingle();
+      const dailySent = dailyRow?.sent_count || 0;
+      if (dailySent >= HARD_DAILY_CAP) {
+        return json(429, {
+          error: `Daily cap reached (${HARD_DAILY_CAP}) for ${fromEmail}. Try again tomorrow.`,
+          daily_sent: dailySent,
+          daily_cap: HARD_DAILY_CAP,
+        });
+      }
+
+      const subject = applyMerge(subjectTpl, displayName, to);
+      const text = applyMerge(bodyTextTpl || bodyHtmlTpl.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''), displayName, to);
+      const html = bodyHtmlTpl
+        ? applyMerge(bodyHtmlTpl, displayName, to)
+        : text.replace(/\n/g, '<br/>');
+      const subjectWithTag = subject.startsWith('[TEST]') ? subject : `[TEST] ${subject}`;
+
+      try {
+        const transport = getTransport();
+        await new Promise<void>((resolve, reject) => {
+          transport.sendMail(
+            {
+              from: fromEmail,
+              to,
+              bcc: mergePortalBcc(),
+              subject: subjectWithTag,
+              text,
+              html,
+            },
+            (err: Error | null) => (err ? reject(err) : resolve()),
+          );
+        });
+      } catch (sendErr) {
+        const msg = sendErr instanceof Error ? sendErr.message : String(sendErr);
+        await insertEmailSendLog(admin, {
+          source: 'hm-bulk-email',
+          trigger_label: 'bulk:test',
+          from_email: fromEmail,
+          to_email: to,
+          subject: subjectWithTag,
+          sent_by_user_id: userId,
+          status: 'failed',
+          error_message: msg,
+          metadata: { test: true },
+        });
+        throw sendErr;
+      }
+
+      const now = new Date().toISOString();
+      const nextDaily = dailySent + 1;
+      await admin.from('hm_bulk_daily_counts').upsert({
+        send_date: sendDate,
+        from_email: fromEmail,
+        sent_count: nextDaily,
+        updated_at: now,
+      });
+      await insertEmailSendLog(admin, {
+        source: 'hm-bulk-email',
+        trigger_label: 'bulk:test',
+        from_email: fromEmail,
+        to_email: to,
+        subject: subjectWithTag,
+        sent_by_user_id: userId,
+        status: 'sent',
+        metadata: { test: true, body_text: text.slice(0, 20000) },
+      });
+
+      return json(200, {
+        ok: true,
+        test: true,
+        to,
+        from_email: fromEmail,
+        subject: subjectWithTag,
+        daily_sent: nextDaily,
+        daily_cap: HARD_DAILY_CAP,
+      });
+    }
+
     if (action === 'get_settings') {
       const { data } = await admin.from('hm_bulk_app_settings').select('*').eq('id', 1).maybeSingle();
       const fromEmail = defaultFromEmail();

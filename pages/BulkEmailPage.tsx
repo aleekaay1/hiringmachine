@@ -4,6 +4,7 @@ import {
   Pause,
   Play,
   RefreshCw,
+  Send,
   Settings2,
   Square,
   Upload,
@@ -18,6 +19,7 @@ import {
   processBulkNext,
   resumeBulkCampaign,
   saveBulkSettings,
+  sendBulkTestEmail,
   sleep,
   type BulkAppSettings,
   type BulkCampaign,
@@ -80,6 +82,9 @@ const BulkEmailPage: React.FC = () => {
   const [activeId, setActiveId] = React.useState<string | null>(null);
   const [progress, setProgress] = React.useState<BulkProgress | null>(null);
   const [sending, setSending] = React.useState(false);
+  const [testTo, setTestTo] = React.useState('');
+  const [testName, setTestName] = React.useState('Alex');
+  const [testing, setTesting] = React.useState(false);
   const stopRef = React.useRef(false);
   const fileRef = React.useRef<HTMLInputElement>(null);
 
@@ -216,6 +221,35 @@ const BulkEmailPage: React.FC = () => {
     }
   };
 
+  const onSendTest = async () => {
+    setError(null);
+    setMsg(null);
+    if (!testTo.trim() || !testTo.includes('@')) {
+      setError('Enter a valid test email address');
+      return;
+    }
+    if (!subject.trim() || !body.trim()) {
+      setError('Subject and body are required for a test send');
+      return;
+    }
+    setTesting(true);
+    try {
+      const result = await sendBulkTestEmail({
+        to: testTo.trim(),
+        name: testName.trim() || 'there',
+        subject: subject.trim(),
+        bodyText: body.trim(),
+        fromEmail: smtpFrom,
+      });
+      setDailySent(result.daily_sent);
+      setMsg(`Test sent to ${result.to} — subject “${result.subject}”.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Test send failed');
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const onStart = async () => {
     setError(null);
     setMsg(null);
@@ -323,6 +357,48 @@ const BulkEmailPage: React.FC = () => {
       )}
 
       {tab === 'compose' && (
+        <div className="space-y-6">
+        <section className="rounded-2xl border border-[#e6e0d4] bg-white p-5">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="hm-kicker">Test email</p>
+              <p className="mt-1 text-sm text-[#6f675c]">
+                Send one copy of the current subject/body via SMTP before a mass send. Subject is prefixed with [TEST].
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={testing || sending}
+              onClick={() => void onSendTest()}
+              className="hm-btn-brass inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs disabled:opacity-50"
+            >
+              <Send size={14} />
+              {testing ? 'Sending test…' : 'Send test email'}
+            </button>
+          </div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <label className="block text-xs text-[#6f675c]">
+              Send test to
+              <input
+                type="email"
+                className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm"
+                value={testTo}
+                onChange={(e) => setTestTo(e.target.value)}
+                placeholder="you@globelife-paz.com"
+              />
+            </label>
+            <label className="block text-xs text-[#6f675c]">
+              Merge name (for {'{{first_name}}'} / {'{{name}}'})
+              <input
+                className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm"
+                value={testName}
+                onChange={(e) => setTestName(e.target.value)}
+                placeholder="Alex"
+              />
+            </label>
+          </div>
+        </section>
+
         <div className="grid gap-6 lg:grid-cols-2">
           <section className="space-y-4 rounded-2xl border border-[#e6e0d4] bg-white p-5">
             <p className="hm-kicker">1 · Upload</p>
@@ -487,6 +563,7 @@ const BulkEmailPage: React.FC = () => {
               {sending ? 'Sending…' : `Start SMTP send (${recipients.length})`}
             </button>
           </section>
+        </div>
         </div>
       )}
 

@@ -170,6 +170,31 @@ export async function cancelBulkCampaign(campaignId: string): Promise<BulkProgre
   return json as unknown as BulkProgress;
 }
 
+export async function sendBulkTestEmail(input: {
+  to: string;
+  name?: string;
+  subject: string;
+  bodyText: string;
+  bodyHtml?: string;
+  fromEmail?: string;
+}): Promise<{ to: string; subject: string; daily_sent: number; daily_cap: number }> {
+  const json = await invokeBulk({
+    action: 'test_send',
+    to: input.to,
+    name: input.name,
+    subject: input.subject,
+    body_text: input.bodyText,
+    body_html: input.bodyHtml,
+    from_email: input.fromEmail,
+  });
+  return {
+    to: String(json.to || input.to),
+    subject: String(json.subject || input.subject),
+    daily_sent: Number(json.daily_sent) || 0,
+    daily_cap: Number(json.daily_cap) || 500,
+  };
+}
+
 export function defaultBulkEmailBody(): string {
   return (
     `Hi {{first_name}},\n\n` +
