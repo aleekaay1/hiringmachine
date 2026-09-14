@@ -25,6 +25,7 @@ import {
   type BulkCampaign,
   type BulkProgress,
   type BulkProvider,
+  type BulkSmtpAccountUsage,
 } from '../services/bulkEmailService';
 import {
   guessColumn,
@@ -68,7 +69,8 @@ const BulkEmailPage: React.FC = () => {
   const [provider, setProvider] = React.useState<BulkProvider>('smtp');
 
   const [settings, setSettings] = React.useState<BulkAppSettings | null>(null);
-  const [smtpFrom, setSmtpFrom] = React.useState('');
+  const [smtpFrom, setSmtpFrom] = React.useState('auto');
+  const [smtpAccounts, setSmtpAccounts] = React.useState<BulkSmtpAccountUsage[]>([]);
   const [dailySent, setDailySent] = React.useState(0);
   const [instantlyKey, setInstantlyKey] = React.useState('');
   const [instantlyWorkspace, setInstantlyWorkspace] = React.useState('');
@@ -92,8 +94,14 @@ const BulkEmailPage: React.FC = () => {
     try {
       const data = await getBulkSettings();
       setSettings(data.settings);
-      setSmtpFrom(data.smtp_from);
-      setDailySent(data.daily_sent);
+      setSmtpAccounts(data.smtp_accounts || []);
+      setSmtpFrom((prev) => {
+        if (prev && (prev === 'auto' || data.smtp_accounts.some((a) => a.email === prev))) return prev;
+        return data.smtp_accounts[0]?.email || data.smtp_from || 'auto';
+      });
+      setDailySent(
+        data.smtp_accounts.reduce((sum, a) => sum + (a.daily_sent || 0), 0) || data.daily_sent,
+      );
       setGapSeconds(data.settings.gap_seconds || 60);
       setDailyCap(Math.min(500, data.settings.daily_cap || 500));
       setProvider((data.settings.default_provider as BulkProvider) || 'smtp');
@@ -242,7 +250,8 @@ const BulkEmailPage: React.FC = () => {
         fromEmail: smtpFrom,
       });
       setDailySent(result.daily_sent);
-      setMsg(`Test sent to ${result.to} — subject “${result.subject}”.`);
+      if (result.smtp_accounts?.length) setSmtpAccounts(result.smtp_accounts);
+      setMsg(`Test sent from ${result.from_email} to ${result.to} — subject “${result.subject}”.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Test send failed');
     } finally {
@@ -318,7 +327,15 @@ const BulkEmailPage: React.FC = () => {
           </p>
         </div>
         <div className="rounded-xl border border-[#e6e0d4] bg-[#fbf8f2] px-4 py-2 text-sm text-[#3f3a32]">
-          Today: <strong>{dailySent}</strong> / {dailyCap} from {smtpFrom || 'SMTP'}
+          Today:{' '}
+          <strong>
+            {smtpAccounts.length
+              ? smtpAccounts.reduce((s, a) => s + a.daily_sent, 0)
+              : dailySent}
+          </strong>
+          {' / '}
+          {(smtpAccounts[0]?.daily_cap || dailyCap) * Math.max(1, smtpAccounts.length || 1)} across{' '}
+          {smtpAccounts.length || 1} sender{smtpAccounts.length === 1 ? '' : 's'}
         </div>
       </div>
 
@@ -376,7 +393,7 @@ const BulkEmailPage: React.FC = () => {
               {testing ? 'Sending test…' : 'Send test email'}
             </button>
           </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <label className="block text-xs text-[#6f675c]">
               Send test to
               <input
@@ -395,6 +412,21 @@ const BulkEmailPage: React.FC = () => {
                 onChange={(e) => setTestName(e.target.value)}
                 placeholder="Alex"
               />
+            </label>
+            <label className="block text-xs text-[#6f675c]">
+              Send from
+              <select
+                className="mt-1 w-full rounded-lg border border-[#e0d8ca] bg-white px-3 py-2 text-sm"
+                value={smtpFrom}
+                onChange={(e) => setSmtpFrom(e.target.value)}
+              >
+                <option value="auto">Auto (best remaining capacity)</option>
+                {smtpAccounts.map((a) => (
+                  <option key={a.email} value={a.email}>
+                    {a.email} · {a.daily_sent}/{a.daily_cap}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
         </section>
@@ -537,6 +569,21 @@ const BulkEmailPage: React.FC = () => {
               </label>
             </div>
             <label className="block text-xs text-[#6f675c]">
+              Send from
+              <select
+                className="mt-1 w-full rounded-lg border border-[#e0d8ca] bg-white px-3 py-2 text-sm"
+                value={smtpFrom}
+                onChange={(e) => setSmtpFrom(e.target.value)}
+              >
+                <option value="auto">Auto-rotate (all warmed senders)</option>
+                {smtpAccounts.map((a) => (
+                  <option key={a.email} value={a.email}>
+                    {a.email} · {a.remaining} left today
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-xs text-[#6f675c]">
               Provider
               <select
                 className="mt-1 w-full rounded-lg border border-[#e0d8ca] bg-white px-3 py-2 text-sm"
@@ -577,7 +624,20 @@ const BulkEmailPage: React.FC = () => {
           <div className="grid gap-4 md:grid-cols-2">
             <div className="rounded-xl border border-[#e6e0d4] p-4">
               <h3 className="font-medium text-[#1f2a24]">SMTP</h3>
-              <p className="mt-1 text-xs text-[#8a8276]">From: {smtpFrom || '—'} · Cap 500/day · Gaps between sends</p>
+              <p className="mt-1 text-xs text-[#8a8276]">
+                Cap 500/day per sender. Passwords live in Edge secrets (not this form).
+              </p>
+              <ul className="mt-3 space-y-1 text-xs text-[#3f3a32]">
+                {smtpAccounts.length ? (
+                  smtpAccounts.map((a) => (
+                    <li key={a.email}>
+                      {a.email}: <strong>{a.daily_sent}</strong>/{a.daily_cap} today · {a.remaining} left
+                    </li>
+                  ))
+                ) : (
+                  <li>No senders loaded yet.</li>
+                )}
+              </ul>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <label className="text-xs text-[#6f675c]">
                   Default gap (sec)

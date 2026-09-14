@@ -76,11 +76,20 @@ async function invokeBulk(
   return json;
 }
 
+export type BulkSmtpAccountUsage = {
+  email: string;
+  label: string;
+  daily_sent: number;
+  daily_cap: number;
+  remaining: number;
+};
+
 export async function getBulkSettings(): Promise<{
   settings: BulkAppSettings;
   smtp_from: string;
   daily_sent: number;
   hard_daily_cap: number;
+  smtp_accounts: BulkSmtpAccountUsage[];
 }> {
   const json = await invokeBulk({ action: 'get_settings' });
   return {
@@ -88,6 +97,7 @@ export async function getBulkSettings(): Promise<{
     smtp_from: String(json.smtp_from || ''),
     daily_sent: Number(json.daily_sent) || 0,
     hard_daily_cap: Number(json.hard_daily_cap) || 500,
+    smtp_accounts: (json.smtp_accounts as BulkSmtpAccountUsage[]) || [],
   };
 }
 
@@ -177,7 +187,14 @@ export async function sendBulkTestEmail(input: {
   bodyText: string;
   bodyHtml?: string;
   fromEmail?: string;
-}): Promise<{ to: string; subject: string; daily_sent: number; daily_cap: number }> {
+}): Promise<{
+  to: string;
+  subject: string;
+  from_email: string;
+  daily_sent: number;
+  daily_cap: number;
+  smtp_accounts: BulkSmtpAccountUsage[];
+}> {
   const json = await invokeBulk({
     action: 'test_send',
     to: input.to,
@@ -190,8 +207,10 @@ export async function sendBulkTestEmail(input: {
   return {
     to: String(json.to || input.to),
     subject: String(json.subject || input.subject),
+    from_email: String(json.from_email || ''),
     daily_sent: Number(json.daily_sent) || 0,
     daily_cap: Number(json.daily_cap) || 500,
+    smtp_accounts: (json.smtp_accounts as BulkSmtpAccountUsage[]) || [],
   };
 }
 

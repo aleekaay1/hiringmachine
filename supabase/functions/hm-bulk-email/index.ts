@@ -1,7 +1,10 @@
 // Bulk mass email via SMTP with gaps + 500/day per from-address.
 // Deploy: supabase functions deploy hm-bulk-email --project-ref ofhcnsuwrhyvxtvtdunw
+// Extra senders: Edge secret BULK_SMTP_ACCOUNTS JSON
+//   [{"email":"apply@globelife-pazao.com","password":"xxxx xxxx xxxx xxxx"}]
 
 import nodemailer from 'npm:nodemailer@6.9.10';
+import type { Transporter } from 'npm:nodemailer@6.9.10';
 import {
   corsHeaders,
   cronSecretOk,
@@ -20,30 +23,162 @@ const HARD_DAILY_CAP = 500;
 
 type RecipientInput = { name?: string; email?: string; row_index?: number; raw?: Record<string, unknown> };
 
-function getTransport() {
-  const host = Deno.env.get('SMTP_HOSTNAME')?.trim();
+type SmtpAccount = {
+  email: string;
+  user: string;
+  pass: string;
+  label: string;
+};
+
+function smtpHostConfig() {
+  const host = Deno.env.get('SMTP_HOSTNAME')?.trim() || 'smtp.gmail.com';
   const port = Number(Deno.env.get('SMTP_PORT') ?? 587);
   const secure = (Deno.env.get('SMTP_SECURE') ?? 'false') === 'true';
-  const user = Deno.env.get('SMTP_USERNAME')?.trim();
-  const pass = Deno.env.get('SMTP_PASSWORD')?.trim();
-  if (!host || !user || !pass) {
-    throw new Error('Missing SMTP config (SMTP_HOSTNAME, SMTP_USERNAME, SMTP_PASSWORD)');
-  }
-  return nodemailer.createTransport({
+  return {
     host,
     port: Number.isNaN(port) ? 587 : port,
     secure,
-    auth: { user, pass },
     ...(port === 587 && !secure ? { requireTLS: true } : {}),
+  };
+}
+
+function listSmtpAccounts(): SmtpAccount[] {
+  const accounts: SmtpAccount[] = [];
+  const seen = new Set<string>();
+
+  const push = (emailRaw: string, passRaw: string, userRaw?: string, label?: string) => {
+    const email = normalizeEmail(emailRaw);
+    const pass = String(passRaw || '').replace(/\s+/g, '').trim();
+    const user = normalizeEmail(userRaw || emailRaw) || email;
+    if (!email || !pass || seen.has(email)) return;
+    seen.add(email);
+    accounts.push({ email, user, pass, label: label || email });
+  };
+
+  const primaryUser = Deno.env.get('SMTP_USERNAME')?.trim() || '';
+  const primaryPass = Deno.env.get('SMTP_PASSWORD')?.trim() || '';
+  const primaryFrom = Deno.env.get('SMTP_FROM')?.trim() || primaryUser;
+  if (primaryUser && primaryPass) {
+    push(primaryFrom || primaryUser, primaryPass, primaryUser, 'Primary SMTP');
+  }
+
+  const rawExtra = Deno.env.get('BULK_SMTP_ACCOUNTS')?.trim() || '';
+  if (rawExtra) {
+    try {
+      const parsed = JSON.parse(rawExtra) as unknown;
+      const list = Array.isArray(parsed) ? parsed : [];
+      for (const item of list) {
+        if (!item || typeof item !== 'object') continue;
+        const row = item as Record<string, unknown>;
+        const email = str(row.email || row.from || row.username || row.user);
+        const pass = str(row.password || row.pass || row.app_password || row.appPassword);
+        const user = str(row.user || row.username || email);
+        const label = str(row.label) || email;
+        if (email && pass) push(email, pass, user, label);
+      }
+    } catch (err) {
+      console.error('Invalid BULK_SMTP_ACCOUNTS JSON', err);
+    }
+  }
+
+  return accounts;
+}
+
+function getTransportFor(account: SmtpAccount): Transporter {
+  const cfg = smtpHostConfig();
+  return nodemailer.createTransport({
+    ...cfg,
+    auth: { user: account.user, pass: account.pass },
   });
 }
 
 function defaultFromEmail(): string {
+  const accounts = listSmtpAccounts();
+  if (accounts[0]) return accounts[0].email;
   return (
     Deno.env.get('SMTP_FROM')?.trim() ||
     Deno.env.get('SMTP_USERNAME')?.trim() ||
     'noreply@example.com'
   );
+}
+
+function findAccount(emailOrAuto: string | null | undefined): SmtpAccount | null {
+  const accounts = listSmtpAccounts();
+  if (!accounts.length) return null;
+  const wanted = normalizeEmail(emailOrAuto);
+  if (!wanted || wanted === 'auto') return accounts[0];
+  return accounts.find((a) => a.email === wanted) || null;
+}
+
+async function dailySentFor(
+  admin: ReturnType<typeof serviceClient>,
+  fromEmail: string,
+): Promise<number> {
+  const { data } = await admin
+    .from('hm_bulk_daily_counts')
+    .select('sent_count')
+    .eq('send_date', todayUtcDate())
+    .eq('from_email', normalizeEmail(fromEmail))
+    .maybeSingle();
+  return data?.sent_count || 0;
+}
+
+async function resolveSendAccount(
+  admin: ReturnType<typeof serviceClient>,
+  preferred: string | null | undefined,
+  dailyCap: number,
+): Promise<{ account: SmtpAccount; dailySent: number } | { error: string; daily_cap_hit: true }> {
+  const accounts = listSmtpAccounts();
+  if (!accounts.length) {
+    throw new Error('No SMTP accounts configured (SMTP_* / BULK_SMTP_ACCOUNTS)');
+  }
+  const wanted = normalizeEmail(preferred);
+  const rotate = !wanted || wanted === 'auto';
+  const candidates = rotate
+    ? accounts
+    : accounts.filter((a) => a.email === wanted);
+
+  if (!rotate && !candidates.length) {
+    throw new Error(`SMTP account not configured for ${wanted}`);
+  }
+
+  let best: { account: SmtpAccount; dailySent: number; remaining: number } | null = null;
+  for (const account of candidates) {
+    const dailySent = await dailySentFor(admin, account.email);
+    const remaining = dailyCap - dailySent;
+    if (remaining <= 0) continue;
+    if (!best || remaining > best.remaining) {
+      best = { account, dailySent, remaining };
+    }
+  }
+  if (!best) {
+    return {
+      error: rotate
+        ? `Daily cap reached (${dailyCap}) on all SMTP senders. Try again tomorrow.`
+        : `Daily cap reached (${dailyCap}) for ${wanted}. Try another sender or wait until tomorrow.`,
+      daily_cap_hit: true,
+    };
+  }
+  return { account: best.account, dailySent: best.dailySent };
+}
+
+async function listAccountUsage(
+  admin: ReturnType<typeof serviceClient>,
+  dailyCap: number,
+): Promise<Array<{ email: string; label: string; daily_sent: number; daily_cap: number; remaining: number }>> {
+  const accounts = listSmtpAccounts();
+  const out = [];
+  for (const account of accounts) {
+    const dailySent = await dailySentFor(admin, account.email);
+    out.push({
+      email: account.email,
+      label: account.label,
+      daily_sent: dailySent,
+      daily_cap: dailyCap,
+      remaining: Math.max(0, dailyCap - dailySent),
+    });
+  }
+  return out;
 }
 
 function clampGap(value: unknown): number {
@@ -99,21 +234,21 @@ async function campaignProgress(admin: ReturnType<typeof serviceClient>, campaig
     .select('id', { count: 'exact', head: true })
     .eq('campaign_id', campaignId)
     .eq('status', 'failed');
-  const fromEmail = normalizeEmail(campaign.from_email) || normalizeEmail(defaultFromEmail());
-  const { data: daily } = await admin
-    .from('hm_bulk_daily_counts')
-    .select('sent_count')
-    .eq('send_date', todayUtcDate())
-    .eq('from_email', fromEmail)
-    .maybeSingle();
+  const fromEmail = normalizeEmail(campaign.from_email) || 'auto';
+  const usage = await listAccountUsage(admin, clampDailyCap(campaign.daily_cap));
+  const matched = fromEmail === 'auto' ? null : usage.find((u) => u.email === fromEmail);
+  const dailySent = matched
+    ? matched.daily_sent
+    : usage.reduce((sum, u) => sum + u.daily_sent, 0);
   return {
     campaign,
     pending: pending || 0,
     sent: sent || 0,
     failed: failed || 0,
-    daily_sent: daily?.sent_count || 0,
+    daily_sent: dailySent,
     daily_cap: campaign.daily_cap || DEFAULT_DAILY_CAP,
     from_email: fromEmail,
+    smtp_accounts: usage,
   };
 }
 
@@ -171,32 +306,27 @@ Deno.serve(async (req) => {
         return json(400, { error: 'Subject and body are required' });
       }
 
-      const fromEmail = normalizeEmail(body.from_email || body.fromEmail) || normalizeEmail(defaultFromEmail());
-      const sendDate = todayUtcDate();
-      const { data: dailyRow } = await admin
-        .from('hm_bulk_daily_counts')
-        .select('sent_count')
-        .eq('send_date', sendDate)
-        .eq('from_email', fromEmail)
-        .maybeSingle();
-      const dailySent = dailyRow?.sent_count || 0;
-      if (dailySent >= HARD_DAILY_CAP) {
-        return json(429, {
-          error: `Daily cap reached (${HARD_DAILY_CAP}) for ${fromEmail}. Try again tomorrow.`,
-          daily_sent: dailySent,
-          daily_cap: HARD_DAILY_CAP,
-        });
+      const preferred = str(body.from_email || body.fromEmail) || 'auto';
+      const resolved = await resolveSendAccount(admin, preferred, HARD_DAILY_CAP);
+      if ('daily_cap_hit' in resolved) {
+        return json(429, { error: resolved.error, daily_cap_hit: true, daily_cap: HARD_DAILY_CAP });
       }
+      const { account, dailySent } = resolved;
+      const fromEmail = account.email;
 
       const subject = applyMerge(subjectTpl, displayName, to);
-      const text = applyMerge(bodyTextTpl || bodyHtmlTpl.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''), displayName, to);
+      const text = applyMerge(
+        bodyTextTpl || bodyHtmlTpl.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''),
+        displayName,
+        to,
+      );
       const html = bodyHtmlTpl
         ? applyMerge(bodyHtmlTpl, displayName, to)
         : text.replace(/\n/g, '<br/>');
       const subjectWithTag = subject.startsWith('[TEST]') ? subject : `[TEST] ${subject}`;
 
       try {
-        const transport = getTransport();
+        const transport = getTransportFor(account);
         await new Promise<void>((resolve, reject) => {
           transport.sendMail(
             {
@@ -229,7 +359,7 @@ Deno.serve(async (req) => {
       const now = new Date().toISOString();
       const nextDaily = dailySent + 1;
       await admin.from('hm_bulk_daily_counts').upsert({
-        send_date: sendDate,
+        send_date: todayUtcDate(),
         from_email: fromEmail,
         sent_count: nextDaily,
         updated_at: now,
@@ -253,18 +383,16 @@ Deno.serve(async (req) => {
         subject: subjectWithTag,
         daily_sent: nextDaily,
         daily_cap: HARD_DAILY_CAP,
+        smtp_accounts: await listAccountUsage(admin, HARD_DAILY_CAP),
       });
     }
 
     if (action === 'get_settings') {
       const { data } = await admin.from('hm_bulk_app_settings').select('*').eq('id', 1).maybeSingle();
+      const dailyCap = clampDailyCap(data?.daily_cap ?? DEFAULT_DAILY_CAP);
+      const usage = await listAccountUsage(admin, dailyCap);
       const fromEmail = defaultFromEmail();
-      const { data: daily } = await admin
-        .from('hm_bulk_daily_counts')
-        .select('sent_count')
-        .eq('send_date', todayUtcDate())
-        .eq('from_email', normalizeEmail(fromEmail))
-        .maybeSingle();
+      const primary = usage.find((u) => u.email === normalizeEmail(fromEmail)) || usage[0];
       return json(200, {
         ok: true,
         settings: data || {
@@ -278,8 +406,9 @@ Deno.serve(async (req) => {
           billionmail: {},
         },
         smtp_from: fromEmail,
-        daily_sent: daily?.sent_count || 0,
+        daily_sent: primary?.daily_sent || 0,
         hard_daily_cap: HARD_DAILY_CAP,
+        smtp_accounts: usage,
       });
     }
 
@@ -308,7 +437,11 @@ Deno.serve(async (req) => {
         .select('*')
         .single();
       if (error) throw error;
-      return json(200, { ok: true, settings: data });
+      return json(200, {
+        ok: true,
+        settings: data,
+        smtp_accounts: await listAccountUsage(admin, dailyCap),
+      });
     }
 
     if (action === 'list') {
@@ -375,7 +508,12 @@ Deno.serve(async (req) => {
           error: `${provider} sending is configured in Settings but not enabled yet. Use SMTP to send.`,
         });
       }
-      const fromEmail = normalizeEmail(body.from_email || body.fromEmail) || normalizeEmail(defaultFromEmail());
+
+      const preferredRaw = str(body.from_email || body.fromEmail) || 'auto';
+      const preferred = preferredRaw.toLowerCase() === 'auto' ? 'auto' : normalizeEmail(preferredRaw);
+      if (preferred !== 'auto' && !findAccount(preferred)) {
+        return json(400, { error: `SMTP account not configured for ${preferred}` });
+      }
 
       const { data: campaign, error: campErr } = await admin
         .from('hm_bulk_campaigns')
@@ -387,7 +525,7 @@ Deno.serve(async (req) => {
           status: 'queued',
           gap_seconds: gap,
           daily_cap: dailyCap,
-          from_email: fromEmail,
+          from_email: preferred,
           provider,
           total_count: recipients.length,
           sent_count: 0,
@@ -397,6 +535,7 @@ Deno.serve(async (req) => {
             source_file: str(body.source_file || body.sourceFile) || null,
             email_column: str(body.email_column || body.emailColumn) || null,
             name_column: str(body.name_column || body.nameColumn) || null,
+            rotate: preferred === 'auto',
           },
         })
         .select('*')
@@ -462,22 +601,15 @@ Deno.serve(async (req) => {
         return json(400, { error: 'Only SMTP sending is enabled. Switch provider to SMTP.' });
       }
 
-      const fromEmail = normalizeEmail(campaign.from_email) || normalizeEmail(defaultFromEmail());
       const dailyCap = clampDailyCap(campaign.daily_cap);
-      const sendDate = todayUtcDate();
-      const { data: dailyRow } = await admin
-        .from('hm_bulk_daily_counts')
-        .select('sent_count')
-        .eq('send_date', sendDate)
-        .eq('from_email', fromEmail)
-        .maybeSingle();
-      const dailySent = dailyRow?.sent_count || 0;
-      if (dailySent >= dailyCap) {
+      const preferred = str(campaign.from_email) || 'auto';
+      const resolved = await resolveSendAccount(admin, preferred, dailyCap);
+      if ('daily_cap_hit' in resolved) {
         await admin
           .from('hm_bulk_campaigns')
           .update({
             status: 'paused',
-            last_error: `Daily cap reached (${dailyCap}) for ${fromEmail}. Resumes tomorrow or raise gap / wait.`,
+            last_error: resolved.error,
             updated_at: new Date().toISOString(),
           })
           .eq('id', campaignId);
@@ -485,11 +617,12 @@ Deno.serve(async (req) => {
           ok: true,
           done: false,
           daily_cap_hit: true,
-          daily_sent: dailySent,
           daily_cap: dailyCap,
           ...(await syncCampaignCounters(admin, campaignId)),
         });
       }
+      const { account, dailySent } = resolved;
+      const fromEmail = account.email;
 
       const { data: nextRows, error: nextErr } = await admin
         .from('hm_bulk_recipients')
@@ -527,7 +660,7 @@ Deno.serve(async (req) => {
       const html = htmlRaw || text.replace(/\n/g, '<br/>');
 
       try {
-        const transport = getTransport();
+        const transport = getTransportFor(account);
         await new Promise<void>((resolve, reject) => {
           transport.sendMail(
             {
@@ -550,7 +683,7 @@ Deno.serve(async (req) => {
 
         const nextDaily = dailySent + 1;
         await admin.from('hm_bulk_daily_counts').upsert({
-          send_date: sendDate,
+          send_date: todayUtcDate(),
           from_email: fromEmail,
           sent_count: nextDaily,
           updated_at: now,
@@ -577,6 +710,7 @@ Deno.serve(async (req) => {
           done: (progress?.pending || 0) === 0,
           sent_one: true,
           to,
+          from_email: fromEmail,
           daily_sent: nextDaily,
           daily_cap: dailyCap,
           gap_seconds: campaign.gap_seconds || DEFAULT_GAP,
@@ -611,6 +745,7 @@ Deno.serve(async (req) => {
           sent_one: false,
           failed_one: true,
           error: msg,
+          from_email: fromEmail,
           gap_seconds: campaign.gap_seconds || DEFAULT_GAP,
           ...progress,
         });
