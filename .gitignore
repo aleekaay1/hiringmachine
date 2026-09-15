@@ -16,6 +16,7 @@ public/onnxruntime-web
 .env
 .env.local
 .env.*.local
+.tmp-bulk-cron-secret.txt
 
 # Editor directories and files
 .vscode/*

@@ -24,6 +24,9 @@ import {
   pauseBulkCampaign,
   processBulkNext,
   resumeBulkCampaign,
+  listBulkRecipients,
+  tickBulkCampaigns,
+  getBulkCampaignStatus,
   saveBulkDraftLeads,
   saveBulkSettings,
   saveBulkTemplate,
@@ -35,6 +38,7 @@ import {
   type BulkCampaign,
   type BulkProgress,
   type BulkProvider,
+  type BulkRecipientRow,
   type BulkSmtpAccountUsage,
 } from '../services/bulkEmailService';
 import {
@@ -94,6 +98,10 @@ const BulkEmailPage: React.FC = () => {
   const [activeId, setActiveId] = React.useState<string | null>(null);
   const [editingCampaignId, setEditingCampaignId] = React.useState<string | null>(null);
   const [progress, setProgress] = React.useState<BulkProgress | null>(null);
+  const [leads, setLeads] = React.useState<BulkRecipientRow[]>([]);
+  const [leadFilter, setLeadFilter] = React.useState<'all' | 'pending' | 'sent' | 'failed'>('all');
+  const [leadQuery, setLeadQuery] = React.useState('');
+  const [loadingLeads, setLoadingLeads] = React.useState(false);
   const [sending, setSending] = React.useState(false);
   const [pausing, setPausing] = React.useState(false);
   const [savingCampaign, setSavingCampaign] = React.useState(false);
@@ -342,16 +350,65 @@ const BulkEmailPage: React.FC = () => {
     }
   };
 
+  const loadLeads = React.useCallback(async (campaignId: string) => {
+    setLoadingLeads(true);
+    try {
+      const data = await listBulkRecipients(campaignId, {
+        status: leadFilter === 'all' ? '' : leadFilter,
+        q: leadQuery,
+      });
+      setLeads(data.recipients);
+      if (data.campaign) {
+        setProgress({
+          campaign: data.campaign,
+          pending: data.pending || 0,
+          sent: data.sent || 0,
+          failed: data.failed || 0,
+          daily_sent: data.daily_sent || 0,
+          daily_cap: data.daily_cap || dailyCap,
+          from_email: data.from_email || smtpFrom,
+        });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load leads');
+    } finally {
+      setLoadingLeads(false);
+    }
+  }, [leadFilter, leadQuery, dailyCap, smtpFrom]);
+
+  React.useEffect(() => {
+    if (!activeId) return;
+    void loadLeads(activeId);
+  }, [activeId, leadFilter, leadQuery, loadLeads]);
+
+  // Live refresh while a campaign is selected (Instantly-style dashboard).
+  React.useEffect(() => {
+    if (!activeId) return;
+    const status = progress?.campaign?.status;
+    const live = sending || status === 'sending' || status === 'queued';
+    if (!live) return;
+    const id = window.setInterval(() => {
+      void loadLeads(activeId);
+      void loadCampaigns();
+    }, 8000);
+    return () => window.clearInterval(id);
+  }, [activeId, sending, progress?.campaign?.status, loadLeads, loadCampaigns]);
+
   const runSendLoop = async (campaignId: string) => {
     setSending(true);
     stopRef.current = false;
     setActiveId(campaignId);
     setTab('campaigns');
+    setMsg('Campaign is running on the server. You can close this page — sending continues.');
     try {
+      // Kick the server worker immediately, then keep a faster local loop while this tab is open.
+      void tickBulkCampaigns().catch(() => undefined);
+      await loadLeads(campaignId);
       while (!stopRef.current) {
         const result = await processBulkNext(campaignId);
         setProgress(result);
         setDailySent(result.daily_sent);
+        await loadLeads(campaignId);
         if (result.daily_cap_hit) {
           setMsg(`Paused: daily cap (${result.daily_cap}) reached for ${result.from_email}. Resume tomorrow.`);
           break;
@@ -367,7 +424,7 @@ const BulkEmailPage: React.FC = () => {
         const gap = Math.max(5, Number(result.gap_seconds || gapSeconds) || 60);
         setMsg(
           result.sent_one
-            ? `Sent to ${result.to}. Waiting ${gap}s before next…`
+            ? `Sent to ${result.to}. Waiting ${gap}s (also continues if you close this page)…`
             : result.failed_one
               ? `Failed one (${result.error}). Waiting ${gap}s…`
               : `Waiting ${gap}s…`,
@@ -379,11 +436,19 @@ const BulkEmailPage: React.FC = () => {
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Send loop failed');
+      // If the tab loop fails, server cron/tick still continues.
+      setError(err instanceof Error ? err.message : 'Send loop failed — server may still be sending');
+      try {
+        const status = await getBulkCampaignStatus(campaignId);
+        setProgress(status);
+      } catch {
+        /* ignore */
+      }
     } finally {
       setSending(false);
       await loadCampaigns();
       await loadSettings();
+      await loadLeads(campaignId);
     }
   };
 
@@ -542,6 +607,7 @@ const BulkEmailPage: React.FC = () => {
           <h1 className="font-[Fraunces] text-3xl text-[#1f2a24]">Bulk email</h1>
           <p className="mt-1 max-w-xl text-sm text-[#6f675c]">
             Upload CSV/Excel, map name & email, preview, then send via SMTP with gaps (max 500/day per sending address).
+            Campaigns keep sending on the server even if you close this tab.
           </p>
         </div>
         <div className="rounded-xl border border-[#e6e0d4] bg-[#fbf8f2] px-4 py-2 text-sm text-[#3f3a32]">
@@ -1034,6 +1100,9 @@ const BulkEmailPage: React.FC = () => {
           {progress && activeId && (
             <div className="rounded-xl border border-[#d9e5d4] bg-[#f3f8f1] px-4 py-3 text-sm text-[#2f4a38]">
               Active: {progress.sent} sent · {progress.failed} failed · {progress.pending} pending
+              <p className="mt-1 text-[11px] text-[#5a6f5c]">
+                Sending continues on the server if you close this window. Open a campaign below to see every lead.
+              </p>
               <div className="mt-2 flex flex-wrap gap-2">
                 {(sending || progress.campaign?.status === 'sending' || progress.campaign?.status === 'queued') && (
                   <button
@@ -1052,6 +1121,13 @@ const BulkEmailPage: React.FC = () => {
                 >
                   <Pencil size={12} /> Edit
                 </button>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-full border border-[#ddd5c6] px-3 py-1 text-xs"
+                  onClick={() => void loadLeads(activeId)}
+                >
+                  <RefreshCw size={12} /> Refresh leads
+                </button>
                 {sending && (
                   <button
                     type="button"
@@ -1065,6 +1141,95 @@ const BulkEmailPage: React.FC = () => {
                   </button>
                 )}
               </div>
+            </div>
+          )}
+
+          {activeId && (
+            <div className="space-y-3 rounded-xl border border-[#eee7db] bg-[#fbfaf7] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="hm-kicker">Campaign leads</p>
+                <div className="flex flex-wrap gap-1">
+                  {(['all', 'pending', 'sent', 'failed'] as const).map((f) => (
+                    <button
+                      key={f}
+                      type="button"
+                      onClick={() => setLeadFilter(f)}
+                      className={`rounded-full px-3 py-1 text-[11px] capitalize ${
+                        leadFilter === f
+                          ? 'bg-[#1c1915] text-white'
+                          : 'border border-[#ddd5c6] text-[#5a5348]'
+                      }`}
+                    >
+                      {f}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <input
+                value={leadQuery}
+                onChange={(e) => setLeadQuery(e.target.value)}
+                placeholder="Search name or email…"
+                className="w-full rounded-lg border border-[#e0d8ca] bg-white px-3 py-2 text-sm"
+              />
+              <div className="max-h-[420px] overflow-auto rounded-xl border border-[#eee7db] bg-white">
+                <table className="min-w-full text-left text-xs">
+                  <thead className="sticky top-0 bg-[#f7f3eb] text-[#6f675c]">
+                    <tr>
+                      <th className="px-3 py-2">#</th>
+                      <th className="px-3 py-2">Name</th>
+                      <th className="px-3 py-2">Email</th>
+                      <th className="px-3 py-2">Status</th>
+                      <th className="px-3 py-2">Sent at</th>
+                      <th className="px-3 py-2">Error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loadingLeads && (
+                      <tr>
+                        <td colSpan={6} className="px-3 py-6 text-[#8a8276]">Loading leads…</td>
+                      </tr>
+                    )}
+                    {!loadingLeads &&
+                      leads.map((row) => (
+                        <tr key={row.id} className="border-t border-[#f0ebe2]">
+                          <td className="px-3 py-2 text-[#8a8276]">{(row.row_index ?? 0) + 1}</td>
+                          <td className="px-3 py-2 text-[#3f3a32]">{row.full_name || '—'}</td>
+                          <td className="px-3 py-2 text-[#3f3a32]">{row.email}</td>
+                          <td className="px-3 py-2 capitalize">
+                            <span
+                              className={
+                                row.status === 'sent'
+                                  ? 'text-emerald-700'
+                                  : row.status === 'failed'
+                                    ? 'text-red-700'
+                                    : row.status === 'pending'
+                                      ? 'text-amber-700'
+                                      : 'text-[#5a5348]'
+                              }
+                            >
+                              {row.status}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-[#8a8276]">
+                            {row.sent_at ? new Date(row.sent_at).toLocaleString() : '—'}
+                          </td>
+                          <td className="max-w-[220px] truncate px-3 py-2 text-red-700" title={row.error || ''}>
+                            {row.error || '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    {!loadingLeads && !leads.length && (
+                      <tr>
+                        <td colSpan={6} className="px-3 py-6 text-[#8a8276]">No leads for this filter.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[11px] text-[#8a8276]">
+                {leads.length} row{leads.length === 1 ? '' : 's'} shown
+                {progress ? ` · ${progress.sent} sent · ${progress.pending} remaining · ${progress.failed} failed` : ''}
+              </p>
             </div>
           )}
 
@@ -1096,6 +1261,16 @@ const BulkEmailPage: React.FC = () => {
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex flex-wrap gap-1">
+                        <button
+                          type="button"
+                          className="rounded-full border border-[#ddd5c6] px-3 py-1 text-[11px] text-[#5a5348]"
+                          onClick={() => {
+                            setActiveId(c.id);
+                            void loadLeads(c.id);
+                          }}
+                        >
+                          Leads
+                        </button>
                         {c.status !== 'cancelled' && c.status !== 'completed' && (
                           <button
                             type="button"

@@ -295,6 +295,230 @@ async function syncCampaignCounters(admin: ReturnType<typeof serviceClient>, cam
   return campaignProgress(admin, campaignId);
 }
 
+async function lastRecipientSentAtMs(
+  admin: ReturnType<typeof serviceClient>,
+  campaignId: string,
+): Promise<number | null> {
+  const { data } = await admin
+    .from('hm_bulk_recipients')
+    .select('sent_at')
+    .eq('campaign_id', campaignId)
+    .eq('status', 'sent')
+    .order('sent_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const iso = str((data as { sent_at?: string } | null)?.sent_at);
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+async function recoverStuckSending(
+  admin: ReturnType<typeof serviceClient>,
+  campaignId: string,
+): Promise<void> {
+  const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  await admin
+    .from('hm_bulk_recipients')
+    .update({ status: 'pending', updated_at: new Date().toISOString() })
+    .eq('campaign_id', campaignId)
+    .eq('status', 'sending')
+    .lt('updated_at', cutoff);
+}
+
+async function sendNextForCampaign(
+  admin: ReturnType<typeof serviceClient>,
+  campaignId: string,
+  userId: string | null,
+  opts?: { respectGap?: boolean },
+): Promise<Record<string, unknown>> {
+  const respectGap = opts?.respectGap !== false;
+
+  const { data: campaign, error: campErr } = await admin
+    .from('hm_bulk_campaigns')
+    .select('*')
+    .eq('id', campaignId)
+    .maybeSingle();
+  if (campErr) throw campErr;
+  if (!campaign) return { ok: false, error: 'Campaign not found', http_status: 404 };
+
+  if (campaign.status === 'cancelled' || campaign.status === 'completed') {
+    return { ok: true, done: true, reason: campaign.status, ...(await syncCampaignCounters(admin, campaignId)) };
+  }
+  if (campaign.status === 'paused') {
+    return { ok: true, done: false, paused: true, ...(await syncCampaignCounters(admin, campaignId)) };
+  }
+  if (campaign.provider !== 'smtp') {
+    return { ok: false, error: 'Only SMTP sending is enabled. Switch provider to SMTP.', http_status: 400 };
+  }
+
+  await recoverStuckSending(admin, campaignId);
+
+  const gapSeconds = Math.max(5, Number(campaign.gap_seconds) || DEFAULT_GAP);
+  if (respectGap) {
+    const lastMs = await lastRecipientSentAtMs(admin, campaignId);
+    if (lastMs != null && Date.now() - lastMs < gapSeconds * 1000) {
+      return {
+        ok: true,
+        done: false,
+        waiting_gap: true,
+        gap_seconds: gapSeconds,
+        wait_ms: gapSeconds * 1000 - (Date.now() - lastMs),
+        ...(await syncCampaignCounters(admin, campaignId)),
+      };
+    }
+  }
+
+  const dailyCap = clampDailyCap(campaign.daily_cap);
+  const preferred = str(campaign.from_email) || 'auto';
+  const resolved = await resolveSendAccount(admin, preferred, dailyCap);
+  if ('daily_cap_hit' in resolved) {
+    await admin
+      .from('hm_bulk_campaigns')
+      .update({
+        status: 'paused',
+        last_error: resolved.error,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', campaignId);
+    return {
+      ok: true,
+      done: false,
+      daily_cap_hit: true,
+      daily_cap: dailyCap,
+      ...(await syncCampaignCounters(admin, campaignId)),
+    };
+  }
+  const { account, dailySent } = resolved;
+  const fromEmail = account.email;
+
+  const { data: nextRows, error: nextErr } = await admin
+    .from('hm_bulk_recipients')
+    .select('*')
+    .eq('campaign_id', campaignId)
+    .eq('status', 'pending')
+    .order('row_index', { ascending: true })
+    .limit(1);
+  if (nextErr) throw nextErr;
+  const next = nextRows?.[0];
+  if (!next) {
+    const progress = await syncCampaignCounters(admin, campaignId);
+    return { ok: true, done: true, reason: 'completed', ...progress };
+  }
+
+  await admin
+    .from('hm_bulk_campaigns')
+    .update({
+      status: 'sending',
+      started_at: campaign.started_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      last_error: null,
+    })
+    .eq('id', campaignId);
+  await admin
+    .from('hm_bulk_recipients')
+    .update({ status: 'sending', updated_at: new Date().toISOString() })
+    .eq('id', next.id);
+
+  const to = normalizeEmail(next.email);
+  const displayName = str(next.full_name);
+  const subject = applyMerge(String(campaign.subject || ''), displayName, to);
+  const text = applyMerge(String(campaign.body_text || ''), displayName, to);
+  const htmlRaw = campaign.body_html ? applyMerge(String(campaign.body_html), displayName, to) : '';
+  const html = htmlRaw || text.replace(/\n/g, '<br/>');
+
+  try {
+    const transport = getTransportFor(account);
+    await new Promise<void>((resolve, reject) => {
+      transport.sendMail(
+        {
+          from: formatFromHeader(fromEmail),
+          to,
+          subject,
+          text,
+          html,
+        },
+        (err: Error | null) => (err ? reject(err) : resolve()),
+      );
+    });
+
+    const now = new Date().toISOString();
+    await admin
+      .from('hm_bulk_recipients')
+      .update({ status: 'sent', sent_at: now, error: null, updated_at: now })
+      .eq('id', next.id);
+
+    const nextDaily = dailySent + 1;
+    await admin.from('hm_bulk_daily_counts').upsert({
+      send_date: todayUtcDate(),
+      from_email: fromEmail,
+      sent_count: nextDaily,
+      updated_at: now,
+    });
+
+    await insertEmailSendLog(admin, {
+      source: 'hm-bulk-email',
+      trigger_label: `bulk:${campaignId}`,
+      from_email: fromEmail,
+      to_email: to,
+      subject,
+      sent_by_user_id: userId,
+      status: 'sent',
+      metadata: {
+        campaign_id: campaignId,
+        recipient_id: next.id,
+        body_text: text.slice(0, 20000),
+      },
+    });
+
+    const progress = await syncCampaignCounters(admin, campaignId);
+    return {
+      ok: true,
+      done: (progress?.pending || 0) === 0,
+      sent_one: true,
+      to,
+      from_email: fromEmail,
+      daily_sent: nextDaily,
+      daily_cap: dailyCap,
+      gap_seconds: gapSeconds,
+      ...progress,
+    };
+  } catch (sendErr) {
+    const msg = sendErr instanceof Error ? sendErr.message : String(sendErr);
+    const now = new Date().toISOString();
+    await admin
+      .from('hm_bulk_recipients')
+      .update({ status: 'failed', error: msg, updated_at: now })
+      .eq('id', next.id);
+    await admin
+      .from('hm_bulk_campaigns')
+      .update({ last_error: msg, updated_at: now })
+      .eq('id', campaignId);
+    await insertEmailSendLog(admin, {
+      source: 'hm-bulk-email',
+      trigger_label: `bulk:${campaignId}`,
+      from_email: fromEmail,
+      to_email: to,
+      subject,
+      sent_by_user_id: userId,
+      status: 'failed',
+      error_message: msg,
+      metadata: { campaign_id: campaignId, recipient_id: next.id },
+    });
+    const progress = await syncCampaignCounters(admin, campaignId);
+    return {
+      ok: true,
+      done: false,
+      sent_one: false,
+      failed_one: true,
+      error: msg,
+      from_email: fromEmail,
+      gap_seconds: gapSeconds,
+      ...progress,
+    };
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
   if (req.method === 'GET') return json(200, { ok: true, service: 'hm-bulk-email' });
@@ -669,7 +893,7 @@ Deno.serve(async (req) => {
           subject,
           body_text: bodyText || bodyHtml.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''),
           body_html: bodyHtml || null,
-          status: 'queued',
+          status: 'sending',
           gap_seconds: gap,
           daily_cap: dailyCap,
           from_email: preferred,
@@ -678,6 +902,7 @@ Deno.serve(async (req) => {
           sent_count: 0,
           failed_count: 0,
           created_by: userId,
+          started_at: new Date().toISOString(),
           settings: {
             source_file: str(body.source_file || body.sourceFile) || null,
             email_column: str(body.email_column || body.emailColumn) || null,
@@ -797,175 +1022,89 @@ Deno.serve(async (req) => {
       return json(200, { ok: true, campaign });
     }
 
+    if (action === 'list_recipients') {
+      if (!userOk) return json(401, { error: 'Sign in required' });
+      const campaignId = str(body.campaign_id || body.campaignId);
+      if (!campaignId) return json(400, { error: 'Missing campaign_id' });
+      const statusFilter = str(body.status).toLowerCase();
+      const q = str(body.q || body.query).toLowerCase();
+      const limit = Math.min(5000, Math.max(1, Number(body.limit) || 2000));
+
+      let query = admin
+        .from('hm_bulk_recipients')
+        .select('id, full_name, email, status, error, row_index, sent_at, created_at, updated_at')
+        .eq('campaign_id', campaignId)
+        .order('row_index', { ascending: true })
+        .limit(limit);
+      if (['pending', 'sending', 'sent', 'failed', 'skipped'].includes(statusFilter)) {
+        query = query.eq('status', statusFilter);
+      }
+      const { data, error } = await query;
+      if (error) throw error;
+      let rows = data || [];
+      if (q) {
+        rows = rows.filter((row) => {
+          const hay = `${row.full_name || ''} ${row.email || ''} ${row.error || ''}`.toLowerCase();
+          return hay.includes(q);
+        });
+      }
+      const progress = await campaignProgress(admin, campaignId);
+      return json(200, { ok: true, recipients: rows, ...(progress || {}) });
+    }
+
+    if (action === 'tick' || action === 'worker') {
+      // Server-side sender: keeps campaigns moving even if the browser is closed.
+      const { data: camps, error: listErr } = await admin
+        .from('hm_bulk_campaigns')
+        .select('id, status, gap_seconds')
+        .in('status', ['queued', 'sending'])
+        .order('updated_at', { ascending: true })
+        .limit(20);
+      if (listErr) throw listErr;
+
+      const results: Array<Record<string, unknown>> = [];
+      for (const camp of camps || []) {
+        const campaignId = String(camp.id);
+        const gapSeconds = Math.max(5, Number(camp.gap_seconds) || DEFAULT_GAP);
+        // Rough budget: up to ~50s of sends per campaign per tick.
+        const maxSends = Math.max(1, Math.min(12, Math.floor(55 / Math.max(5, Math.min(gapSeconds, 55)))));
+        let sends = 0;
+        while (sends < maxSends) {
+          const one = await sendNextForCampaign(admin, campaignId, userId, { respectGap: true });
+          if (one.http_status) break;
+          if (one.paused || one.daily_cap_hit || one.done || one.waiting_gap) {
+            results.push({ campaign_id: campaignId, ...one });
+            break;
+          }
+          if (one.sent_one || one.failed_one) {
+            sends += 1;
+            results.push({ campaign_id: campaignId, ...one });
+            if (one.failed_one) break;
+            continue;
+          }
+          results.push({ campaign_id: campaignId, ...one });
+          break;
+        }
+        if (!results.some((r) => r.campaign_id === campaignId)) {
+          results.push({ campaign_id: campaignId, ok: true, sends });
+        }
+      }
+      return json(200, {
+        ok: true,
+        campaigns: (camps || []).length,
+        results,
+        server_driven: true,
+      });
+    }
+
     if (action === 'process' || action === 'send_next') {
       const campaignId = str(body.campaign_id || body.campaignId);
       if (!campaignId) return json(400, { error: 'Missing campaign_id' });
-
-      const { data: campaign, error: campErr } = await admin
-        .from('hm_bulk_campaigns')
-        .select('*')
-        .eq('id', campaignId)
-        .maybeSingle();
-      if (campErr) throw campErr;
-      if (!campaign) return json(404, { error: 'Campaign not found' });
-      if (campaign.status === 'cancelled' || campaign.status === 'completed') {
-        return json(200, { ok: true, done: true, reason: campaign.status, ...(await syncCampaignCounters(admin, campaignId)) });
-      }
-      if (campaign.status === 'paused') {
-        return json(200, { ok: true, done: false, paused: true, ...(await syncCampaignCounters(admin, campaignId)) });
-      }
-      if (campaign.provider !== 'smtp') {
-        return json(400, { error: 'Only SMTP sending is enabled. Switch provider to SMTP.' });
-      }
-
-      const dailyCap = clampDailyCap(campaign.daily_cap);
-      const preferred = str(campaign.from_email) || 'auto';
-      const resolved = await resolveSendAccount(admin, preferred, dailyCap);
-      if ('daily_cap_hit' in resolved) {
-        await admin
-          .from('hm_bulk_campaigns')
-          .update({
-            status: 'paused',
-            last_error: resolved.error,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', campaignId);
-        return json(200, {
-          ok: true,
-          done: false,
-          daily_cap_hit: true,
-          daily_cap: dailyCap,
-          ...(await syncCampaignCounters(admin, campaignId)),
-        });
-      }
-      const { account, dailySent } = resolved;
-      const fromEmail = account.email;
-
-      const { data: nextRows, error: nextErr } = await admin
-        .from('hm_bulk_recipients')
-        .select('*')
-        .eq('campaign_id', campaignId)
-        .eq('status', 'pending')
-        .order('row_index', { ascending: true })
-        .limit(1);
-      if (nextErr) throw nextErr;
-      const next = nextRows?.[0];
-      if (!next) {
-        const progress = await syncCampaignCounters(admin, campaignId);
-        return json(200, { ok: true, done: true, reason: 'completed', ...progress });
-      }
-
-      await admin
-        .from('hm_bulk_campaigns')
-        .update({
-          status: 'sending',
-          started_at: campaign.started_at || new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          last_error: null,
-        })
-        .eq('id', campaignId);
-      await admin
-        .from('hm_bulk_recipients')
-        .update({ status: 'sending', updated_at: new Date().toISOString() })
-        .eq('id', next.id);
-
-      const to = normalizeEmail(next.email);
-      const displayName = str(next.full_name);
-      const subject = applyMerge(String(campaign.subject || ''), displayName, to);
-      const text = applyMerge(String(campaign.body_text || ''), displayName, to);
-      const htmlRaw = campaign.body_html ? applyMerge(String(campaign.body_html), displayName, to) : '';
-      const html = htmlRaw || text.replace(/\n/g, '<br/>');
-
-      try {
-        const transport = getTransportFor(account);
-        await new Promise<void>((resolve, reject) => {
-          transport.sendMail(
-            {
-              from: formatFromHeader(fromEmail),
-              to,
-              subject,
-              text,
-              html,
-            },
-            (err: Error | null) => (err ? reject(err) : resolve()),
-          );
-        });
-
-        const now = new Date().toISOString();
-        await admin
-          .from('hm_bulk_recipients')
-          .update({ status: 'sent', sent_at: now, error: null, updated_at: now })
-          .eq('id', next.id);
-
-        const nextDaily = dailySent + 1;
-        await admin.from('hm_bulk_daily_counts').upsert({
-          send_date: todayUtcDate(),
-          from_email: fromEmail,
-          sent_count: nextDaily,
-          updated_at: now,
-        });
-
-        await insertEmailSendLog(admin, {
-          source: 'hm-bulk-email',
-          trigger_label: `bulk:${campaignId}`,
-          from_email: fromEmail,
-          to_email: to,
-          subject,
-          sent_by_user_id: userId,
-          status: 'sent',
-          metadata: {
-            campaign_id: campaignId,
-            recipient_id: next.id,
-            body_text: text.slice(0, 20000),
-          },
-        });
-
-        const progress = await syncCampaignCounters(admin, campaignId);
-        return json(200, {
-          ok: true,
-          done: (progress?.pending || 0) === 0,
-          sent_one: true,
-          to,
-          from_email: fromEmail,
-          daily_sent: nextDaily,
-          daily_cap: dailyCap,
-          gap_seconds: campaign.gap_seconds || DEFAULT_GAP,
-          ...progress,
-        });
-      } catch (sendErr) {
-        const msg = sendErr instanceof Error ? sendErr.message : String(sendErr);
-        const now = new Date().toISOString();
-        await admin
-          .from('hm_bulk_recipients')
-          .update({ status: 'failed', error: msg, updated_at: now })
-          .eq('id', next.id);
-        await admin
-          .from('hm_bulk_campaigns')
-          .update({ last_error: msg, updated_at: now })
-          .eq('id', campaignId);
-        await insertEmailSendLog(admin, {
-          source: 'hm-bulk-email',
-          trigger_label: `bulk:${campaignId}`,
-          from_email: fromEmail,
-          to_email: to,
-          subject,
-          sent_by_user_id: userId,
-          status: 'failed',
-          error_message: msg,
-          metadata: { campaign_id: campaignId, recipient_id: next.id },
-        });
-        const progress = await syncCampaignCounters(admin, campaignId);
-        return json(200, {
-          ok: true,
-          done: false,
-          sent_one: false,
-          failed_one: true,
-          error: msg,
-          from_email: fromEmail,
-          gap_seconds: campaign.gap_seconds || DEFAULT_GAP,
-          ...progress,
-        });
-      }
+      // Browser loop already waits the gap; don't double-wait here.
+      const result = await sendNextForCampaign(admin, campaignId, userId, { respectGap: false });
+      if (result.http_status === 404) return json(404, result);
+      if (result.http_status === 400) return json(400, result);
+      return json(200, result);
     }
 
     return json(400, { error: `Unknown action: ${action}` });

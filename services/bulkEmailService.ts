@@ -245,9 +245,37 @@ export async function createBulkCampaign(input: {
   };
 }
 
-export async function getBulkCampaignStatus(campaignId: string): Promise<BulkProgress> {
-  const json = await invokeBulk({ action: 'status', campaign_id: campaignId });
-  return json as unknown as BulkProgress;
+export type BulkRecipientRow = {
+  id: string;
+  full_name: string | null;
+  email: string;
+  status: string;
+  error: string | null;
+  row_index: number | null;
+  sent_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function listBulkRecipients(
+  campaignId: string,
+  opts?: { status?: string; q?: string; limit?: number },
+): Promise<{ recipients: BulkRecipientRow[] } & Partial<BulkProgress>> {
+  const json = await invokeBulk({
+    action: 'list_recipients',
+    campaign_id: campaignId,
+    status: opts?.status || '',
+    q: opts?.q || '',
+    limit: opts?.limit || 3000,
+  });
+  return {
+    recipients: Array.isArray(json.recipients) ? (json.recipients as BulkRecipientRow[]) : [],
+    ...(json as unknown as Partial<BulkProgress>),
+  };
+}
+
+export async function tickBulkCampaigns(): Promise<Record<string, unknown>> {
+  return invokeBulk({ action: 'tick' });
 }
 
 export async function processBulkNext(campaignId: string): Promise<BulkProgress> {
