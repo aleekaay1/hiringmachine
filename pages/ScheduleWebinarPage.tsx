@@ -228,7 +228,7 @@ const ScheduleWebinarPage: React.FC = () => {
                     : 'text-gray-600 hover:bg-gray-50'
                 }`}
               >
-                Watch soon
+                Watch now
               </button>
             </div>
 
@@ -237,7 +237,7 @@ const ScheduleWebinarPage: React.FC = () => {
                 {quickSlot ? (
                   <>
                     <p className="font-semibold">
-                      {quickSlot.is_jit ? 'Watch soon (Just-in-time)' : 'Start soon'}
+                      {quickSlot.is_jit ? 'Watch now (Just-in-time)' : 'Watch now'}
                     </p>
                     <p className="mt-1 text-[13px] leading-snug">
                       {quickSlot.is_jit

@@ -146,7 +146,7 @@ const ScheduleWebinarSignupsPage: React.FC = () => {
                           : 'bg-blue-50 text-blue-800'
                       }`}
                     >
-                      {row.schedule_mode === 'quick' ? 'Watch soon' : 'Pick a time'}
+                      {row.schedule_mode === 'quick' ? 'Watch now' : 'Pick a time'}
                     </span>
                   </td>
                   <td className="px-3 py-3 text-slate-700">
