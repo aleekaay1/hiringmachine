@@ -19,6 +19,8 @@ export type PublicWebinarBookResult = {
   quick?: boolean;
   email_verified?: boolean;
   message?: string;
+  watch_link?: string | null;
+  confirmation_link?: string | null;
   broadcast?: {
     id: string;
     title: string | null;

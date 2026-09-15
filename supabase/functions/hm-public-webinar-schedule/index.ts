@@ -158,7 +158,24 @@ function nearestSoonSlot(
 /**
  * WebinarGeek Just-in-time uses a virtual broadcast (`active_jit` / episode.jit_broadcast_id).
  * Subscribing to that ID creates a real slot at the next 5/10/15‑minute mark.
+ *
+ * Prefer the published AO Globe Life registration webinar — accounts often have older
+ * unpublished duplicates that still expose a JIT broadcast id.
  */
+function webinarJitScore(webinar: Record<string, unknown>, episode: Record<string, unknown>): number {
+  let score = 0;
+  const title = `${str(webinar.title)} ${str(episode.title)}`.toLowerCase();
+  const url = `${str(webinar.url)} ${str(webinar.view_without_registration_url)}`.toLowerCase();
+  if (url.includes('globe-life-online-career-session')) score += 100;
+  if (url.includes('globelifepaz')) score += 40;
+  if (title.includes('ao globe life')) score += 50;
+  if (title.includes('ao paz')) score += 20;
+  if (episode.published === true) score += 30;
+  if (episode.published === false) score -= 80;
+  if (webinar.archived === true) score -= 200;
+  return score;
+}
+
 async function resolveJitQuickSlot(
   preferredWebinarId?: string,
 ): Promise<Record<string, unknown> | null> {
@@ -169,8 +186,8 @@ async function resolveJitQuickSlot(
     : [];
 
   const nowMs = Date.now();
-  let best: Record<string, unknown> | null = null;
-  let bestMs = Number.MAX_SAFE_INTEGER;
+  type Candidate = { score: number; ms: number; row: Record<string, unknown> };
+  const candidates: Candidate[] = [];
 
   for (const webinar of webinars) {
     if (webinar.archived === true) continue;
@@ -193,26 +210,37 @@ async function resolveJitQuickSlot(
             : null,
         );
       const ms = closestMs ?? nowMs + 5 * 60 * 1000;
-      if (ms < bestMs) {
-        bestMs = ms;
-        const period = Number(episode.jit_period_minutes);
-        best = {
+      const period = Number(episode.jit_period_minutes);
+      const score = preferredWebinarId
+        ? 1000
+        : webinarJitScore(webinar, episode);
+      candidates.push({
+        score,
+        ms,
+        row: {
           id: jitBroadcastId,
           title: str(episode.title || webinar.title) || 'Watch soon',
           date: closestMs != null ? (closestMs > 1e12 ? closestMs / 1000 : closestMs) : Math.floor(ms / 1000),
           webinar_id: webinar.id ?? null,
           episode_id: episode.id ?? null,
+          webinar_url: str(webinar.url) || null,
           day_label: 'today',
           starts_in_minutes: Math.max(1, Math.round((ms - nowMs) / 60000)),
           jit_period_minutes: Number.isFinite(period) && period > 0 ? period : 5,
           is_jit: true,
           active_jit: true,
-        };
-      }
+          episode_published: episode.published === true,
+        },
+      });
     }
   }
 
-  return best;
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => b.score - a.score || a.ms - b.ms);
+  // Ignore clearly unpublished duplicates when a better match exists
+  const top = candidates[0];
+  if (top.score < 0) return null;
+  return top.row;
 }
 
 async function loadPublicSchedule(): Promise<
@@ -369,14 +397,14 @@ async function resolveBroadcastContext(broadcastId: string, webinarIdHint?: stri
     if (webinarRes.ok) registrationFields = registrationFieldsFromJson(webinarRes.json);
   }
 
-  if (broadcast.cancelled === true) {
+  if (broadcast.cancelled === true && broadcast.active_jit !== true) {
     return {
       ok: false as const,
       status: 422,
       error: 'This session was cancelled. Please pick another upcoming time.',
     };
   }
-  if (broadcast.has_ended === true) {
+  if (broadcast.has_ended === true && broadcast.active_jit !== true) {
     return {
       ok: false as const,
       status: 422,
@@ -399,6 +427,7 @@ function formatBroadcast(row: Record<string, unknown>) {
     title: row.title ?? row.name ?? null,
     date: row.date ?? null,
     webinar_id: row.webinar_id ?? null,
+    webinar_url: row.webinar_url ?? null,
     day_label: row.day_label === 'tomorrow' ? 'tomorrow' : row.day_label === 'today' ? 'today' : null,
     starts_in_minutes:
       typeof row.starts_in_minutes === 'number' && Number.isFinite(row.starts_in_minutes)
@@ -409,6 +438,27 @@ function formatBroadcast(row: Record<string, unknown>) {
       typeof row.jit_period_minutes === 'number' && Number.isFinite(row.jit_period_minutes)
         ? row.jit_period_minutes
         : null,
+  };
+}
+
+function linksFromSubscription(row: Record<string, unknown> | null): {
+  watch_link: string | null;
+  confirmation_link: string | null;
+  broadcast_id: string | null;
+  broadcast_date: unknown;
+} {
+  if (!row) {
+    return { watch_link: null, confirmation_link: null, broadcast_id: null, broadcast_date: null };
+  }
+  const nested =
+    row.broadcast && typeof row.broadcast === 'object'
+      ? (row.broadcast as Record<string, unknown>)
+      : null;
+  return {
+    watch_link: str(row.watch_link) || null,
+    confirmation_link: str(row.confirmation_link) || null,
+    broadcast_id: nested?.id != null ? String(nested.id) : row.broadcast_id != null ? String(row.broadcast_id) : null,
+    broadcast_date: nested?.date ?? row.broadcast_date ?? null,
   };
 }
 
@@ -434,6 +484,42 @@ Deno.serve(async (req) => {
         window: 'today_and_tomorrow',
         quick_window_minutes: Math.round(QUICK_WINDOW_MS / 60000),
       });
+    }
+
+    if (req.method === 'GET' && mode === 'jit-catalog') {
+      const webinarsRes = await wgGet('/webinars', { per_page: 50 });
+      if (!webinarsRes.ok) {
+        return json(webinarsRes.status === 503 ? 503 : 502, {
+          error: wgErrorMessage(webinarsRes.json, 'Unable to load webinars'),
+        });
+      }
+      const webinars = Array.isArray(webinarsRes.json.webinars)
+        ? (webinarsRes.json.webinars as Array<Record<string, unknown>>)
+        : [];
+      const rows: Array<Record<string, unknown>> = [];
+      for (const webinar of webinars) {
+        const episodes = Array.isArray(webinar.episodes)
+          ? (webinar.episodes as Array<Record<string, unknown>>)
+          : [];
+        for (const episode of episodes) {
+          if (episode.jit_enabled !== true) continue;
+          rows.push({
+            webinar_id: webinar.id ?? null,
+            webinar_title: webinar.title ?? null,
+            webinar_url: webinar.url ?? null,
+            archived: webinar.archived === true,
+            episode_id: episode.id ?? null,
+            episode_title: episode.title ?? null,
+            episode_published: episode.published === true,
+            jit_broadcast_id: episode.jit_broadcast_id ?? null,
+            jit_period_minutes: episode.jit_period_minutes ?? null,
+            jit_closest_time: episode.jit_closest_time ?? null,
+            score: webinarJitScore(webinar, episode),
+          });
+        }
+      }
+      rows.sort((a, b) => Number(b.score) - Number(a.score));
+      return json(200, { ok: true, jit_webinars: rows });
     }
 
     if (req.method === 'POST' && mode === 'book') {
@@ -463,15 +549,16 @@ Deno.serve(async (req) => {
         return json(400, { error: 'Please enter a valid email address.' });
       }
 
-      if (wantQuick && !broadcastId) {
+      // Always re-resolve JIT from the preferred published webinar (ignore stale client ids).
+      if (wantQuick) {
         const schedule = await loadPublicSchedule();
         if (!schedule.ok) {
           return json(schedule.status, { error: schedule.error });
         }
-        if (!schedule.quick) {
+        if (!schedule.quick?.id) {
           return json(409, {
             error:
-              'Watch soon is unavailable right now. Enable Just-in-time on your webinar in WebinarGeek, or pick a time from today’s / tomorrow’s list.',
+              'Watch soon is unavailable right now. Enable Just-in-time on your published AO webinar, or pick a time from today’s / tomorrow’s list.',
             quick_available: false,
           });
         }
@@ -487,33 +574,37 @@ Deno.serve(async (req) => {
         });
       }
 
-      const [broadcastContext, existingRows] = await Promise.all([
-        resolveBroadcastContext(broadcastId, webinarId || undefined),
-        findSubscriptionForBroadcast(email, broadcastId),
-      ]);
-
+      // For JIT virtual broadcasts, skip "already registered" lookup on the virtual id —
+      // WebinarGeek creates a real broadcast on subscribe and handles duplicates itself.
+      const broadcastContext = await resolveBroadcastContext(broadcastId, webinarId || undefined);
       if (!broadcastContext.ok) {
         return json(broadcastContext.status === 404 ? 404 : broadcastContext.status === 422 ? 422 : 502, {
           error: broadcastContext.error,
         });
       }
 
-      if (existingRows.length > 0) {
-        const row = existingRows[0];
-        return json(200, {
-          ok: true,
-          booked: true,
-          already_registered: true,
-          email_verified: row.email_verified === true,
-          broadcast: {
-            id: broadcastId,
-            title: broadcastContext.title,
-            date: broadcastContext.date,
-            webinar_id: broadcastContext.webinarId,
-          },
-          message:
-            'You are already registered for this session. Check your inbox for the WebinarGeek confirmation email.',
-        });
+      if (!wantQuick) {
+        const existingRows = await findSubscriptionForBroadcast(email, broadcastId);
+        if (existingRows.length > 0) {
+          const row = existingRows[0];
+          const links = linksFromSubscription(row);
+          return json(200, {
+            ok: true,
+            booked: true,
+            already_registered: true,
+            email_verified: row.email_verified === true,
+            watch_link: links.watch_link,
+            confirmation_link: links.confirmation_link,
+            broadcast: {
+              id: links.broadcast_id || broadcastId,
+              title: broadcastContext.title,
+              date: links.broadcast_date ?? broadcastContext.date,
+              webinar_id: broadcastContext.webinarId,
+            },
+            message:
+              'You are already registered for this session. Check your inbox for the WebinarGeek confirmation email.',
+          });
+        }
       }
 
       let payload = buildSubscriptionPayload({
@@ -524,6 +615,8 @@ Deno.serve(async (req) => {
         customField,
         registrationFields: broadcastContext.registrationFields,
       });
+      // Explicitly ensure WG sends confirmation (default is true; set false only if needed).
+      payload.skip_confirmation_mail = false;
 
       let bookRes = await wgPost(
         `/broadcasts/${encodeURIComponent(broadcastId)}/subscriptions`,
@@ -552,6 +645,7 @@ Deno.serve(async (req) => {
           customField: payload.custom_field ? String(payload.custom_field) : null,
           registrationFields: broadcastContext.registrationFields,
         });
+        withSurname.skip_confirmation_mail = false;
         const retry = await wgPost(
           `/broadcasts/${encodeURIComponent(broadcastId)}/subscriptions`,
           withSurname,
@@ -574,6 +668,9 @@ Deno.serve(async (req) => {
         const confirmed = await findSubscriptionForBroadcast(email, broadcastId);
         subscriptionRow = confirmed[0] || null;
       }
+      const links = linksFromSubscription(subscriptionRow);
+      const effectiveBroadcastId = links.broadcast_id || broadcastId;
+      const effectiveDate = links.broadcast_date ?? broadcastContext.date;
 
       return json(200, {
         ok: true,
@@ -581,14 +678,18 @@ Deno.serve(async (req) => {
         already_registered: false,
         quick: wantQuick,
         email_verified: subscriptionRow?.email_verified === true,
+        watch_link: links.watch_link,
+        confirmation_link: links.confirmation_link,
         broadcast: {
-          id: broadcastId,
+          id: effectiveBroadcastId,
           title: broadcastContext.title,
-          date: broadcastContext.date,
+          date: effectiveDate,
           webinar_id: broadcastContext.webinarId,
         },
         message: wantQuick
-          ? 'You are registered for the soonest available session. Check your email for the WebinarGeek join link — it starts shortly.'
+          ? links.watch_link
+            ? 'You are registered. Use the join link below — WebinarGeek also emails it shortly.'
+            : 'You are registered for the soonest available session. Check your email for the WebinarGeek join link — it starts shortly.'
           : 'You are registered. WebinarGeek will email you a confirmation with the join link shortly.',
       });
     }
