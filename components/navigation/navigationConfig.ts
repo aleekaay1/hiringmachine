@@ -1,5 +1,6 @@
 import type { LucideIcon } from 'lucide-react';
 import {
+  BarChart3,
   ClipboardList,
   Home,
   Mail,
@@ -65,16 +66,22 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [{ name: 'Call workspace', route: '/pipeline/call', icon: PhoneCall, section: 'pipeline-call' }],
   },
   {
-    id: 'webinar-verify',
-    label: 'Webinar verify',
+    id: 'webinar',
+    label: 'Webinar',
     icon: Video,
-    tourId: 'nav-webinar-verify',
+    tourId: 'nav-webinar',
     items: [
       {
         name: 'Webinar verify',
         route: '/pipeline/webinar-verify',
         icon: Video,
         section: 'pipeline-webinar-verify',
+      },
+      {
+        name: 'Registrations',
+        route: '/webinar-geek',
+        icon: BarChart3,
+        section: 'webinar-geek',
       },
     ],
   },

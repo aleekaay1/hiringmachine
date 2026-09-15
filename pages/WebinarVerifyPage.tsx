@@ -1,19 +1,12 @@
 import React from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { CheckCircle2, CircleAlert, ExternalLink, Loader2, Search, Sparkles, Video } from 'lucide-react';
+import { CheckCircle2, CircleAlert, Loader2, Search, Video } from 'lucide-react';
 import PipelineAuthShell from '../components/PipelineAuthShell';
-import HomeLoadingScreen from '../components/dashboard/HomeLoadingScreen';
 import { Button } from '../components/UI';
 import { supabase } from '../services/supabaseClient';
-import { getPipelineUserCallSettings } from '../services/pipelineService';
 import { formatDateTimeCanadaEastern } from '../services/dateDisplay';
 import {
-  bookWebinarGeekBroadcast,
-  fetchWebinarGeekBookingIdentities,
-  fetchWebinarGeekUpcomingBroadcasts,
   verifyWebinarGeekEmail,
-  type WebinarGeekBookingIdentity,
-  type WebinarGeekUpcomingBroadcast,
   type WebinarGeekVerifyStatus,
   type WebinarGeekVerifySubscription,
 } from '../services/webinarGeekIntegrations';
@@ -23,13 +16,6 @@ function formatBroadcastDate(value: unknown): string {
   if (!Number.isFinite(n) || n <= 0) return 'Date TBD';
   const ms = n > 1e12 ? n : n * 1000;
   return formatDateTimeCanadaEastern(new Date(ms).toISOString());
-}
-
-function splitFullName(fullName: string): { firstname: string; surname: string } {
-  const parts = fullName.trim().split(/\s+/).filter(Boolean);
-  if (!parts.length) return { firstname: '', surname: '' };
-  if (parts.length === 1) return { firstname: parts[0], surname: '' };
-  return { firstname: parts[0], surname: parts.slice(1).join(' ') };
 }
 
 function statusMeta(status: WebinarGeekVerifyStatus | null) {
@@ -57,145 +43,16 @@ function statusMeta(status: WebinarGeekVerifyStatus | null) {
 const WebinarVerifyPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const [email, setEmail] = React.useState(searchParams.get('email') || '');
-  const [firstname, setFirstname] = React.useState(searchParams.get('first') || '');
-  const [surname, setSurname] = React.useState(searchParams.get('last') || '');
-  const [phone, setPhone] = React.useState(searchParams.get('phone') || '');
-  const candidateId = searchParams.get('candidateId') || '';
-
   const [checking, setChecking] = React.useState(false);
-  const [booking, setBooking] = React.useState(false);
-  const [bookingProgress, setBookingProgress] = React.useState<{ pct: number; label: string } | null>(null);
-  const [bookSuccess, setBookSuccess] = React.useState<string | null>(null);
-  const [loadingBroadcasts, setLoadingBroadcasts] = React.useState(false);
   const [message, setMessage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-
   const [verifyStatus, setVerifyStatus] = React.useState<WebinarGeekVerifyStatus | null>(null);
   const [subscriptions, setSubscriptions] = React.useState<WebinarGeekVerifySubscription[]>([]);
-  const [broadcasts, setBroadcasts] = React.useState<WebinarGeekUpcomingBroadcast[]>([]);
-  const [selectedBroadcastId, setSelectedBroadcastId] = React.useState('');
-  const [bookingIdentities, setBookingIdentities] = React.useState<WebinarGeekBookingIdentity[]>([]);
-  const [loadingIdentities, setLoadingIdentities] = React.useState(false);
-  const [selectedLinkTag, setSelectedLinkTag] = React.useState('');
 
   React.useEffect(() => {
-    const name = searchParams.get('name') || '';
-    if (!firstname && !surname && name.trim()) {
-      const split = splitFullName(name);
-      setFirstname(split.firstname);
-      setSurname(split.surname);
-    }
-  }, [searchParams, firstname, surname]);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const settings = await getPipelineUserCallSettings();
-        if (cancelled) return;
-        setSelectedBroadcastId(settings?.webinar_geek_default_broadcast_id || '');
-        const settingsTag = settings?.webinar_geek_custom_field || '';
-        if (settingsTag) setSelectedLinkTag(settingsTag);
-      } catch {
-        /* optional settings */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      setLoadingIdentities(true);
-      try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData.session?.access_token;
-        if (!token) return;
-        const result = await fetchWebinarGeekBookingIdentities(token);
-        if (cancelled) return;
-        if (!result.ok) {
-          setError(result.error);
-          return;
-        }
-        const rows = Array.isArray(result.data.identities)
-          ? (result.data.identities as WebinarGeekBookingIdentity[])
-          : [];
-        setBookingIdentities(rows);
-        setSelectedLinkTag((prev) => {
-          if (prev && rows.some((row) => row.tag === prev)) return prev;
-          return rows[0]?.tag || prev;
-        });
-      } finally {
-        if (!cancelled) setLoadingIdentities(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      setLoadingBroadcasts(true);
-      try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData.session?.access_token;
-        if (!token) return;
-        const result = await fetchWebinarGeekUpcomingBroadcasts(token);
-        if (cancelled) return;
-        if (!result.ok) {
-          setError(result.error);
-          return;
-        }
-        const rows = Array.isArray(result.data.broadcasts)
-          ? (result.data.broadcasts as WebinarGeekUpcomingBroadcast[])
-          : [];
-        setBroadcasts(rows);
-        setSelectedBroadcastId((prev) => {
-          if (prev && rows.some((row) => String(row.id) === prev)) return prev;
-          return rows[0]?.id != null ? String(rows[0].id) : prev;
-        });
-      } finally {
-        if (!cancelled) setLoadingBroadcasts(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  React.useEffect(() => {
-    if (!booking) return;
-    const stages = [
-      { pct: 15, label: 'Connecting to WebinarGeek…' },
-      { pct: 35, label: 'Checking session slot…' },
-      { pct: 55, label: 'Registering candidate…' },
-      { pct: 78, label: 'Confirming booking…' },
-    ];
-    let stageIndex = 0;
-    setBookingProgress(stages[0]);
-    const timer = window.setInterval(() => {
-      stageIndex += 1;
-      if (stageIndex < stages.length) {
-        setBookingProgress(stages[stageIndex]);
-        return;
-      }
-      setBookingProgress((prev) => (
-        prev ? { ...prev, pct: Math.min(prev.pct + 2, 94), label: 'Almost done…' } : prev
-      ));
-    }, 800);
-    return () => window.clearInterval(timer);
-  }, [booking]);
-
-  const getToken = async (): Promise<string> => {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    if (!token) throw new Error('Sign in to use the webinar portal.');
-    return token;
-  };
+    const fromQuery = searchParams.get('email') || '';
+    if (fromQuery) setEmail(fromQuery);
+  }, [searchParams]);
 
   const runVerify = async () => {
     const normalized = email.trim().toLowerCase();
@@ -207,7 +64,9 @@ const WebinarVerifyPage: React.FC = () => {
     setError(null);
     setMessage(null);
     try {
-      const token = await getToken();
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('Sign in to use the webinar portal.');
       const result = await verifyWebinarGeekEmail(token, normalized);
       if (!result.ok) throw new Error(result.error);
       const status = (result.data.status as WebinarGeekVerifyStatus) || 'not_found';
@@ -219,65 +78,26 @@ const WebinarVerifyPage: React.FC = () => {
       if (status === 'verified_scheduled') {
         setMessage('They are verified in WebinarGeek and show as scheduled.');
       } else if (status === 'pending_verification') {
-        setMessage('They are registered but still need to confirm the WebinarGeek email.');
+        setMessage('Registered in WebinarGeek, but they have not confirmed the invitation email yet.');
       } else {
-        setMessage('No subscription found for this email yet.');
+        setMessage('No matching WebinarGeek registration found for this email.');
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
       setVerifyStatus(null);
       setSubscriptions([]);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setChecking(false);
     }
   };
 
-  const runBook = async () => {
-    const normalized = email.trim().toLowerCase();
-    if (!normalized || !firstname.trim() || !selectedBroadcastId) {
-      setError('Email, first name, and a broadcast slot are required to book.');
-      return;
-    }
-    if (!surname.trim()) {
-      setError('Last name is required — WebinarGeek rejects bookings without a surname.');
-      return;
-    }
-    if (!selectedLinkTag.trim()) {
-      setError('Choose a Cooper/RMS registration link to book as.');
-      return;
-    }
-    if (!phone.trim()) {
-      setError('Phone number is required for WebinarGeek registration.');
-      return;
-    }
-    setBooking(true);
-    setError(null);
-    setBookSuccess(null);
-    setBookingProgress({ pct: 8, label: 'Starting booking…' });
-    try {
-      const token = await getToken();
-      const selected = broadcasts.find((row) => String(row.id) === selectedBroadcastId);
-      const result = await bookWebinarGeekBroadcast(token, {
-        email: normalized,
-        firstname: firstname.trim(),
-        surname: surname.trim() || undefined,
-        phone: phone.trim(),
-        broadcastId: selectedBroadcastId,
-        webinarId: selected?.webinar_id != null ? String(selected.webinar_id) : undefined,
-        customField: selectedLinkTag.trim(),
-        candidateId: candidateId || undefined,
-      });
-      if (!result.ok) throw new Error(result.error);
-      setBookingProgress({ pct: 100, label: 'Booked successfully!' });
-      setBookSuccess(String(result.data.message || 'Webinar booked through the portal.'));
-      await runVerify();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setBookingProgress(null);
-    } finally {
-      setBooking(false);
-    }
-  };
+  React.useEffect(() => {
+    const fromQuery = (searchParams.get('email') || '').trim();
+    if (!fromQuery) return;
+    void runVerify();
+    // Auto-check once when opened with ?email= from Call workspace
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const status = statusMeta(verifyStatus);
   const StatusIcon = status.icon;
@@ -285,7 +105,7 @@ const WebinarVerifyPage: React.FC = () => {
   return (
     <PipelineAuthShell
       title="Webinar verify"
-      subtitle="Quick WebinarGeek check & booking for callers"
+      subtitle="Check WebinarGeek registration and email verification"
       redirectPath="/pipeline/webinar-verify"
     >
       <div className="min-h-screen bg-gradient-to-br from-[#eef4ff] via-[#f8fbff] to-[#ede9fe] p-4 md:p-8">
@@ -296,7 +116,7 @@ const WebinarVerifyPage: React.FC = () => {
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-[#0B1B34]">Webinar verify</h1>
             <p className="mt-1 text-sm text-[#4b6d95]">
-              Check if they confirmed WebinarGeek, or book them directly from here.
+              Paste an email to see if they registered and verified in WebinarGeek.
             </p>
           </div>
 
@@ -307,7 +127,7 @@ const WebinarVerifyPage: React.FC = () => {
                 Verify registration
               </div>
               <p className="mt-1 text-xs text-[#6b84a8]">
-                Paste the email they used (or will use) for WebinarGeek and hit Check.
+                Paste the email they used for WebinarGeek and hit Check.
               </p>
               <div className="mt-4 flex flex-col gap-2 sm:flex-row">
                 <input
@@ -362,177 +182,14 @@ const WebinarVerifyPage: React.FC = () => {
                         {row.webinar_title || 'Webinar'} · {formatBroadcastDate(row.broadcast_date)}
                       </p>
                       <p className="mt-1">
-                        Email verified: {row.email_verified ? 'Yes' : 'No'} · Source:{' '}
-                        {String(row.registration_source || '—')}
+                        Email verified: {row.email_verified ? 'Yes' : 'No'} · Watched:{' '}
+                        {row.watched ? 'Yes' : 'No'} · Source: {String(row.registration_source || '—')}
                       </p>
                       {row.custom_field && (
                         <p className="mt-1">Tag: {String(row.custom_field)}</p>
                       )}
                     </div>
                   ))}
-                </div>
-              )}
-            </section>
-
-            <section className="relative rounded-3xl border border-white/80 bg-white/90 p-5 shadow-[0_20px_60px_-40px_rgba(59,130,246,0.35)] backdrop-blur">
-              {booking && bookingProgress && (
-                <div className="absolute inset-0 z-10 flex items-center justify-center rounded-3xl bg-white/95 p-4 backdrop-blur-sm">
-                  <div className="w-full max-w-md">
-                    <HomeLoadingScreen
-                      progress={bookingProgress}
-                      title="Booking webinar"
-                      subtitle="Registering the candidate in WebinarGeek — this usually takes a few seconds."
-                    />
-                  </div>
-                </div>
-              )}
-
-              <div className="flex items-center gap-2 text-sm font-semibold text-[#0B1B34]">
-                <Sparkles className="h-4 w-4 text-sky-600" />
-                Book webinar
-              </div>
-              <p className="mt-1 text-xs text-[#6b84a8]">
-                Registers them via WebinarGeek using your Cooper/RMS registration link.
-              </p>
-
-              <div className="mt-4 space-y-3 rounded-2xl border border-[#dbe8f8] bg-[#f8fbff] px-3 py-3">
-                <p className="text-xs font-semibold text-[#0B1B34]">Book as</p>
-                {loadingIdentities ? (
-                  <p className="text-xs text-[#6b84a8]">Loading your registration links…</p>
-                ) : (
-                  <div className="space-y-2">
-                    {bookingIdentities.map((identity) => (
-                      <label
-                        key={identity.tag}
-                        className={`flex cursor-pointer items-start gap-2 rounded-xl border px-3 py-2 text-xs ${
-                          selectedLinkTag === identity.tag
-                            ? 'border-sky-300 bg-white text-[#0B1B34]'
-                            : 'border-transparent bg-white/70 text-[#365274]'
-                        }`}
-                      >
-                        <input
-                          type="radio"
-                          name="booking-as"
-                          className="mt-0.5"
-                          checked={selectedLinkTag === identity.tag}
-                          onChange={() => setSelectedLinkTag(identity.tag)}
-                        />
-                        <span>
-                          <span className="font-semibold">{identity.label}</span>
-                          <span className="mt-0.5 block font-mono text-[10px] text-[#6b84a8]">{identity.tag}</span>
-                        </span>
-                      </label>
-                    ))}
-                    {!bookingIdentities.length && (
-                      <p className="text-[11px] text-amber-800">
-                        No Cooper/RMS links matched your first name yet. Set your registration tag in{' '}
-                        <a href="/account#recruiter-call-settings" target="_blank" rel="noreferrer" className="font-semibold underline">
-                          Pipeline settings
-                        </a>{' '}
-                        (e.g. cooper_yourname) — you can still book using that saved tag.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <label className="text-xs font-medium text-[#365274]">
-                  First name
-                  <input
-                    value={firstname}
-                    onChange={(e) => setFirstname(e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="text-xs font-medium text-[#365274]">
-                  Last name
-                  <input
-                    value={surname}
-                    onChange={(e) => setSurname(e.target.value)}
-                    required
-                    className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="text-xs font-medium text-[#365274] sm:col-span-2">
-                  Email (same as verify)
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="text-xs font-medium text-[#365274] sm:col-span-2">
-                  Phone
-                  <input
-                    type="tel"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="(555) 555-5555"
-                    required
-                    className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="text-xs font-medium text-[#365274] sm:col-span-2">
-                  Upcoming session
-                  <select
-                    value={selectedBroadcastId}
-                    onChange={(e) => setSelectedBroadcastId(e.target.value)}
-                    disabled={loadingBroadcasts || !broadcasts.length}
-                    className="mt-1 w-full rounded-xl border border-[#c8ddf4] px-3 py-2 text-sm"
-                  >
-                    {!broadcasts.length && <option value="">No upcoming broadcasts loaded</option>}
-                    {broadcasts.map((row) => (
-                      <option key={String(row.id)} value={String(row.id)}>
-                        {row.title || `Broadcast ${row.id}`} · {formatBroadcastDate(row.date)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <Button
-                  className="!min-h-0 h-11 px-5 bg-[#005EB8] hover:bg-[#004a93] text-white border-0"
-                  onClick={() => void runBook()}
-                  disabled={booking || loadingBroadcasts || !selectedBroadcastId || !selectedLinkTag.trim()}
-                >
-                  {booking ? 'Booking…' : 'Book webinar'}
-                </Button>
-                <a
-                  href="/account#recruiter-call-settings"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-[#005EB8] hover:underline"
-                >
-                  Pipeline settings
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-              </div>
-
-              {bookSuccess && (
-                <div className="mt-4 flex items-start gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-                  <div>
-                    <p className="font-semibold">Booking confirmed</p>
-                    <p className="mt-1 text-xs opacity-90">{bookSuccess}</p>
-                    {verifyStatus === 'pending_verification' && (
-                      <p className="mt-1 text-xs text-amber-800">
-                        They are registered in WebinarGeek but still need to confirm the invitation email.
-                      </p>
-                    )}
-                    {verifyStatus === 'verified_scheduled' && (
-                      <p className="mt-1 text-xs text-emerald-800">
-                        Verified in WebinarGeek — see the registration details above.
-                      </p>
-                    )}
-                    {verifyStatus === 'not_found' && (
-                      <p className="mt-1 text-xs text-amber-800">
-                        Registration is still syncing. Click Check again in a few seconds.
-                      </p>
-                    )}
-                  </div>
                 </div>
               )}
             </section>
