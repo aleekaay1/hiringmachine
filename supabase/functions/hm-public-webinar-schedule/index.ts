@@ -469,12 +469,16 @@ Deno.serve(async (req) => {
             quick_available: false,
           });
         }
-        broadcastId = str(schedule.quick.id);
-        webinarId = str(schedule.quick.webinar_id) || webinarId;
+        broadcastId = String(schedule.quick.id ?? '').trim();
+        webinarId = String(schedule.quick.webinar_id ?? '').trim() || webinarId;
       }
 
       if (!broadcastId) {
-        return json(400, { error: 'email, firstname, and broadcast_id are required.' });
+        return json(400, {
+          error: wantQuick
+            ? 'Could not resolve a Just-in-time session. Try again or pick a time from the list.'
+            : 'email, firstname, and broadcast_id are required.',
+        });
       }
 
       const [broadcastContext, existingRows] = await Promise.all([
