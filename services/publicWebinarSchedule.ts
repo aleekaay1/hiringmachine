@@ -8,6 +8,8 @@ export type PublicUpcomingBroadcast = {
   webinar_id: string | number | null;
   day_label?: 'today' | 'tomorrow' | null;
   starts_in_minutes?: number | null;
+  is_jit?: boolean;
+  jit_period_minutes?: number | null;
 };
 
 export type PublicWebinarBookResult = {

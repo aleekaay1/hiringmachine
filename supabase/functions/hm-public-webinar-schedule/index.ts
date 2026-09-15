@@ -68,7 +68,7 @@ async function wgPost(path: string, body: Record<string, unknown>) {
 }
 
 const SCHEDULE_TZ = 'America/Toronto';
-/** Nearest session within this window qualifies as "watch soon". */
+/** Fallback “soon” window when JIT virtual broadcast is not available. */
 const QUICK_WINDOW_MS = 90 * 60 * 1000;
 
 function unixMsFromField(value: unknown): number | null {
@@ -104,6 +104,7 @@ function upcomingBroadcastRows(rows: Array<Record<string, unknown>>): Array<Reco
     .filter(({ row, ms }) => {
       if (row.cancelled === true) return false;
       if (row.has_ended === true) return false;
+      if (row.active_jit === true) return false; // handled via JIT resolver
       if (ms == null) return false;
       return ms >= nowMs;
     })
@@ -112,10 +113,7 @@ function upcomingBroadcastRows(rows: Array<Record<string, unknown>>): Array<Reco
 }
 
 /** Same calendar day + next day only (Toronto), one broadcast per start time. */
-function publicScheduleSlots(rows: Array<Record<string, unknown>>): {
-  broadcasts: Array<Record<string, unknown>>;
-  quick: Record<string, unknown> | null;
-} {
+function publicScheduleSlots(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   const nowMs = Date.now();
   const todayYmd = torontoYmdFromMs(nowMs);
   const tomorrowYmd = addCalendarDaysYmd(todayYmd, 1);
@@ -131,23 +129,90 @@ function publicScheduleSlots(rows: Array<Record<string, unknown>>): {
     if (!bySlot.has(ms)) bySlot.set(ms, row);
   }
 
-  const broadcasts = [...bySlot.entries()]
+  return [...bySlot.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([ms, row]) => ({
       ...row,
       day_label: torontoYmdFromMs(ms) === todayYmd ? 'today' : 'tomorrow',
     }));
+}
 
-  const quickEntry = [...bySlot.entries()].find(([ms]) => ms - nowMs <= QUICK_WINDOW_MS);
-  const quick = quickEntry
-    ? {
-        ...quickEntry[1],
-        day_label: torontoYmdFromMs(quickEntry[0]) === todayYmd ? 'today' : 'tomorrow',
-        starts_in_minutes: Math.max(1, Math.round((quickEntry[0] - nowMs) / 60000)),
+function nearestSoonSlot(
+  slots: Array<Record<string, unknown>>,
+): Record<string, unknown> | null {
+  const nowMs = Date.now();
+  for (const row of slots) {
+    const ms = unixMsFromField(row.date);
+    if (ms == null) continue;
+    if (ms - nowMs <= QUICK_WINDOW_MS) {
+      return {
+        ...row,
+        starts_in_minutes: Math.max(1, Math.round((ms - nowMs) / 60000)),
+        is_jit: false,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * WebinarGeek Just-in-time uses a virtual broadcast (`active_jit` / episode.jit_broadcast_id).
+ * Subscribing to that ID creates a real slot at the next 5/10/15‑minute mark.
+ */
+async function resolveJitQuickSlot(
+  preferredWebinarId?: string,
+): Promise<Record<string, unknown> | null> {
+  const webinarsRes = await wgGet('/webinars', { per_page: 50 });
+  if (!webinarsRes.ok) return null;
+  const webinars = Array.isArray(webinarsRes.json.webinars)
+    ? (webinarsRes.json.webinars as Array<Record<string, unknown>>)
+    : [];
+
+  const nowMs = Date.now();
+  let best: Record<string, unknown> | null = null;
+  let bestMs = Number.MAX_SAFE_INTEGER;
+
+  for (const webinar of webinars) {
+    if (webinar.archived === true) continue;
+    const webinarId = webinar.id != null ? String(webinar.id) : '';
+    if (preferredWebinarId && webinarId && webinarId !== preferredWebinarId) continue;
+
+    const episodes = Array.isArray(webinar.episodes)
+      ? (webinar.episodes as Array<Record<string, unknown>>)
+      : [];
+    for (const episode of episodes) {
+      if (episode.jit_enabled !== true) continue;
+      const jitBroadcastId = episode.jit_broadcast_id;
+      if (jitBroadcastId == null || String(jitBroadcastId).trim() === '') continue;
+
+      const closestMs =
+        unixMsFromField(episode.jit_closest_time) ??
+        unixMsFromField(
+          Array.isArray(episode.broadcasts)
+            ? (episode.broadcasts as Array<Record<string, unknown>>).find((b) => b.active_jit === true)?.date
+            : null,
+        );
+      const ms = closestMs ?? nowMs + 5 * 60 * 1000;
+      if (ms < bestMs) {
+        bestMs = ms;
+        const period = Number(episode.jit_period_minutes);
+        best = {
+          id: jitBroadcastId,
+          title: str(episode.title || webinar.title) || 'Watch soon',
+          date: closestMs != null ? (closestMs > 1e12 ? closestMs / 1000 : closestMs) : Math.floor(ms / 1000),
+          webinar_id: webinar.id ?? null,
+          episode_id: episode.id ?? null,
+          day_label: 'today',
+          starts_in_minutes: Math.max(1, Math.round((ms - nowMs) / 60000)),
+          jit_period_minutes: Number.isFinite(period) && period > 0 ? period : 5,
+          is_jit: true,
+          active_jit: true,
+        };
       }
-    : null;
+    }
+  }
 
-  return { broadcasts, quick };
+  return best;
 }
 
 async function loadPublicSchedule(): Promise<
@@ -157,7 +222,9 @@ async function loadPublicSchedule(): Promise<
   const configuredWebinarId = Deno.env.get('PUBLIC_WEBINAR_GEEK_WEBINAR_ID')?.trim() || '';
   const broadcastsRes = await wgGet(
     '/broadcasts',
-    configuredWebinarId ? { webinar_id: configuredWebinarId, per_page: 100 } : { per_page: 100 },
+    configuredWebinarId
+      ? { webinar_id: configuredWebinarId, per_page: 100, nested_resources: 'episode,webinar' }
+      : { per_page: 100, nested_resources: 'episode,webinar' },
   );
   if (!broadcastsRes.ok) {
     return {
@@ -169,7 +236,9 @@ async function loadPublicSchedule(): Promise<
   const rawRows = Array.isArray(broadcastsRes.json.broadcasts)
     ? (broadcastsRes.json.broadcasts as Array<Record<string, unknown>>)
     : [];
-  const { broadcasts, quick } = publicScheduleSlots(rawRows);
+  const broadcasts = publicScheduleSlots(rawRows);
+  const jitQuick = await resolveJitQuickSlot(configuredWebinarId || undefined);
+  const quick = jitQuick || nearestSoonSlot(broadcasts);
   return { ok: true, broadcasts, quick };
 }
 
@@ -335,6 +404,11 @@ function formatBroadcast(row: Record<string, unknown>) {
       typeof row.starts_in_minutes === 'number' && Number.isFinite(row.starts_in_minutes)
         ? row.starts_in_minutes
         : null,
+    is_jit: row.is_jit === true || row.active_jit === true,
+    jit_period_minutes:
+      typeof row.jit_period_minutes === 'number' && Number.isFinite(row.jit_period_minutes)
+        ? row.jit_period_minutes
+        : null,
   };
 }
 
@@ -391,7 +465,7 @@ Deno.serve(async (req) => {
         if (!schedule.quick) {
           return json(409, {
             error:
-              'No session starts within the next 90 minutes. Pick a time from today’s or tomorrow’s list, or enable Just-in-time (5 min) in WebinarGeek for always-on quick starts.',
+              'Watch soon is unavailable right now. Enable Just-in-time on your webinar in WebinarGeek, or pick a time from today’s / tomorrow’s list.',
             quick_available: false,
           });
         }

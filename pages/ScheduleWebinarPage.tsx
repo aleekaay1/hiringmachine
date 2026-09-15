@@ -232,19 +232,28 @@ const ScheduleWebinarPage: React.FC = () => {
               <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
                 {quickSlot ? (
                   <>
-                    <p className="font-semibold">Start soon — no waiting for a later slot</p>
+                    <p className="font-semibold">
+                      {quickSlot.is_jit ? 'Watch soon (Just-in-time)' : 'Start soon'}
+                    </p>
                     <p className="mt-1 text-[13px] leading-snug">
-                      We&apos;ll register you for the soonest session
-                      {quickSlot.starts_in_minutes
-                        ? ` (about ${quickSlot.starts_in_minutes} min)`
-                        : ''}
-                      :{' '}
-                      <span className="font-medium">{formatBroadcastWhen(quickSlot.date)}</span>
+                      {quickSlot.is_jit
+                        ? `We’ll register you for the next available start (every ${
+                            quickSlot.jit_period_minutes || 5
+                          } min). WebinarGeek emails the join link right away.`
+                        : 'We’ll register you for the soonest listed session.'}{' '}
+                      {quickSlot.starts_in_minutes ? (
+                        <span className="font-medium">
+                          Starts in about {quickSlot.starts_in_minutes} min
+                          {quickSlot.date ? ` · ${formatBroadcastWhen(quickSlot.date)}` : ''}.
+                        </span>
+                      ) : quickSlot.date ? (
+                        <span className="font-medium">{formatBroadcastWhen(quickSlot.date)}</span>
+                      ) : null}
                     </p>
                   </>
                 ) : (
                   <p>
-                    No session starts within the next 90 minutes. Switch to{' '}
+                    No quick session is available. Switch to{' '}
                     <button
                       type="button"
                       className="font-semibold underline"
