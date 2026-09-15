@@ -97,10 +97,12 @@ Deno.serve(async (req) => {
       });
     }
 
-    const from =
+    const fromEmail =
       Deno.env.get('SMTP_FROM')?.trim() ||
       Deno.env.get('SMTP_USERNAME')?.trim() ||
       'noreply@example.com';
+    const fromName = (Deno.env.get('SMTP_FROM_NAME')?.trim() || 'AO Globelife').replace(/"/g, '');
+    const from = `"${fromName}" <${fromEmail}>`;
     const attachments = rawAttachments
       .map((a: { filename?: string; content?: string; contentType?: string }) => {
         const filename = typeof a?.filename === 'string' && a.filename.trim() ? a.filename.trim() : 'attachment';
@@ -153,7 +155,7 @@ Deno.serve(async (req) => {
         await insertEmailSendLog(logClient, {
           source: 'send-email',
           trigger_label: triggerLabel,
-          from_email: from,
+          from_email: fromEmail,
           to_email: to,
           cc_email: cc || null,
           subject,

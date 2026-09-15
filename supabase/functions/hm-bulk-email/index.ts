@@ -92,6 +92,17 @@ function getTransportFor(account: SmtpAccount): Transporter {
   });
 }
 
+/** Inbox display name — e.g. "AO Globelife" <apply@…> */
+function smtpFromName(): string {
+  return Deno.env.get('SMTP_FROM_NAME')?.trim() || 'AO Globelife';
+}
+
+function formatFromHeader(email: string): string {
+  const name = smtpFromName().replace(/"/g, '');
+  const addr = normalizeEmail(email);
+  return `"${name}" <${addr}>`;
+}
+
 function defaultFromEmail(): string {
   const accounts = listSmtpAccounts();
   if (accounts[0]) return accounts[0].email;
@@ -330,7 +341,7 @@ Deno.serve(async (req) => {
         await new Promise<void>((resolve, reject) => {
           transport.sendMail(
             {
-              from: fromEmail,
+              from: formatFromHeader(fromEmail),
               to,
               bcc: mergePortalBcc(),
               subject: subjectWithTag,
@@ -664,7 +675,7 @@ Deno.serve(async (req) => {
         await new Promise<void>((resolve, reject) => {
           transport.sendMail(
             {
-              from: fromEmail,
+              from: formatFromHeader(fromEmail),
               to,
               bcc: mergePortalBcc(),
               subject,
