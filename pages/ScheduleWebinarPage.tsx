@@ -90,7 +90,11 @@ const ScheduleWebinarPage: React.FC = () => {
         surname: form.lastName.trim(),
         phone: form.phone.replace(/\D/g, ''),
         broadcast_id:
-          scheduleMode === 'pick' && form.broadcastId ? form.broadcastId : undefined,
+          scheduleMode === 'quick'
+            ? selected?.id != null
+              ? String(selected.id)
+              : undefined
+            : form.broadcastId || undefined,
         webinar_id: selected?.webinar_id != null ? String(selected.webinar_id) : undefined,
         quick: scheduleMode === 'quick',
       });

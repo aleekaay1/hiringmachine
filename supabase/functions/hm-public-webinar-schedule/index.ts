@@ -442,9 +442,15 @@ Deno.serve(async (req) => {
       const firstname = str(body.firstname || body.first_name || body.firstName);
       const surname = str(body.surname || body.last_name || body.lastName);
       const phone = str(body.phone);
-      const wantQuick = body.quick === true || body.mode === 'quick' || str(body.schedule_mode) === 'quick';
-      let broadcastId = str(body.broadcast_id || body.broadcastId);
-      let webinarId = str(body.webinar_id || body.webinarId);
+      const wantQuick =
+        body.quick === true ||
+        body.quick === 1 ||
+        body.quick === '1' ||
+        String(body.quick || '').toLowerCase() === 'true' ||
+        body.mode === 'quick' ||
+        str(body.schedule_mode) === 'quick';
+      let broadcastId = String(body.broadcast_id ?? body.broadcastId ?? '').trim();
+      let webinarId = String(body.webinar_id ?? body.webinarId ?? '').trim();
       const customField =
         str(body.custom_field) ||
         Deno.env.get('PUBLIC_WEBINAR_CUSTOM_FIELD')?.trim() ||
