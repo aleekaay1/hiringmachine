@@ -216,11 +216,53 @@ export async function sendBulkTestEmail(input: {
 
 export function defaultBulkEmailBody(): string {
   return (
-    `Hi {{first_name}},\n\n` +
-    `We're reaching out about an opportunity with AO Globe Life.\n\n` +
-    `Reply to this email if you'd like to learn more.\n\n` +
-    `Best,\nAO Paz Globelife recruiting`
+    `<p>Hi {{first_name}},</p>\n` +
+    `<p>We're reaching out about an opportunity with AO Globe Life.</p>\n` +
+    `<p>Reply to this email if you'd like to learn more.</p>\n` +
+    `<p>Best,<br/>AO Paz Globelife recruiting</p>`
   );
+}
+
+export function looksLikeHtml(value: string): boolean {
+  return /<\/?[a-z][\s\S]*>/i.test(value);
+}
+
+export function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** Split compose body into SMTP text + html parts. Plain text is wrapped with <br/>. */
+export function splitBulkEmailBody(body: string): { bodyText: string; bodyHtml: string } {
+  const raw = body.trim();
+  if (!raw) return { bodyText: '', bodyHtml: '' };
+  if (looksLikeHtml(raw)) {
+    return { bodyText: htmlToPlainText(raw) || raw, bodyHtml: raw };
+  }
+  return {
+    bodyText: raw,
+    bodyHtml: raw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>\n'),
+  };
+}
+
+export function applyBulkMerge(template: string, name: string, email: string): string {
+  const first = name.trim().split(/\s+/)[0] || 'there';
+  return template
+    .replace(/\{\{\s*name\s*\}\}/gi, name.trim() || first)
+    .replace(/\{\{\s*full_?name\s*\}\}/gi, name.trim() || first)
+    .replace(/\{\{\s*first_?name\s*\}\}/gi, first)
+    .replace(/\{\{\s*email\s*\}\}/gi, email);
 }
 
 export function sleep(ms: number): Promise<void> {

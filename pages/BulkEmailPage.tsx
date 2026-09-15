@@ -13,14 +13,17 @@ import {
   cancelBulkCampaign,
   createBulkCampaign,
   defaultBulkEmailBody,
+  applyBulkMerge,
   getBulkSettings,
   listBulkCampaigns,
+  looksLikeHtml,
   pauseBulkCampaign,
   processBulkNext,
   resumeBulkCampaign,
   saveBulkSettings,
   sendBulkTestEmail,
   sleep,
+  splitBulkEmailBody,
   type BulkAppSettings,
   type BulkCampaign,
   type BulkProgress,
@@ -242,11 +245,13 @@ const BulkEmailPage: React.FC = () => {
     }
     setTesting(true);
     try {
+      const parts = splitBulkEmailBody(body);
       const result = await sendBulkTestEmail({
         to: testTo.trim(),
         name: testName.trim() || 'there',
         subject: subject.trim(),
-        bodyText: body.trim(),
+        bodyText: parts.bodyText,
+        bodyHtml: parts.bodyHtml,
         fromEmail: smtpFrom,
       });
       setDailySent(result.daily_sent);
@@ -275,10 +280,12 @@ const BulkEmailPage: React.FC = () => {
       return;
     }
     try {
+      const parts = splitBulkEmailBody(body);
       const created = await createBulkCampaign({
         name: campaignName || fileName || 'Bulk campaign',
         subject: subject.trim(),
-        bodyText: body.trim(),
+        bodyText: parts.bodyText,
+        bodyHtml: parts.bodyHtml,
         gapSeconds,
         dailyCap: Math.min(500, dailyCap),
         provider: 'smtp',
@@ -302,19 +309,11 @@ const BulkEmailPage: React.FC = () => {
   };
 
   const previewRows = recipients.slice(0, 12);
-  const mergePreviewName = recipients[0]?.name || 'Alex Candidate';
-  const mergePreviewEmail = recipients[0]?.email || 'alex@example.com';
-  const first = mergePreviewName.split(/\s+/)[0] || 'there';
-  const previewSubject = subject
-    .replace(/\{\{\s*name\s*\}\}/gi, mergePreviewName)
-    .replace(/\{\{\s*full_?name\s*\}\}/gi, mergePreviewName)
-    .replace(/\{\{\s*first_?name\s*\}\}/gi, first)
-    .replace(/\{\{\s*email\s*\}\}/gi, mergePreviewEmail);
-  const previewBody = body
-    .replace(/\{\{\s*name\s*\}\}/gi, mergePreviewName)
-    .replace(/\{\{\s*full_?name\s*\}\}/gi, mergePreviewName)
-    .replace(/\{\{\s*first_?name\s*\}\}/gi, first)
-    .replace(/\{\{\s*email\s*\}\}/gi, mergePreviewEmail);
+  const mergePreviewName = recipients[0]?.name || testName || 'Alex Candidate';
+  const mergePreviewEmail = recipients[0]?.email || testTo || 'alex@example.com';
+  const previewSubject = applyBulkMerge(subject, mergePreviewName, mergePreviewEmail);
+  const previewParts = splitBulkEmailBody(applyBulkMerge(body, mergePreviewName, mergePreviewEmail));
+  const bodyIsHtml = looksLikeHtml(body);
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 px-4 py-6">
@@ -537,13 +536,19 @@ const BulkEmailPage: React.FC = () => {
               />
             </label>
             <label className="block text-xs text-[#6f675c]">
-              Body (use {'{{first_name}}'}, {'{{name}}'}, {'{{email}}'})
+              Body — plain text or HTML (use {'{{first_name}}'}, {'{{name}}'}, {'{{email}}'})
               <textarea
-                className="mt-1 min-h-[180px] w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm leading-relaxed"
+                className="mt-1 min-h-[200px] w-full rounded-lg border border-[#e0d8ca] px-3 py-2 font-mono text-[12px] leading-relaxed"
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
+                placeholder={'<p>Hi {{first_name}},</p>\n<p>Your message…</p>'}
               />
             </label>
+            <p className="text-[11px] text-[#8a8276]">
+              {bodyIsHtml
+                ? 'HTML detected — preview renders it and SMTP sends as HTML + plain-text fallback.'
+                : 'Plain text — preview shows line breaks; add tags like <p>, <b>, <a> for HTML.'}
+            </p>
             <div className="grid grid-cols-2 gap-3">
               <label className="block text-xs text-[#6f675c]">
                 Gap between emails (sec)
@@ -596,9 +601,12 @@ const BulkEmailPage: React.FC = () => {
               </select>
             </label>
             <div className="rounded-xl bg-[#f7f3eb] px-3 py-3 text-xs text-[#5a5348]">
-              <p className="hm-kicker mb-1">Preview</p>
+              <p className="hm-kicker mb-1">Preview {bodyIsHtml ? '· HTML' : '· text'}</p>
               <p className="font-medium text-[#1f2a24]">{previewSubject}</p>
-              <pre className="mt-2 whitespace-pre-wrap font-[IBM_Plex_Sans] text-[12px] leading-relaxed">{previewBody}</pre>
+              <div
+                className="bulk-email-preview mt-2 max-h-64 overflow-auto rounded-lg border border-[#e6e0d4] bg-white px-3 py-3 text-[13px] leading-relaxed text-[#1f2a24] [&_a]:text-[#3f6b4e] [&_a]:underline [&_p]:mb-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
+                dangerouslySetInnerHTML={{ __html: previewParts.bodyHtml || '<p></p>' }}
+              />
             </div>
             <button
               type="button"
