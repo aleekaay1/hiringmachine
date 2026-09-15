@@ -404,11 +404,9 @@ Deno.serve(async (req) => {
       const usage = await listAccountUsage(admin, dailyCap);
       const fromEmail = defaultFromEmail();
       const primary = usage.find((u) => u.email === normalizeEmail(fromEmail)) || usage[0];
-      const { data: draftLeads, error: draftErr } = await admin
+      const { count: draftCount } = await admin
         .from('hm_bulk_draft_leads')
-        .select('id, full_name, email, row_index, raw, created_at')
-        .order('row_index', { ascending: true });
-      if (draftErr) throw draftErr;
+        .select('id', { count: 'exact', head: true });
       return json(200, {
         ok: true,
         settings: data || {
@@ -425,7 +423,30 @@ Deno.serve(async (req) => {
         daily_sent: primary?.daily_sent || 0,
         hard_daily_cap: HARD_DAILY_CAP,
         smtp_accounts: usage,
+        draft_leads_count: draftCount || 0,
+      });
+    }
+
+    if (action === 'list_draft_leads') {
+      const limitRaw = Number(body.limit ?? 1000);
+      const offsetRaw = Number(body.offset ?? 0);
+      const limit = Math.min(2000, Math.max(1, Number.isFinite(limitRaw) ? Math.floor(limitRaw) : 1000));
+      const offset = Math.max(0, Number.isFinite(offsetRaw) ? Math.floor(offsetRaw) : 0);
+      const { data: draftLeads, error: draftErr } = await admin
+        .from('hm_bulk_draft_leads')
+        .select('id, full_name, email, row_index, raw, created_at')
+        .order('row_index', { ascending: true })
+        .range(offset, offset + limit - 1);
+      if (draftErr) throw draftErr;
+      const { count } = await admin
+        .from('hm_bulk_draft_leads')
+        .select('id', { count: 'exact', head: true });
+      return json(200, {
+        ok: true,
         draft_leads: draftLeads || [],
+        total: count || 0,
+        offset,
+        limit,
       });
     }
 

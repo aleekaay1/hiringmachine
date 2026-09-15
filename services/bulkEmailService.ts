@@ -108,7 +108,7 @@ export async function getBulkSettings(): Promise<{
   daily_sent: number;
   hard_daily_cap: number;
   smtp_accounts: BulkSmtpAccountUsage[];
-  draft_leads: BulkDraftLead[];
+  draft_leads_count: number;
 }> {
   const json = await invokeBulk({ action: 'get_settings' });
   return {
@@ -117,8 +117,27 @@ export async function getBulkSettings(): Promise<{
     daily_sent: Number(json.daily_sent) || 0,
     hard_daily_cap: Number(json.hard_daily_cap) || 500,
     smtp_accounts: (json.smtp_accounts as BulkSmtpAccountUsage[]) || [],
-    draft_leads: (json.draft_leads as BulkDraftLead[]) || [],
+    draft_leads_count: Number(json.draft_leads_count) || 0,
   };
+}
+
+export async function listBulkDraftLeads(): Promise<BulkDraftLead[]> {
+  const pageSize = 1000;
+  let offset = 0;
+  const all: BulkDraftLead[] = [];
+  for (;;) {
+    const json = await invokeBulk({
+      action: 'list_draft_leads',
+      limit: pageSize,
+      offset,
+    });
+    const batch = (json.draft_leads as BulkDraftLead[]) || [];
+    all.push(...batch);
+    const total = Number(json.total) || 0;
+    offset += batch.length;
+    if (!batch.length || offset >= total) break;
+  }
+  return all;
 }
 
 export async function saveBulkSettings(input: {

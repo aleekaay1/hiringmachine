@@ -17,6 +17,7 @@ import {
   applyBulkMerge,
   getBulkSettings,
   listBulkCampaigns,
+  listBulkDraftLeads,
   looksLikeHtml,
   pauseBulkCampaign,
   processBulkNext,
@@ -106,9 +107,9 @@ const BulkEmailPage: React.FC = () => {
       setSettings(data.settings);
       setSmtpAccounts(data.smtp_accounts || []);
       const savedFrom = data.settings.draft_from_email || '';
-      setSmtpFrom((prev) => {
-        const preferred = savedFrom || prev;
-        if (preferred === 'auto' || data.smtp_accounts.some((a) => a.email === preferred)) return preferred || 'auto';
+      setSmtpFrom(() => {
+        const preferred = savedFrom || 'auto';
+        if (preferred === 'auto' || data.smtp_accounts.some((a) => a.email === preferred)) return preferred;
         return data.smtp_accounts[0]?.email || data.smtp_from || 'auto';
       });
       setDailySent(
@@ -133,10 +134,15 @@ const BulkEmailPage: React.FC = () => {
       if (data.settings.draft_name_column != null) setNameCol(data.settings.draft_name_column || '');
       if (data.settings.draft_email_column) setEmailCol(data.settings.draft_email_column);
 
-      if (data.draft_leads?.length) {
+      // Restore template first; leads load in pages so large lists don't wipe the whole page.
+      setHydrated(true);
+
+      if (data.draft_leads_count > 0) {
+        setMsg(`Restoring ${data.draft_leads_count} saved leads…`);
+        const draftLeads = await listBulkDraftLeads();
         skipNextLeadPersist.current = true;
         setRecipients(
-          data.draft_leads.map((lead, idx) => ({
+          draftLeads.map((lead, idx) => ({
             name: String(lead.full_name || ''),
             email: String(lead.email || '').toLowerCase(),
             rowIndex: typeof lead.row_index === 'number' ? lead.row_index : idx + 2,
@@ -145,10 +151,13 @@ const BulkEmailPage: React.FC = () => {
         );
         setSkipped(0);
         setDraftSavedAt(new Date().toISOString());
+        setMsg(`Restored ${draftLeads.length} saved leads and your HTML template.`);
+      } else if (data.settings.template_body || data.settings.template_subject) {
+        setDraftSavedAt(data.settings.updated_at || new Date().toISOString());
+        setMsg('Restored your saved email template.');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load settings');
-    } finally {
       setHydrated(true);
     }
   }, []);
@@ -199,8 +208,8 @@ const BulkEmailPage: React.FC = () => {
           });
           setSettings(saved);
           setDraftSavedAt(saved.updated_at || new Date().toISOString());
-        } catch {
-          // Keep editing even if autosave fails; user can retry.
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Could not auto-save template');
         }
       })();
     }, 900);
@@ -412,16 +421,7 @@ const BulkEmailPage: React.FC = () => {
         })),
       });
       setMsg(`Campaign created with ${created.total} recipients. Starting…`);
-      try {
-        await clearBulkDraftLeads();
-        skipNextLeadPersist.current = true;
-        setTable(null);
-        setRecipients([]);
-        setSkipped(0);
-        setFileName('');
-      } catch {
-        // Campaign already created; draft clear is best-effort.
-      }
+      // Keep draft leads/template in DB so refresh still restores them.
       await loadCampaigns();
       await runSendLoop(created.campaign_id);
     } catch (err) {
