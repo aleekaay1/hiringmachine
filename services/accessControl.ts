@@ -311,6 +311,7 @@ const HIRING_MACHINE_SECTIONS: AppSection[] = [
   'home',
   'overview',
   'pipeline-call',
+  'pipeline-webinar-verify',
   'sent-ahead',
   'check-ins',
   'replies',

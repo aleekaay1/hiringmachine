@@ -7,6 +7,7 @@ import {
   PhoneCall,
   Send,
   User,
+  Video,
 } from 'lucide-react';
 import type { AppSection } from '../../services/accessControl';
 
@@ -62,6 +63,20 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: PhoneCall,
     tourId: 'nav-call',
     items: [{ name: 'Call workspace', route: '/pipeline/call', icon: PhoneCall, section: 'pipeline-call' }],
+  },
+  {
+    id: 'webinar-verify',
+    label: 'Webinar verify',
+    icon: Video,
+    tourId: 'nav-webinar-verify',
+    items: [
+      {
+        name: 'Webinar verify',
+        route: '/pipeline/webinar-verify',
+        icon: Video,
+        section: 'pipeline-webinar-verify',
+      },
+    ],
   },
   {
     id: 'sent-ahead',
