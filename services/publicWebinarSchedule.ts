@@ -6,12 +6,15 @@ export type PublicUpcomingBroadcast = {
   title: string | null;
   date: unknown;
   webinar_id: string | number | null;
+  day_label?: 'today' | 'tomorrow' | null;
+  starts_in_minutes?: number | null;
 };
 
 export type PublicWebinarBookResult = {
   ok: true;
   booked: boolean;
   already_registered: boolean;
+  quick?: boolean;
   email_verified?: boolean;
   message?: string;
   broadcast?: {
@@ -60,14 +63,23 @@ async function callPublic(
 }
 
 export async function fetchPublicUpcomingBroadcasts(): Promise<
-  { ok: true; broadcasts: PublicUpcomingBroadcast[] } | { ok: false; error: string }
+  | {
+      ok: true;
+      broadcasts: PublicUpcomingBroadcast[];
+      quickSlot: PublicUpcomingBroadcast | null;
+    }
+  | { ok: false; error: string }
 > {
   const result = await callPublic('?mode=upcoming');
   if (!result.ok) return result;
   const rows = Array.isArray(result.data.broadcasts)
     ? (result.data.broadcasts as PublicUpcomingBroadcast[])
     : [];
-  return { ok: true, broadcasts: rows };
+  const quick =
+    result.data.quick_slot && typeof result.data.quick_slot === 'object'
+      ? (result.data.quick_slot as PublicUpcomingBroadcast)
+      : null;
+  return { ok: true, broadcasts: rows, quickSlot: quick };
 }
 
 export async function bookPublicWebinar(input: {
@@ -75,8 +87,9 @@ export async function bookPublicWebinar(input: {
   firstname: string;
   surname: string;
   phone?: string;
-  broadcast_id: string;
+  broadcast_id?: string;
   webinar_id?: string;
+  quick?: boolean;
 }): Promise<{ ok: true; data: PublicWebinarBookResult } | { ok: false; error: string }> {
   const result = await callPublic('?mode=book', {
     method: 'POST',
@@ -97,7 +110,6 @@ export function formatBroadcastWhen(date: unknown, timeZone = 'America/Toronto')
       weekday: 'short',
       month: 'short',
       day: 'numeric',
-      year: 'numeric',
       hour: 'numeric',
       minute: '2-digit',
       timeZoneName: 'short',
@@ -105,4 +117,10 @@ export function formatBroadcastWhen(date: unknown, timeZone = 'America/Toronto')
   } catch {
     return new Date(ms).toLocaleString();
   }
+}
+
+export function dayLabelText(label: PublicUpcomingBroadcast['day_label']): string {
+  if (label === 'today') return 'Today';
+  if (label === 'tomorrow') return 'Tomorrow';
+  return '';
 }

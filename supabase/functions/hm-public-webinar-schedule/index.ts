@@ -67,10 +67,34 @@ async function wgPost(path: string, body: Record<string, unknown>) {
   return wgRequest(path, { method: 'POST', body: JSON.stringify(body) });
 }
 
+const SCHEDULE_TZ = 'America/Toronto';
+/** Nearest session within this window qualifies as "watch soon". */
+const QUICK_WINDOW_MS = 90 * 60 * 1000;
+
 function unixMsFromField(value: unknown): number | null {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
   return n > 1e12 ? n : n * 1000;
+}
+
+function torontoYmdFromMs(ms: number): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: SCHEDULE_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(ms));
+  const y = parts.find((p) => p.type === 'year')?.value || '1970';
+  const m = parts.find((p) => p.type === 'month')?.value || '01';
+  const d = parts.find((p) => p.type === 'day')?.value || '01';
+  return `${y}-${m}-${d}`;
+}
+
+function addCalendarDaysYmd(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const utc = new Date(Date.UTC(y, m - 1, d));
+  utc.setUTCDate(utc.getUTCDate() + days);
+  return `${utc.getUTCFullYear()}-${String(utc.getUTCMonth() + 1).padStart(2, '0')}-${String(utc.getUTCDate()).padStart(2, '0')}`;
 }
 
 function upcomingBroadcastRows(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
@@ -85,6 +109,68 @@ function upcomingBroadcastRows(rows: Array<Record<string, unknown>>): Array<Reco
     })
     .sort((a, b) => (a.ms ?? Number.MAX_SAFE_INTEGER) - (b.ms ?? Number.MAX_SAFE_INTEGER))
     .map(({ row }) => row);
+}
+
+/** Same calendar day + next day only (Toronto), one broadcast per start time. */
+function publicScheduleSlots(rows: Array<Record<string, unknown>>): {
+  broadcasts: Array<Record<string, unknown>>;
+  quick: Record<string, unknown> | null;
+} {
+  const nowMs = Date.now();
+  const todayYmd = torontoYmdFromMs(nowMs);
+  const tomorrowYmd = addCalendarDaysYmd(todayYmd, 1);
+  const allowed = new Set([todayYmd, tomorrowYmd]);
+
+  const upcoming = upcomingBroadcastRows(rows);
+  const bySlot = new Map<number, Record<string, unknown>>();
+  for (const row of upcoming) {
+    const ms = unixMsFromField(row.date);
+    if (ms == null) continue;
+    const ymd = torontoYmdFromMs(ms);
+    if (!allowed.has(ymd)) continue;
+    if (!bySlot.has(ms)) bySlot.set(ms, row);
+  }
+
+  const broadcasts = [...bySlot.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([ms, row]) => ({
+      ...row,
+      day_label: torontoYmdFromMs(ms) === todayYmd ? 'today' : 'tomorrow',
+    }));
+
+  const quickEntry = [...bySlot.entries()].find(([ms]) => ms - nowMs <= QUICK_WINDOW_MS);
+  const quick = quickEntry
+    ? {
+        ...quickEntry[1],
+        day_label: torontoYmdFromMs(quickEntry[0]) === todayYmd ? 'today' : 'tomorrow',
+        starts_in_minutes: Math.max(1, Math.round((quickEntry[0] - nowMs) / 60000)),
+      }
+    : null;
+
+  return { broadcasts, quick };
+}
+
+async function loadPublicSchedule(): Promise<
+  | { ok: true; broadcasts: Array<Record<string, unknown>>; quick: Record<string, unknown> | null }
+  | { ok: false; status: number; error: string }
+> {
+  const configuredWebinarId = Deno.env.get('PUBLIC_WEBINAR_GEEK_WEBINAR_ID')?.trim() || '';
+  const broadcastsRes = await wgGet(
+    '/broadcasts',
+    configuredWebinarId ? { webinar_id: configuredWebinarId, per_page: 100 } : { per_page: 100 },
+  );
+  if (!broadcastsRes.ok) {
+    return {
+      ok: false,
+      status: broadcastsRes.status === 503 ? 503 : 502,
+      error: wgErrorMessage(broadcastsRes.json, 'Unable to load upcoming webinars'),
+    };
+  }
+  const rawRows = Array.isArray(broadcastsRes.json.broadcasts)
+    ? (broadcastsRes.json.broadcasts as Array<Record<string, unknown>>)
+    : [];
+  const { broadcasts, quick } = publicScheduleSlots(rawRows);
+  return { ok: true, broadcasts, quick };
 }
 
 function registrationFieldsFromJson(json: Record<string, unknown>): RegistrationFieldRow[] {
@@ -244,6 +330,11 @@ function formatBroadcast(row: Record<string, unknown>) {
     title: row.title ?? row.name ?? null,
     date: row.date ?? null,
     webinar_id: row.webinar_id ?? null,
+    day_label: row.day_label === 'tomorrow' ? 'tomorrow' : row.day_label === 'today' ? 'today' : null,
+    starts_in_minutes:
+      typeof row.starts_in_minutes === 'number' && Number.isFinite(row.starts_in_minutes)
+        ? row.starts_in_minutes
+        : null,
   };
 }
 
@@ -257,23 +348,18 @@ Deno.serve(async (req) => {
     const mode = (url.searchParams.get('mode') || '').trim() || (req.method === 'GET' ? 'upcoming' : 'book');
 
     if (req.method === 'GET' && (mode === 'upcoming' || mode === 'upcoming-broadcasts')) {
-      const configuredWebinarId = Deno.env.get('PUBLIC_WEBINAR_GEEK_WEBINAR_ID')?.trim() || '';
-      const webinarId = url.searchParams.get('webinar_id')?.trim() || configuredWebinarId || undefined;
-      const broadcastsRes = await wgGet(
-        '/broadcasts',
-        webinarId ? { webinar_id: webinarId, per_page: 100 } : { per_page: 100 },
-      );
-      if (!broadcastsRes.ok) {
-        return json(broadcastsRes.status === 503 ? 503 : 502, {
-          error: wgErrorMessage(broadcastsRes.json, 'Unable to load upcoming webinars'),
-          source_status: broadcastsRes.status,
-        });
+      const schedule = await loadPublicSchedule();
+      if (!schedule.ok) {
+        return json(schedule.status, { error: schedule.error });
       }
-      const rawRows = Array.isArray(broadcastsRes.json.broadcasts)
-        ? (broadcastsRes.json.broadcasts as Array<Record<string, unknown>>)
-        : [];
-      const upcoming = upcomingBroadcastRows(rawRows).slice(0, 40).map(formatBroadcast);
-      return json(200, { ok: true, broadcasts: upcoming });
+      return json(200, {
+        ok: true,
+        broadcasts: schedule.broadcasts.map(formatBroadcast),
+        quick_slot: schedule.quick ? formatBroadcast(schedule.quick) : null,
+        timezone: SCHEDULE_TZ,
+        window: 'today_and_tomorrow',
+        quick_window_minutes: Math.round(QUICK_WINDOW_MS / 60000),
+      });
     }
 
     if (req.method === 'POST' && mode === 'book') {
@@ -282,18 +368,39 @@ Deno.serve(async (req) => {
       const firstname = str(body.firstname || body.first_name || body.firstName);
       const surname = str(body.surname || body.last_name || body.lastName);
       const phone = str(body.phone);
-      const broadcastId = str(body.broadcast_id || body.broadcastId);
-      const webinarId = str(body.webinar_id || body.webinarId);
+      const wantQuick = body.quick === true || body.mode === 'quick' || str(body.schedule_mode) === 'quick';
+      let broadcastId = str(body.broadcast_id || body.broadcastId);
+      let webinarId = str(body.webinar_id || body.webinarId);
       const customField =
         str(body.custom_field) ||
         Deno.env.get('PUBLIC_WEBINAR_CUSTOM_FIELD')?.trim() ||
         'cold-email';
 
-      if (!email || !firstname || !broadcastId) {
-        return json(400, { error: 'email, firstname, and broadcast_id are required.' });
+      if (!email || !firstname) {
+        return json(400, { error: 'email and firstname are required.' });
       }
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         return json(400, { error: 'Please enter a valid email address.' });
+      }
+
+      if (wantQuick && !broadcastId) {
+        const schedule = await loadPublicSchedule();
+        if (!schedule.ok) {
+          return json(schedule.status, { error: schedule.error });
+        }
+        if (!schedule.quick) {
+          return json(409, {
+            error:
+              'No session starts within the next 90 minutes. Pick a time from today’s or tomorrow’s list, or enable Just-in-time (5 min) in WebinarGeek for always-on quick starts.',
+            quick_available: false,
+          });
+        }
+        broadcastId = str(schedule.quick.id);
+        webinarId = str(schedule.quick.webinar_id) || webinarId;
+      }
+
+      if (!broadcastId) {
+        return json(400, { error: 'email, firstname, and broadcast_id are required.' });
       }
 
       const [broadcastContext, existingRows] = await Promise.all([
@@ -388,6 +495,7 @@ Deno.serve(async (req) => {
         ok: true,
         booked: true,
         already_registered: false,
+        quick: wantQuick,
         email_verified: subscriptionRow?.email_verified === true,
         broadcast: {
           id: broadcastId,
@@ -395,8 +503,9 @@ Deno.serve(async (req) => {
           date: broadcastContext.date,
           webinar_id: broadcastContext.webinarId,
         },
-        message:
-          'You are registered. WebinarGeek will email you a confirmation with the join link shortly.',
+        message: wantQuick
+          ? 'You are registered for the soonest available session. Check your email for the WebinarGeek join link — it starts shortly.'
+          : 'You are registered. WebinarGeek will email you a confirmation with the join link shortly.',
       });
     }
 
