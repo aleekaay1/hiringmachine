@@ -459,6 +459,9 @@ verify_jwt = false
 [functions.hm-bulk-email]
 verify_jwt = false
 
+[functions.hm-public-webinar-schedule]
+verify_jwt = false
+
 [functions.checkin-staff-notify]
 verify_jwt = false
 

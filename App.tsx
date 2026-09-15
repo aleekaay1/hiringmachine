@@ -4,6 +4,7 @@ import AdminShell from './components/AdminShell';
 import AdminRouteFallback from './components/AdminRouteFallback';
 import Landing from './pages/Landing';
 import InterviewForm from './pages/InterviewForm';
+import ScheduleWebinarPage from './pages/ScheduleWebinarPage';
 import PostInterview from './pages/PostInterview';
 import AssessmentIntro from './pages/AssessmentIntro';
 import Assessment from './pages/Assessment';
@@ -58,6 +59,8 @@ const App: React.FC = () => {
       <Routes>
         <Route path="/" element={<Landing />} />
         <Route path="/checkin" element={<InterviewForm />} />
+        <Route path="/schedule-webinar" element={<ScheduleWebinarPage />} />
+        <Route path="/webinar" element={<Navigate to="/schedule-webinar" replace />} />
         <Route path="/interview" element={<Navigate to="/checkin" replace />} />
         <Route path="/check-status" element={<CheckStatus />} />
         <Route path="/confirmation/:id" element={<PostInterview />} />
