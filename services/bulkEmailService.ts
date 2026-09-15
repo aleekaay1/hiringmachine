@@ -298,6 +298,11 @@ export async function cancelBulkCampaign(campaignId: string): Promise<BulkProgre
   return json as unknown as BulkProgress;
 }
 
+export async function getBulkCampaignStatus(campaignId: string): Promise<BulkProgress> {
+  const json = await invokeBulk({ action: 'status', campaign_id: campaignId });
+  return json as unknown as BulkProgress;
+}
+
 export async function getBulkCampaign(campaignId: string): Promise<{
   campaign: BulkCampaign;
 } & Partial<BulkProgress>> {
