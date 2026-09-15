@@ -22,12 +22,7 @@ const ScheduleWebinarPage: React.FC = () => {
   const [loadError, setLoadError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [success, setSuccess] = useState<{
-    message: string;
-    when: string;
-    watchLink?: string | null;
-    confirmationLink?: string | null;
-  } | null>(null);
+  const [success, setSuccess] = useState<{ message: string; when: string } | null>(null);
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>('pick');
   const [form, setForm] = useState({
     firstName: '',
@@ -113,8 +108,6 @@ const ScheduleWebinarPage: React.FC = () => {
           result.data.message ||
           'You are registered. Check your email for the WebinarGeek confirmation and join link.',
         when,
-        watchLink: result.data.watch_link || null,
-        confirmationLink: result.data.confirmation_link || null,
       });
       if (typeof window !== 'undefined') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -204,19 +197,8 @@ const ScheduleWebinarPage: React.FC = () => {
             {success.when && success.when !== 'Date TBA' && (
               <p className="mt-3 text-sm font-medium text-emerald-900">Session: {success.when}</p>
             )}
-            {(success.watchLink || success.confirmationLink) && (
-              <a
-                href={success.watchLink || success.confirmationLink || '#'}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-4 inline-flex min-h-[48px] w-full items-center justify-center rounded-lg bg-[#005EB8] px-4 text-sm font-semibold text-white shadow touch-manipulation hover:bg-[#004a93]"
-              >
-                Open webinar join link
-              </a>
-            )}
             <p className="mt-3 text-xs text-emerald-700">
-              If you do not see the email in a few minutes, check spam or promotions
-              {success.watchLink ? ', or use the join button above' : ''}.
+              If you do not see the email in a few minutes, check spam or promotions.
             </p>
           </div>
         ) : (

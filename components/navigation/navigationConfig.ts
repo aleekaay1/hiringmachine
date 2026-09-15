@@ -8,6 +8,7 @@ import {
   PhoneCall,
   Send,
   User,
+  Users,
   Video,
 } from 'lucide-react';
 import type { AppSection } from '../../services/accessControl';
@@ -82,6 +83,12 @@ export const NAV_GROUPS: NavGroup[] = [
         route: '/webinar-geek',
         icon: BarChart3,
         section: 'webinar-geek',
+      },
+      {
+        name: 'Form signups',
+        route: '/schedule-webinar-signups',
+        icon: Users,
+        section: 'schedule-webinar-signups',
       },
     ],
   },

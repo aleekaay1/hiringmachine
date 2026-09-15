@@ -31,6 +31,7 @@ const SentAheadPage = React.lazy(() => import('./pages/SentAheadPage'));
 const CheckInsPage = React.lazy(() => import('./pages/CheckInsPage'));
 const InstantlyRepliesPage = React.lazy(() => import('./pages/InstantlyRepliesPage'));
 const BulkEmailPage = React.lazy(() => import('./pages/BulkEmailPage'));
+const ScheduleWebinarSignupsPage = React.lazy(() => import('./pages/ScheduleWebinarSignupsPage'));
 const PipelinePerformance = React.lazy(() => import('./pages/PipelinePerformance'));
 const PipelineEmailWorkspace = React.lazy(() => import('./pages/PipelineEmailWorkspace'));
 const PipelineUploadsWorkspace = React.lazy(() => import('./pages/PipelineUploadsWorkspace'));
@@ -76,6 +77,7 @@ const App: React.FC = () => {
           <Route path="/check-ins" element={<Lazy><CheckInsPage /></Lazy>} />
           <Route path="/replies" element={<Lazy><InstantlyRepliesPage /></Lazy>} />
           <Route path="/bulk-email" element={<Lazy><BulkEmailPage /></Lazy>} />
+          <Route path="/schedule-webinar-signups" element={<Lazy><ScheduleWebinarSignupsPage /></Lazy>} />
           <Route path="/sent-ahead" element={<Lazy><SentAheadPage /></Lazy>} />
           <Route path="/dashboard" element={<Lazy><AdminDashboard /></Lazy>} />
           <Route path="/admin" element={<Navigate to="/home" replace />} />

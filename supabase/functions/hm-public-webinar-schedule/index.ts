@@ -3,7 +3,7 @@
 // Requires Edge secret: WEBINARGEEK_API_TOKEN
 // Optional: WEBINARGEEK_API_BASE_URL, PUBLIC_WEBINAR_GEEK_WEBINAR_ID, PUBLIC_WEBINAR_CUSTOM_FIELD
 
-import { corsHeaders, json, normalizeEmail, str } from '../_shared/hiringMachine.ts';
+import { corsHeaders, json, normalizeEmail, serviceClient, str } from '../_shared/hiringMachine.ts';
 
 const WEBINARGEEK_BASE = (
   Deno.env.get('WEBINARGEEK_API_BASE_URL')?.trim() || 'https://app.webinargeek.com/api/v2'
@@ -462,6 +462,56 @@ function linksFromSubscription(row: Record<string, unknown> | null): {
   };
 }
 
+function sessionAtFromWgDate(value: unknown): string | null {
+  const ms = unixMsFromField(value);
+  if (ms == null) return null;
+  return new Date(ms).toISOString();
+}
+
+async function logPublicSignup(input: {
+  firstname: string;
+  surname: string;
+  email: string;
+  phone?: string;
+  wantQuick: boolean;
+  sessionDate: unknown;
+  broadcastId: string | null;
+  webinarId: string | null;
+  subscriptionId?: string | null;
+  alreadyRegistered: boolean;
+  emailVerified?: boolean | null;
+  watchLink?: string | null;
+  confirmationLink?: string | null;
+  customField?: string | null;
+}): Promise<void> {
+  try {
+    const admin = serviceClient();
+    const { error } = await admin.from('hm_public_webinar_signups').insert({
+      first_name: input.firstname,
+      last_name: input.surname || null,
+      email: input.email,
+      phone: input.phone || null,
+      schedule_mode: input.wantQuick ? 'quick' : 'pick',
+      session_at: sessionAtFromWgDate(input.sessionDate),
+      session_label: null,
+      broadcast_id: input.broadcastId,
+      webinar_id: input.webinarId,
+      wg_subscription_id: input.subscriptionId || null,
+      already_registered: input.alreadyRegistered,
+      email_verified: input.emailVerified ?? null,
+      watch_link: input.watchLink || null,
+      confirmation_link: input.confirmationLink || null,
+      custom_field: input.customField || null,
+      metadata: {
+        source: 'hm-public-webinar-schedule',
+      },
+    });
+    if (error) console.error('hm_public_webinar_signups insert failed', error);
+  } catch (err) {
+    console.error('hm_public_webinar_signups insert failed', err);
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -588,17 +638,33 @@ Deno.serve(async (req) => {
         if (existingRows.length > 0) {
           const row = existingRows[0];
           const links = linksFromSubscription(row);
+          const effectiveBroadcastId = links.broadcast_id || broadcastId;
+          const effectiveDate = links.broadcast_date ?? broadcastContext.date;
+          await logPublicSignup({
+            firstname,
+            surname,
+            email,
+            phone,
+            wantQuick: false,
+            sessionDate: effectiveDate,
+            broadcastId: effectiveBroadcastId,
+            webinarId: broadcastContext.webinarId,
+            subscriptionId: row.id != null ? String(row.id) : null,
+            alreadyRegistered: true,
+            emailVerified: row.email_verified === true,
+            watchLink: links.watch_link,
+            confirmationLink: links.confirmation_link,
+            customField,
+          });
           return json(200, {
             ok: true,
             booked: true,
             already_registered: true,
             email_verified: row.email_verified === true,
-            watch_link: links.watch_link,
-            confirmation_link: links.confirmation_link,
             broadcast: {
-              id: links.broadcast_id || broadcastId,
+              id: effectiveBroadcastId,
               title: broadcastContext.title,
-              date: links.broadcast_date ?? broadcastContext.date,
+              date: effectiveDate,
               webinar_id: broadcastContext.webinarId,
             },
             message:
@@ -672,14 +738,29 @@ Deno.serve(async (req) => {
       const effectiveBroadcastId = links.broadcast_id || broadcastId;
       const effectiveDate = links.broadcast_date ?? broadcastContext.date;
 
+      await logPublicSignup({
+        firstname,
+        surname,
+        email,
+        phone,
+        wantQuick,
+        sessionDate: effectiveDate,
+        broadcastId: effectiveBroadcastId,
+        webinarId: broadcastContext.webinarId,
+        subscriptionId: subscriptionRow?.id != null ? String(subscriptionRow.id) : null,
+        alreadyRegistered: false,
+        emailVerified: subscriptionRow?.email_verified === true,
+        watchLink: links.watch_link,
+        confirmationLink: links.confirmation_link,
+        customField,
+      });
+
       return json(200, {
         ok: true,
         booked: true,
         already_registered: false,
         quick: wantQuick,
         email_verified: subscriptionRow?.email_verified === true,
-        watch_link: links.watch_link,
-        confirmation_link: links.confirmation_link,
         broadcast: {
           id: effectiveBroadcastId,
           title: broadcastContext.title,
@@ -687,9 +768,7 @@ Deno.serve(async (req) => {
           webinar_id: broadcastContext.webinarId,
         },
         message: wantQuick
-          ? links.watch_link
-            ? 'You are registered. Use the join link below — WebinarGeek also emails it shortly.'
-            : 'You are registered for the soonest available session. Check your email for the WebinarGeek join link — it starts shortly.'
+          ? 'You are registered for the soonest available session. Check your email for the WebinarGeek join link — it starts shortly.'
           : 'You are registered. WebinarGeek will email you a confirmation with the join link shortly.',
       });
     }
