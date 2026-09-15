@@ -109,6 +109,8 @@ export async function getBulkSettings(): Promise<{
   hard_daily_cap: number;
   smtp_accounts: BulkSmtpAccountUsage[];
   draft_leads_count: number;
+  business_day?: string;
+  business_tz?: string;
 }> {
   const json = await invokeBulk({ action: 'get_settings' });
   return {
@@ -118,6 +120,8 @@ export async function getBulkSettings(): Promise<{
     hard_daily_cap: Number(json.hard_daily_cap) || 500,
     smtp_accounts: (json.smtp_accounts as BulkSmtpAccountUsage[]) || [],
     draft_leads_count: Number(json.draft_leads_count) || 0,
+    business_day: json.business_day ? String(json.business_day) : undefined,
+    business_tz: json.business_tz ? String(json.business_tz) : undefined,
   };
 }
 
@@ -276,6 +280,33 @@ export async function listBulkRecipients(
 
 export async function tickBulkCampaigns(): Promise<Record<string, unknown>> {
   return invokeBulk({ action: 'tick' });
+}
+
+export type BulkEmailStats = {
+  business_day: string;
+  business_tz: string;
+  totals: {
+    sent: number;
+    failed: number;
+    pending: number;
+    sent_today: number;
+    bounced: number;
+    failed_logs: number;
+    sent_logs: number;
+    replies: number;
+    reply_rate: number | null;
+    reply_note?: string;
+    bounce_note?: string;
+  };
+  campaigns: BulkCampaign[];
+};
+
+export async function getBulkEmailStats(campaignId?: string): Promise<BulkEmailStats> {
+  const json = await invokeBulk({
+    action: 'stats',
+    ...(campaignId ? { campaign_id: campaignId } : {}),
+  });
+  return json as unknown as BulkEmailStats;
 }
 
 export async function processBulkNext(campaignId: string): Promise<BulkProgress> {

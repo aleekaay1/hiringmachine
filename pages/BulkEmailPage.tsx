@@ -26,6 +26,7 @@ import {
   listBulkRecipients,
   tickBulkCampaigns,
   getBulkCampaignStatus,
+  getBulkEmailStats,
   saveBulkDraftLeads,
   saveBulkSettings,
   saveBulkTemplate,
@@ -35,6 +36,7 @@ import {
   updateBulkCampaign,
   type BulkAppSettings,
   type BulkCampaign,
+  type BulkEmailStats,
   type BulkProgress,
   type BulkProvider,
   type BulkRecipientRow,
@@ -48,7 +50,7 @@ import {
   type SpreadsheetTable,
 } from '../services/bulkEmailSpreadsheet';
 
-type Tab = 'compose' | 'settings' | 'campaigns';
+type Tab = 'compose' | 'settings' | 'campaigns' | 'stats';
 
 const PROVIDER_LABELS: Record<BulkProvider, string> = {
   smtp: 'SMTP (active)',
@@ -77,9 +79,12 @@ const BulkEmailPage: React.FC = () => {
   const [campaignName, setCampaignName] = React.useState('');
   const [subject, setSubject] = React.useState('Opportunity with AO Globe Life');
   const [body, setBody] = React.useState(defaultBulkEmailBody());
-  const [gapSeconds, setGapSeconds] = React.useState(60);
+  const [gapSeconds, setGapSeconds] = React.useState(120);
   const [dailyCap, setDailyCap] = React.useState(500);
   const [provider, setProvider] = React.useState<BulkProvider>('smtp');
+  const [stats, setStats] = React.useState<BulkEmailStats | null>(null);
+  const [loadingStats, setLoadingStats] = React.useState(false);
+  const [businessDay, setBusinessDay] = React.useState<string>('');
 
   const [settings, setSettings] = React.useState<BulkAppSettings | null>(null);
   const [smtpFrom, setSmtpFrom] = React.useState('auto');
@@ -128,8 +133,9 @@ const BulkEmailPage: React.FC = () => {
       setDailySent(
         data.smtp_accounts.reduce((sum, a) => sum + (a.daily_sent || 0), 0) || data.daily_sent,
       );
-      setGapSeconds(data.settings.draft_gap_seconds || data.settings.gap_seconds || 60);
+      setGapSeconds(Math.max(90, data.settings.draft_gap_seconds || data.settings.gap_seconds || 120));
       setDailyCap(Math.min(500, data.settings.draft_daily_cap || data.settings.daily_cap || 500));
+      setBusinessDay(data.business_day || '');
       setProvider((data.settings.default_provider as BulkProvider) || 'smtp');
       setInstantlyKey(strField(data.settings.instantly, 'api_key'));
       setInstantlyWorkspace(strField(data.settings.instantly, 'workspace'));
@@ -189,17 +195,36 @@ const BulkEmailPage: React.FC = () => {
     void loadCampaigns();
   }, [loadSettings, loadCampaigns]);
 
-  // Keep server worker warm for any active campaigns (safe if the tab is closed later).
+  // Poll campaign list only — cron owns sending (avoids 3/min bursts from tab + worker).
   const hasServerCampaigns = campaigns.some((c) => c.status === 'sending' || c.status === 'queued');
   React.useEffect(() => {
     if (!hasServerCampaigns) return;
-    void tickBulkCampaigns().catch(() => undefined);
     const id = window.setInterval(() => {
-      void tickBulkCampaigns().catch(() => undefined);
       void loadCampaigns();
-    }, 20_000);
+      void loadSettings();
+    }, 15_000);
     return () => window.clearInterval(id);
-  }, [hasServerCampaigns, loadCampaigns]);
+  }, [hasServerCampaigns, loadCampaigns, loadSettings]);
+
+  const loadStats = React.useCallback(async () => {
+    setLoadingStats(true);
+    try {
+      const data = await getBulkEmailStats(activeId || undefined);
+      setStats(data);
+      setBusinessDay(data.business_day || '');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load stats');
+    } finally {
+      setLoadingStats(false);
+    }
+  }, [activeId]);
+
+  React.useEffect(() => {
+    if (tab !== 'stats') return;
+    void loadStats();
+    const id = window.setInterval(() => void loadStats(), 20_000);
+    return () => window.clearInterval(id);
+  }, [tab, loadStats]);
 
   React.useEffect(() => {
     if (!table) return;
@@ -482,7 +507,7 @@ const BulkEmailPage: React.FC = () => {
       setSubject(c.subject || '');
       const rawBody = (c.body_html && String(c.body_html).trim()) || c.body_text || '';
       setBody(rawBody);
-      setGapSeconds(c.gap_seconds || 60);
+      setGapSeconds(Math.max(90, c.gap_seconds || 120));
       setDailyCap(Math.min(500, c.daily_cap || 500));
       setSmtpFrom(c.from_email || 'auto');
       setActiveId(c.id);
@@ -631,7 +656,7 @@ const BulkEmailPage: React.FC = () => {
           </p>
         </div>
         <div className="rounded-xl border border-[#e6e0d4] bg-[#fbf8f2] px-4 py-2 text-sm text-[#3f3a32]">
-          Today:{' '}
+          Today ({businessDay || 'Pacific'}):{' '}
           <strong>
             {smtpAccounts.length
               ? smtpAccounts.reduce((s, a) => s + a.daily_sent, 0)
@@ -649,6 +674,7 @@ const BulkEmailPage: React.FC = () => {
             ['compose', 'Compose & send'],
             ['settings', 'Settings & more'],
             ['campaigns', 'Campaigns'],
+            ['stats', 'Stats'],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -906,12 +932,15 @@ const BulkEmailPage: React.FC = () => {
                 Gap between emails (sec)
                 <input
                   type="number"
-                  min={5}
+                  min={90}
                   max={3600}
                   className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm"
                   value={gapSeconds}
-                  onChange={(e) => setGapSeconds(Number(e.target.value) || 60)}
+                  onChange={(e) => setGapSeconds(Math.max(90, Number(e.target.value) || 120))}
                 />
+                <span className="mt-1 block text-[11px] text-[#8a8276]">
+                  Minimum 90s (default 120s) so messages don’t burst into spam.
+                </span>
               </label>
               <label className="block text-xs text-[#6f675c]">
                 Daily cap (max 500)
@@ -1003,11 +1032,11 @@ const BulkEmailPage: React.FC = () => {
                   Default gap (sec)
                   <input
                     type="number"
-                    min={5}
+                    min={90}
                     max={3600}
                     className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm"
                     value={gapSeconds}
-                    onChange={(e) => setGapSeconds(Number(e.target.value) || 60)}
+                    onChange={(e) => setGapSeconds(Math.max(90, Number(e.target.value) || 120))}
                   />
                 </label>
                 <label className="text-xs text-[#6f675c]">
@@ -1339,6 +1368,91 @@ const BulkEmailPage: React.FC = () => {
                 {!campaigns.length && (
                   <tr>
                     <td colSpan={5} className="px-3 py-6 text-[#8a8276]">No campaigns yet.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {tab === 'stats' && (
+        <section className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="hm-kicker">Email stats</p>
+              <p className="text-sm text-[#6f675c]">
+                Pacific business day {stats?.business_day || businessDay || '—'}. SMTP does not track inbox
+                replies; bounce count is estimated from send-log errors.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadStats()}
+              className="inline-flex items-center gap-1.5 rounded-full border border-[#ddd5c6] px-3 py-1.5 text-xs text-[#5a5348]"
+            >
+              <RefreshCw size={12} /> {loadingStats ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              { label: 'Sent today', value: stats?.totals.sent_today ?? '—' },
+              { label: 'Sent (all campaigns)', value: stats?.totals.sent ?? '—' },
+              { label: 'Failed', value: stats?.totals.failed ?? '—' },
+              { label: 'Pending', value: stats?.totals.pending ?? '—' },
+              { label: 'Bounced (est.)', value: stats?.totals.bounced ?? '—' },
+              { label: 'Replies', value: stats?.totals.replies ?? 0 },
+              {
+                label: 'Reply rate',
+                value:
+                  stats?.totals.reply_rate == null
+                    ? 'n/a'
+                    : `${Math.round((stats.totals.reply_rate || 0) * 1000) / 10}%`,
+              },
+              {
+                label: 'Log sends',
+                value: stats?.totals.sent_logs ?? '—',
+              },
+            ].map((card) => (
+              <div
+                key={card.label}
+                className="rounded-xl border border-[#eee7db] bg-[#fbfaf7] px-4 py-3"
+              >
+                <p className="text-[11px] uppercase tracking-wide text-[#8a8276]">{card.label}</p>
+                <p className="mt-1 font-[Fraunces] text-2xl text-[#1f2a24]">{card.value}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="overflow-auto rounded-xl border border-[#eee7db]">
+            <table className="min-w-full text-left text-xs">
+              <thead className="bg-[#f7f3eb] text-[#6f675c]">
+                <tr>
+                  <th className="px-3 py-2">Campaign</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2">Sent</th>
+                  <th className="px-3 py-2">Failed</th>
+                  <th className="px-3 py-2">Total</th>
+                  <th className="px-3 py-2">Gap</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(stats?.campaigns || []).map((c) => (
+                  <tr key={c.id} className="border-t border-[#f0ebe2]">
+                    <td className="px-3 py-2 text-[#3f3a32]">{c.name}</td>
+                    <td className="px-3 py-2 capitalize text-[#3f3a32]">{c.status}</td>
+                    <td className="px-3 py-2 text-[#3f3a32]">{c.sent_count}</td>
+                    <td className="px-3 py-2 text-[#3f3a32]">{c.failed_count}</td>
+                    <td className="px-3 py-2 text-[#3f3a32]">{c.total_count}</td>
+                    <td className="px-3 py-2 text-[#8a8276]">{c.gap_seconds}s</td>
+                  </tr>
+                ))}
+                {!loadingStats && !(stats?.campaigns || []).length && (
+                  <tr>
+                    <td colSpan={6} className="px-3 py-6 text-[#8a8276]">
+                      No campaign stats yet.
+                    </td>
                   </tr>
                 )}
               </tbody>

@@ -16,9 +16,11 @@ import {
 } from '../_shared/hiringMachine.ts';
 import { insertEmailSendLog } from '../_shared/emailSendLog.ts';
 
-const DEFAULT_GAP = 60;
+const DEFAULT_GAP = 120;
+const MIN_GAP = 90;
 const DEFAULT_DAILY_CAP = 500;
 const HARD_DAILY_CAP = 500;
+const BUSINESS_TZ = 'America/Los_Angeles';
 
 type RecipientInput = { name?: string; email?: string; row_index?: number; raw?: Record<string, unknown> };
 
@@ -135,13 +137,38 @@ async function dailySentFor(
   admin: ReturnType<typeof serviceClient>,
   fromEmail: string,
 ): Promise<number> {
+  const email = bareEmailAddress(fromEmail) || normalizeEmail(fromEmail);
   const { data } = await admin
     .from('hm_bulk_daily_counts')
     .select('sent_count')
-    .eq('send_date', todayUtcDate())
-    .eq('from_email', normalizeEmail(fromEmail))
+    .eq('send_date', businessDayDate())
+    .eq('from_email', email)
     .maybeSingle();
   return data?.sent_count || 0;
+}
+
+async function bumpDailySent(
+  admin: ReturnType<typeof serviceClient>,
+  fromEmail: string,
+): Promise<number> {
+  const email = bareEmailAddress(fromEmail) || normalizeEmail(fromEmail);
+  const { data, error } = await admin.rpc('hm_bulk_increment_daily', {
+    p_from: email,
+    p_day: businessDayDate(),
+  });
+  if (error) {
+    // Fallback if RPC missing: read+write (may race, but better than failing the send).
+    const current = await dailySentFor(admin, email);
+    const next = current + 1;
+    await admin.from('hm_bulk_daily_counts').upsert({
+      send_date: businessDayDate(),
+      from_email: email,
+      sent_count: next,
+      updated_at: new Date().toISOString(),
+    });
+    return next;
+  }
+  return Number(data) || 0;
 }
 
 async function resolveSendAccount(
@@ -205,7 +232,7 @@ async function listAccountUsage(
 function clampGap(value: unknown): number {
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(n)) return DEFAULT_GAP;
-  return Math.min(3600, Math.max(5, Math.floor(n)));
+  return Math.min(3600, Math.max(MIN_GAP, Math.floor(n)));
 }
 
 function clampDailyCap(value: unknown): number {
@@ -223,8 +250,19 @@ function applyMerge(template: string, name: string, email: string): string {
     .replace(/\{\{\s*email\s*\}\}/gi, email);
 }
 
+/** Calendar date in America/Los_Angeles (AO Paz business day), not UTC midnight. */
+function businessDayDate(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: BUSINESS_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
 function todayUtcDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  // Kept for compatibility; daily caps use Pacific business day.
+  return businessDayDate();
 }
 
 function summarizeTickResult(one: Record<string, unknown>): Record<string, unknown> {
@@ -394,16 +432,18 @@ async function sendNextForCampaign(
 
   await recoverStuckSending(admin, campaignId);
 
-  const gapSeconds = Math.max(5, Number(campaign.gap_seconds) || DEFAULT_GAP);
+  const gapSeconds = Math.max(MIN_GAP, Number(campaign.gap_seconds) || DEFAULT_GAP);
   if (respectGap) {
     const lastMs = await lastRecipientSentAtMs(admin, campaignId);
-    if (lastMs != null && Date.now() - lastMs < gapSeconds * 1000) {
+    const campaignLast = campaign.last_sent_at ? Date.parse(String(campaign.last_sent_at)) : NaN;
+    const latestMs = Math.max(lastMs || 0, Number.isFinite(campaignLast) ? campaignLast : 0) || null;
+    if (latestMs != null && Date.now() - latestMs < gapSeconds * 1000) {
       return {
         ok: true,
         done: false,
         waiting_gap: true,
         gap_seconds: gapSeconds,
-        wait_ms: gapSeconds * 1000 - (Date.now() - lastMs),
+        wait_ms: gapSeconds * 1000 - (Date.now() - latestMs),
         ...(await syncCampaignCounters(admin, campaignId)),
       };
     }
@@ -429,7 +469,7 @@ async function sendNextForCampaign(
       ...(await syncCampaignCounters(admin, campaignId)),
     };
   }
-  const { account, dailySent } = resolved;
+  const { account } = resolved;
   const fromEmail = account.email;
 
   const { data: nextRows, error: nextErr } = await admin
@@ -446,15 +486,23 @@ async function sendNextForCampaign(
     return { ok: true, done: true, reason: 'completed', ...progress };
   }
 
-  await admin
-    .from('hm_bulk_campaigns')
-    .update({
-      status: 'sending',
-      started_at: campaign.started_at || new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      last_error: null,
-    })
-    .eq('id', campaignId);
+  // Atomic pacing lock so cron + browser cannot burst-send.
+  const { data: claimedSlot, error: lockErr } = await admin.rpc('hm_bulk_claim_send_slot', {
+    p_campaign_id: campaignId,
+    p_gap_seconds: gapSeconds,
+  });
+  if (lockErr) throw lockErr;
+  if (!claimedSlot) {
+    return {
+      ok: true,
+      done: false,
+      waiting_gap: true,
+      gap_seconds: gapSeconds,
+      wait_ms: gapSeconds * 1000,
+      ...(await syncCampaignCounters(admin, campaignId)),
+    };
+  }
+
   const { data: claimed, error: claimErr } = await admin
     .from('hm_bulk_recipients')
     .update({ status: 'sending', updated_at: new Date().toISOString() })
@@ -464,7 +512,6 @@ async function sendNextForCampaign(
     .maybeSingle();
   if (claimErr) throw claimErr;
   if (!claimed) {
-    // Another worker already claimed this lead; try again next tick.
     return {
       ok: true,
       done: false,
@@ -501,13 +548,7 @@ async function sendNextForCampaign(
       .update({ status: 'sent', sent_at: now, error: null, updated_at: now })
       .eq('id', next.id);
 
-    const nextDaily = dailySent + 1;
-    await admin.from('hm_bulk_daily_counts').upsert({
-      send_date: todayUtcDate(),
-      from_email: fromEmail,
-      sent_count: nextDaily,
-      updated_at: now,
-    });
+    const nextDaily = await bumpDailySent(admin, fromEmail);
 
     await insertEmailSendLog(admin, {
       source: 'hm-bulk-email',
@@ -652,14 +693,7 @@ Deno.serve(async (req) => {
         throw sendErr;
       }
 
-      const now = new Date().toISOString();
-      const nextDaily = dailySent + 1;
-      await admin.from('hm_bulk_daily_counts').upsert({
-        send_date: todayUtcDate(),
-        from_email: fromEmail,
-        sent_count: nextDaily,
-        updated_at: now,
-      });
+      const nextDaily = await bumpDailySent(admin, fromEmail);
       await insertEmailSendLog(admin, {
         source: 'hm-bulk-email',
         trigger_label: 'bulk:test',
@@ -686,9 +720,22 @@ Deno.serve(async (req) => {
     if (action === 'get_settings') {
       const { data } = await admin.from('hm_bulk_app_settings').select('*').eq('id', 1).maybeSingle();
       const dailyCap = clampDailyCap(data?.daily_cap ?? DEFAULT_DAILY_CAP);
+      // Reconcile counter from actual Pacific-day sends so the UI can't drift.
+      const { data: realToday } = await admin.rpc('hm_bulk_sent_today_count');
+      const reconciled = Number(realToday) || 0;
+      if (reconciled > 0) {
+        const fromEmailBare = bareEmailAddress(defaultFromEmail()) || normalizeEmail(defaultFromEmail());
+        await admin.from('hm_bulk_daily_counts').upsert({
+          send_date: businessDayDate(),
+          from_email: fromEmailBare,
+          sent_count: reconciled,
+          updated_at: new Date().toISOString(),
+        });
+      }
       const usage = await listAccountUsage(admin, dailyCap);
       const fromEmail = defaultFromEmail();
-      const primary = usage.find((u) => u.email === normalizeEmail(fromEmail)) || usage[0];
+      const primary = usage.find((u) => u.email === bareEmailAddress(fromEmail) || u.email === normalizeEmail(fromEmail)) || usage[0];
+      const totalToday = usage.reduce((sum, u) => sum + u.daily_sent, 0) || reconciled;
       const { count: draftCount } = await admin
         .from('hm_bulk_draft_leads')
         .select('id', { count: 'exact', head: true });
@@ -705,10 +752,87 @@ Deno.serve(async (req) => {
           billionmail: {},
         },
         smtp_from: fromEmail,
-        daily_sent: primary?.daily_sent || 0,
+        daily_sent: totalToday || primary?.daily_sent || 0,
         hard_daily_cap: HARD_DAILY_CAP,
         smtp_accounts: usage,
         draft_leads_count: draftCount || 0,
+        business_day: businessDayDate(),
+        business_tz: BUSINESS_TZ,
+      });
+    }
+
+    if (action === 'stats' || action === 'dashboard') {
+      if (!userOk) return json(401, { error: 'Sign in required' });
+      const campaignId = str(body.campaign_id || body.campaignId);
+      let campsQuery = admin
+        .from('hm_bulk_campaigns')
+        .select('id, name, status, total_count, sent_count, failed_count, gap_seconds, created_at, updated_at, started_at, completed_at');
+      if (campaignId) campsQuery = campsQuery.eq('id', campaignId);
+      else campsQuery = campsQuery.order('updated_at', { ascending: false }).limit(50);
+      const { data: camps, error: campsErr } = await campsQuery;
+      if (campsErr) throw campsErr;
+
+      const { count: sentAll } = await admin
+        .from('hm_bulk_recipients')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'sent');
+      const { count: failedAll } = await admin
+        .from('hm_bulk_recipients')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'failed');
+      const { count: pendingAll } = await admin
+        .from('hm_bulk_recipients')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'pending');
+      const { data: sentTodayRaw } = await admin.rpc('hm_bulk_sent_today_count');
+      const sentToday = Number(sentTodayRaw) || 0;
+
+      // SMTP has no native bounce/reply webhooks; surface log-based failures + Instantly if present.
+      const { count: bouncedLogs } = await admin
+        .from('email_send_logs')
+        .select('id', { count: 'exact', head: true })
+        .eq('source', 'hm-bulk-email')
+        .ilike('error_message', '%bounce%');
+      const { count: failedLogs } = await admin
+        .from('email_send_logs')
+        .select('id', { count: 'exact', head: true })
+        .eq('source', 'hm-bulk-email')
+        .eq('status', 'failed');
+      const { count: sentLogs } = await admin
+        .from('email_send_logs')
+        .select('id', { count: 'exact', head: true })
+        .eq('source', 'hm-bulk-email')
+        .eq('status', 'sent');
+
+      let campaignStats = null;
+      if (campaignId) {
+        const progress = await campaignProgress(admin, campaignId);
+        campaignStats = progress;
+      }
+
+      const sent = sentAll || 0;
+      const failed = failedAll || 0;
+      const deliveredLike = Math.max(0, sent - (bouncedLogs || 0));
+      return json(200, {
+        ok: true,
+        business_day: businessDayDate(),
+        business_tz: BUSINESS_TZ,
+        totals: {
+          sent: sent,
+          failed: failed,
+          pending: pendingAll || 0,
+          sent_today: sentToday,
+          bounced: bouncedLogs || 0,
+          failed_logs: failedLogs || 0,
+          sent_logs: sentLogs || 0,
+          reply_rate: null,
+          replies: 0,
+          reply_note: 'SMTP bulk does not track inbox replies yet.',
+          bounce_note: 'Bounces are estimated from send-log errors (SMTP has no bounce webhook).',
+        },
+        campaigns: camps || [],
+        campaign: campaignStats,
+        delivered_estimate: deliveredLike,
       });
     }
 
@@ -1175,8 +1299,8 @@ Deno.serve(async (req) => {
     if (action === 'process' || action === 'send_next') {
       const campaignId = str(body.campaign_id || body.campaignId);
       if (!campaignId) return json(400, { error: 'Missing campaign_id' });
-      // Browser loop already waits the gap; don't double-wait here.
-      const result = await sendNextForCampaign(admin, campaignId, userId, { respectGap: false });
+      // Always respect gap — multi-worker bursts were landing in spam.
+      const result = await sendNextForCampaign(admin, campaignId, userId, { respectGap: true });
       if (result.http_status === 404) return json(404, result);
       if (result.http_status === 400) return json(400, result);
       return json(200, result);
