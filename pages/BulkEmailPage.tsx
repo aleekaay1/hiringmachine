@@ -22,7 +22,6 @@ import {
   listBulkDraftLeads,
   looksLikeHtml,
   pauseBulkCampaign,
-  processBulkNext,
   resumeBulkCampaign,
   listBulkRecipients,
   tickBulkCampaigns,
@@ -189,6 +188,18 @@ const BulkEmailPage: React.FC = () => {
     void loadSettings();
     void loadCampaigns();
   }, [loadSettings, loadCampaigns]);
+
+  // Keep server worker warm for any active campaigns (safe if the tab is closed later).
+  const hasServerCampaigns = campaigns.some((c) => c.status === 'sending' || c.status === 'queued');
+  React.useEffect(() => {
+    if (!hasServerCampaigns) return;
+    void tickBulkCampaigns().catch(() => undefined);
+    const id = window.setInterval(() => {
+      void tickBulkCampaigns().catch(() => undefined);
+      void loadCampaigns();
+    }, 20_000);
+    return () => window.clearInterval(id);
+  }, [hasServerCampaigns, loadCampaigns]);
 
   React.useEffect(() => {
     if (!table) return;
@@ -401,43 +412,52 @@ const BulkEmailPage: React.FC = () => {
     setTab('campaigns');
     setMsg('Campaign is running on the server. You can close this page — sending continues.');
     try {
-      // Kick the server worker immediately, then keep a faster local loop while this tab is open.
+      // Server cron is the source of truth; this tab only accelerates while open.
       void tickBulkCampaigns().catch(() => undefined);
       await loadLeads(campaignId);
       while (!stopRef.current) {
-        const result = await processBulkNext(campaignId);
-        setProgress(result);
-        setDailySent(result.daily_sent);
+        // Nudge the server worker each cycle; do not own the send lifecycle in the browser.
+        const tick = await tickBulkCampaigns().catch(() => null);
+        const status = await getBulkCampaignStatus(campaignId);
+        setProgress(status);
+        setDailySent(status.daily_sent);
         await loadLeads(campaignId);
-        if (result.daily_cap_hit) {
-          setMsg(`Paused: daily cap (${result.daily_cap}) reached for ${result.from_email}. Resume tomorrow.`);
-          break;
-        }
-        if (result.paused || stopRef.current) {
+
+        if (status.campaign?.status === 'paused' || status.paused) {
           setMsg('Campaign paused');
           break;
         }
-        if (result.done) {
-          setMsg(`Finished. Sent ${result.sent}, failed ${result.failed}.`);
+        if (status.daily_cap_hit || status.campaign?.status === 'paused') {
+          setMsg(
+            `Paused: daily cap (${status.daily_cap}) reached for ${status.from_email || 'sender'}. Resume tomorrow.`,
+          );
           break;
         }
-        const gap = Math.max(5, Number(result.gap_seconds || gapSeconds) || 60);
+        if (status.done || status.campaign?.status === 'completed' || (status.pending || 0) === 0) {
+          setMsg(`Finished. Sent ${status.sent}, failed ${status.failed}.`);
+          break;
+        }
+        if (status.campaign?.status === 'cancelled') {
+          setMsg('Campaign cancelled');
+          break;
+        }
+
+        const gap = Math.max(5, Number(status.gap_seconds || gapSeconds) || 60);
+        const tickResults = Array.isArray((tick as { results?: unknown })?.results)
+          ? ((tick as { results: Array<Record<string, unknown>> }).results)
+          : [];
+        const last = tickResults.length ? tickResults[tickResults.length - 1] : null;
         setMsg(
-          result.sent_one
-            ? `Sent to ${result.to}. Waiting ${gap}s (also continues if you close this page)…`
-            : result.failed_one
-              ? `Failed one (${result.error}). Waiting ${gap}s…`
-              : `Waiting ${gap}s…`,
+          last?.sent_one
+            ? `Sent to ${String(last.to || 'lead')}. Server keeps going if you close this page.`
+            : `Server sending… ${status.sent} sent · ${status.pending} remaining (safe to close).`,
         );
-        await waitGap(gap);
-        if (stopRef.current) {
-          setMsg('Campaign paused');
-          break;
-        }
+        await waitGap(Math.min(gap, 20));
+        if (stopRef.current) break;
       }
     } catch (err) {
-      // If the tab loop fails, server cron/tick still continues.
-      setError(err instanceof Error ? err.message : 'Send loop failed — server may still be sending');
+      // Tab errors must never pause the campaign — cron continues.
+      setError(err instanceof Error ? err.message : 'Browser helper stopped — server is still sending');
       try {
         const status = await getBulkCampaignStatus(campaignId);
         setProgress(status);
@@ -1251,7 +1271,14 @@ const BulkEmailPage: React.FC = () => {
                       <div className="font-medium">{c.name}</div>
                       <div className="text-[11px] text-[#8a8276]">{c.subject}</div>
                     </td>
-                    <td className="px-3 py-2 capitalize text-[#3f3a32]">{c.status}</td>
+                    <td className="px-3 py-2 capitalize text-[#3f3a32]">
+                      {c.status}
+                      {(c.status === 'sending' || c.status === 'queued') && (
+                        <div className="text-[10px] font-normal normal-case text-emerald-700">
+                          Running on server
+                        </div>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-[#3f3a32]">
                       {c.sent_count}/{c.total_count}
                       {c.failed_count ? ` · ${c.failed_count} fail` : ''}

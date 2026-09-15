@@ -46,10 +46,10 @@ function listSmtpAccounts(): SmtpAccount[] {
   const seen = new Set<string>();
 
   const push = (emailRaw: string, passRaw: string, userRaw?: string, label?: string) => {
-    const email = normalizeEmail(emailRaw);
+    const email = bareEmailAddress(emailRaw);
     const pass = String(passRaw || '').replace(/\s+/g, '').trim();
-    const user = normalizeEmail(userRaw || emailRaw) || email;
-    if (!email || !pass || seen.has(email)) return;
+    const user = bareEmailAddress(userRaw || emailRaw) || email;
+    if (!email || !email.includes('@') || !pass || seen.has(email)) return;
     seen.add(email);
     accounts.push({ email, user, pass, label: label || email });
   };
@@ -227,6 +227,28 @@ function todayUtcDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function summarizeTickResult(one: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ok: one.ok,
+    done: one.done,
+    paused: one.paused,
+    daily_cap_hit: one.daily_cap_hit,
+    waiting_gap: one.waiting_gap,
+    wait_ms: one.wait_ms,
+    sent_one: one.sent_one,
+    failed_one: one.failed_one,
+    raced: one.raced,
+    to: one.to,
+    error: one.error,
+    pending: one.pending,
+    sent: one.sent,
+    failed: one.failed,
+    gap_seconds: one.gap_seconds,
+    from_email: one.from_email,
+    reason: one.reason,
+  };
+}
+
 async function getAuthUserId(req: Request): Promise<string | null> {
   const admin = serviceClient();
   const auth = req.headers.get('authorization') || '';
@@ -238,13 +260,24 @@ async function getAuthUserId(req: Request): Promise<string | null> {
 }
 
 async function campaignProgress(admin: ReturnType<typeof serviceClient>, campaignId: string) {
-  const { data: campaign } = await admin.from('hm_bulk_campaigns').select('*').eq('id', campaignId).maybeSingle();
+  const { data: campaign } = await admin
+    .from('hm_bulk_campaigns')
+    .select(
+      'id, name, subject, status, total_count, sent_count, failed_count, gap_seconds, daily_cap, provider, from_email, created_at, updated_at, started_at, completed_at, last_error',
+    )
+    .eq('id', campaignId)
+    .maybeSingle();
   if (!campaign) return null;
   const { count: pending } = await admin
     .from('hm_bulk_recipients')
     .select('id', { count: 'exact', head: true })
     .eq('campaign_id', campaignId)
     .eq('status', 'pending');
+  const { count: sending } = await admin
+    .from('hm_bulk_recipients')
+    .select('id', { count: 'exact', head: true })
+    .eq('campaign_id', campaignId)
+    .eq('status', 'sending');
   const { count: sent } = await admin
     .from('hm_bulk_recipients')
     .select('id', { count: 'exact', head: true })
@@ -264,6 +297,7 @@ async function campaignProgress(admin: ReturnType<typeof serviceClient>, campaig
   return {
     campaign,
     pending: pending || 0,
+    sending: sending || 0,
     sent: sent || 0,
     failed: failed || 0,
     daily_sent: dailySent,
@@ -276,12 +310,17 @@ async function campaignProgress(admin: ReturnType<typeof serviceClient>, campaig
 async function syncCampaignCounters(admin: ReturnType<typeof serviceClient>, campaignId: string) {
   const progress = await campaignProgress(admin, campaignId);
   if (!progress) return null;
-  const { pending, sent, failed, campaign } = progress;
-  const total = Number(campaign.total_count) || pending + sent + failed;
+  const { pending, sending, sent, failed, campaign } = progress;
+  const total = Number(campaign.total_count) || pending + sending + sent + failed;
   let status = campaign.status as string;
   if (status !== 'cancelled' && status !== 'paused') {
-    if (pending === 0 && (sent > 0 || failed > 0)) status = 'completed';
-    else if (sent > 0 || failed > 0) status = 'sending';
+    if (pending === 0 && sending === 0 && (sent > 0 || failed > 0)) {
+      status = 'completed';
+    } else if (status === 'queued' && sent === 0 && failed === 0 && sending === 0) {
+      status = 'queued';
+    } else {
+      status = 'sending';
+    }
   }
   const patch: Record<string, unknown> = {
     sent_count: sent,
@@ -317,7 +356,8 @@ async function recoverStuckSending(
   admin: ReturnType<typeof serviceClient>,
   campaignId: string,
 ): Promise<void> {
-  const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  // Browser tab close can abort mid-send and leave rows stuck in "sending".
+  const cutoff = new Date(Date.now() - 90 * 1000).toISOString();
   await admin
     .from('hm_bulk_recipients')
     .update({ status: 'pending', updated_at: new Date().toISOString() })
@@ -415,10 +455,23 @@ async function sendNextForCampaign(
       last_error: null,
     })
     .eq('id', campaignId);
-  await admin
+  const { data: claimed, error: claimErr } = await admin
     .from('hm_bulk_recipients')
     .update({ status: 'sending', updated_at: new Date().toISOString() })
-    .eq('id', next.id);
+    .eq('id', next.id)
+    .eq('status', 'pending')
+    .select('id')
+    .maybeSingle();
+  if (claimErr) throw claimErr;
+  if (!claimed) {
+    // Another worker already claimed this lead; try again next tick.
+    return {
+      ok: true,
+      done: false,
+      raced: true,
+      ...(await syncCampaignCounters(admin, campaignId)),
+    };
+  }
 
   const to = normalizeEmail(next.email);
   const displayName = str(next.full_name);
@@ -1054,6 +1107,7 @@ Deno.serve(async (req) => {
 
     if (action === 'tick' || action === 'worker') {
       // Server-side sender: keeps campaigns moving even if the browser is closed.
+      const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
       const { data: camps, error: listErr } = await admin
         .from('hm_bulk_campaigns')
         .select('id, status, gap_seconds')
@@ -1063,26 +1117,47 @@ Deno.serve(async (req) => {
       if (listErr) throw listErr;
 
       const results: Array<Record<string, unknown>> = [];
+      const deadline = Date.now() + 50_000;
       for (const camp of camps || []) {
+        if (Date.now() >= deadline) break;
         const campaignId = String(camp.id);
         const gapSeconds = Math.max(5, Number(camp.gap_seconds) || DEFAULT_GAP);
-        // Rough budget: up to ~50s of sends per campaign per tick.
-        const maxSends = Math.max(1, Math.min(12, Math.floor(55 / Math.max(5, Math.min(gapSeconds, 55)))));
+        // Stay inside this tick and wait out gaps so closing the browser never stalls the campaign.
+        const maxSends = Math.max(1, Math.min(20, Math.floor(50_000 / Math.max(gapSeconds * 1000, 5000)) + 1));
         let sends = 0;
-        while (sends < maxSends) {
+        while (sends < maxSends && Date.now() < deadline) {
           const one = await sendNextForCampaign(admin, campaignId, userId, { respectGap: true });
-          if (one.http_status) break;
-          if (one.paused || one.daily_cap_hit || one.done || one.waiting_gap) {
-            results.push({ campaign_id: campaignId, ...one });
+          if (one.http_status) {
+            results.push({ campaign_id: campaignId, ...summarizeTickResult(one) });
             break;
           }
+          if (one.paused || one.daily_cap_hit || one.done) {
+            results.push({ campaign_id: campaignId, ...summarizeTickResult(one) });
+            break;
+          }
+          if (one.waiting_gap) {
+            const waitMs = Math.max(0, Number(one.wait_ms) || 0);
+            const remaining = deadline - Date.now() - 500;
+            if (waitMs > remaining) {
+              results.push({
+                campaign_id: campaignId,
+                waiting_gap: true,
+                wait_ms: waitMs,
+                sends,
+              });
+              break;
+            }
+            if (waitMs > 0) await sleep(waitMs);
+            continue;
+          }
+          if (one.raced) continue;
           if (one.sent_one || one.failed_one) {
             sends += 1;
-            results.push({ campaign_id: campaignId, ...one });
+            results.push({ campaign_id: campaignId, ...summarizeTickResult(one) });
             if (one.failed_one) break;
             continue;
           }
-          results.push({ campaign_id: campaignId, ...one });
+          results.push({ campaign_id: campaignId, ...summarizeTickResult(one) });
           break;
         }
         if (!results.some((r) => r.campaign_id === campaignId)) {
