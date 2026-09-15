@@ -11,7 +11,25 @@ export type BulkAppSettings = {
   instantly: Record<string, unknown>;
   apollo: Record<string, unknown>;
   billionmail: Record<string, unknown>;
+  template_subject?: string | null;
+  template_body?: string | null;
+  draft_campaign_name?: string | null;
+  draft_from_email?: string | null;
+  draft_source_file?: string | null;
+  draft_name_column?: string | null;
+  draft_email_column?: string | null;
+  draft_gap_seconds?: number | null;
+  draft_daily_cap?: number | null;
   updated_at?: string;
+};
+
+export type BulkDraftLead = {
+  id?: string;
+  full_name?: string | null;
+  email: string;
+  row_index?: number | null;
+  raw?: Record<string, unknown>;
+  created_at?: string;
 };
 
 export type BulkCampaign = {
@@ -90,6 +108,7 @@ export async function getBulkSettings(): Promise<{
   daily_sent: number;
   hard_daily_cap: number;
   smtp_accounts: BulkSmtpAccountUsage[];
+  draft_leads: BulkDraftLead[];
 }> {
   const json = await invokeBulk({ action: 'get_settings' });
   return {
@@ -98,6 +117,7 @@ export async function getBulkSettings(): Promise<{
     daily_sent: Number(json.daily_sent) || 0,
     hard_daily_cap: Number(json.hard_daily_cap) || 500,
     smtp_accounts: (json.smtp_accounts as BulkSmtpAccountUsage[]) || [],
+    draft_leads: (json.draft_leads as BulkDraftLead[]) || [],
   };
 }
 
@@ -112,6 +132,57 @@ export async function saveBulkSettings(input: {
 }): Promise<BulkAppSettings> {
   const json = await invokeBulk({ action: 'save_settings', ...input });
   return json.settings as BulkAppSettings;
+}
+
+export async function saveBulkTemplate(input: {
+  subject: string;
+  body: string;
+  campaignName?: string;
+  fromEmail?: string;
+  sourceFile?: string;
+  nameColumn?: string;
+  emailColumn?: string;
+  gapSeconds?: number;
+  dailyCap?: number;
+}): Promise<BulkAppSettings> {
+  const json = await invokeBulk({
+    action: 'save_template',
+    subject: input.subject,
+    body: input.body,
+    campaign_name: input.campaignName,
+    from_email: input.fromEmail,
+    source_file: input.sourceFile,
+    name_column: input.nameColumn,
+    email_column: input.emailColumn,
+    gap_seconds: input.gapSeconds,
+    daily_cap: input.dailyCap,
+  });
+  return json.settings as BulkAppSettings;
+}
+
+export async function saveBulkDraftLeads(input: {
+  recipients: Array<{ name: string; email: string; row_index?: number; raw?: Record<string, string> }>;
+  sourceFile?: string;
+  nameColumn?: string;
+  emailColumn?: string;
+  campaignName?: string;
+}): Promise<{ total: number; draft_leads: BulkDraftLead[] }> {
+  const json = await invokeBulk({
+    action: 'save_draft_leads',
+    recipients: input.recipients,
+    source_file: input.sourceFile,
+    name_column: input.nameColumn,
+    email_column: input.emailColumn,
+    campaign_name: input.campaignName,
+  });
+  return {
+    total: Number(json.total) || 0,
+    draft_leads: (json.draft_leads as BulkDraftLead[]) || [],
+  };
+}
+
+export async function clearBulkDraftLeads(): Promise<void> {
+  await invokeBulk({ action: 'clear_draft_leads' });
 }
 
 export async function listBulkCampaigns(): Promise<BulkCampaign[]> {

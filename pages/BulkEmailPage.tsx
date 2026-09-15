@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import {
   cancelBulkCampaign,
+  clearBulkDraftLeads,
   createBulkCampaign,
   defaultBulkEmailBody,
   applyBulkMerge,
@@ -20,7 +21,9 @@ import {
   pauseBulkCampaign,
   processBulkNext,
   resumeBulkCampaign,
+  saveBulkDraftLeads,
   saveBulkSettings,
+  saveBulkTemplate,
   sendBulkTestEmail,
   sleep,
   splitBulkEmailBody,
@@ -90,23 +93,29 @@ const BulkEmailPage: React.FC = () => {
   const [testTo, setTestTo] = React.useState('');
   const [testName, setTestName] = React.useState('Alex');
   const [testing, setTesting] = React.useState(false);
+  const [savingDraft, setSavingDraft] = React.useState(false);
+  const [draftSavedAt, setDraftSavedAt] = React.useState<string | null>(null);
+  const [hydrated, setHydrated] = React.useState(false);
   const stopRef = React.useRef(false);
   const fileRef = React.useRef<HTMLInputElement>(null);
+  const skipNextLeadPersist = React.useRef(false);
 
   const loadSettings = React.useCallback(async () => {
     try {
       const data = await getBulkSettings();
       setSettings(data.settings);
       setSmtpAccounts(data.smtp_accounts || []);
+      const savedFrom = data.settings.draft_from_email || '';
       setSmtpFrom((prev) => {
-        if (prev && (prev === 'auto' || data.smtp_accounts.some((a) => a.email === prev))) return prev;
+        const preferred = savedFrom || prev;
+        if (preferred === 'auto' || data.smtp_accounts.some((a) => a.email === preferred)) return preferred || 'auto';
         return data.smtp_accounts[0]?.email || data.smtp_from || 'auto';
       });
       setDailySent(
         data.smtp_accounts.reduce((sum, a) => sum + (a.daily_sent || 0), 0) || data.daily_sent,
       );
-      setGapSeconds(data.settings.gap_seconds || 60);
-      setDailyCap(Math.min(500, data.settings.daily_cap || 500));
+      setGapSeconds(data.settings.draft_gap_seconds || data.settings.gap_seconds || 60);
+      setDailyCap(Math.min(500, data.settings.draft_daily_cap || data.settings.daily_cap || 500));
       setProvider((data.settings.default_provider as BulkProvider) || 'smtp');
       setInstantlyKey(strField(data.settings.instantly, 'api_key'));
       setInstantlyWorkspace(strField(data.settings.instantly, 'workspace'));
@@ -114,8 +123,33 @@ const BulkEmailPage: React.FC = () => {
       setApolloBase(strField(data.settings.apollo, 'base_url') || 'https://api.apollo.io');
       setBillionApiUrl(strField(data.settings.billionmail, 'api_url'));
       setBillionApiKey(strField(data.settings.billionmail, 'api_key'));
+
+      if (data.settings.template_subject) setSubject(data.settings.template_subject);
+      if (typeof data.settings.template_body === 'string' && data.settings.template_body.length) {
+        setBody(data.settings.template_body);
+      }
+      if (data.settings.draft_campaign_name) setCampaignName(data.settings.draft_campaign_name);
+      if (data.settings.draft_source_file) setFileName(data.settings.draft_source_file);
+      if (data.settings.draft_name_column != null) setNameCol(data.settings.draft_name_column || '');
+      if (data.settings.draft_email_column) setEmailCol(data.settings.draft_email_column);
+
+      if (data.draft_leads?.length) {
+        skipNextLeadPersist.current = true;
+        setRecipients(
+          data.draft_leads.map((lead, idx) => ({
+            name: String(lead.full_name || ''),
+            email: String(lead.email || '').toLowerCase(),
+            rowIndex: typeof lead.row_index === 'number' ? lead.row_index : idx + 2,
+            raw: (lead.raw || {}) as Record<string, string>,
+          })),
+        );
+        setSkipped(0);
+        setDraftSavedAt(new Date().toISOString());
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load settings');
+    } finally {
+      setHydrated(true);
     }
   }, []);
 
@@ -134,11 +168,7 @@ const BulkEmailPage: React.FC = () => {
   }, [loadSettings, loadCampaigns]);
 
   React.useEffect(() => {
-    if (!table) {
-      setRecipients([]);
-      setSkipped(0);
-      return;
-    }
+    if (!table) return;
     try {
       const mapped = mapRecipients(table, nameCol, emailCol);
       setRecipients(mapped.recipients);
@@ -149,6 +179,70 @@ const BulkEmailPage: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Mapping failed');
     }
   }, [table, nameCol, emailCol]);
+
+  // Auto-save HTML/plain template + compose fields.
+  React.useEffect(() => {
+    if (!hydrated) return;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const saved = await saveBulkTemplate({
+            subject,
+            body,
+            campaignName,
+            fromEmail: smtpFrom,
+            sourceFile: fileName,
+            nameColumn: nameCol,
+            emailColumn: emailCol,
+            gapSeconds,
+            dailyCap,
+          });
+          setSettings(saved);
+          setDraftSavedAt(saved.updated_at || new Date().toISOString());
+        } catch {
+          // Keep editing even if autosave fails; user can retry.
+        }
+      })();
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [hydrated, subject, body, campaignName, smtpFrom, fileName, nameCol, emailCol, gapSeconds, dailyCap]);
+
+  // Persist mapped leads whenever the recipient list changes from upload/mapping.
+  React.useEffect(() => {
+    if (!hydrated) return;
+    if (skipNextLeadPersist.current) {
+      skipNextLeadPersist.current = false;
+      return;
+    }
+    if (!table && !recipients.length) return;
+    if (!recipients.length && !fileName) return;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        setSavingDraft(true);
+        try {
+          const saved = await saveBulkDraftLeads({
+            recipients: recipients.map((r) => ({
+              name: r.name,
+              email: r.email,
+              row_index: r.rowIndex,
+              raw: r.raw,
+            })),
+            sourceFile: fileName,
+            nameColumn: nameCol,
+            emailColumn: emailCol,
+            campaignName,
+          });
+          setDraftSavedAt(new Date().toISOString());
+          setMsg(`Saved ${saved.total} leads to the database.`);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Could not save leads');
+        } finally {
+          setSavingDraft(false);
+        }
+      })();
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [hydrated, recipients, table, fileName, nameCol, emailCol, campaignName]);
 
   const onFile = async (file: File | null) => {
     if (!file) return;
@@ -166,6 +260,23 @@ const BulkEmailPage: React.FC = () => {
     } catch (err) {
       setTable(null);
       setError(err instanceof Error ? err.message : 'Upload failed');
+    }
+  };
+
+  const onClearDraftLeads = async () => {
+    setError(null);
+    try {
+      await clearBulkDraftLeads();
+      skipNextLeadPersist.current = true;
+      setTable(null);
+      setRecipients([]);
+      setSkipped(0);
+      setFileName('');
+      setNameCol('');
+      setEmailCol('');
+      setMsg('Cleared saved leads.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not clear leads');
     }
   };
 
@@ -301,6 +412,16 @@ const BulkEmailPage: React.FC = () => {
         })),
       });
       setMsg(`Campaign created with ${created.total} recipients. Starting…`);
+      try {
+        await clearBulkDraftLeads();
+        skipNextLeadPersist.current = true;
+        setTable(null);
+        setRecipients([]);
+        setSkipped(0);
+        setFileName('');
+      } catch {
+        // Campaign already created; draft clear is best-effort.
+      }
       await loadCampaigns();
       await runSendLoop(created.campaign_id);
     } catch (err) {
@@ -448,40 +569,62 @@ const BulkEmailPage: React.FC = () => {
               <Upload size={18} />
               {fileName ? `Replace file (${fileName})` : 'Upload CSV or Excel'}
             </button>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#8a8276]">
+              <span>
+                {savingDraft
+                  ? 'Saving leads…'
+                  : draftSavedAt
+                    ? `Draft saved ${new Date(draftSavedAt).toLocaleString()}`
+                    : 'Template & leads auto-save to the database'}
+              </span>
+              {recipients.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void onClearDraftLeads()}
+                  className="rounded-full border border-[#ddd5c6] px-3 py-1 text-[11px] text-[#5a5348]"
+                >
+                  Clear saved leads
+                </button>
+              )}
+            </div>
 
             {table && (
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-xs text-[#6f675c]">
+                  Name column
+                  <select
+                    className="mt-1 w-full rounded-lg border border-[#e0d8ca] bg-white px-3 py-2 text-sm"
+                    value={nameCol}
+                    onChange={(e) => setNameCol(e.target.value)}
+                  >
+                    <option value="">— optional —</option>
+                    {table.headers.map((h) => (
+                      <option key={h} value={h}>{h}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="block text-xs text-[#6f675c]">
+                  Email column
+                  <select
+                    className="mt-1 w-full rounded-lg border border-[#e0d8ca] bg-white px-3 py-2 text-sm"
+                    value={emailCol}
+                    onChange={(e) => setEmailCol(e.target.value)}
+                  >
+                    {table.headers.map((h) => (
+                      <option key={h} value={h}>{h}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
+
+            {(table || recipients.length > 0) && (
               <>
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="block text-xs text-[#6f675c]">
-                    Name column
-                    <select
-                      className="mt-1 w-full rounded-lg border border-[#e0d8ca] bg-white px-3 py-2 text-sm"
-                      value={nameCol}
-                      onChange={(e) => setNameCol(e.target.value)}
-                    >
-                      <option value="">— optional —</option>
-                      {table.headers.map((h) => (
-                        <option key={h} value={h}>{h}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="block text-xs text-[#6f675c]">
-                    Email column
-                    <select
-                      className="mt-1 w-full rounded-lg border border-[#e0d8ca] bg-white px-3 py-2 text-sm"
-                      value={emailCol}
-                      onChange={(e) => setEmailCol(e.target.value)}
-                    >
-                      {table.headers.map((h) => (
-                        <option key={h} value={h}>{h}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
                 <p className="text-xs text-[#6f675c]">
                   <FileSpreadsheet size={12} className="mr-1 inline" />
                   {recipients.length} valid emails
                   {skipped > 0 ? ` · ${skipped} skipped (invalid/duplicate)` : ''}
+                  {!table && recipients.length > 0 ? ' · restored from database' : ''}
                 </p>
                 <div className="overflow-auto rounded-xl border border-[#eee7db]">
                   <table className="min-w-full text-left text-xs">

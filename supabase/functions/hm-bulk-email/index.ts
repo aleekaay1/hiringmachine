@@ -404,6 +404,11 @@ Deno.serve(async (req) => {
       const usage = await listAccountUsage(admin, dailyCap);
       const fromEmail = defaultFromEmail();
       const primary = usage.find((u) => u.email === normalizeEmail(fromEmail)) || usage[0];
+      const { data: draftLeads, error: draftErr } = await admin
+        .from('hm_bulk_draft_leads')
+        .select('id, full_name, email, row_index, raw, created_at')
+        .order('row_index', { ascending: true });
+      if (draftErr) throw draftErr;
       return json(200, {
         ok: true,
         settings: data || {
@@ -420,7 +425,109 @@ Deno.serve(async (req) => {
         daily_sent: primary?.daily_sent || 0,
         hard_daily_cap: HARD_DAILY_CAP,
         smtp_accounts: usage,
+        draft_leads: draftLeads || [],
       });
+    }
+
+    if (action === 'save_template') {
+      const subject = str(body.subject);
+      const templateBody = typeof body.body === 'string'
+        ? body.body
+        : str(body.template_body || body.templateBody || body.body_html || body.bodyHtml);
+      const patch = {
+        template_subject: subject || null,
+        template_body: templateBody || null,
+        draft_campaign_name: str(body.campaign_name || body.campaignName) || null,
+        draft_from_email: str(body.from_email || body.fromEmail) || null,
+        draft_source_file: str(body.source_file || body.sourceFile) || null,
+        draft_name_column: str(body.name_column || body.nameColumn) || null,
+        draft_email_column: str(body.email_column || body.emailColumn) || null,
+        draft_gap_seconds: clampGap(body.gap_seconds ?? body.gapSeconds ?? DEFAULT_GAP),
+        draft_daily_cap: clampDailyCap(body.daily_cap ?? body.dailyCap ?? DEFAULT_DAILY_CAP),
+        updated_by: userId,
+        updated_at: new Date().toISOString(),
+      };
+      const { data, error } = await admin
+        .from('hm_bulk_app_settings')
+        .upsert({ id: 1, ...patch })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return json(200, { ok: true, settings: data });
+    }
+
+    if (action === 'save_draft_leads') {
+      const rawRecipients = Array.isArray(body.recipients) ? (body.recipients as RecipientInput[]) : [];
+      const seen = new Set<string>();
+      const leads: Array<{
+        full_name: string | null;
+        email: string;
+        row_index: number | null;
+        raw: Record<string, unknown>;
+        updated_at: string;
+      }> = [];
+      const now = new Date().toISOString();
+      for (let i = 0; i < rawRecipients.length; i++) {
+        const row = rawRecipients[i] || {};
+        const email = normalizeEmail(row.email);
+        if (!email || !email.includes('@') || seen.has(email)) continue;
+        seen.add(email);
+        leads.push({
+          full_name: str(row.name) || null,
+          email,
+          row_index: typeof row.row_index === 'number' ? row.row_index : i,
+          raw: row.raw && typeof row.raw === 'object' ? row.raw : {},
+          updated_at: now,
+        });
+      }
+
+      const { error: delErr } = await admin.from('hm_bulk_draft_leads').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      if (delErr) throw delErr;
+
+      const chunkSize = 500;
+      for (let i = 0; i < leads.length; i += chunkSize) {
+        const chunk = leads.slice(i, i + chunkSize);
+        if (!chunk.length) continue;
+        const { error: insErr } = await admin.from('hm_bulk_draft_leads').insert(chunk);
+        if (insErr) throw insErr;
+      }
+
+      // Also stash mapping metadata on settings when provided.
+      const metaPatch: Record<string, unknown> = {
+        updated_by: userId,
+        updated_at: now,
+      };
+      if (str(body.source_file || body.sourceFile)) metaPatch.draft_source_file = str(body.source_file || body.sourceFile);
+      if (str(body.name_column || body.nameColumn) || body.name_column === '') {
+        metaPatch.draft_name_column = str(body.name_column || body.nameColumn) || null;
+      }
+      if (str(body.email_column || body.emailColumn)) {
+        metaPatch.draft_email_column = str(body.email_column || body.emailColumn);
+      }
+      if (str(body.campaign_name || body.campaignName)) {
+        metaPatch.draft_campaign_name = str(body.campaign_name || body.campaignName);
+      }
+      await admin.from('hm_bulk_app_settings').upsert({ id: 1, ...metaPatch });
+
+      const { data: draftLeads } = await admin
+        .from('hm_bulk_draft_leads')
+        .select('id, full_name, email, row_index, raw, created_at')
+        .order('row_index', { ascending: true });
+      return json(200, { ok: true, total: leads.length, draft_leads: draftLeads || [] });
+    }
+
+    if (action === 'clear_draft_leads') {
+      const { error } = await admin.from('hm_bulk_draft_leads').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      if (error) throw error;
+      await admin.from('hm_bulk_app_settings').upsert({
+        id: 1,
+        draft_source_file: null,
+        draft_name_column: null,
+        draft_email_column: null,
+        updated_by: userId,
+        updated_at: new Date().toISOString(),
+      });
+      return json(200, { ok: true, draft_leads: [] });
     }
 
     if (action === 'save_settings') {
