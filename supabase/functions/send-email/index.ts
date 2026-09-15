@@ -97,12 +97,17 @@ Deno.serve(async (req) => {
       });
     }
 
-    const fromEmail =
+    const fromEmailRaw =
       Deno.env.get('SMTP_FROM')?.trim() ||
       Deno.env.get('SMTP_USERNAME')?.trim() ||
       'noreply@example.com';
-    const fromName = (Deno.env.get('SMTP_FROM_NAME')?.trim() || 'AO Globelife').replace(/"/g, '');
-    const from = `"${fromName}" <${fromEmail}>`;
+    const fromName = (Deno.env.get('SMTP_FROM_NAME')?.trim() || 'AO Globelife')
+      .replace(/["<>]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() || 'AO Globelife';
+    const angled = fromEmailRaw.match(/<([^>]+)>/);
+    const fromEmail = (angled?.[1] || fromEmailRaw).trim().toLowerCase();
+    const from = { name: fromName, address: fromEmail };
     const attachments = rawAttachments
       .map((a: { filename?: string; content?: string; contentType?: string }) => {
         const filename = typeof a?.filename === 'string' && a.filename.trim() ? a.filename.trim() : 'attachment';

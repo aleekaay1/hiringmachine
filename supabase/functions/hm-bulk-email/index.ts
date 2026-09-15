@@ -91,15 +91,26 @@ function getTransportFor(account: SmtpAccount): Transporter {
   });
 }
 
-/** Inbox display name — e.g. "AO Globelife" <apply@…> */
+/** Inbox display name — e.g. AO Globelife <apply@…> */
 function smtpFromName(): string {
-  return Deno.env.get('SMTP_FROM_NAME')?.trim() || 'AO Globelife';
+  return (Deno.env.get('SMTP_FROM_NAME')?.trim() || 'AO Globelife')
+    .replace(/["<>]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim() || 'AO Globelife';
 }
 
-function formatFromHeader(email: string): string {
-  const name = smtpFromName().replace(/"/g, '');
-  const addr = normalizeEmail(email);
-  return `"${name}" <${addr}>`;
+function bareEmailAddress(value: string): string {
+  const raw = String(value || '').trim();
+  const angled = raw.match(/<([^>]+)>/);
+  if (angled?.[1]) return normalizeEmail(angled[1]);
+  return normalizeEmail(raw);
+}
+
+function formatFromHeader(email: string): { name: string; address: string } {
+  return {
+    name: smtpFromName(),
+    address: bareEmailAddress(email),
+  };
 }
 
 function defaultFromEmail(): string {
