@@ -219,7 +219,7 @@ async function resolveJitQuickSlot(
         ms,
         row: {
           id: jitBroadcastId,
-          title: str(episode.title || webinar.title) || 'Watch soon',
+          title: str(episode.title || webinar.title) || 'Watch now',
           date: closestMs != null ? (closestMs > 1e12 ? closestMs / 1000 : closestMs) : Math.floor(ms / 1000),
           webinar_id: webinar.id ?? null,
           episode_id: episode.id ?? null,
@@ -608,7 +608,7 @@ Deno.serve(async (req) => {
         if (!schedule.quick?.id) {
           return json(409, {
             error:
-              'Watch soon is unavailable right now. Enable Just-in-time on your published AO webinar, or pick a time from today’s / tomorrow’s list.',
+              'Watch now is unavailable right now. Enable Just-in-time on your published AO webinar, or pick a time from today’s / tomorrow’s list.',
             quick_available: false,
           });
         }

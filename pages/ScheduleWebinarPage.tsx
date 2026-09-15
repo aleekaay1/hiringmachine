@@ -385,7 +385,7 @@ const ScheduleWebinarPage: React.FC = () => {
                 {submitting
                   ? 'Scheduling…'
                   : scheduleMode === 'quick'
-                  ? 'Register me for soon'
+                  ? 'Register me now'
                   : 'Schedule me'}
               </Button>
             </div>
