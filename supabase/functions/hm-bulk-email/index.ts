@@ -15,7 +15,6 @@ import {
   userIsAuthenticated,
 } from '../_shared/hiringMachine.ts';
 import { insertEmailSendLog } from '../_shared/emailSendLog.ts';
-import { mergePortalBcc } from '../_shared/portalEmailBcc.ts';
 
 const DEFAULT_GAP = 60;
 const DEFAULT_DAILY_CAP = 500;
@@ -334,7 +333,6 @@ Deno.serve(async (req) => {
       const html = bodyHtmlTpl
         ? applyMerge(bodyHtmlTpl, displayName, to)
         : text.replace(/\n/g, '<br/>');
-      const subjectWithTag = subject.startsWith('[TEST]') ? subject : `[TEST] ${subject}`;
 
       try {
         const transport = getTransportFor(account);
@@ -343,8 +341,7 @@ Deno.serve(async (req) => {
             {
               from: formatFromHeader(fromEmail),
               to,
-              bcc: mergePortalBcc(),
-              subject: subjectWithTag,
+              subject,
               text,
               html,
             },
@@ -358,7 +355,7 @@ Deno.serve(async (req) => {
           trigger_label: 'bulk:test',
           from_email: fromEmail,
           to_email: to,
-          subject: subjectWithTag,
+          subject,
           sent_by_user_id: userId,
           status: 'failed',
           error_message: msg,
@@ -380,7 +377,7 @@ Deno.serve(async (req) => {
         trigger_label: 'bulk:test',
         from_email: fromEmail,
         to_email: to,
-        subject: subjectWithTag,
+        subject,
         sent_by_user_id: userId,
         status: 'sent',
         metadata: { test: true, body_text: text.slice(0, 20000) },
@@ -391,7 +388,7 @@ Deno.serve(async (req) => {
         test: true,
         to,
         from_email: fromEmail,
-        subject: subjectWithTag,
+        subject,
         daily_sent: nextDaily,
         daily_cap: HARD_DAILY_CAP,
         smtp_accounts: await listAccountUsage(admin, HARD_DAILY_CAP),
@@ -705,7 +702,11 @@ Deno.serve(async (req) => {
       const nextStatus = action === 'pause' ? 'paused' : action === 'resume' ? 'queued' : 'cancelled';
       const { error } = await admin
         .from('hm_bulk_campaigns')
-        .update({ status: nextStatus, updated_at: new Date().toISOString() })
+        .update({
+          status: nextStatus,
+          updated_at: new Date().toISOString(),
+          ...(action === 'pause' ? { last_error: 'Paused by user' } : { last_error: null }),
+        })
         .eq('id', campaignId);
       if (error) throw error;
       if (action === 'cancel') {
@@ -716,7 +717,73 @@ Deno.serve(async (req) => {
           .eq('status', 'pending');
       }
       const progress = await syncCampaignCounters(admin, campaignId);
-      return json(200, { ok: true, ...progress });
+      return json(200, { ok: true, paused: nextStatus === 'paused', ...progress });
+    }
+
+    if (action === 'get_campaign') {
+      const campaignId = str(body.campaign_id || body.campaignId);
+      if (!campaignId) return json(400, { error: 'Missing campaign_id' });
+      const { data: campaign, error } = await admin
+        .from('hm_bulk_campaigns')
+        .select('*')
+        .eq('id', campaignId)
+        .maybeSingle();
+      if (error) throw error;
+      if (!campaign) return json(404, { error: 'Campaign not found' });
+      const progress = await syncCampaignCounters(admin, campaignId);
+      return json(200, { ok: true, campaign, ...progress });
+    }
+
+    if (action === 'update_campaign') {
+      const campaignId = str(body.campaign_id || body.campaignId);
+      if (!campaignId) return json(400, { error: 'Missing campaign_id' });
+      const { data: existing, error: existingErr } = await admin
+        .from('hm_bulk_campaigns')
+        .select('id, status')
+        .eq('id', campaignId)
+        .maybeSingle();
+      if (existingErr) throw existingErr;
+      if (!existing) return json(404, { error: 'Campaign not found' });
+      if (existing.status === 'completed' || existing.status === 'cancelled') {
+        return json(400, { error: `Cannot edit a ${existing.status} campaign` });
+      }
+
+      const subject = str(body.subject);
+      const bodyText = str(body.body_text || body.bodyText || body.text);
+      const bodyHtml = str(body.body_html || body.bodyHtml || body.html);
+      if (!subject || (!bodyText && !bodyHtml)) {
+        return json(400, { error: 'Subject and body are required' });
+      }
+
+      const preferredRaw = str(body.from_email || body.fromEmail) || 'auto';
+      const preferred = preferredRaw.toLowerCase() === 'auto' ? 'auto' : normalizeEmail(preferredRaw);
+      if (preferred !== 'auto' && !findAccount(preferred)) {
+        return json(400, { error: `SMTP account not configured for ${preferred}` });
+      }
+
+      const patch = {
+        name: str(body.name) || undefined,
+        subject,
+        body_text: bodyText || bodyHtml.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''),
+        body_html: bodyHtml || null,
+        gap_seconds: clampGap(body.gap_seconds ?? body.gapSeconds),
+        daily_cap: clampDailyCap(body.daily_cap ?? body.dailyCap),
+        from_email: preferred,
+        updated_at: new Date().toISOString(),
+        last_error: null,
+      };
+      const cleanPatch = Object.fromEntries(
+        Object.entries(patch).filter(([, v]) => v !== undefined),
+      );
+
+      const { data: campaign, error } = await admin
+        .from('hm_bulk_campaigns')
+        .update(cleanPatch)
+        .eq('id', campaignId)
+        .select('*')
+        .single();
+      if (error) throw error;
+      return json(200, { ok: true, campaign });
     }
 
     if (action === 'process' || action === 'send_next') {
@@ -805,7 +872,6 @@ Deno.serve(async (req) => {
             {
               from: formatFromHeader(fromEmail),
               to,
-              bcc: mergePortalBcc(),
               subject,
               text,
               html,

@@ -270,6 +270,37 @@ export async function cancelBulkCampaign(campaignId: string): Promise<BulkProgre
   return json as unknown as BulkProgress;
 }
 
+export async function getBulkCampaign(campaignId: string): Promise<{
+  campaign: BulkCampaign;
+} & Partial<BulkProgress>> {
+  const json = await invokeBulk({ action: 'get_campaign', campaign_id: campaignId });
+  return json as unknown as { campaign: BulkCampaign } & Partial<BulkProgress>;
+}
+
+export async function updateBulkCampaign(input: {
+  campaignId: string;
+  name?: string;
+  subject: string;
+  bodyText: string;
+  bodyHtml?: string;
+  gapSeconds: number;
+  dailyCap: number;
+  fromEmail?: string;
+}): Promise<BulkCampaign> {
+  const json = await invokeBulk({
+    action: 'update_campaign',
+    campaign_id: input.campaignId,
+    name: input.name,
+    subject: input.subject,
+    body_text: input.bodyText,
+    body_html: input.bodyHtml,
+    gap_seconds: input.gapSeconds,
+    daily_cap: input.dailyCap,
+    from_email: input.fromEmail,
+  });
+  return json.campaign as BulkCampaign;
+}
+
 export async function sendBulkTestEmail(input: {
   to: string;
   name?: string;

@@ -2,6 +2,7 @@ import React from 'react';
 import {
   FileSpreadsheet,
   Pause,
+  Pencil,
   Play,
   RefreshCw,
   Send,
@@ -15,6 +16,7 @@ import {
   createBulkCampaign,
   defaultBulkEmailBody,
   applyBulkMerge,
+  getBulkCampaign,
   getBulkSettings,
   listBulkCampaigns,
   listBulkDraftLeads,
@@ -28,6 +30,7 @@ import {
   sendBulkTestEmail,
   sleep,
   splitBulkEmailBody,
+  updateBulkCampaign,
   type BulkAppSettings,
   type BulkCampaign,
   type BulkProgress,
@@ -89,8 +92,11 @@ const BulkEmailPage: React.FC = () => {
 
   const [campaigns, setCampaigns] = React.useState<BulkCampaign[]>([]);
   const [activeId, setActiveId] = React.useState<string | null>(null);
+  const [editingCampaignId, setEditingCampaignId] = React.useState<string | null>(null);
   const [progress, setProgress] = React.useState<BulkProgress | null>(null);
   const [sending, setSending] = React.useState(false);
+  const [pausing, setPausing] = React.useState(false);
+  const [savingCampaign, setSavingCampaign] = React.useState(false);
   const [testTo, setTestTo] = React.useState('');
   const [testName, setTestName] = React.useState('Alex');
   const [testing, setTesting] = React.useState(false);
@@ -311,6 +317,31 @@ const BulkEmailPage: React.FC = () => {
     }
   };
 
+  const waitGap = React.useCallback(async (seconds: number) => {
+    const end = Date.now() + Math.max(1, seconds) * 1000;
+    while (Date.now() < end) {
+      if (stopRef.current) return;
+      await sleep(Math.min(200, end - Date.now()));
+    }
+  }, []);
+
+  const onPauseCampaign = async (campaignId: string) => {
+    stopRef.current = true;
+    setPausing(true);
+    setMsg('Pausing now…');
+    try {
+      const result = await pauseBulkCampaign(campaignId);
+      setProgress(result);
+      setActiveId(campaignId);
+      setMsg('Campaign paused. You can edit it, then Resume.');
+      await loadCampaigns();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not pause');
+    } finally {
+      setPausing(false);
+    }
+  };
+
   const runSendLoop = async (campaignId: string) => {
     setSending(true);
     stopRef.current = false;
@@ -325,7 +356,7 @@ const BulkEmailPage: React.FC = () => {
           setMsg(`Paused: daily cap (${result.daily_cap}) reached for ${result.from_email}. Resume tomorrow.`);
           break;
         }
-        if (result.paused) {
+        if (result.paused || stopRef.current) {
           setMsg('Campaign paused');
           break;
         }
@@ -341,7 +372,11 @@ const BulkEmailPage: React.FC = () => {
               ? `Failed one (${result.error}). Waiting ${gap}s…`
               : `Waiting ${gap}s…`,
         );
-        await sleep(gap * 1000);
+        await waitGap(gap);
+        if (stopRef.current) {
+          setMsg('Campaign paused');
+          break;
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Send loop failed');
@@ -349,6 +384,69 @@ const BulkEmailPage: React.FC = () => {
       setSending(false);
       await loadCampaigns();
       await loadSettings();
+    }
+  };
+
+  const onEditCampaign = async (campaignId: string) => {
+    setError(null);
+    try {
+      const data = await getBulkCampaign(campaignId);
+      const c = data.campaign;
+      setEditingCampaignId(c.id);
+      setCampaignName(c.name || '');
+      setSubject(c.subject || '');
+      const rawBody = (c.body_html && String(c.body_html).trim()) || c.body_text || '';
+      setBody(rawBody);
+      setGapSeconds(c.gap_seconds || 60);
+      setDailyCap(Math.min(500, c.daily_cap || 500));
+      setSmtpFrom(c.from_email || 'auto');
+      setActiveId(c.id);
+      if (data.pending != null || data.sent != null) {
+        setProgress({
+          campaign: c,
+          pending: data.pending || 0,
+          sent: data.sent || 0,
+          failed: data.failed || 0,
+          daily_sent: data.daily_sent || 0,
+          daily_cap: data.daily_cap || c.daily_cap || 500,
+          from_email: data.from_email || c.from_email || 'auto',
+        });
+      }
+      setTab('compose');
+      setMsg(
+        `Editing “${c.name}” (${c.status}). Save changes below, or pause first if it’s still sending.`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load campaign');
+    }
+  };
+
+  const onSaveCampaignEdits = async () => {
+    if (!editingCampaignId) return;
+    setError(null);
+    if (!subject.trim() || !body.trim()) {
+      setError('Subject and body are required');
+      return;
+    }
+    setSavingCampaign(true);
+    try {
+      const parts = splitBulkEmailBody(body);
+      const updated = await updateBulkCampaign({
+        campaignId: editingCampaignId,
+        name: campaignName || undefined,
+        subject: subject.trim(),
+        bodyText: parts.bodyText,
+        bodyHtml: parts.bodyHtml,
+        gapSeconds,
+        dailyCap: Math.min(500, dailyCap),
+        fromEmail: smtpFrom,
+      });
+      setMsg(`Saved edits to “${updated.name}”.`);
+      await loadCampaigns();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save campaign');
+    } finally {
+      setSavingCampaign(false);
     }
   };
 
@@ -500,7 +598,7 @@ const BulkEmailPage: React.FC = () => {
             <div>
               <p className="hm-kicker">Test email</p>
               <p className="mt-1 text-sm text-[#6f675c]">
-                Send one copy of the current subject/body via SMTP before a mass send. Subject is prefixed with [TEST].
+                Send one copy of the current subject/body via SMTP before a mass send.
               </p>
             </div>
             <button
@@ -662,6 +760,31 @@ const BulkEmailPage: React.FC = () => {
 
           <section className="space-y-4 rounded-2xl border border-[#e6e0d4] bg-white p-5">
             <p className="hm-kicker">2 · Message & pace</p>
+            {editingCampaignId && (
+              <div className="rounded-xl border border-[#d9e5d4] bg-[#f3f8f1] px-3 py-2 text-xs text-[#2f4a38]">
+                Editing campaign <strong>{editingCampaignId.slice(0, 8)}…</strong>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={savingCampaign}
+                    onClick={() => void onSaveCampaignEdits()}
+                    className="hm-btn-brass rounded-full px-3 py-1 text-[11px] disabled:opacity-50"
+                  >
+                    {savingCampaign ? 'Saving…' : 'Save campaign edits'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingCampaignId(null);
+                      setMsg('Exited campaign edit mode.');
+                    }}
+                    className="rounded-full border border-[#ddd5c6] px-3 py-1 text-[11px] text-[#5a5348]"
+                  >
+                    Done editing
+                  </button>
+                </div>
+              </div>
+            )}
             <label className="block text-xs text-[#6f675c]">
               Campaign name
               <input
@@ -911,18 +1034,25 @@ const BulkEmailPage: React.FC = () => {
           {progress && activeId && (
             <div className="rounded-xl border border-[#d9e5d4] bg-[#f3f8f1] px-4 py-3 text-sm text-[#2f4a38]">
               Active: {progress.sent} sent · {progress.failed} failed · {progress.pending} pending
-              {sending && (
-                <div className="mt-2 flex flex-wrap gap-2">
+              <div className="mt-2 flex flex-wrap gap-2">
+                {(sending || progress.campaign?.status === 'sending' || progress.campaign?.status === 'queued') && (
                   <button
                     type="button"
-                    className="inline-flex items-center gap-1 rounded-full border border-[#b7c9b4] px-3 py-1 text-xs"
-                    onClick={() => {
-                      stopRef.current = true;
-                      void pauseBulkCampaign(activeId).then(setProgress);
-                    }}
+                    disabled={pausing}
+                    className="inline-flex items-center gap-1 rounded-full border border-[#b7c9b4] px-3 py-1 text-xs disabled:opacity-50"
+                    onClick={() => void onPauseCampaign(activeId)}
                   >
-                    <Pause size={12} /> Pause
+                    <Pause size={12} /> {pausing ? 'Pausing…' : 'Pause now'}
                   </button>
+                )}
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-full border border-[#ddd5c6] px-3 py-1 text-xs"
+                  onClick={() => void onEditCampaign(activeId)}
+                >
+                  <Pencil size={12} /> Edit
+                </button>
+                {sending && (
                   <button
                     type="button"
                     className="inline-flex items-center gap-1 rounded-full border border-red-200 px-3 py-1 text-xs text-red-700"
@@ -933,8 +1063,8 @@ const BulkEmailPage: React.FC = () => {
                   >
                     <Square size={12} /> Cancel remaining
                   </button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           )}
 
@@ -965,21 +1095,42 @@ const BulkEmailPage: React.FC = () => {
                       {new Date(c.created_at).toLocaleString()}
                     </td>
                     <td className="px-3 py-2">
-                      {(c.status === 'queued' || c.status === 'paused' || c.status === 'sending') && (
-                        <button
-                          type="button"
-                          disabled={sending}
-                          className="hm-btn-brass rounded-full px-3 py-1 text-[11px] disabled:opacity-50"
-                          onClick={() => {
-                            void (async () => {
-                              if (c.status === 'paused') await resumeBulkCampaign(c.id);
-                              await runSendLoop(c.id);
-                            })();
-                          }}
-                        >
-                          {c.status === 'paused' ? 'Resume' : 'Continue'}
-                        </button>
-                      )}
+                      <div className="flex flex-wrap gap-1">
+                        {c.status !== 'cancelled' && c.status !== 'completed' && (
+                          <button
+                            type="button"
+                            className="rounded-full border border-[#ddd5c6] px-3 py-1 text-[11px] text-[#5a5348]"
+                            onClick={() => void onEditCampaign(c.id)}
+                          >
+                            Edit
+                          </button>
+                        )}
+                        {(c.status === 'sending' || c.status === 'queued') && (
+                          <button
+                            type="button"
+                            disabled={pausing}
+                            className="rounded-full border border-[#b7c9b4] px-3 py-1 text-[11px] text-[#2f4a38] disabled:opacity-50"
+                            onClick={() => void onPauseCampaign(c.id)}
+                          >
+                            Pause
+                          </button>
+                        )}
+                        {(c.status === 'queued' || c.status === 'paused' || c.status === 'sending') && (
+                          <button
+                            type="button"
+                            disabled={sending}
+                            className="hm-btn-brass rounded-full px-3 py-1 text-[11px] disabled:opacity-50"
+                            onClick={() => {
+                              void (async () => {
+                                if (c.status === 'paused') await resumeBulkCampaign(c.id);
+                                await runSendLoop(c.id);
+                              })();
+                            }}
+                          >
+                            {c.status === 'paused' ? 'Resume' : 'Continue'}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
