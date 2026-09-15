@@ -179,7 +179,7 @@ Deno.serve(async (req) => {
       await insertEmailSendLog(logClient, {
         source: 'send-email',
         trigger_label: triggerLabel,
-        from_email: from,
+        from_email: fromEmail,
         to_email: to,
         cc_email: cc || null,
         subject,
