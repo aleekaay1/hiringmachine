@@ -22,7 +22,11 @@ const ScheduleWebinarPage: React.FC = () => {
   const [loadError, setLoadError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [success, setSuccess] = useState<{ message: string; when: string } | null>(null);
+  const [success, setSuccess] = useState<{
+    message: string;
+    when: string;
+    alreadyRegistered?: boolean;
+  } | null>(null);
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>('pick');
   const [form, setForm] = useState({
     firstName: '',
@@ -106,8 +110,11 @@ const ScheduleWebinarPage: React.FC = () => {
       setSuccess({
         message:
           result.data.message ||
-          'You are registered. Check your email for the WebinarGeek confirmation and join link.',
+          (result.data.already_registered
+            ? 'You have already registered for the webinar. Please check your email for the confirmation and join link.'
+            : 'You are registered. Check your email for the WebinarGeek confirmation and join link.'),
         when,
+        alreadyRegistered: result.data.already_registered === true,
       });
       if (typeof window !== 'undefined') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -191,14 +198,43 @@ const ScheduleWebinarPage: React.FC = () => {
         </p>
 
         {success ? (
-          <div className="w-full rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-5 text-left">
-            <p className="text-base font-semibold text-emerald-900">You&apos;re registered</p>
-            <p className="mt-2 text-sm text-emerald-800">{success.message}</p>
+          <div
+            className={`w-full rounded-xl border px-4 py-5 text-left ${
+              success.alreadyRegistered
+                ? 'border-amber-200 bg-amber-50'
+                : 'border-emerald-200 bg-emerald-50'
+            }`}
+          >
+            <p
+              className={`text-base font-semibold ${
+                success.alreadyRegistered ? 'text-amber-950' : 'text-emerald-900'
+              }`}
+            >
+              {success.alreadyRegistered ? 'Already registered' : "You're registered"}
+            </p>
+            <p
+              className={`mt-2 text-sm ${
+                success.alreadyRegistered ? 'text-amber-900' : 'text-emerald-800'
+              }`}
+            >
+              {success.message}
+            </p>
             {success.when && success.when !== 'Date TBA' && (
-              <p className="mt-3 text-sm font-medium text-emerald-900">Session: {success.when}</p>
+              <p
+                className={`mt-3 text-sm font-medium ${
+                  success.alreadyRegistered ? 'text-amber-950' : 'text-emerald-900'
+                }`}
+              >
+                Your session: {success.when}
+              </p>
             )}
-            <p className="mt-3 text-xs text-emerald-700">
-              If you do not see the email in a few minutes, check spam or promotions.
+            <p
+              className={`mt-3 text-xs ${
+                success.alreadyRegistered ? 'text-amber-800' : 'text-emerald-700'
+              }`}
+            >
+              Please check your email for the join link. If you do not see it in a few minutes, check
+              spam or promotions.
             </p>
           </div>
         ) : (

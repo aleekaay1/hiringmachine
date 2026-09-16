@@ -468,6 +468,171 @@ function sessionAtFromWgDate(value: unknown): string | null {
   return new Date(ms).toISOString();
 }
 
+function formatSessionWhen(value: unknown): string {
+  let ms = unixMsFromField(value);
+  if (ms == null && typeof value === 'string' && value.trim()) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) ms = parsed;
+  }
+  if (ms == null) return '';
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: SCHEDULE_TZ,
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    }).format(new Date(ms));
+  } catch {
+    return new Date(ms).toISOString();
+  }
+}
+
+function phoneDigits(value: unknown): string {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function registrationStillActive(sessionAt: string | null | undefined): boolean {
+  if (!sessionAt) return true;
+  const ms = Date.parse(sessionAt);
+  if (!Number.isFinite(ms)) return true;
+  // Allow a new booking only after the prior session is well past (3 hours after start).
+  return ms > Date.now() - 3 * 60 * 60 * 1000;
+}
+
+async function findExistingPublicSignup(
+  email: string,
+  phone?: string,
+): Promise<Record<string, unknown> | null> {
+  const admin = serviceClient();
+  const { data: byEmail, error } = await admin
+    .from('hm_public_webinar_signups')
+    .select(
+      'id, first_name, last_name, email, phone, session_at, session_label, broadcast_id, webinar_id, watch_link, confirmation_link, email_verified, created_at, already_registered',
+    )
+    .ilike('email', email)
+    .order('created_at', { ascending: false })
+    .limit(20);
+  if (error) {
+    console.error('findExistingPublicSignup email lookup failed', error);
+  }
+  const emailHit = (byEmail || []).find((row) =>
+    registrationStillActive(row.session_at != null ? String(row.session_at) : null),
+  );
+  if (emailHit) return emailHit as Record<string, unknown>;
+
+  const digits = phoneDigits(phone);
+  if (digits.length < 7) return null;
+
+  const { data: phoneRows, error: phoneErr } = await admin
+    .from('hm_public_webinar_signups')
+    .select(
+      'id, first_name, last_name, email, phone, session_at, session_label, broadcast_id, webinar_id, watch_link, confirmation_link, email_verified, created_at, already_registered',
+    )
+    .not('phone', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(100);
+  if (phoneErr) {
+    console.error('findExistingPublicSignup phone lookup failed', phoneErr);
+    return null;
+  }
+  const phoneHit = (phoneRows || []).find((row) => {
+    if (phoneDigits(row.phone) !== digits) return false;
+    return registrationStillActive(row.session_at != null ? String(row.session_at) : null);
+  });
+  return phoneHit ? (phoneHit as Record<string, unknown>) : null;
+}
+
+async function findAnySubscriptionForEmail(
+  email: string,
+  webinarId?: string | null,
+): Promise<Record<string, unknown> | null> {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return null;
+  const baseParams = {
+    email: normalized,
+    per_page: 50,
+    nested_resources: 'broadcast,webinar',
+  };
+  const passes: Array<Record<string, string | number | boolean | undefined>> = [
+    baseParams,
+    { ...baseParams, email_verified: false },
+    { ...baseParams, include_unverified: true },
+  ];
+  for (const params of passes) {
+    const res = await wgGet('/subscriptions', params);
+    if (!res.ok) continue;
+    const rows = subscriptionRowsFromWgJson(res.json);
+    const matches = rows.filter((row) => {
+      const nestedWebinar =
+        row.webinar && typeof row.webinar === 'object'
+          ? (row.webinar as Record<string, unknown>)
+          : null;
+      const nestedBroadcast =
+        row.broadcast && typeof row.broadcast === 'object'
+          ? (row.broadcast as Record<string, unknown>)
+          : null;
+      const rowWebinarId = str(
+        nestedWebinar?.id || row.webinar_id || nestedBroadcast?.webinar_id,
+      );
+      if (webinarId && rowWebinarId && rowWebinarId !== webinarId) return false;
+      const dateMs =
+        unixMsFromField(nestedBroadcast?.date) ??
+        unixMsFromField(row.broadcast_date) ??
+        unixMsFromField(row.created_at);
+      if (dateMs != null && dateMs < Date.now() - 3 * 60 * 60 * 1000) return false;
+      return true;
+    });
+    if (matches.length) {
+      matches.sort((a, b) => {
+        const aB =
+          a.broadcast && typeof a.broadcast === 'object'
+            ? (a.broadcast as Record<string, unknown>)
+            : null;
+        const bB =
+          b.broadcast && typeof b.broadcast === 'object'
+            ? (b.broadcast as Record<string, unknown>)
+            : null;
+        const aMs = unixMsFromField(aB?.date) ?? 0;
+        const bMs = unixMsFromField(bB?.date) ?? 0;
+        return bMs - aMs;
+      });
+      return matches[0];
+    }
+  }
+  return null;
+}
+
+function alreadyRegisteredResponse(input: {
+  whenLabel: string;
+  broadcastId: string | null;
+  title: string | null;
+  date: unknown;
+  webinarId: string | null;
+  emailVerified?: boolean;
+  watchLink?: string | null;
+  confirmationLink?: string | null;
+}) {
+  const when = input.whenLabel || 'the session you already chose';
+  return json(200, {
+    ok: true,
+    booked: false,
+    already_registered: true,
+    email_verified: input.emailVerified === true,
+    watch_link: input.watchLink || null,
+    confirmation_link: input.confirmationLink || null,
+    broadcast: {
+      id: input.broadcastId,
+      title: input.title,
+      date: input.date,
+      webinar_id: input.webinarId,
+    },
+    message: `You have already registered for the webinar on ${when}. Please check your email for the WebinarGeek confirmation and join link (and spam/promotions if you do not see it).`,
+  });
+}
+
 async function logPublicSignup(input: {
   firstname: string;
   surname: string;
@@ -493,7 +658,7 @@ async function logPublicSignup(input: {
       phone: input.phone || null,
       schedule_mode: input.wantQuick ? 'quick' : 'pick',
       session_at: sessionAtFromWgDate(input.sessionDate),
-      session_label: null,
+      session_label: formatSessionWhen(input.sessionDate) || null,
       broadcast_id: input.broadcastId,
       webinar_id: input.webinarId,
       wg_subscription_id: input.subscriptionId || null,
@@ -624,12 +789,50 @@ Deno.serve(async (req) => {
         });
       }
 
+      // Block duplicate form submissions (any upcoming session for this email/phone).
+      const existingSignup = await findExistingPublicSignup(email, phone);
+      if (existingSignup) {
+        const sessionAt = existingSignup.session_at != null ? String(existingSignup.session_at) : null;
+        const whenLabel =
+          str(existingSignup.session_label) || formatSessionWhen(sessionAt) || 'your selected time';
+        return alreadyRegisteredResponse({
+          whenLabel,
+          broadcastId: existingSignup.broadcast_id != null ? String(existingSignup.broadcast_id) : null,
+          title: null,
+          date: sessionAt,
+          webinarId: existingSignup.webinar_id != null ? String(existingSignup.webinar_id) : null,
+          emailVerified: existingSignup.email_verified === true,
+          watchLink: existingSignup.watch_link != null ? String(existingSignup.watch_link) : null,
+          confirmationLink:
+            existingSignup.confirmation_link != null ? String(existingSignup.confirmation_link) : null,
+        });
+      }
+
       // For JIT virtual broadcasts, skip "already registered" lookup on the virtual id —
       // WebinarGeek creates a real broadcast on subscribe and handles duplicates itself.
       const broadcastContext = await resolveBroadcastContext(broadcastId, webinarId || undefined);
       if (!broadcastContext.ok) {
         return json(broadcastContext.status === 404 ? 404 : broadcastContext.status === 422 ? 422 : 502, {
           error: broadcastContext.error,
+        });
+      }
+
+      // Also block if WebinarGeek already has an active subscription for this email.
+      const existingWg = await findAnySubscriptionForEmail(email, broadcastContext.webinarId);
+      if (existingWg) {
+        const links = linksFromSubscription(existingWg);
+        const effectiveBroadcastId = links.broadcast_id || broadcastId;
+        const effectiveDate = links.broadcast_date ?? broadcastContext.date;
+        const whenLabel = formatSessionWhen(effectiveDate) || 'your selected time';
+        return alreadyRegisteredResponse({
+          whenLabel,
+          broadcastId: effectiveBroadcastId,
+          title: broadcastContext.title,
+          date: effectiveDate,
+          webinarId: broadcastContext.webinarId,
+          emailVerified: existingWg.email_verified === true,
+          watchLink: links.watch_link,
+          confirmationLink: links.confirmation_link,
         });
       }
 
@@ -640,35 +843,16 @@ Deno.serve(async (req) => {
           const links = linksFromSubscription(row);
           const effectiveBroadcastId = links.broadcast_id || broadcastId;
           const effectiveDate = links.broadcast_date ?? broadcastContext.date;
-          await logPublicSignup({
-            firstname,
-            surname,
-            email,
-            phone,
-            wantQuick: false,
-            sessionDate: effectiveDate,
+          const whenLabel = formatSessionWhen(effectiveDate) || 'your selected time';
+          return alreadyRegisteredResponse({
+            whenLabel,
             broadcastId: effectiveBroadcastId,
+            title: broadcastContext.title,
+            date: effectiveDate,
             webinarId: broadcastContext.webinarId,
-            subscriptionId: row.id != null ? String(row.id) : null,
-            alreadyRegistered: true,
             emailVerified: row.email_verified === true,
             watchLink: links.watch_link,
             confirmationLink: links.confirmation_link,
-            customField,
-          });
-          return json(200, {
-            ok: true,
-            booked: true,
-            already_registered: true,
-            email_verified: row.email_verified === true,
-            broadcast: {
-              id: effectiveBroadcastId,
-              title: broadcastContext.title,
-              date: effectiveDate,
-              webinar_id: broadcastContext.webinarId,
-            },
-            message:
-              'You are already registered for this session. Check your inbox for the WebinarGeek confirmation email.',
           });
         }
       }
@@ -723,8 +907,27 @@ Deno.serve(async (req) => {
       }
 
       if (!bookRes.ok) {
+        const wgMsg = wgErrorMessage(bookRes.json, `WebinarGeek booking failed (${bookRes.status})`);
+        const looksDuplicate =
+          bookRes.status === 422 &&
+          /already|registered|subscribed|exists|duplicate/i.test(wgMsg);
+        if (looksDuplicate) {
+          const confirmed = await findAnySubscriptionForEmail(email, broadcastContext.webinarId);
+          const links = linksFromSubscription(confirmed);
+          const effectiveDate = links.broadcast_date ?? broadcastContext.date;
+          return alreadyRegisteredResponse({
+            whenLabel: formatSessionWhen(effectiveDate) || 'your selected time',
+            broadcastId: links.broadcast_id || broadcastId,
+            title: broadcastContext.title,
+            date: effectiveDate,
+            webinarId: broadcastContext.webinarId,
+            emailVerified: confirmed?.email_verified === true,
+            watchLink: links.watch_link,
+            confirmationLink: links.confirmation_link,
+          });
+        }
         return json(502, {
-          error: wgErrorMessage(bookRes.json, `WebinarGeek booking failed (${bookRes.status})`),
+          error: wgMsg,
           source_status: bookRes.status,
         });
       }
