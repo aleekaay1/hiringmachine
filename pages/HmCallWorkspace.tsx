@@ -96,7 +96,7 @@ const HmCallWorkspace: React.FC = () => {
     setShowDisposition(true);
     setActionMsg(`Opened 3CX for ${displayName(selected)}.`);
     try {
-      await markHmCalled(selected.id);
+      await markHmCalled(selected.id, selected);
       if (selected.pipeline_candidate_id) {
         await logPipelineCallAction({
           candidateId: selected.pipeline_candidate_id,
@@ -121,7 +121,7 @@ const HmCallWorkspace: React.FC = () => {
     setError(null);
     try {
       if (phoneInput.trim() && phoneInput.trim() !== displayPhone(selected)) {
-        await updateHmPersonPhone(selected.id, phoneInput, selected.pipeline_candidate_id);
+        await updateHmPersonPhone(selected.id, phoneInput, selected.pipeline_candidate_id, selected);
       }
       await applyHmDisposition({
         person: { ...selected, phone: phoneInput.trim() || selected.phone },

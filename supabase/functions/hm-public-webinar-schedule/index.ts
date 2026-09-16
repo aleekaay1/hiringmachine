@@ -714,6 +714,96 @@ function notifyRecipients(): string[] {
     .filter(Boolean);
 }
 
+/** Create/update Hiring Machine call-queue person so recruiters can dial from /pipeline/call. */
+async function upsertHmPersonFromPublicWebinarSignup(input: {
+  firstname: string;
+  surname: string;
+  email: string;
+  phone?: string;
+  wantQuick: boolean;
+  sessionDate: unknown;
+  broadcastId: string | null;
+  webinarId: string | null;
+  webinarTitle?: string | null;
+  subscriptionId?: string | null;
+  customField?: string | null;
+}): Promise<void> {
+  try {
+    const admin = serviceClient();
+    const email = normalizeEmail(input.email);
+    if (!email) return;
+    const phone = phoneDigits(input.phone) || null;
+    const fullName = `${input.firstname} ${input.surname}`.trim() || input.firstname || null;
+    const when = formatSessionWhen(input.sessionDate) || 'session TBA';
+    const mode = input.wantQuick ? 'Watch now' : 'Pick a time';
+    const summary = `Public webinar form · ${mode} · ${when}`;
+    const now = new Date().toISOString();
+
+    const { data: existing } = await admin
+      .from('hm_people')
+      .select('id, stage, phone, extracted_phone, full_name')
+      .ilike('email', email)
+      .maybeSingle();
+
+    const terminal =
+      existing?.stage === 'sent_to_hub' || existing?.stage === 'not_interested';
+    const patch: Record<string, unknown> = {
+      email,
+      updated_at: now,
+      campaign_name: 'Public webinar form',
+      reply_snippet: summary.slice(0, 280),
+      last_reply_text: summary,
+      ai_summary: `Registered via /schedule-webinar (${mode}). Session: ${when}.`,
+      raw_lead: {
+        source: 'hm_public_webinar_signups',
+        broadcast_id: input.broadcastId,
+        webinar_id: input.webinarId,
+        webinar_title: input.webinarTitle || null,
+        subscription_id: input.subscriptionId || null,
+        custom_field: input.customField || null,
+        schedule_mode: input.wantQuick ? 'quick' : 'pick',
+        session_label: when,
+      },
+    };
+    if (fullName && !existing?.full_name) patch.full_name = fullName;
+    if (phone && !existing?.phone) {
+      patch.phone = phone;
+      patch.extracted_phone = phone;
+    }
+    if (!terminal) {
+      // Prefer call_ready so they land in the dialer queue.
+      if (
+        !existing?.stage ||
+        existing.stage === 'replied' ||
+        existing.stage === 'ooo' ||
+        existing.stage === 'shortlisted'
+      ) {
+        patch.stage = 'call_ready';
+      }
+    }
+
+    if (existing?.id) {
+      const { error } = await admin.from('hm_people').update(patch).eq('id', existing.id);
+      if (error) console.error('hm_people update from webinar signup failed', error);
+      return;
+    }
+
+    const { error: insertErr } = await admin.from('hm_people').insert({
+      ...patch,
+      full_name: fullName,
+      phone,
+      extracted_phone: phone,
+      extracted_email: email,
+      stage: 'call_ready',
+      qualify_status: 'none',
+      created_at: now,
+    });
+    if (insertErr) console.error('hm_people insert from webinar signup failed', insertErr);
+  } catch (err) {
+    console.error('upsertHmPersonFromPublicWebinarSignup failed', err);
+  }
+}
+
 /** Staff alert when someone completes /schedule-webinar (new bookings only). */
 async function notifyStaffPublicWebinarSignup(input: {
   firstname: string;
@@ -1107,7 +1197,20 @@ Deno.serve(async (req) => {
         customField,
       });
 
-      // Fire-and-forget staff alert — never block the registrant response.
+      // Fire-and-forget staff alert + call-workspace lead — never block the registrant response.
+      void upsertHmPersonFromPublicWebinarSignup({
+        firstname,
+        surname,
+        email,
+        phone,
+        wantQuick,
+        sessionDate: effectiveDate,
+        broadcastId: effectiveBroadcastId,
+        webinarId: broadcastContext.webinarId,
+        webinarTitle: broadcastContext.title,
+        subscriptionId: subscriptionRow?.id != null ? String(subscriptionRow.id) : null,
+        customField,
+      }).catch((err) => console.error('public webinar hm_people upsert error', err));
       void notifyStaffPublicWebinarSignup({
         firstname,
         surname,

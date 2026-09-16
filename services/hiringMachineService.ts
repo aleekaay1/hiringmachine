@@ -52,7 +52,7 @@ export type HmPerson = {
   pipeline_candidate_id: string | null;
   created_at: string;
   updated_at: string;
-  recordSource?: 'hm' | 'checkin';
+  recordSource?: 'hm' | 'checkin' | 'webinar_signup';
 };
 
 export type InstantlyTotals = {
@@ -168,9 +168,89 @@ function fromCheckInRow(row: CheckInRow): HmPerson {
   };
 }
 
-function mergePeople(hm: HmPerson[], checkins: HmPerson[]): HmPerson[] {
+function fromWebinarSignupRow(row: {
+  id: string;
+  first_name: string;
+  last_name: string | null;
+  email: string;
+  phone: string | null;
+  session_at: string | null;
+  session_label: string | null;
+  schedule_mode: string;
+  created_at: string;
+}): HmPerson {
+  const fullName = `${row.first_name || ''} ${row.last_name || ''}`.trim();
+  const when = row.session_label || (row.session_at ? new Date(row.session_at).toLocaleString() : 'session TBA');
+  const mode = row.schedule_mode === 'quick' ? 'Watch now' : 'Pick a time';
+  const summary = `Public webinar form · ${mode} · ${when}`;
+  return {
+    id: row.id,
+    email: row.email,
+    full_name: fullName || null,
+    phone: row.phone || null,
+    extracted_email: row.email || null,
+    extracted_phone: row.phone || null,
+    instantly_lead_id: null,
+    campaign_id: null,
+    campaign_name: 'Public webinar form',
+    instantly_email_id: null,
+    unibox_url: null,
+    reply_snippet: summary.slice(0, 280),
+    last_reply_text: summary,
+    last_reply_subject: null,
+    stage: 'call_ready',
+    positive_source: null,
+    ai_summary: `Registered via /schedule-webinar (${mode}).`,
+    ai_score: null,
+    ai_recommendation: null,
+    shortlisted_email_sent_at: null,
+    sent_to_hub_at: null,
+    last_called_at: null,
+    pipeline_candidate_id: null,
+    created_at: row.created_at,
+    updated_at: row.created_at,
+    recordSource: 'webinar_signup',
+  };
+}
+
+async function loadWebinarSignupPeople(): Promise<HmPerson[]> {
+  try {
+    const { data, error } = await supabase
+      .from('hm_public_webinar_signups')
+      .select(
+        'id, first_name, last_name, email, phone, session_at, session_label, schedule_mode, created_at, already_registered',
+      )
+      .eq('already_registered', false)
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (error) {
+      console.warn('webinar signup list failed:', error.message);
+      return [];
+    }
+    return (data || [])
+      .filter((row) => String(row.phone || '').replace(/\D/g, '').length >= 7)
+      .map((row) =>
+        fromWebinarSignupRow({
+          id: String(row.id),
+          first_name: String(row.first_name || ''),
+          last_name: row.last_name != null ? String(row.last_name) : null,
+          email: String(row.email || ''),
+          phone: row.phone != null ? String(row.phone) : null,
+          session_at: row.session_at != null ? String(row.session_at) : null,
+          session_label: row.session_label != null ? String(row.session_label) : null,
+          schedule_mode: String(row.schedule_mode || 'pick'),
+          created_at: String(row.created_at || new Date().toISOString()),
+        }),
+      );
+  } catch (err) {
+    console.warn('webinar signup list failed:', err);
+    return [];
+  }
+}
+
+function mergePeople(hm: HmPerson[], extras: HmPerson[]): HmPerson[] {
   const byEmail = new Map<string, HmPerson>();
-  for (const person of checkins) {
+  for (const person of extras) {
     if (person.email) byEmail.set(person.email.toLowerCase(), person);
   }
   for (const person of hm) {
@@ -180,6 +260,7 @@ function mergePeople(hm: HmPerson[], checkins: HmPerson[]): HmPerson[] {
       byEmail.set(key, person);
       continue;
     }
+    // Prefer hm_people row (has call history / stage), keep phone from either side.
     byEmail.set(key, {
       ...person,
       phone: person.phone || existing.phone,
@@ -187,6 +268,10 @@ function mergePeople(hm: HmPerson[], checkins: HmPerson[]): HmPerson[] {
       sent_to_hub_at: person.sent_to_hub_at || existing.sent_to_hub_at,
       last_called_at: person.last_called_at || existing.last_called_at,
       stage: person.stage === 'sent_to_hub' || existing.stage === 'sent_to_hub' ? 'sent_to_hub' : person.stage,
+      campaign_name: person.campaign_name || existing.campaign_name,
+      reply_snippet: person.reply_snippet || existing.reply_snippet,
+      last_reply_text: person.last_reply_text || existing.last_reply_text,
+      ai_summary: person.ai_summary || existing.ai_summary,
     });
   }
   return [...byEmail.values()];
@@ -215,15 +300,51 @@ async function loadCheckInPeople(): Promise<HmPerson[]> {
 }
 
 async function loadMergedPeople(): Promise<HmPerson[]> {
-  const [hm, checkins] = await Promise.all([loadHmPeopleRows(), loadCheckInPeople()]);
-  return mergePeople(hm, checkins);
+  const [hm, checkins, webinarSignups] = await Promise.all([
+    loadHmPeopleRows(),
+    loadCheckInPeople(),
+    loadWebinarSignupPeople(),
+  ]);
+  return mergePeople(hm, [...checkins, ...webinarSignups]);
 }
 
 async function isCheckInRecord(personId: string, source?: HmPerson['recordSource']): Promise<boolean> {
   if (source === 'checkin') return true;
-  if (source === 'hm') return false;
+  if (source === 'hm' || source === 'webinar_signup') return false;
   const { data } = await supabase.from('hm_people').select('id').eq('id', personId).maybeSingle();
   return !data?.id;
+}
+
+/** Promote a public-webinar signup queue row into hm_people so call history sticks. */
+async function ensureHmPersonId(person: HmPerson): Promise<string> {
+  if (person.recordSource !== 'webinar_signup') return person.id;
+  const email = person.email.toLowerCase().trim();
+  const { data: existing } = await supabase.from('hm_people').select('id').ilike('email', email).maybeSingle();
+  if (existing?.id) return existing.id;
+  const now = new Date().toISOString();
+  const phone = displayPhone(person) || null;
+  const { data: created, error } = await supabase
+    .from('hm_people')
+    .insert({
+      email,
+      full_name: person.full_name,
+      phone,
+      extracted_phone: phone,
+      extracted_email: email,
+      campaign_name: 'Public webinar form',
+      reply_snippet: person.reply_snippet,
+      last_reply_text: person.last_reply_text,
+      ai_summary: person.ai_summary,
+      stage: 'call_ready',
+      qualify_status: 'none',
+      raw_lead: { source: 'hm_public_webinar_signups', signup_id: person.id },
+      created_at: now,
+      updated_at: now,
+    })
+    .select('id')
+    .single();
+  if (error || !created?.id) throw error || new Error('Could not create call-queue person');
+  return created.id;
 }
 
 function startOfTodayIso(): string {
@@ -304,27 +425,28 @@ export async function syncInstantlyReplies(): Promise<{ fetched: number; upserte
   };
 }
 
-export async function updateHmPersonPhone(personId: string, phone: string, pipelineCandidateId?: string | null): Promise<void> {
+export async function updateHmPersonPhone(personId: string, phone: string, pipelineCandidateId?: string | null, person?: HmPerson): Promise<void> {
   const trimmed = phone.trim();
-  if (await isCheckInRecord(personId)) {
+  if (person && (await isCheckInRecord(personId, person.recordSource))) {
     const full = await getCandidateById(personId);
     if (!full) throw new Error('Check-in not found.');
     await saveCandidate({ ...full, phone: trimmed });
     return;
   }
+  const hmId = person ? await ensureHmPersonId(person) : personId;
   const { error } = await supabase
     .from('hm_people')
     .update({ phone: trimmed, extracted_phone: trimmed, updated_at: new Date().toISOString() })
-    .eq('id', personId);
+    .eq('id', hmId);
   if (error) throw error;
   if (pipelineCandidateId) {
     await savePipelineCandidatePhoneOverride({ candidateId: pipelineCandidateId, phoneInput: trimmed });
   }
 }
 
-export async function markHmCalled(personId: string): Promise<void> {
+export async function markHmCalled(personId: string, person?: HmPerson): Promise<void> {
   const now = new Date().toISOString();
-  if (await isCheckInRecord(personId)) {
+  if (person && (await isCheckInRecord(personId, person.recordSource))) {
     const full = await getCandidateById(personId);
     if (!full) return;
     await saveCandidate({
@@ -338,10 +460,11 @@ export async function markHmCalled(personId: string): Promise<void> {
     });
     return;
   }
+  const hmId = person ? await ensureHmPersonId(person) : personId;
   const { error } = await supabase
     .from('hm_people')
     .update({ last_called_at: now, stage: 'called', updated_at: now })
-    .eq('id', personId)
+    .eq('id', hmId)
     .neq('stage', 'sent_to_hub');
   if (error) throw error;
 }
@@ -390,6 +513,7 @@ export async function applyHmDisposition(input: {
     return;
   }
 
+  const hmId = await ensureHmPersonId(input.person);
   const patch: Record<string, unknown> = { last_called_at: now, updated_at: now };
   if (input.disposition === 'Not interested' || input.disposition === 'Do not call') {
     patch.stage = 'not_interested';
@@ -399,7 +523,7 @@ export async function applyHmDisposition(input: {
   } else if (input.person.stage !== 'sent_to_hub') {
     patch.stage = 'called';
   }
-  const { error } = await supabase.from('hm_people').update(patch).eq('id', input.person.id);
+  const { error } = await supabase.from('hm_people').update(patch).eq('id', hmId);
   if (error) throw error;
 }
 
