@@ -175,6 +175,24 @@ function watchMinutes(value: unknown): number {
   return Math.round(sec / 60);
 }
 
+/**
+ * WebinarGeek can set watched=true when someone opens the player even if
+ * watch_duration stays 0 (join+leave instantly). Show that clearly.
+ */
+function formatWatchMinutesCell(row: AnyRow): { text: string; title?: string } {
+  const sec = Number(row.watch_duration || 0);
+  const mins = Number.isFinite(sec) && sec > 0 ? Math.round(sec / 60) : 0;
+  if (mins > 0) return { text: String(mins) };
+  if (row.watched === true) {
+    return {
+      text: '0*',
+      title:
+        'WebinarGeek marked this person as watched, but reported 0 seconds of viewing time (opened/joined with no measurable watch duration).',
+    };
+  }
+  return { text: '0' };
+}
+
 function shortCalendarDayLabel(viewYear: number, viewMonth0: number, day: number): string {
   return new Date(viewYear, viewMonth0, day).toLocaleDateString('en-GB', {
     day: 'numeric',
@@ -1404,7 +1422,9 @@ const WebinarGeekDashboard: React.FC = () => {
                                 {recruiterOutcomeLabel(outcome)}
                               </span>
                             </td>
-                            <td className="px-3 py-2 tabular-nums">{watchMinutes(row.watch_duration)}</td>
+                            <td className="px-3 py-2 tabular-nums" title={formatWatchMinutesCell(row).title}>
+                              {formatWatchMinutesCell(row).text}
+                            </td>
                           </>
                         ) : (
                           <>
@@ -1431,7 +1451,9 @@ const WebinarGeekDashboard: React.FC = () => {
                               )}
                             </td>
                             <td className="px-3 py-2">{row.watched === true ? 'Yes' : 'No'}</td>
-                            <td className="px-3 py-2 tabular-nums">{watchMinutes(row.watch_duration)}</td>
+                            <td className="px-3 py-2 tabular-nums" title={formatWatchMinutesCell(row).title}>
+                              {formatWatchMinutesCell(row).text}
+                            </td>
                           </>
                         )}
                       </tr>
