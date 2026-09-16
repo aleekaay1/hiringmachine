@@ -7,6 +7,7 @@ import {
 } from './liveSessionBookedOutcomes';
 import { filterRowsForRecruiterOwnership } from './recruiterDataScope';
 import { loadWebinarGeekDashboardCache } from './webinarGeekDashboardCache';
+import { HALF_WATCH_SECONDS } from './webinarGeekInviters';
 
 type AnyRow = Record<string, unknown>;
 
@@ -20,8 +21,6 @@ export type BookedOutcomeClassification = {
   watchedSignal: boolean;
   reason: string;
 };
-
-const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
 
 function normalizeEmail(value: string | null | undefined): string {
   return String(value || '').trim().toLowerCase();

@@ -815,7 +815,7 @@ export function subscribeWebinarQuestionnaireSubmissions(
   };
 }
 
-const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
+const HALF_WATCH_SECONDS = Math.floor(22 * 60 * 0.5);
 
 function normalizeQuestionnaireEmail(value: unknown): string {
   return String(value || '').trim().toLowerCase();

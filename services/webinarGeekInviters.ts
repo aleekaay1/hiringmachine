@@ -228,11 +228,16 @@ export function inviteeLabelFromRow(row: AnyRow): string {
 
 export type WatchBucket = 'full' | 'half' | 'not_yet';
 
+/** AO Globe Life career session length (shortened from ~40–47 min to ~22 min). */
+export const WEBINAR_LENGTH_SECONDS = 22 * 60;
+/** Green / full watch — nearly the whole session. */
+export const FULL_WATCH_SECONDS = 20 * 60;
+/** Sky / half+ watch threshold. */
+export const HALF_WATCH_SECONDS = Math.floor(WEBINAR_LENGTH_SECONDS * 0.5);
+
 export function watchBucketFromSeconds(seconds: number): WatchBucket {
-  const FULL = 45 * 60;
-  const HALF = Math.floor(47 * 60 * 0.5);
-  if (seconds >= FULL) return 'full';
-  if (seconds >= HALF) return 'half';
+  if (seconds >= FULL_WATCH_SECONDS) return 'full';
+  if (seconds >= HALF_WATCH_SECONDS) return 'half';
   return 'not_yet';
 }
 

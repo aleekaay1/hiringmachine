@@ -22,13 +22,11 @@ import {
   ymdToLocalDate,
   ymdToShortLabel,
 } from './webinarGeekDates';
-import { nameKeyFromRow } from './webinarGeekInviters';
+import { nameKeyFromRow, HALF_WATCH_SECONDS } from './webinarGeekInviters';
 import { fmtHrScheduledDateKey } from './webinarGeekRecruiterAnalytics';
 
 type AnyRow = Record<string, unknown>;
 type RecruiterDirectory = Map<string, { fullName: string | null; email: string | null }>;
-
-const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
 
 const EXCLUDED_LEADERBOARD_NAMES = new Set(['unknown recruiter', 'unknown', 'admin']);
 

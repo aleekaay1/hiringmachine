@@ -18,6 +18,7 @@ import {
   fmtHrScheduledDateKey,
   fmtWebinarSessionDateKey,
 } from './webinarGeekRecruiterAnalytics';
+import { HALF_WATCH_SECONDS } from './webinarGeekInviters';
 
 export const COINS_PER_SHOW = 10;
 export const COINS_PER_LIVE_SESSION_SHOW = 15;
@@ -42,8 +43,6 @@ export type CoinEarnWindow = {
 };
 
 type AnyRow = Record<string, unknown>;
-
-const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
 
 export function coinEarnWindow(now = new Date()): CoinEarnWindow {
   const untilYmd = torontoYmdFromDate(now);

@@ -9,6 +9,9 @@ import { filterRowsForRecruiterOwnership } from '../services/recruiterDataScope'
 import { fetchWebinarGeekDashboard, syncWebinarGeekCandidates } from '../services/webinarGeekIntegrations';
 import { ChevronLeft, ChevronRight, Download, MessageSquare, RefreshCw, Search, UserCircle2, X } from 'lucide-react';
 import {
+  FULL_WATCH_SECONDS,
+  HALF_WATCH_SECONDS,
+  WEBINAR_LENGTH_SECONDS,
   buildRecruiterFilterProfiles,
   candidateDisplayNameFromRow,
   fileTagNameFromRow,
@@ -51,9 +54,6 @@ type BroadcastSchedule = {
 type ScopeMode = 'month' | 'week' | 'day';
 type RecruiterDateGrouping = 'booking_action_date' | 'session_outcome_date';
 type RecruiterOutcomeStatus = 'pending' | 'watched' | 'partial' | 'no-show';
-
-const FULL_WATCH_SECONDS = 45 * 60;
-const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
 
 function asUnixMs(value: unknown): number | null {
   const n = Number(value);
@@ -1314,7 +1314,7 @@ const WebinarGeekDashboard: React.FC = () => {
                 type="button"
                 onClick={() => toggleWatchToneFilter('full')}
                 aria-pressed={watchToneFilter === 'full'}
-                title="Show only full-watch rows. Click again to clear."
+                title={`Full watch ≥ ${Math.round(FULL_WATCH_SECONDS / 60)} min (of ~${Math.round(WEBINAR_LENGTH_SECONDS / 60)} min session). Click again to clear.`}
                 className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/80 ${
                   watchToneFilter === 'full'
                     ? 'border-emerald-500 bg-emerald-100/90 text-emerald-950 shadow-sm'
@@ -1322,13 +1322,13 @@ const WebinarGeekDashboard: React.FC = () => {
                 }`}
               >
                 <span className="h-2.5 w-6 shrink-0 rounded bg-emerald-100 border border-emerald-200/80" aria-hidden />
-                Full watch
+                Full (≥{Math.round(FULL_WATCH_SECONDS / 60)}m)
               </button>
               <button
                 type="button"
                 onClick={() => toggleWatchToneFilter('half')}
                 aria-pressed={watchToneFilter === 'half'}
-                title="Show only half+ watch rows. Click again to clear."
+                title={`Half+ ≥ ${Math.round(HALF_WATCH_SECONDS / 60)} min. Click again to clear.`}
                 className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/80 ${
                   watchToneFilter === 'half'
                     ? 'border-sky-500 bg-sky-100/90 text-sky-950 shadow-sm'
@@ -1336,7 +1336,7 @@ const WebinarGeekDashboard: React.FC = () => {
                 }`}
               >
                 <span className="h-2.5 w-6 shrink-0 rounded bg-sky-100 border border-sky-200/80" aria-hidden />
-                Half+
+                Half+ (≥{Math.round(HALF_WATCH_SECONDS / 60)}m)
               </button>
               <button
                 type="button"
@@ -1502,7 +1502,15 @@ const WebinarGeekDashboard: React.FC = () => {
                   })()}
                 />
                 <Detail label="Watched" value={selectedRow.watched === true ? 'Yes' : 'No'} />
-                <Detail label="Watch (min)" value={String(watchMinutes(selectedRow.watch_duration))} />
+                <Detail
+                  label="Watch (min)"
+                  value={
+                    formatWatchMinutesCell(selectedRow).text +
+                    (selectedRow.watched === true && watchMinutes(selectedRow.watch_duration) === 0
+                      ? ' (WG reported 0s viewing time)'
+                      : '')
+                  }
+                />
                 <Detail label="Subscription" value={selectedRow.unsubscribed === true ? 'Unsubscribed' : 'Active'} />
               </div>
               <div className="border-t border-slate-100 px-4 py-3 flex-1 min-h-0 flex flex-col gap-3">

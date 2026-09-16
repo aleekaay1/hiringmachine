@@ -46,7 +46,8 @@ type PipelineCallRecord = {
   threecx_metadata?: Record<string, unknown> | null;
 };
 
-const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
+/** Half-watch threshold for ~22 min AO webinar (was ~47 min). */
+const HALF_WATCH_SECONDS = Math.floor(22 * 60 * 0.5);
 const INVITER_FILE_PREFIXES = ['cooper', 'rms'] as const;
 
 function pad2(n: number): string {

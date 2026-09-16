@@ -1153,7 +1153,8 @@ export async function rematchStoredQuestionnaireRows(
   return { updated, matchedPipeline, newlyMatched };
 }
 
-const HALF_WATCH_SECONDS = Math.floor(47 * 60 * 0.5);
+/** Half-watch threshold for ~22 min AO webinar (was ~47 min). */
+const HALF_WATCH_SECONDS = Math.floor(22 * 60 * 0.5);
 
 function watchSecondsFromSubscription(sub: Record<string, unknown>): number {
   const sec = Number(sub.watch_duration || 0);

@@ -21,6 +21,7 @@ import {
 } from './pipelineService';
 import { listAllUserProfiles } from './accessControl';
 import { fmtHrScheduledDateKey } from './webinarGeekRecruiterAnalytics';
+import { HALF_WATCH_SECONDS } from './webinarGeekInviters';
 
 export type RecruiterPersonalMetrics = {
   windowLabel: string;
@@ -145,7 +146,7 @@ export async function loadRecruiterPersonalMetrics(profile: UserProfile): Promis
     if (row.watched === true) webinarShowed += 1;
     else {
       const sec = Number(row.watch_duration || 0);
-      if (Number.isFinite(sec) && sec >= Math.floor(47 * 60 * 0.5)) webinarShowed += 1;
+      if (Number.isFinite(sec) && sec >= HALF_WATCH_SECONDS) webinarShowed += 1;
     }
   }
 
