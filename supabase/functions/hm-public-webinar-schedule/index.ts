@@ -3,7 +3,10 @@
 // Requires Edge secret: WEBINARGEEK_API_TOKEN
 // Optional: WEBINARGEEK_API_BASE_URL, PUBLIC_WEBINAR_GEEK_WEBINAR_ID, PUBLIC_WEBINAR_CUSTOM_FIELD
 
+import nodemailer from 'npm:nodemailer@6.9.10';
 import { corsHeaders, json, normalizeEmail, serviceClient, str } from '../_shared/hiringMachine.ts';
+import { insertEmailSendLog } from '../_shared/emailSendLog.ts';
+import { PORTAL_EMAIL_BCC } from '../_shared/portalEmailBcc.ts';
 
 const WEBINARGEEK_BASE = (
   Deno.env.get('WEBINARGEEK_API_BASE_URL')?.trim() || 'https://app.webinargeek.com/api/v2'
@@ -677,6 +680,152 @@ async function logPublicSignup(input: {
   }
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function smtpTransport() {
+  const host = Deno.env.get('SMTP_HOSTNAME')?.trim();
+  const port = Number(Deno.env.get('SMTP_PORT') ?? 587);
+  const secure = (Deno.env.get('SMTP_SECURE') ?? 'false') === 'true';
+  const user = Deno.env.get('SMTP_USERNAME')?.trim();
+  const pass = Deno.env.get('SMTP_PASSWORD')?.trim();
+  if (!host || !user || !pass) throw new Error('Missing SMTP config');
+  return nodemailer.createTransport({
+    host,
+    port: Number.isNaN(port) ? 587 : port,
+    secure,
+    auth: { user, pass },
+    ...(port === 587 && !secure ? { requireTLS: true } : {}),
+  });
+}
+
+function notifyRecipients(): string[] {
+  const raw =
+    Deno.env.get('PUBLIC_WEBINAR_SIGNUP_NOTIFY_EMAIL')?.trim() ||
+    PORTAL_EMAIL_BCC;
+  return raw
+    .split(/[,;]/)
+    .map((a) => a.trim())
+    .filter(Boolean);
+}
+
+/** Staff alert when someone completes /schedule-webinar (new bookings only). */
+async function notifyStaffPublicWebinarSignup(input: {
+  firstname: string;
+  surname: string;
+  email: string;
+  phone?: string;
+  wantQuick: boolean;
+  sessionDate: unknown;
+  broadcastId: string | null;
+  webinarId: string | null;
+  webinarTitle?: string | null;
+  subscriptionId?: string | null;
+  emailVerified?: boolean | null;
+  watchLink?: string | null;
+  confirmationLink?: string | null;
+  customField?: string | null;
+}): Promise<void> {
+  const toList = notifyRecipients();
+  if (!toList.length) return;
+
+  const name =
+    `${input.firstname} ${input.surname}`.trim() || input.firstname || '—';
+  const when = formatSessionWhen(input.sessionDate) || 'Date TBA';
+  const mode = input.wantQuick ? 'Watch now' : 'Pick a time';
+  const subject = `New webinar registration — ${name}`;
+  const rows: Array<[string, string]> = [
+    ['Name', name],
+    ['Email', input.email],
+    ['Phone', input.phone || '—'],
+    ['Mode', mode],
+    ['Session', when],
+    ['Webinar', input.webinarTitle || '—'],
+    ['Broadcast ID', input.broadcastId || '—'],
+    ['Webinar ID', input.webinarId || '—'],
+    ['Subscription ID', input.subscriptionId || '—'],
+    ['Email verified', input.emailVerified === true ? 'Yes' : input.emailVerified === false ? 'No' : '—'],
+    ['Tag', input.customField || '—'],
+    ['Watch link', input.watchLink || '—'],
+    ['Confirmation link', input.confirmationLink || '—'],
+  ];
+  const htmlRows = rows
+    .map(
+      ([label, value]) =>
+        `<tr><td style="padding:6px 10px;color:#555;vertical-align:top;"><strong>${escapeHtml(label)}</strong></td><td style="padding:6px 10px;color:#111;">${escapeHtml(value)}</td></tr>`,
+    )
+    .join('');
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.45;color:#222;">
+      <p style="margin:0 0 12px 0;">A new signup was submitted on the public <strong>/schedule-webinar</strong> form.</p>
+      <table style="border-collapse:collapse;width:100%;max-width:560px;border:1px solid #e5e7eb;">${htmlRows}</table>
+      <p style="margin:14px 0 0 0;color:#666;font-size:12px;">Hiring Machine · public webinar schedule</p>
+    </div>
+  `.trim();
+  const text = rows.map(([label, value]) => `${label}: ${value}`).join('\n');
+
+  const fromEmail =
+    Deno.env.get('SMTP_FROM')?.trim() ||
+    Deno.env.get('SMTP_USERNAME')?.trim() ||
+    'noreply@example.com';
+  const fromName = (Deno.env.get('SMTP_FROM_NAME')?.trim() || 'AO Globelife')
+    .replace(/["<>]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim() || 'AO Globelife';
+
+  const transport = smtpTransport();
+  const admin = serviceClient();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      transport.sendMail(
+        {
+          from: { name: fromName, address: fromEmail },
+          to: toList.join(', '),
+          subject,
+          text,
+          html,
+        },
+        (err: Error | null) => (err ? reject(err) : resolve()),
+      );
+    });
+    await insertEmailSendLog(admin, {
+      source: 'hm-public-webinar-schedule',
+      trigger_label: 'public_webinar_signup_notify',
+      from_email: fromEmail,
+      to_email: toList.join(', '),
+      subject,
+      status: 'sent',
+      metadata: {
+        registrant_email: input.email,
+        broadcast_id: input.broadcastId,
+        webinar_id: input.webinarId,
+        mode,
+      },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('public webinar signup notify failed', msg);
+    await insertEmailSendLog(admin, {
+      source: 'hm-public-webinar-schedule',
+      trigger_label: 'public_webinar_signup_notify',
+      from_email: fromEmail,
+      to_email: toList.join(', '),
+      subject,
+      status: 'failed',
+      error_message: msg,
+      metadata: {
+        registrant_email: input.email,
+        broadcast_id: input.broadcastId,
+      },
+    }).catch(() => undefined);
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -957,6 +1106,24 @@ Deno.serve(async (req) => {
         confirmationLink: links.confirmation_link,
         customField,
       });
+
+      // Fire-and-forget staff alert — never block the registrant response.
+      void notifyStaffPublicWebinarSignup({
+        firstname,
+        surname,
+        email,
+        phone,
+        wantQuick,
+        sessionDate: effectiveDate,
+        broadcastId: effectiveBroadcastId,
+        webinarId: broadcastContext.webinarId,
+        webinarTitle: broadcastContext.title,
+        subscriptionId: subscriptionRow?.id != null ? String(subscriptionRow.id) : null,
+        emailVerified: subscriptionRow?.email_verified === true,
+        watchLink: links.watch_link,
+        confirmationLink: links.confirmation_link,
+        customField,
+      }).catch((err) => console.error('public webinar signup notify error', err));
 
       return json(200, {
         ok: true,
