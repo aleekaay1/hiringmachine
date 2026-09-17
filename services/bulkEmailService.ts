@@ -408,6 +408,39 @@ export function defaultBulkEmailBody(): string {
   );
 }
 
+/** Public site used for unsubscribe links in previews. */
+export function bulkPublicAppUrl(): string {
+  const fromEnv = (import.meta.env.VITE_PUBLIC_SITE_URL as string | undefined)?.trim();
+  if (fromEnv) return fromEnv.replace(/\/$/, '');
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin.replace(/\/$/, '');
+  }
+  return 'https://aopaz.vercel.app';
+}
+
+export function bulkUnsubscribeUrl(email: string): string {
+  const addr = String(email || '').trim().toLowerCase();
+  return `${bulkPublicAppUrl()}/unsubscribe?email=${encodeURIComponent(addr || 'you@example.com')}`;
+}
+
+/** Footer always appended on send (and shown in compose preview). */
+export function bulkUnsubscribeFooterHtml(email: string): string {
+  const url = bulkUnsubscribeUrl(email);
+  return (
+    `<hr style="border:none;border-top:1px solid #e5e5e5;margin:28px 0 16px;" />` +
+    `<p style="margin:0;font-size:12px;line-height:1.5;color:#6b7280;font-family:Arial,Helvetica,sans-serif;">` +
+    `You're receiving this because you shared interest in AO Globe Life career opportunities.<br/>` +
+    `<a href="${url}" style="color:#6b7280;text-decoration:underline;">Unsubscribe</a>` +
+    ` from future recruiting emails.` +
+    `</p>`
+  );
+}
+
+export function withBulkUnsubscribePreview(bodyHtml: string, email: string): string {
+  if (/unsubscribe/i.test(bodyHtml)) return bodyHtml;
+  return `${bodyHtml.trimEnd()}${bulkUnsubscribeFooterHtml(email)}`;
+}
+
 export function looksLikeHtml(value: string): boolean {
   return /<\/?[a-z][\s\S]*>/i.test(value);
 }

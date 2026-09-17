@@ -5,6 +5,7 @@ import AdminRouteFallback from './components/AdminRouteFallback';
 import Landing from './pages/Landing';
 import InterviewForm from './pages/InterviewForm';
 import ScheduleWebinarPage from './pages/ScheduleWebinarPage';
+import UnsubscribePage from './pages/UnsubscribePage';
 import PostInterview from './pages/PostInterview';
 import AssessmentIntro from './pages/AssessmentIntro';
 import Assessment from './pages/Assessment';
@@ -61,6 +62,7 @@ const App: React.FC = () => {
         <Route path="/" element={<Landing />} />
         <Route path="/checkin" element={<InterviewForm />} />
         <Route path="/schedule-webinar" element={<ScheduleWebinarPage />} />
+        <Route path="/unsubscribe" element={<UnsubscribePage />} />
         <Route path="/webinar" element={<Navigate to="/schedule-webinar" replace />} />
         <Route path="/interview" element={<Navigate to="/checkin" replace />} />
         <Route path="/check-status" element={<CheckStatus />} />

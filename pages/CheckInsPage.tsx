@@ -115,7 +115,7 @@ const CheckInsPage: React.FC = () => {
     try {
       const result = await sendAoHubInviteForCheckIn(row.id, template);
       setActionMsg(
-        `Email sent to ${row.firstName} ${row.lastName} from aopaz@globelife-paz.com.`,
+        `Email sent to ${row.firstName} ${row.lastName} via SMTP.`,
       );
       await load();
     } catch (err) {

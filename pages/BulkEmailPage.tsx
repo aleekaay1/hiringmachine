@@ -34,6 +34,7 @@ import {
   sleep,
   splitBulkEmailBody,
   updateBulkCampaign,
+  withBulkUnsubscribePreview,
   type BulkAppSettings,
   type BulkCampaign,
   type BulkEmailStats,
@@ -127,8 +128,11 @@ const BulkEmailPage: React.FC = () => {
       const savedFrom = data.settings.draft_from_email || '';
       setSmtpFrom(() => {
         const preferred = savedFrom || 'auto';
-        if (preferred === 'auto' || data.smtp_accounts.some((a) => a.email === preferred)) return preferred;
-        return data.smtp_accounts[0]?.email || data.smtp_from || 'auto';
+        if (preferred === 'auto') return 'auto';
+        // Never stick to suspended aopaz — force rotation onto apply/careers.
+        if (preferred.includes('aopaz@')) return 'auto';
+        if (data.smtp_accounts.some((a) => a.email === preferred)) return preferred;
+        return 'auto';
       });
       setDailySent(
         data.smtp_accounts.reduce((sum, a) => sum + (a.daily_sent || 0), 0) || data.daily_sent,
@@ -642,6 +646,10 @@ const BulkEmailPage: React.FC = () => {
   const mergePreviewEmail = recipients[0]?.email || testTo || 'alex@example.com';
   const previewSubject = applyBulkMerge(subject, mergePreviewName, mergePreviewEmail);
   const previewParts = splitBulkEmailBody(applyBulkMerge(body, mergePreviewName, mergePreviewEmail));
+  const previewHtmlWithUnsub = withBulkUnsubscribePreview(
+    previewParts.bodyHtml || '<p></p>',
+    mergePreviewEmail,
+  );
   const bodyIsHtml = looksLikeHtml(body);
 
   return (
@@ -652,7 +660,7 @@ const BulkEmailPage: React.FC = () => {
           <h1 className="font-[Fraunces] text-3xl text-[#1f2a24]">Bulk email</h1>
           <p className="mt-1 max-w-xl text-sm text-[#6f675c]">
             Upload CSV/Excel, map name & email, preview, then send via SMTP with gaps (max 500/day per sending address).
-            Campaigns keep sending on the server even if you close this tab.
+            Auto-rotate alternates apply@ ↔ careers@ so one mailbox never takes the full load. Campaigns keep sending if you close this tab.
           </p>
         </div>
         <div className="rounded-xl border border-[#e6e0d4] bg-[#fbf8f2] px-4 py-2 text-sm text-[#3f3a32]">
@@ -925,7 +933,8 @@ const BulkEmailPage: React.FC = () => {
             <p className="text-[11px] text-[#8a8276]">
               {bodyIsHtml
                 ? 'HTML detected — preview renders it and SMTP sends as HTML + plain-text fallback.'
-                : 'Plain text — preview shows line breaks; add tags like <p>, <b>, <a> for HTML.'}
+                : 'Plain text — preview shows line breaks; add tags like <p>, <b>, <a> for HTML.'}{' '}
+              An unsubscribe link is appended automatically at the end of every email.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <label className="block text-xs text-[#6f675c]">
@@ -961,13 +970,16 @@ const BulkEmailPage: React.FC = () => {
                 value={smtpFrom}
                 onChange={(e) => setSmtpFrom(e.target.value)}
               >
-                <option value="auto">Auto-rotate (all warmed senders)</option>
+                <option value="auto">Auto-rotate (1st apply · 2nd careers · 3rd apply…)</option>
                 {smtpAccounts.map((a) => (
                   <option key={a.email} value={a.email}>
                     {a.email} · {a.remaining} left today
                   </option>
                 ))}
               </select>
+              <span className="mt-1 block text-[11px] text-[#8a8276]">
+                Prefer Auto-rotate. Suspended mailboxes (aopaz@) are blocked and will not send.
+              </span>
             </label>
             <label className="block text-xs text-[#6f675c]">
               Provider
@@ -982,11 +994,11 @@ const BulkEmailPage: React.FC = () => {
               </select>
             </label>
             <div className="rounded-xl bg-[#f7f3eb] px-3 py-3 text-xs text-[#5a5348]">
-              <p className="hm-kicker mb-1">Preview {bodyIsHtml ? '· HTML' : '· text'}</p>
+              <p className="hm-kicker mb-1">Preview {bodyIsHtml ? '· HTML' : '· text'} · includes unsubscribe footer</p>
               <p className="font-medium text-[#1f2a24]">{previewSubject}</p>
               <div
                 className="bulk-email-preview mt-2 max-h-64 overflow-auto rounded-lg border border-[#e6e0d4] bg-white px-3 py-3 text-[13px] leading-relaxed text-[#1f2a24] [&_a]:text-[#3f6b4e] [&_a]:underline [&_p]:mb-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
-                dangerouslySetInnerHTML={{ __html: previewParts.bodyHtml || '<p></p>' }}
+                dangerouslySetInnerHTML={{ __html: previewHtmlWithUnsub }}
               />
             </div>
             <button
@@ -1014,7 +1026,8 @@ const BulkEmailPage: React.FC = () => {
             <div className="rounded-xl border border-[#e6e0d4] p-4">
               <h3 className="font-medium text-[#1f2a24]">SMTP</h3>
               <p className="mt-1 text-xs text-[#8a8276]">
-                Cap 500/day per sender. Passwords live in Edge secrets (not this form).
+                Cap 500/day per sender. Passwords live in Edge secrets (not this form). Auto-rotate alternates senders each email.
+                Suspended aopaz@globelife-paz.com is blocked.
               </p>
               <ul className="mt-3 space-y-1 text-xs text-[#3f3a32]">
                 {smtpAccounts.length ? (

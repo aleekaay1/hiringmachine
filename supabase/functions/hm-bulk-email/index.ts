@@ -2,6 +2,8 @@
 // Deploy: supabase functions deploy hm-bulk-email --project-ref ofhcnsuwrhyvxtvtdunw
 // Extra senders: Edge secret BULK_SMTP_ACCOUNTS JSON
 //   [{"email":"apply@globelife-pazao.com","password":"xxxx xxxx xxxx xxxx"}]
+// Suspended: set SMTP_DISABLED_SENDERS=aopaz@globelife-paz.com (comma-separated).
+// Round-robin: Auto-rotate alternates senders 1→A, 2→B, 3→A, 4→B…
 
 import nodemailer from 'npm:nodemailer@6.9.10';
 import type { Transporter } from 'npm:nodemailer@6.9.10';
@@ -21,6 +23,8 @@ const MIN_GAP = 90;
 const DEFAULT_DAILY_CAP = 500;
 const HARD_DAILY_CAP = 500;
 const BUSINESS_TZ = 'America/Los_Angeles';
+/** Hard-blocked after Google suspended for spam — never send from these. */
+const HARD_DISABLED_SENDERS = new Set(['aopaz@globelife-paz.com']);
 
 type RecipientInput = { name?: string; email?: string; row_index?: number; raw?: Record<string, unknown> };
 
@@ -43,26 +47,32 @@ function smtpHostConfig() {
   };
 }
 
+function disabledSenderSet(): Set<string> {
+  const out = new Set(HARD_DISABLED_SENDERS);
+  const raw = Deno.env.get('SMTP_DISABLED_SENDERS')?.trim() || '';
+  for (const part of raw.split(/[,;\s]+/)) {
+    const email = normalizeEmail(part);
+    if (email) out.add(email);
+  }
+  return out;
+}
+
 function listSmtpAccounts(): SmtpAccount[] {
   const accounts: SmtpAccount[] = [];
   const seen = new Set<string>();
+  const disabled = disabledSenderSet();
 
   const push = (emailRaw: string, passRaw: string, userRaw?: string, label?: string) => {
     const email = bareEmailAddress(emailRaw);
     const pass = String(passRaw || '').replace(/\s+/g, '').trim();
     const user = bareEmailAddress(userRaw || emailRaw) || email;
     if (!email || !email.includes('@') || !pass || seen.has(email)) return;
+    if (disabled.has(email)) return;
     seen.add(email);
     accounts.push({ email, user, pass, label: label || email });
   };
 
-  const primaryUser = Deno.env.get('SMTP_USERNAME')?.trim() || '';
-  const primaryPass = Deno.env.get('SMTP_PASSWORD')?.trim() || '';
-  const primaryFrom = Deno.env.get('SMTP_FROM')?.trim() || primaryUser;
-  if (primaryUser && primaryPass) {
-    push(primaryFrom || primaryUser, primaryPass, primaryUser, 'Primary SMTP');
-  }
-
+  // Prefer BULK_SMTP_ACCOUNTS first so warmed apply/careers lead rotation.
   const rawExtra = Deno.env.get('BULK_SMTP_ACCOUNTS')?.trim() || '';
   if (rawExtra) {
     try {
@@ -82,7 +92,65 @@ function listSmtpAccounts(): SmtpAccount[] {
     }
   }
 
+  const primaryUser = Deno.env.get('SMTP_USERNAME')?.trim() || '';
+  const primaryPass = Deno.env.get('SMTP_PASSWORD')?.trim() || '';
+  const primaryFrom = Deno.env.get('SMTP_FROM')?.trim() || primaryUser;
+  if (primaryUser && primaryPass) {
+    push(primaryFrom || primaryUser, primaryPass, primaryUser, 'Primary SMTP');
+  }
+
   return accounts;
+}
+
+function publicAppUrl(): string {
+  return (
+    Deno.env.get('OPS_APP_URL')?.trim() ||
+    Deno.env.get('PUBLIC_APP_URL')?.trim() ||
+    'https://aopaz.vercel.app'
+  ).replace(/\/$/, '');
+}
+
+function unsubscribeUrlFor(email: string): string {
+  return `${publicAppUrl()}/unsubscribe?email=${encodeURIComponent(normalizeEmail(email))}`;
+}
+
+function unsubscribeFooterText(email: string): string {
+  const url = unsubscribeUrlFor(email);
+  return (
+    `\n\n---\n` +
+    `You're receiving this because you shared interest in AO Globe Life career opportunities.\n` +
+    `If you no longer want these emails, unsubscribe here:\n${url}\n`
+  );
+}
+
+function unsubscribeFooterHtml(email: string): string {
+  const url = unsubscribeUrlFor(email);
+  return (
+    `<hr style="border:none;border-top:1px solid #e5e5e5;margin:28px 0 16px;" />` +
+    `<p style="margin:0;font-size:12px;line-height:1.5;color:#6b7280;font-family:Arial,Helvetica,sans-serif;">` +
+    `You're receiving this because you shared interest in AO Globe Life career opportunities.<br/>` +
+    `<a href="${url}" style="color:#6b7280;text-decoration:underline;">Unsubscribe</a>` +
+    ` from future recruiting emails.` +
+    `</p>`
+  );
+}
+
+function appendUnsubscribe(text: string, html: string, toEmail: string): { text: string; html: string } {
+  const already =
+    /unsubscribe/i.test(text) ||
+    /unsubscribe/i.test(html) ||
+    /\{\{\s*unsubscribe_url\s*\}\}/i.test(text) ||
+    /\{\{\s*unsubscribe_url\s*\}\}/i.test(html);
+  const url = unsubscribeUrlFor(toEmail);
+  const withToken = (s: string) =>
+    s.replace(/\{\{\s*unsubscribe_url\s*\}\}/gi, url);
+  let nextText = withToken(text);
+  let nextHtml = withToken(html);
+  if (!already) {
+    nextText = `${nextText.trimEnd()}${unsubscribeFooterText(toEmail)}`;
+    nextHtml = `${nextHtml.trimEnd()}${unsubscribeFooterHtml(toEmail)}`;
+  }
+  return { text: nextText, html: nextHtml };
 }
 
 function getTransportFor(account: SmtpAccount): Transporter {
@@ -133,6 +201,36 @@ function findAccount(emailOrAuto: string | null | undefined): SmtpAccount | null
   return accounts.find((a) => a.email === wanted) || null;
 }
 
+async function isUnsubscribed(
+  admin: ReturnType<typeof serviceClient>,
+  email: string,
+): Promise<boolean> {
+  const addr = normalizeEmail(email);
+  if (!addr) return false;
+  const { data } = await admin
+    .from('hm_bulk_unsubscribes')
+    .select('email')
+    .eq('email', addr)
+    .maybeSingle();
+  return Boolean(data?.email);
+}
+
+async function recordUnsubscribe(
+  admin: ReturnType<typeof serviceClient>,
+  email: string,
+  source: string,
+  reason?: string,
+): Promise<void> {
+  const addr = normalizeEmail(email);
+  if (!addr || !addr.includes('@')) throw new Error('Valid email is required to unsubscribe');
+  await admin.from('hm_bulk_unsubscribes').upsert({
+    email: addr,
+    unsubscribed_at: new Date().toISOString(),
+    source: source || 'link',
+    reason: reason || null,
+  });
+}
+
 async function dailySentFor(
   admin: ReturnType<typeof serviceClient>,
   fromEmail: string,
@@ -171,14 +269,19 @@ async function bumpDailySent(
   return Number(data) || 0;
 }
 
+/**
+ * Auto-rotate: strict A/B/A/B by send ordinal (campaign sent_count, or global today total).
+ * Skips accounts at daily cap; never picks disabled/suspended senders.
+ */
 async function resolveSendAccount(
   admin: ReturnType<typeof serviceClient>,
   preferred: string | null | undefined,
   dailyCap: number,
+  opts?: { rotationIndex?: number },
 ): Promise<{ account: SmtpAccount; dailySent: number } | { error: string; daily_cap_hit: true }> {
   const accounts = listSmtpAccounts();
   if (!accounts.length) {
-    throw new Error('No SMTP accounts configured (SMTP_* / BULK_SMTP_ACCOUNTS)');
+    throw new Error('No SMTP accounts configured (SMTP_* / BULK_SMTP_ACCOUNTS). Suspended senders are excluded.');
   }
   const wanted = normalizeEmail(preferred);
   const rotate = !wanted || wanted === 'auto';
@@ -187,19 +290,19 @@ async function resolveSendAccount(
     : accounts.filter((a) => a.email === wanted);
 
   if (!rotate && !candidates.length) {
-    throw new Error(`SMTP account not configured for ${wanted}`);
+    throw new Error(
+      disabledSenderSet().has(wanted)
+        ? `Sender ${wanted} is disabled (suspended). Use Auto-rotate or another mailbox.`
+        : `SMTP account not configured for ${wanted}`,
+    );
   }
 
-  let best: { account: SmtpAccount; dailySent: number; remaining: number } | null = null;
+  const withRoom: Array<{ account: SmtpAccount; dailySent: number }> = [];
   for (const account of candidates) {
     const dailySent = await dailySentFor(admin, account.email);
-    const remaining = dailyCap - dailySent;
-    if (remaining <= 0) continue;
-    if (!best || remaining > best.remaining) {
-      best = { account, dailySent, remaining };
-    }
+    if (dailyCap - dailySent > 0) withRoom.push({ account, dailySent });
   }
-  if (!best) {
+  if (!withRoom.length) {
     return {
       error: rotate
         ? `Daily cap reached (${dailyCap}) on all SMTP senders. Try again tomorrow.`
@@ -207,7 +310,18 @@ async function resolveSendAccount(
       daily_cap_hit: true,
     };
   }
-  return { account: best.account, dailySent: best.dailySent };
+
+  if (!rotate || withRoom.length === 1) {
+    return withRoom[0];
+  }
+
+  let rotationIndex = opts?.rotationIndex;
+  if (rotationIndex == null || !Number.isFinite(rotationIndex)) {
+    const totalToday = (await listAccountUsage(admin, dailyCap)).reduce((s, u) => s + u.daily_sent, 0);
+    rotationIndex = totalToday;
+  }
+  const pick = withRoom[Math.abs(Math.floor(rotationIndex)) % withRoom.length];
+  return pick;
 }
 
 async function listAccountUsage(
@@ -451,7 +565,8 @@ async function sendNextForCampaign(
 
   const dailyCap = clampDailyCap(campaign.daily_cap);
   const preferred = str(campaign.from_email) || 'auto';
-  const resolved = await resolveSendAccount(admin, preferred, dailyCap);
+  const rotationIndex = Number(campaign.sent_count) || 0;
+  const resolved = await resolveSendAccount(admin, preferred, dailyCap, { rotationIndex });
   if ('daily_cap_hit' in resolved) {
     await admin
       .from('hm_bulk_campaigns')
@@ -478,12 +593,31 @@ async function sendNextForCampaign(
     .eq('campaign_id', campaignId)
     .eq('status', 'pending')
     .order('row_index', { ascending: true })
-    .limit(1);
+    .limit(5);
   if (nextErr) throw nextErr;
-  const next = nextRows?.[0];
+  let next: Record<string, unknown> | null = null;
+  for (const row of (nextRows || []) as Record<string, unknown>[]) {
+    if (await isUnsubscribed(admin, String(row.email || ''))) {
+      const nowSkip = new Date().toISOString();
+      await admin
+        .from('hm_bulk_recipients')
+        .update({
+          status: 'failed',
+          error: 'Skipped: recipient unsubscribed',
+          updated_at: nowSkip,
+        })
+        .eq('id', row.id)
+        .eq('status', 'pending');
+      continue;
+    }
+    next = row;
+    break;
+  }
   if (!next) {
     const progress = await syncCampaignCounters(admin, campaignId);
-    return { ok: true, done: true, reason: 'completed', ...progress };
+    const pendingLeft = Number(progress?.pending) || 0;
+    if (pendingLeft === 0) return { ok: true, done: true, reason: 'completed', ...progress };
+    return { ok: true, done: false, skipped_unsubscribed: true, ...progress };
   }
 
   // Atomic pacing lock so cron + browser cannot burst-send.
@@ -523,9 +657,11 @@ async function sendNextForCampaign(
   const to = normalizeEmail(next.email);
   const displayName = str(next.full_name);
   const subject = applyMerge(String(campaign.subject || ''), displayName, to);
-  const text = applyMerge(String(campaign.body_text || ''), displayName, to);
+  const textMerged = applyMerge(String(campaign.body_text || ''), displayName, to);
   const htmlRaw = campaign.body_html ? applyMerge(String(campaign.body_html), displayName, to) : '';
-  const html = htmlRaw || text.replace(/\n/g, '<br/>');
+  const htmlMerged = htmlRaw || textMerged.replace(/\n/g, '<br/>');
+  const { text, html } = appendUnsubscribe(textMerged, htmlMerged, to);
+  const unsubUrl = unsubscribeUrlFor(to);
 
   try {
     const transport = getTransportFor(account);
@@ -537,6 +673,10 @@ async function sendNextForCampaign(
           subject,
           text,
           html,
+          headers: {
+            'List-Unsubscribe': `<${unsubUrl}>`,
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+          },
         },
         (err: Error | null) => (err ? reject(err) : resolve()),
       );
@@ -621,7 +761,6 @@ Deno.serve(async (req) => {
   const admin = serviceClient();
   const cronOk = cronSecretOk(req);
   const userOk = await userIsAuthenticated(req, admin);
-  if (!cronOk && !userOk) return json(401, { error: 'Unauthorized' });
 
   let body: Record<string, unknown> = {};
   try {
@@ -631,9 +770,36 @@ Deno.serve(async (req) => {
   }
 
   const action = str(body.action || body.mode).toLowerCase() || 'status';
+  const publicActions = new Set(['unsubscribe', 'unsubscribe_status']);
+  if (!cronOk && !userOk && !publicActions.has(action)) {
+    return json(401, { error: 'Unauthorized' });
+  }
+
   const userId = userOk ? await getAuthUserId(req) : null;
 
   try {
+    if (action === 'unsubscribe') {
+      const email = normalizeEmail(body.email || body.to);
+      if (!email || !email.includes('@')) return json(400, { error: 'Valid email is required' });
+      await recordUnsubscribe(
+        admin,
+        email,
+        str(body.source) || 'link',
+        str(body.reason),
+      );
+      return json(200, { ok: true, unsubscribed: true, email });
+    }
+
+    if (action === 'unsubscribe_status') {
+      const email = normalizeEmail(body.email || body.to);
+      if (!email || !email.includes('@')) return json(400, { error: 'Valid email is required' });
+      return json(200, {
+        ok: true,
+        email,
+        unsubscribed: await isUnsubscribed(admin, email),
+      });
+    }
+
     if (action === 'test_send' || action === 'send_test') {
       const to = normalizeEmail(body.to || body.email);
       const displayName = str(body.name || body.full_name || body.fullName) || 'there';
@@ -653,15 +819,21 @@ Deno.serve(async (req) => {
       const { account, dailySent } = resolved;
       const fromEmail = account.email;
 
+      if (await isUnsubscribed(admin, to)) {
+        return json(400, { error: `${to} is on the unsubscribe list. Remove them before testing.` });
+      }
+
       const subject = applyMerge(subjectTpl, displayName, to);
-      const text = applyMerge(
+      const textMerged = applyMerge(
         bodyTextTpl || bodyHtmlTpl.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''),
         displayName,
         to,
       );
-      const html = bodyHtmlTpl
+      const htmlMerged = bodyHtmlTpl
         ? applyMerge(bodyHtmlTpl, displayName, to)
-        : text.replace(/\n/g, '<br/>');
+        : textMerged.replace(/\n/g, '<br/>');
+      const { text, html } = appendUnsubscribe(textMerged, htmlMerged, to);
+      const unsubUrl = unsubscribeUrlFor(to);
 
       try {
         const transport = getTransportFor(account);
@@ -673,6 +845,10 @@ Deno.serve(async (req) => {
               subject,
               text,
               html,
+              headers: {
+                'List-Unsubscribe': `<${unsubUrl}>`,
+                'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+              },
             },
             (err: Error | null) => (err ? reject(err) : resolve()),
           );
