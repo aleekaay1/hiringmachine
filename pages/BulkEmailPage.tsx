@@ -119,9 +119,13 @@ const BulkEmailPage: React.FC = () => {
   const stopRef = React.useRef(false);
   const fileRef = React.useRef<HTMLInputElement>(null);
   const skipNextLeadPersist = React.useRef(false);
+  /** Block auto-save until hydrate finishes and React has applied restored body. */
+  const [templatePersistReady, setTemplatePersistReady] = React.useState(false);
+  const lastPersistedBody = React.useRef<string | null>(null);
 
   const loadSettings = React.useCallback(async () => {
     try {
+      setTemplatePersistReady(false);
       const data = await getBulkSettings();
       setSettings(data.settings);
       setSmtpAccounts(data.smtp_accounts || []);
@@ -151,7 +155,9 @@ const BulkEmailPage: React.FC = () => {
       if (data.settings.template_subject) setSubject(data.settings.template_subject);
       if (typeof data.settings.template_body === 'string' && data.settings.template_body.length) {
         setBody(data.settings.template_body);
+        lastPersistedBody.current = data.settings.template_body;
       }
+
       if (data.settings.draft_campaign_name) setCampaignName(data.settings.draft_campaign_name);
       if (data.settings.draft_source_file) setFileName(data.settings.draft_source_file);
       if (data.settings.draft_name_column != null) setNameCol(data.settings.draft_name_column || '');
@@ -159,6 +165,8 @@ const BulkEmailPage: React.FC = () => {
 
       // Restore template first; leads load in pages so large lists don't wipe the whole page.
       setHydrated(true);
+      // Wait so restored body is committed before auto-save can run.
+      window.setTimeout(() => setTemplatePersistReady(true), 1200);
 
       if (data.draft_leads_count > 0) {
         setMsg(`Restoring ${data.draft_leads_count} saved leads…`);
@@ -182,6 +190,7 @@ const BulkEmailPage: React.FC = () => {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load settings');
       setHydrated(true);
+      window.setTimeout(() => setTemplatePersistReady(true), 1200);
     }
   }, []);
 
@@ -245,8 +254,11 @@ const BulkEmailPage: React.FC = () => {
 
   // Auto-save HTML/plain template + compose fields.
   React.useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || !templatePersistReady) return;
+    // Never persist an empty body over a known saved template (hydrate race).
+    if (!body.trim() && lastPersistedBody.current) return;
     const timer = window.setTimeout(() => {
+      if (!body.trim() && lastPersistedBody.current) return;
       void (async () => {
         try {
           const saved = await saveBulkTemplate({
@@ -261,6 +273,7 @@ const BulkEmailPage: React.FC = () => {
             dailyCap,
           });
           setSettings(saved);
+          if (body.trim()) lastPersistedBody.current = body;
           setDraftSavedAt(saved.updated_at || new Date().toISOString());
         } catch (err) {
           setError(err instanceof Error ? err.message : 'Could not auto-save template');
@@ -268,7 +281,7 @@ const BulkEmailPage: React.FC = () => {
       })();
     }, 900);
     return () => window.clearTimeout(timer);
-  }, [hydrated, subject, body, campaignName, smtpFrom, fileName, nameCol, emailCol, gapSeconds, dailyCap]);
+  }, [hydrated, templatePersistReady, subject, body, campaignName, smtpFrom, fileName, nameCol, emailCol, gapSeconds, dailyCap]);
 
   // Persist mapped leads whenever the recipient list changes from upload/mapping.
   React.useEffect(() => {

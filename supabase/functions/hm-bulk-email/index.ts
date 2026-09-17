@@ -895,7 +895,33 @@ Deno.serve(async (req) => {
 
     if (action === 'get_settings') {
       const { data } = await admin.from('hm_bulk_app_settings').select('*').eq('id', 1).maybeSingle();
-      const dailyCap = clampDailyCap(data?.daily_cap ?? DEFAULT_DAILY_CAP);
+      let settingsRow = data;
+      // Self-heal: if compose template was wiped, restore HTML from the newest campaign that has it.
+      if (!str(settingsRow?.template_body)) {
+        const { data: camp } = await admin
+          .from('hm_bulk_campaigns')
+          .select('subject, body_html, body_text')
+          .not('body_html', 'is', null)
+          .neq('body_html', '')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (camp && str(camp.body_html)) {
+          const healed = {
+            id: 1,
+            template_subject: str(settingsRow?.template_subject) || str(camp.subject) || null,
+            template_body: String(camp.body_html),
+            updated_at: new Date().toISOString(),
+          };
+          const { data: upserted } = await admin
+            .from('hm_bulk_app_settings')
+            .upsert(healed)
+            .select('*')
+            .single();
+          if (upserted) settingsRow = upserted;
+        }
+      }
+      const dailyCap = clampDailyCap(settingsRow?.daily_cap ?? DEFAULT_DAILY_CAP);
       // Reconcile counter from actual Pacific-day sends so the UI can't drift.
       const { data: realToday } = await admin.rpc('hm_bulk_sent_today_count');
       const reconciled = Number(realToday) || 0;
@@ -917,7 +943,7 @@ Deno.serve(async (req) => {
         .select('id', { count: 'exact', head: true });
       return json(200, {
         ok: true,
-        settings: data || {
+        settings: settingsRow || {
           id: 1,
           gap_seconds: DEFAULT_GAP,
           daily_cap: DEFAULT_DAILY_CAP,
@@ -1037,12 +1063,17 @@ Deno.serve(async (req) => {
 
     if (action === 'save_template') {
       const subject = str(body.subject);
+      // Prefer explicit string body (may be long HTML). Never coerce with str() — that is fine,
+      // but NEVER null-out a saved template when the client sends an empty body (hydrate race).
       const templateBody = typeof body.body === 'string'
         ? body.body
-        : str(body.template_body || body.templateBody || body.body_html || body.bodyHtml);
-      const patch = {
+        : typeof body.template_body === 'string'
+          ? body.template_body
+          : typeof body.templateBody === 'string'
+            ? body.templateBody
+            : '';
+      const patch: Record<string, unknown> = {
         template_subject: subject || null,
-        template_body: templateBody || null,
         draft_campaign_name: str(body.campaign_name || body.campaignName) || null,
         draft_from_email: str(body.from_email || body.fromEmail) || null,
         draft_source_file: str(body.source_file || body.sourceFile) || null,
@@ -1053,6 +1084,9 @@ Deno.serve(async (req) => {
         updated_by: userId,
         updated_at: new Date().toISOString(),
       };
+      if (templateBody.trim().length > 0) {
+        patch.template_body = templateBody;
+      }
       const { data, error } = await admin
         .from('hm_bulk_app_settings')
         .upsert({ id: 1, ...patch })
