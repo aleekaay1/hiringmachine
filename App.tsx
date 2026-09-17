@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import AdminShell from './components/AdminShell';
 import AdminRouteFallback from './components/AdminRouteFallback';
 import Landing from './pages/Landing';
-import InterviewForm from './pages/InterviewForm';
 import ScheduleWebinarPage from './pages/ScheduleWebinarPage';
 import UnsubscribePage from './pages/UnsubscribePage';
 import PostInterview from './pages/PostInterview';
@@ -60,11 +59,11 @@ const App: React.FC = () => {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Landing />} />
-        <Route path="/checkin" element={<InterviewForm />} />
+        <Route path="/checkin" element={<Navigate to="/schedule-webinar" replace />} />
         <Route path="/schedule-webinar" element={<ScheduleWebinarPage />} />
         <Route path="/unsubscribe" element={<UnsubscribePage />} />
         <Route path="/webinar" element={<Navigate to="/schedule-webinar" replace />} />
-        <Route path="/interview" element={<Navigate to="/checkin" replace />} />
+        <Route path="/interview" element={<Navigate to="/schedule-webinar" replace />} />
         <Route path="/check-status" element={<CheckStatus />} />
         <Route path="/confirmation/:id" element={<PostInterview />} />
         <Route path="/assessment-intro/:id" element={<AssessmentIntro />} />

@@ -62,15 +62,15 @@ const openPrintView = (options: {
 
 const QrCodes: React.FC = () => {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const arrivalUrl = `${origin}/checkin`;
+  const arrivalUrl = `${origin}/schedule-webinar`;
   const assessmentUrl = `${origin}/assessment-lookup`;
 
   const downloadArrivalPdf = useCallback(() => {
     openPrintView({
-      title: 'Check-In',
-      subtitle: 'Before the live Zoom session',
+      title: 'Schedule Webinar',
+      subtitle: 'Book your career session',
       url: arrivalUrl,
-      instruction: 'Place this at your front desk or entrance. Candidates scan to complete Check-In before joining the live Zoom session.',
+      instruction: 'Candidates scan to schedule their AO Globe Life webinar session.',
     });
   }, [arrivalUrl]);
 
@@ -94,8 +94,8 @@ const QrCodes: React.FC = () => {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <Card className="flex flex-col items-center text-center space-y-4">
-            <h2 className="font-semibold text-gray-900">1. Check-In</h2>
-            <p className="text-xs text-gray-500">Candidates scan to complete check-in before joining the live Zoom session.</p>
+            <h2 className="font-semibold text-gray-900">1. Schedule webinar</h2>
+            <p className="text-xs text-gray-500">Candidates scan to book their AO Globe Life career webinar.</p>
             <div className="bg-white p-4 rounded-xl border">
               <QRCode value={arrivalUrl} size={180} />
             </div>
@@ -121,7 +121,7 @@ const QrCodes: React.FC = () => {
         <div className="text-xs text-gray-500 border-t border-gray-100 pt-4">
           <p className="font-medium text-gray-700 mb-1">QR & links</p>
           <p>
-            <strong>QR 1</strong>: Check-In before the live Zoom session. <strong>QR 2</strong>: After the Zoom session, candidates scan and enter their email to complete the merged Leadership Assessment & Applicant Questionnaire.
+            <strong>QR 1</strong>: Schedule webinar. <strong>QR 2</strong>: After the session, candidates scan and enter their email to complete the merged Leadership Assessment & Applicant Questionnaire.
           </p>
         </div>
       </div>
