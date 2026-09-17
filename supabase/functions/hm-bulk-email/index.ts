@@ -355,6 +355,30 @@ function clampDailyCap(value: unknown): number {
   return Math.min(HARD_DAILY_CAP, Math.max(1, Math.floor(n)));
 }
 
+/** Keep full HTML bodies intact — do not use str() (trim-only helper) for content. */
+function rawBodyString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.length) return value;
+  }
+  return '';
+}
+
+async function emailAlreadySent(
+  admin: ReturnType<typeof serviceClient>,
+  email: string,
+): Promise<boolean> {
+  const addr = normalizeEmail(email);
+  if (!addr) return false;
+  const { data } = await admin
+    .from('hm_bulk_recipients')
+    .select('id')
+    .eq('email', addr)
+    .eq('status', 'sent')
+    .limit(1)
+    .maybeSingle();
+  return Boolean(data?.id);
+}
+
 function applyMerge(template: string, name: string, email: string): string {
   const first = name.trim().split(/\s+/)[0] || 'there';
   return template
@@ -597,13 +621,28 @@ async function sendNextForCampaign(
   if (nextErr) throw nextErr;
   let next: Record<string, unknown> | null = null;
   for (const row of (nextRows || []) as Record<string, unknown>[]) {
-    if (await isUnsubscribed(admin, String(row.email || ''))) {
+    const rowEmail = String(row.email || '');
+    if (await isUnsubscribed(admin, rowEmail)) {
       const nowSkip = new Date().toISOString();
       await admin
         .from('hm_bulk_recipients')
         .update({
           status: 'failed',
           error: 'Skipped: recipient unsubscribed',
+          updated_at: nowSkip,
+        })
+        .eq('id', row.id)
+        .eq('status', 'pending');
+      continue;
+    }
+    // Never re-send to an address that already got a successful bulk send (any campaign).
+    if (await emailAlreadySent(admin, rowEmail)) {
+      const nowSkip = new Date().toISOString();
+      await admin
+        .from('hm_bulk_recipients')
+        .update({
+          status: 'failed',
+          error: 'Skipped: already emailed (no duplicates)',
           updated_at: nowSkip,
         })
         .eq('id', row.id)
@@ -1222,14 +1261,55 @@ Deno.serve(async (req) => {
 
     if (action === 'create') {
       const subject = str(body.subject);
-      const bodyText = str(body.body_text || body.bodyText || body.text);
-      const bodyHtml = str(body.body_html || body.bodyHtml || body.html);
+      const bodyText = rawBodyString(body.body_text, body.bodyText, body.text);
+      const bodyHtml = rawBodyString(body.body_html, body.bodyHtml, body.html);
       const name = str(body.name) || `Bulk ${new Date().toISOString().slice(0, 16)}`;
       if (!subject || (!bodyText && !bodyHtml)) {
         return json(400, { error: 'Subject and body are required' });
       }
       const rawRecipients = Array.isArray(body.recipients) ? (body.recipients as RecipientInput[]) : [];
       if (!rawRecipients.length) return json(400, { error: 'No recipients' });
+
+      // Prefetch emails already successfully sent so we never duplicate outreach.
+      const alreadySent = new Set<string>();
+      {
+        const pageSize = 1000;
+        let offset = 0;
+        for (;;) {
+          const { data: priorSent, error: priorErr } = await admin
+            .from('hm_bulk_recipients')
+            .select('email')
+            .eq('status', 'sent')
+            .range(offset, offset + pageSize - 1);
+          if (priorErr) throw priorErr;
+          const batch = priorSent || [];
+          for (const row of batch) {
+            const e = normalizeEmail(row.email);
+            if (e) alreadySent.add(e);
+          }
+          if (batch.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
+      const unsubscribedSet = new Set<string>();
+      {
+        const pageSize = 1000;
+        let offset = 0;
+        for (;;) {
+          const { data: rows, error: unsubErr } = await admin
+            .from('hm_bulk_unsubscribes')
+            .select('email')
+            .range(offset, offset + pageSize - 1);
+          if (unsubErr) throw unsubErr;
+          const batch = rows || [];
+          for (const row of batch) {
+            const e = normalizeEmail(row.email);
+            if (e) unsubscribedSet.add(e);
+          }
+          if (batch.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
 
       const seen = new Set<string>();
       const recipients: Array<{
@@ -1239,12 +1319,25 @@ Deno.serve(async (req) => {
         raw: Record<string, unknown>;
         status: string;
       }> = [];
+      let skippedDupes = 0;
+      let skippedUnsub = 0;
       for (let i = 0; i < rawRecipients.length; i++) {
         const row = rawRecipients[i] || {};
         const email = normalizeEmail(row.email);
         if (!email || !email.includes('@')) continue;
-        if (seen.has(email)) continue;
+        if (seen.has(email)) {
+          skippedDupes += 1;
+          continue;
+        }
         seen.add(email);
+        if (alreadySent.has(email)) {
+          skippedDupes += 1;
+          continue;
+        }
+        if (unsubscribedSet.has(email)) {
+          skippedUnsub += 1;
+          continue;
+        }
         recipients.push({
           full_name: str(row.name) || null,
           email,
@@ -1253,7 +1346,13 @@ Deno.serve(async (req) => {
           status: 'pending',
         });
       }
-      if (!recipients.length) return json(400, { error: 'No valid emails in recipients' });
+      if (!recipients.length) {
+        return json(400, {
+          error: skippedDupes
+            ? `No new recipients — ${skippedDupes} already emailed (duplicates blocked).`
+            : 'No valid emails in recipients',
+        });
+      }
 
       const gap = clampGap(body.gap_seconds ?? body.gapSeconds);
       const dailyCap = clampDailyCap(body.daily_cap ?? body.dailyCap);
@@ -1295,11 +1394,26 @@ Deno.serve(async (req) => {
             email_column: str(body.email_column || body.emailColumn) || null,
             name_column: str(body.name_column || body.nameColumn) || null,
             rotate: preferred === 'auto',
+            skipped_duplicates: skippedDupes,
+            skipped_unsubscribed: skippedUnsub,
           },
         })
         .select('*')
         .single();
       if (campErr || !campaign) throw campErr || new Error('Failed to create campaign');
+
+      // Keep compose template aligned with what this campaign will send.
+      await admin.from('hm_bulk_app_settings').upsert({
+        id: 1,
+        template_subject: subject,
+        template_body: bodyHtml || bodyText,
+        draft_campaign_name: name,
+        draft_from_email: preferred,
+        draft_gap_seconds: gap,
+        draft_daily_cap: dailyCap,
+        updated_by: userId,
+        updated_at: new Date().toISOString(),
+      });
 
       const chunkSize = 500;
       for (let i = 0; i < recipients.length; i += chunkSize) {
@@ -1315,6 +1429,8 @@ Deno.serve(async (req) => {
         ok: true,
         campaign_id: campaign.id,
         total: recipients.length,
+        skipped_duplicates: skippedDupes,
+        skipped_unsubscribed: skippedUnsub,
         campaign,
       });
     }
@@ -1322,13 +1438,24 @@ Deno.serve(async (req) => {
     if (action === 'pause' || action === 'resume' || action === 'cancel') {
       const campaignId = str(body.campaign_id || body.campaignId);
       if (!campaignId) return json(400, { error: 'Missing campaign_id' });
-      const nextStatus = action === 'pause' ? 'paused' : action === 'resume' ? 'queued' : 'cancelled';
+      // Resume → sending so cron/tick continues from remaining pending (never re-sends sent rows).
+      const nextStatus = action === 'pause' ? 'paused' : action === 'resume' ? 'sending' : 'cancelled';
+      const { data: existing } = await admin
+        .from('hm_bulk_campaigns')
+        .select('id, status, sent_count, total_count')
+        .eq('id', campaignId)
+        .maybeSingle();
+      if (!existing) return json(404, { error: 'Campaign not found' });
+      if (action === 'resume' && (existing.status === 'completed' || existing.status === 'cancelled')) {
+        return json(400, { error: `Cannot resume a ${existing.status} campaign` });
+      }
       const { error } = await admin
         .from('hm_bulk_campaigns')
         .update({
           status: nextStatus,
           updated_at: new Date().toISOString(),
           ...(action === 'pause' ? { last_error: 'Paused by user' } : { last_error: null }),
+          ...(action === 'resume' ? { completed_at: null } : {}),
         })
         .eq('id', campaignId);
       if (error) throw error;
@@ -1339,8 +1466,16 @@ Deno.serve(async (req) => {
           .eq('campaign_id', campaignId)
           .eq('status', 'pending');
       }
+      // Resume: recover any stuck "sending" rows back to pending so the queue continues.
+      if (action === 'resume') {
+        await admin
+          .from('hm_bulk_recipients')
+          .update({ status: 'pending', updated_at: new Date().toISOString() })
+          .eq('campaign_id', campaignId)
+          .eq('status', 'sending');
+      }
       const progress = await syncCampaignCounters(admin, campaignId);
-      return json(200, { ok: true, paused: nextStatus === 'paused', ...progress });
+      return json(200, { ok: true, paused: nextStatus === 'paused', resumed: action === 'resume', ...progress });
     }
 
     if (action === 'get_campaign') {
@@ -1372,9 +1507,9 @@ Deno.serve(async (req) => {
       }
 
       const subject = str(body.subject);
-      const bodyText = str(body.body_text || body.bodyText || body.text);
-      const bodyHtml = str(body.body_html || body.bodyHtml || body.html);
-      if (!subject || (!bodyText && !bodyHtml)) {
+      const bodyText = rawBodyString(body.body_text, body.bodyText, body.text);
+      const bodyHtml = rawBodyString(body.body_html, body.bodyHtml, body.html);
+      if (!subject || (!bodyText.trim() && !bodyHtml.trim())) {
         return json(400, { error: 'Subject and body are required' });
       }
 
@@ -1387,7 +1522,7 @@ Deno.serve(async (req) => {
       const patch = {
         name: str(body.name) || undefined,
         subject,
-        body_text: bodyText || bodyHtml.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''),
+        body_text: bodyText.trim() || bodyHtml.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''),
         body_html: bodyHtml || null,
         gap_seconds: clampGap(body.gap_seconds ?? body.gapSeconds),
         daily_cap: clampDailyCap(body.daily_cap ?? body.dailyCap),
@@ -1406,6 +1541,20 @@ Deno.serve(async (req) => {
         .select('*')
         .single();
       if (error) throw error;
+
+      // Keep compose draft in sync so refresh shows the same subject/body.
+      await admin.from('hm_bulk_app_settings').upsert({
+        id: 1,
+        template_subject: subject,
+        template_body: bodyHtml || bodyText,
+        draft_campaign_name: str(body.name) || undefined,
+        draft_from_email: preferred,
+        draft_gap_seconds: clampGap(body.gap_seconds ?? body.gapSeconds),
+        draft_daily_cap: clampDailyCap(body.daily_cap ?? body.dailyCap),
+        updated_by: userId,
+        updated_at: new Date().toISOString(),
+      });
+
       return json(200, { ok: true, campaign });
     }
 

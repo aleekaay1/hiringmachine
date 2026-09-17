@@ -122,27 +122,30 @@ const BulkEmailPage: React.FC = () => {
   /** Block auto-save until hydrate finishes and React has applied restored body. */
   const [templatePersistReady, setTemplatePersistReady] = React.useState(false);
   const lastPersistedBody = React.useRef<string | null>(null);
+  const hydratedOnce = React.useRef(false);
 
-  const loadSettings = React.useCallback(async () => {
+  /** Soft refresh: counters/accounts only — never clobber compose fields. */
+  const refreshSmtpUsage = React.useCallback(async () => {
     try {
-      setTemplatePersistReady(false);
       const data = await getBulkSettings();
-      setSettings(data.settings);
       setSmtpAccounts(data.smtp_accounts || []);
-      const savedFrom = data.settings.draft_from_email || '';
-      setSmtpFrom(() => {
-        const preferred = savedFrom || 'auto';
-        if (preferred === 'auto') return 'auto';
-        // Never stick to suspended aopaz — force rotation onto apply/careers.
-        if (preferred.includes('aopaz@')) return 'auto';
-        if (data.smtp_accounts.some((a) => a.email === preferred)) return preferred;
-        return 'auto';
-      });
       setDailySent(
         data.smtp_accounts.reduce((sum, a) => sum + (a.daily_sent || 0), 0) || data.daily_sent,
       );
-      setGapSeconds(Math.max(90, data.settings.draft_gap_seconds || data.settings.gap_seconds || 120));
-      setDailyCap(Math.min(500, data.settings.draft_daily_cap || data.settings.daily_cap || 500));
+      setBusinessDay(data.business_day || '');
+    } catch {
+      /* ignore soft refresh errors */
+    }
+  }, []);
+
+  const loadSettings = React.useCallback(async () => {
+    try {
+      const data = await getBulkSettings();
+      setSettings(data.settings);
+      setSmtpAccounts(data.smtp_accounts || []);
+      setDailySent(
+        data.smtp_accounts.reduce((sum, a) => sum + (a.daily_sent || 0), 0) || data.daily_sent,
+      );
       setBusinessDay(data.business_day || '');
       setProvider((data.settings.default_provider as BulkProvider) || 'smtp');
       setInstantlyKey(strField(data.settings.instantly, 'api_key'));
@@ -152,44 +155,56 @@ const BulkEmailPage: React.FC = () => {
       setBillionApiUrl(strField(data.settings.billionmail, 'api_url'));
       setBillionApiKey(strField(data.settings.billionmail, 'api_key'));
 
-      if (data.settings.template_subject) setSubject(data.settings.template_subject);
-      if (typeof data.settings.template_body === 'string' && data.settings.template_body.length) {
-        setBody(data.settings.template_body);
-        lastPersistedBody.current = data.settings.template_body;
-      }
+      // Only hydrate compose fields on the first load — polling must not wipe edits.
+      if (!hydratedOnce.current) {
+        setTemplatePersistReady(false);
+        const savedFrom = data.settings.draft_from_email || '';
+        setSmtpFrom(() => {
+          const preferred = savedFrom || 'auto';
+          if (preferred === 'auto') return 'auto';
+          if (preferred.includes('aopaz@')) return 'auto';
+          if (data.smtp_accounts.some((a) => a.email === preferred)) return preferred;
+          return 'auto';
+        });
+        setGapSeconds(Math.max(90, data.settings.draft_gap_seconds || data.settings.gap_seconds || 120));
+        setDailyCap(Math.min(500, data.settings.draft_daily_cap || data.settings.daily_cap || 500));
+        if (data.settings.template_subject) setSubject(data.settings.template_subject);
+        if (typeof data.settings.template_body === 'string' && data.settings.template_body.length) {
+          setBody(data.settings.template_body);
+          lastPersistedBody.current = data.settings.template_body;
+        }
+        if (data.settings.draft_campaign_name) setCampaignName(data.settings.draft_campaign_name);
+        if (data.settings.draft_source_file) setFileName(data.settings.draft_source_file);
+        if (data.settings.draft_name_column != null) setNameCol(data.settings.draft_name_column || '');
+        if (data.settings.draft_email_column) setEmailCol(data.settings.draft_email_column);
+        setHydrated(true);
+        hydratedOnce.current = true;
+        window.setTimeout(() => setTemplatePersistReady(true), 1200);
 
-      if (data.settings.draft_campaign_name) setCampaignName(data.settings.draft_campaign_name);
-      if (data.settings.draft_source_file) setFileName(data.settings.draft_source_file);
-      if (data.settings.draft_name_column != null) setNameCol(data.settings.draft_name_column || '');
-      if (data.settings.draft_email_column) setEmailCol(data.settings.draft_email_column);
-
-      // Restore template first; leads load in pages so large lists don't wipe the whole page.
-      setHydrated(true);
-      // Wait so restored body is committed before auto-save can run.
-      window.setTimeout(() => setTemplatePersistReady(true), 1200);
-
-      if (data.draft_leads_count > 0) {
-        setMsg(`Restoring ${data.draft_leads_count} saved leads…`);
-        const draftLeads = await listBulkDraftLeads();
-        skipNextLeadPersist.current = true;
-        setRecipients(
-          draftLeads.map((lead, idx) => ({
-            name: String(lead.full_name || ''),
-            email: String(lead.email || '').toLowerCase(),
-            rowIndex: typeof lead.row_index === 'number' ? lead.row_index : idx + 2,
-            raw: (lead.raw || {}) as Record<string, string>,
-          })),
-        );
-        setSkipped(0);
-        setDraftSavedAt(new Date().toISOString());
-        setMsg(`Restored ${draftLeads.length} saved leads and your HTML template.`);
-      } else if (data.settings.template_body || data.settings.template_subject) {
-        setDraftSavedAt(data.settings.updated_at || new Date().toISOString());
-        setMsg('Restored your saved email template.');
+        if (data.draft_leads_count > 0) {
+          setMsg(`Restoring ${data.draft_leads_count} saved leads…`);
+          const draftLeads = await listBulkDraftLeads();
+          skipNextLeadPersist.current = true;
+          setRecipients(
+            draftLeads.map((lead, idx) => ({
+              name: String(lead.full_name || ''),
+              email: String(lead.email || '').toLowerCase(),
+              rowIndex: typeof lead.row_index === 'number' ? lead.row_index : idx + 2,
+              raw: (lead.raw || {}) as Record<string, string>,
+            })),
+          );
+          setSkipped(0);
+          setDraftSavedAt(new Date().toISOString());
+          setMsg(`Restored ${draftLeads.length} saved leads and your HTML template.`);
+        } else if (data.settings.template_body || data.settings.template_subject) {
+          setDraftSavedAt(data.settings.updated_at || new Date().toISOString());
+          setMsg('Restored your saved email template.');
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load settings');
       setHydrated(true);
+      hydratedOnce.current = true;
       window.setTimeout(() => setTemplatePersistReady(true), 1200);
     }
   }, []);
@@ -208,16 +223,16 @@ const BulkEmailPage: React.FC = () => {
     void loadCampaigns();
   }, [loadSettings, loadCampaigns]);
 
-  // Poll campaign list only — cron owns sending (avoids 3/min bursts from tab + worker).
+  // Poll campaign list + SMTP counters only — never re-hydrate compose (that wiped subject edits).
   const hasServerCampaigns = campaigns.some((c) => c.status === 'sending' || c.status === 'queued');
   React.useEffect(() => {
     if (!hasServerCampaigns) return;
     const id = window.setInterval(() => {
       void loadCampaigns();
-      void loadSettings();
+      void refreshSmtpUsage();
     }, 15_000);
     return () => window.clearInterval(id);
-  }, [hasServerCampaigns, loadCampaigns, loadSettings]);
+  }, [hasServerCampaigns, loadCampaigns, refreshSmtpUsage]);
 
   const loadStats = React.useCallback(async () => {
     setLoadingStats(true);
@@ -252,7 +267,29 @@ const BulkEmailPage: React.FC = () => {
     }
   }, [table, nameCol, emailCol]);
 
-  // Auto-save HTML/plain template + compose fields.
+  const editableCampaignId = editingCampaignId || (
+    campaigns.find((c) => c.status === 'sending' || c.status === 'queued' || c.status === 'paused')?.id ?? null
+  );
+
+  const persistComposeToCampaign = React.useCallback(
+    async (campaignId: string) => {
+      if (!subject.trim() || !body.trim()) return null;
+      const parts = splitBulkEmailBody(body);
+      return updateBulkCampaign({
+        campaignId,
+        name: campaignName || undefined,
+        subject: subject.trim(),
+        bodyText: parts.bodyText,
+        bodyHtml: parts.bodyHtml,
+        gapSeconds,
+        dailyCap: Math.min(500, dailyCap),
+        fromEmail: smtpFrom,
+      });
+    },
+    [subject, body, campaignName, gapSeconds, dailyCap, smtpFrom],
+  );
+
+  // Auto-save HTML/plain template + compose fields (and live campaign when bound).
   React.useEffect(() => {
     if (!hydrated || !templatePersistReady) return;
     // Never persist an empty body over a known saved template (hydrate race).
@@ -275,13 +312,31 @@ const BulkEmailPage: React.FC = () => {
           setSettings(saved);
           if (body.trim()) lastPersistedBody.current = body;
           setDraftSavedAt(saved.updated_at || new Date().toISOString());
+          // Keep the live/paused campaign in sync so remaining sends use the new subject/body.
+          if (editableCampaignId && subject.trim() && body.trim()) {
+            await persistComposeToCampaign(editableCampaignId);
+          }
         } catch (err) {
           setError(err instanceof Error ? err.message : 'Could not auto-save template');
         }
       })();
     }, 900);
     return () => window.clearTimeout(timer);
-  }, [hydrated, templatePersistReady, subject, body, campaignName, smtpFrom, fileName, nameCol, emailCol, gapSeconds, dailyCap]);
+  }, [
+    hydrated,
+    templatePersistReady,
+    subject,
+    body,
+    campaignName,
+    smtpFrom,
+    fileName,
+    nameCol,
+    emailCol,
+    gapSeconds,
+    dailyCap,
+    editableCampaignId,
+    persistComposeToCampaign,
+  ]);
 
   // Persist mapped leads whenever the recipient list changes from upload/mapping.
   React.useEffect(() => {
@@ -549,7 +604,11 @@ const BulkEmailPage: React.FC = () => {
   };
 
   const onSaveCampaignEdits = async () => {
-    if (!editingCampaignId) return;
+    const targetId = editableCampaignId;
+    if (!targetId) {
+      setError('No active campaign to update. Click Edit on a paused/sending campaign first.');
+      return;
+    }
     setError(null);
     if (!subject.trim() || !body.trim()) {
       setError('Subject and body are required');
@@ -557,18 +616,23 @@ const BulkEmailPage: React.FC = () => {
     }
     setSavingCampaign(true);
     try {
-      const parts = splitBulkEmailBody(body);
-      const updated = await updateBulkCampaign({
-        campaignId: editingCampaignId,
-        name: campaignName || undefined,
+      // Always persist compose draft too so refresh keeps the same subject/body.
+      await saveBulkTemplate({
         subject: subject.trim(),
-        bodyText: parts.bodyText,
-        bodyHtml: parts.bodyHtml,
+        body,
+        campaignName,
+        fromEmail: smtpFrom,
+        sourceFile: fileName,
+        nameColumn: nameCol,
+        emailColumn: emailCol,
         gapSeconds,
         dailyCap: Math.min(500, dailyCap),
-        fromEmail: smtpFrom,
       });
-      setMsg(`Saved edits to “${updated.name}”.`);
+      const updated = await persistComposeToCampaign(targetId);
+      if (!updated) throw new Error('Could not save campaign');
+      setEditingCampaignId(targetId);
+      lastPersistedBody.current = body;
+      setMsg(`Saved “${updated.name}” — remaining emails will use this subject/body.`);
       await loadCampaigns();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save campaign');
@@ -893,9 +957,11 @@ const BulkEmailPage: React.FC = () => {
 
           <section className="space-y-4 rounded-2xl border border-[#e6e0d4] bg-white p-5">
             <p className="hm-kicker">2 · Message & pace</p>
-            {editingCampaignId && (
+            {editableCampaignId && (
               <div className="rounded-xl border border-[#d9e5d4] bg-[#f3f8f1] px-3 py-2 text-xs text-[#2f4a38]">
-                Editing campaign <strong>{editingCampaignId.slice(0, 8)}…</strong>
+                {editingCampaignId
+                  ? <>Editing campaign <strong>{editingCampaignId.slice(0, 8)}…</strong></>
+                  : <>Live campaign bound — subject/body auto-save into the active send.</>}
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -903,18 +969,20 @@ const BulkEmailPage: React.FC = () => {
                     onClick={() => void onSaveCampaignEdits()}
                     className="hm-btn-brass rounded-full px-3 py-1 text-[11px] disabled:opacity-50"
                   >
-                    {savingCampaign ? 'Saving…' : 'Save campaign edits'}
+                    {savingCampaign ? 'Saving…' : 'Save to campaign now'}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditingCampaignId(null);
-                      setMsg('Exited campaign edit mode.');
-                    }}
-                    className="rounded-full border border-[#ddd5c6] px-3 py-1 text-[11px] text-[#5a5348]"
-                  >
-                    Done editing
-                  </button>
+                  {editingCampaignId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingCampaignId(null);
+                        setMsg('Exited campaign edit mode.');
+                      }}
+                      className="rounded-full border border-[#ddd5c6] px-3 py-1 text-[11px] text-[#5a5348]"
+                    >
+                      Done editing
+                    </button>
+                  )}
                 </div>
               </div>
             )}
