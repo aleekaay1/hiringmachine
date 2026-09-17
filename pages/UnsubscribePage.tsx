@@ -63,14 +63,14 @@ const UnsubscribePage: React.FC = () => {
             <h2 className="mb-2 text-3xl font-bold text-gray-900">You're unsubscribed</h2>
             <p className="mb-2 text-sm font-medium text-[#005EB8]">AO Paz Globelife</p>
             <p className="max-w-md text-gray-600">
-              <strong>{email}</strong> will no longer receive recruiting outreach from our bulk email system.
+              <strong>{email}</strong> will no longer receive our recruiting offers.
             </p>
           </>
         ) : (
           <>
             <h2 className="mb-2 text-3xl font-bold text-gray-900">Unsubscribe</h2>
             <p className="mb-6 max-w-md text-gray-600">
-              Stop receiving AO Globe Life recruiting emails. You can resubscribe later by contacting us.
+              Opt out of AO Globe Life recruiting offers. You can reach out anytime if you change your mind.
             </p>
             <form
               className="flex w-full max-w-md flex-col gap-3 text-left"

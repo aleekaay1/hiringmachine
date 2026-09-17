@@ -130,7 +130,7 @@ function unsubscribeFooterHtml(email: string): string {
     `<p style="margin:0;font-size:12px;line-height:1.5;color:#6b7280;font-family:Arial,Helvetica,sans-serif;">` +
     `You're receiving this because you shared interest in AO Globe Life career opportunities.<br/>` +
     `<a href="${url}" style="color:#6b7280;text-decoration:underline;">Unsubscribe</a>` +
-    ` from future recruiting emails.` +
+    ` from future recruiting offers.` +
     `</p>`
   );
 }
