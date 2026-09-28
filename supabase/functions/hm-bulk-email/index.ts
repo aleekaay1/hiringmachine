@@ -1209,6 +1209,173 @@ Deno.serve(async (req) => {
       return json(200, { ok: true, draft_leads: [] });
     }
 
+    if (action === 'match_form_signups') {
+      if (!userOk) return json(401, { error: 'Sign in required' });
+
+      type LeadHit = {
+        email: string;
+        campaignId: string | null;
+        campaignName: string;
+        recipientId: string | null;
+        status: string;
+        rank: number;
+      };
+
+      const leadsByEmail = new Map<string, LeadHit>();
+      const remember = (hit: LeadHit) => {
+        const key = normalizeEmail(hit.email);
+        if (!key) return;
+        const prev = leadsByEmail.get(key);
+        if (!prev || hit.rank > prev.rank) leadsByEmail.set(key, hit);
+      };
+
+      const campaignNames = new Map<string, string>();
+      {
+        let offset = 0;
+        const pageSize = 1000;
+        for (;;) {
+          const { data: camps, error: campErr } = await admin
+            .from('hm_bulk_campaigns')
+            .select('id, name')
+            .range(offset, offset + pageSize - 1);
+          if (campErr) throw campErr;
+          const batch = camps || [];
+          for (const camp of batch) {
+            campaignNames.set(String(camp.id), str(camp.name) || 'Campaign');
+          }
+          if (batch.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
+
+      const statusRank = (status: string) => {
+        if (status === 'sent') return 40;
+        if (status === 'sending') return 30;
+        if (status === 'pending') return 20;
+        if (status === 'failed' || status === 'skipped') return 10;
+        return 5;
+      };
+
+      {
+        let offset = 0;
+        const pageSize = 1000;
+        for (;;) {
+          const { data: recs, error: recErr } = await admin
+            .from('hm_bulk_recipients')
+            .select('id, campaign_id, email, status')
+            .range(offset, offset + pageSize - 1);
+          if (recErr) throw recErr;
+          const batch = recs || [];
+          for (const rec of batch) {
+            const campaignId = rec.campaign_id ? String(rec.campaign_id) : null;
+            remember({
+              email: String(rec.email || ''),
+              campaignId,
+              campaignName: campaignId
+                ? campaignNames.get(campaignId) || 'Campaign'
+                : 'Campaign',
+              recipientId: rec.id ? String(rec.id) : null,
+              status: str(rec.status) || 'pending',
+              rank: statusRank(str(rec.status)),
+            });
+          }
+          if (batch.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
+
+      {
+        let offset = 0;
+        const pageSize = 1000;
+        for (;;) {
+          const { data: drafts, error: draftErr } = await admin
+            .from('hm_bulk_draft_leads')
+            .select('id, email')
+            .range(offset, offset + pageSize - 1);
+          if (draftErr) throw draftErr;
+          const batch = drafts || [];
+          for (const draft of batch) {
+            remember({
+              email: String(draft.email || ''),
+              campaignId: null,
+              campaignName: 'Uploaded leads (not sent yet)',
+              recipientId: draft.id ? String(draft.id) : null,
+              status: 'draft',
+              rank: 8,
+            });
+          }
+          if (batch.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
+
+      const signups: Array<{ id: string; email: string }> = [];
+      {
+        let offset = 0;
+        const pageSize = 1000;
+        for (;;) {
+          const { data: rows, error: signupErr } = await admin
+            .from('hm_public_webinar_signups')
+            .select('id, email')
+            .order('created_at', { ascending: false })
+            .range(offset, offset + pageSize - 1);
+          if (signupErr) throw signupErr;
+          const batch = rows || [];
+          for (const row of batch) {
+            signups.push({ id: String(row.id), email: String(row.email || '') });
+          }
+          if (batch.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
+
+      const now = new Date().toISOString();
+      let coldEmail = 0;
+      let elsewhere = 0;
+      for (const signup of signups) {
+        const hit = leadsByEmail.get(normalizeEmail(signup.email));
+        if (hit) {
+          coldEmail += 1;
+          const { error: upErr } = await admin
+            .from('hm_public_webinar_signups')
+            .update({
+              lead_source: 'cold_email',
+              matched_campaign_id: hit.campaignId,
+              matched_campaign_name: hit.campaignName,
+              matched_recipient_id: hit.recipientId,
+              matched_recipient_status: hit.status,
+              matched_at: now,
+            })
+            .eq('id', signup.id);
+          if (upErr) throw upErr;
+        } else {
+          elsewhere += 1;
+          const { error: upErr } = await admin
+            .from('hm_public_webinar_signups')
+            .update({
+              lead_source: 'elsewhere',
+              matched_campaign_id: null,
+              matched_campaign_name: null,
+              matched_recipient_id: null,
+              matched_recipient_status: null,
+              matched_at: now,
+            })
+            .eq('id', signup.id);
+          if (upErr) throw upErr;
+        }
+      }
+
+      return json(200, {
+        ok: true,
+        matched: true,
+        total: signups.length,
+        cold_email: coldEmail,
+        elsewhere,
+        campaign_leads: leadsByEmail.size,
+        matched_at: now,
+      });
+    }
+
     if (action === 'save_settings') {
       const gap = clampGap(body.gap_seconds ?? body.gapSeconds);
       const dailyCap = clampDailyCap(body.daily_cap ?? body.dailyCap);
