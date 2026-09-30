@@ -1109,6 +1109,65 @@ Deno.serve(async (req) => {
       const sent = sentAll || 0;
       const failed = failedAll || 0;
       const deliveredLike = Math.max(0, sent - (bouncedLogs || 0));
+
+      const signupEmails = await loadSignupEmailSet(admin);
+      const { count: webinarRegistrations } = await admin
+        .from('hm_public_webinar_signups')
+        .select('id', { count: 'exact', head: true });
+
+      const sentByCampaign = new Map<string, Set<string>>();
+      const allSentEmails = new Set<string>();
+      {
+        let offset = 0;
+        const pageSize = 1000;
+        for (;;) {
+          let recQuery = admin
+            .from('hm_bulk_recipients')
+            .select('email, campaign_id')
+            .eq('status', 'sent')
+            .range(offset, offset + pageSize - 1);
+          if (campaignId) recQuery = recQuery.eq('campaign_id', campaignId);
+          const { data: recs, error: recErr } = await recQuery;
+          if (recErr) throw recErr;
+          const batch = recs || [];
+          for (const rec of batch) {
+            const email = normalizeEmail(rec.email);
+            if (!email) continue;
+            allSentEmails.add(email);
+            const cid = String(rec.campaign_id || '');
+            if (!cid) continue;
+            let bucket = sentByCampaign.get(cid);
+            if (!bucket) {
+              bucket = new Set<string>();
+              sentByCampaign.set(cid, bucket);
+            }
+            bucket.add(email);
+          }
+          if (batch.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
+
+      let registeredFromSent = 0;
+      for (const email of allSentEmails) {
+        if (signupEmails.has(email)) registeredFromSent += 1;
+      }
+      const uniqueSent = allSentEmails.size;
+      const webinarRate = uniqueSent > 0 ? registeredFromSent / uniqueSent : null;
+
+      const campaignsWithRegs = (camps || []).map((camp) => {
+        const emails = sentByCampaign.get(String(camp.id)) || new Set<string>();
+        let registered = 0;
+        for (const email of emails) {
+          if (signupEmails.has(email)) registered += 1;
+        }
+        return {
+          ...camp,
+          registered,
+          no_response: Math.max(0, emails.size - registered),
+        };
+      });
+
       return json(200, {
         ok: true,
         business_day: businessDayDate(),
@@ -1125,8 +1184,12 @@ Deno.serve(async (req) => {
           replies: 0,
           reply_note: 'SMTP bulk does not track inbox replies yet.',
           bounce_note: 'Bounces are estimated from send-log errors (SMTP has no bounce webhook).',
+          webinar_registrations: webinarRegistrations || 0,
+          webinar_from_campaigns: registeredFromSent,
+          webinar_no_response: Math.max(0, uniqueSent - registeredFromSent),
+          webinar_rate: webinarRate,
         },
-        campaigns: camps || [],
+        campaigns: campaignsWithRegs,
         campaign: campaignStats,
         delivered_estimate: deliveredLike,
       });

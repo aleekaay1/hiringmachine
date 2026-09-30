@@ -1573,8 +1573,8 @@ const BulkEmailPage: React.FC = () => {
             <div>
               <p className="hm-kicker">Email stats</p>
               <p className="text-sm text-[#6f675c]">
-                Pacific business day {stats?.business_day || businessDay || '—'}. SMTP does not track inbox
-                replies; bounce count is estimated from send-log errors.
+                Pacific business day {stats?.business_day || businessDay || '—'}. Webinar registrations
+                are form signups; registered-from-campaigns matches those emails to people you already emailed.
               </p>
             </div>
             <button
@@ -1605,6 +1605,25 @@ const BulkEmailPage: React.FC = () => {
                 label: 'Log sends',
                 value: stats?.totals.sent_logs ?? '—',
               },
+              {
+                label: 'Webinar registrations',
+                value: stats?.totals.webinar_registrations ?? '—',
+              },
+              {
+                label: 'Registered from campaigns',
+                value: stats?.totals.webinar_from_campaigns ?? '—',
+              },
+              {
+                label: 'No response',
+                value: stats?.totals.webinar_no_response ?? '—',
+              },
+              {
+                label: 'Registration rate',
+                value:
+                  stats?.totals.webinar_rate == null
+                    ? 'n/a'
+                    : `${Math.round((stats.totals.webinar_rate || 0) * 1000) / 10}%`,
+              },
             ].map((card) => (
               <div
                 key={card.label}
@@ -1623,6 +1642,8 @@ const BulkEmailPage: React.FC = () => {
                   <th className="px-3 py-2">Campaign</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Sent</th>
+                  <th className="px-3 py-2">Registered</th>
+                  <th className="px-3 py-2">No response</th>
                   <th className="px-3 py-2">Failed</th>
                   <th className="px-3 py-2">Total</th>
                   <th className="px-3 py-2">Gap</th>
@@ -1634,6 +1655,8 @@ const BulkEmailPage: React.FC = () => {
                     <td className="px-3 py-2 text-[#3f3a32]">{c.name}</td>
                     <td className="px-3 py-2 capitalize text-[#3f3a32]">{c.status}</td>
                     <td className="px-3 py-2 text-[#3f3a32]">{c.sent_count}</td>
+                    <td className="px-3 py-2 text-[#3f3a32]">{c.registered ?? '—'}</td>
+                    <td className="px-3 py-2 text-[#3f3a32]">{c.no_response ?? '—'}</td>
                     <td className="px-3 py-2 text-[#3f3a32]">{c.failed_count}</td>
                     <td className="px-3 py-2 text-[#3f3a32]">{c.total_count}</td>
                     <td className="px-3 py-2 text-[#8a8276]">{c.gap_seconds}s</td>
@@ -1641,7 +1664,7 @@ const BulkEmailPage: React.FC = () => {
                 ))}
                 {!loadingStats && !(stats?.campaigns || []).length && (
                   <tr>
-                    <td colSpan={6} className="px-3 py-6 text-[#8a8276]">
+                    <td colSpan={8} className="px-3 py-6 text-[#8a8276]">
                       No campaign stats yet.
                     </td>
                   </tr>

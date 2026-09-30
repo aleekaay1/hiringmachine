@@ -300,8 +300,12 @@ export type BulkEmailStats = {
     reply_rate: number | null;
     reply_note?: string;
     bounce_note?: string;
+    webinar_registrations?: number;
+    webinar_from_campaigns?: number;
+    webinar_no_response?: number;
+    webinar_rate?: number | null;
   };
-  campaigns: BulkCampaign[];
+  campaigns: Array<BulkCampaign & { registered?: number; no_response?: number }>;
 };
 
 export async function getBulkEmailStats(campaignId?: string): Promise<BulkEmailStats> {
