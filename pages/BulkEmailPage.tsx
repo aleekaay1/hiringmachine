@@ -14,6 +14,7 @@ import {
   cancelBulkCampaign,
   clearBulkDraftLeads,
   createBulkCampaign,
+  createBulkFollowupCampaign,
   defaultBulkEmailBody,
   applyBulkMerge,
   getBulkCampaign,
@@ -27,6 +28,7 @@ import {
   tickBulkCampaigns,
   getBulkCampaignStatus,
   getBulkEmailStats,
+  listBulkCampaignOutcomes,
   saveBulkDraftLeads,
   saveBulkSettings,
   saveBulkTemplate,
@@ -37,6 +39,7 @@ import {
   withBulkUnsubscribePreview,
   type BulkAppSettings,
   type BulkCampaign,
+  type BulkCampaignOutcome,
   type BulkEmailStats,
   type BulkProgress,
   type BulkProvider,
@@ -100,6 +103,8 @@ const BulkEmailPage: React.FC = () => {
   const [savingSettings, setSavingSettings] = React.useState(false);
 
   const [campaigns, setCampaigns] = React.useState<BulkCampaign[]>([]);
+  const [campaignOutcomes, setCampaignOutcomes] = React.useState<Record<string, BulkCampaignOutcome>>({});
+  const [followupBusyId, setFollowupBusyId] = React.useState<string | null>(null);
   const [activeId, setActiveId] = React.useState<string | null>(null);
   const [editingCampaignId, setEditingCampaignId] = React.useState<string | null>(null);
   const [progress, setProgress] = React.useState<BulkProgress | null>(null);
@@ -213,6 +218,10 @@ const BulkEmailPage: React.FC = () => {
     try {
       const list = await listBulkCampaigns();
       setCampaigns(list);
+      const outcomes = await listBulkCampaignOutcomes();
+      const byId: Record<string, BulkCampaignOutcome> = {};
+      for (const row of outcomes) byId[row.campaign_id] = row;
+      setCampaignOutcomes(byId);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load campaigns');
     }
@@ -715,6 +724,54 @@ const BulkEmailPage: React.FC = () => {
       await runSendLoop(created.campaign_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not start campaign');
+    }
+  };
+
+  const onFollowUpNonResponders = async (parent: BulkCampaign) => {
+    setError(null);
+    setMsg(null);
+    if (!subject.trim() || !body.trim()) {
+      setError('Write the follow-up subject and body in Compose first, then start the follow-up.');
+      setTab('compose');
+      return;
+    }
+    const outcome = campaignOutcomes[parent.id];
+    const remaining = outcome?.no_response ?? parent.sent_count;
+    if (!window.confirm(
+      `Send a follow-up to people who got “${parent.name}” but never registered?\n\n` +
+        `First email sent: ${outcome?.sent ?? parent.sent_count}\n` +
+        `Already registered: ${outcome?.registered ?? '?'}\n` +
+        `No response (to follow up): ${remaining}\n\n` +
+        `Uses the current Compose subject/body.`,
+    )) {
+      return;
+    }
+    setFollowupBusyId(parent.id);
+    try {
+      const parts = splitBulkEmailBody(body);
+      const created = await createBulkFollowupCampaign({
+        parentCampaignId: parent.id,
+        name: `Follow-up: ${parent.name}`,
+        subject: subject.trim(),
+        bodyText: parts.bodyText,
+        bodyHtml: parts.bodyHtml,
+        gapSeconds,
+        dailyCap: Math.min(500, dailyCap),
+        fromEmail: smtpFrom,
+      });
+      setActiveId(created.campaign_id);
+      setMsg(
+        `Follow-up started for ${created.total} non-responders` +
+          (created.skipped_registered ? ` · skipped ${created.skipped_registered} already registered` : '') +
+          '.',
+      );
+      setTab('campaigns');
+      await loadCampaigns();
+      await runSendLoop(created.campaign_id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not start follow-up');
+    } finally {
+      setFollowupBusyId(null);
     }
   };
 
@@ -1239,6 +1296,9 @@ const BulkEmailPage: React.FC = () => {
               <RefreshCw size={12} /> Refresh
             </button>
           </div>
+          <p className="text-xs text-[#6f675c]">
+            Counts match first-send addresses against webinar form signups. After a campaign finishes, write the second email in Compose, then use Follow up non-responders — registered and unsubscribed people are skipped. First-send still never duplicates an address.
+          </p>
 
           {progress && activeId && (
             <div className="rounded-xl border border-[#d9e5d4] bg-[#f3f8f1] px-4 py-3 text-sm text-[#2f4a38]">
@@ -1322,6 +1382,7 @@ const BulkEmailPage: React.FC = () => {
                       <th className="px-3 py-2">Name</th>
                       <th className="px-3 py-2">Email</th>
                       <th className="px-3 py-2">Status</th>
+                      <th className="px-3 py-2">Registered</th>
                       <th className="px-3 py-2">Sent at</th>
                       <th className="px-3 py-2">Error</th>
                     </tr>
@@ -1329,7 +1390,7 @@ const BulkEmailPage: React.FC = () => {
                   <tbody>
                     {loadingLeads && (
                       <tr>
-                        <td colSpan={6} className="px-3 py-6 text-[#8a8276]">Loading leads…</td>
+                        <td colSpan={7} className="px-3 py-6 text-[#8a8276]">Loading leads…</td>
                       </tr>
                     )}
                     {!loadingLeads &&
@@ -1353,6 +1414,19 @@ const BulkEmailPage: React.FC = () => {
                               {row.status}
                             </span>
                           </td>
+                          <td className="px-3 py-2">
+                            {row.registered ? (
+                              <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-800">
+                                Registered
+                              </span>
+                            ) : row.status === 'sent' ? (
+                              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-900">
+                                No response
+                              </span>
+                            ) : (
+                              <span className="text-[#8a8276]">—</span>
+                            )}
+                          </td>
                           <td className="px-3 py-2 text-[#8a8276]">
                             {row.sent_at ? new Date(row.sent_at).toLocaleString() : '—'}
                           </td>
@@ -1363,7 +1437,7 @@ const BulkEmailPage: React.FC = () => {
                       ))}
                     {!loadingLeads && !leads.length && (
                       <tr>
-                        <td colSpan={6} className="px-3 py-6 text-[#8a8276]">No leads for this filter.</td>
+                        <td colSpan={7} className="px-3 py-6 text-[#8a8276]">No leads for this filter.</td>
                       </tr>
                     )}
                   </tbody>
@@ -1393,6 +1467,16 @@ const BulkEmailPage: React.FC = () => {
                     <td className="px-3 py-2 text-[#3f3a32]">
                       <div className="font-medium">{c.name}</div>
                       <div className="text-[11px] text-[#8a8276]">{c.subject}</div>
+                      {c.kind === 'followup' && (
+                        <div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700">
+                          Follow-up
+                        </div>
+                      )}
+                      {campaignOutcomes[c.id] && c.kind !== 'followup' && (c.sent_count || 0) > 0 && (
+                        <div className="mt-1 text-[11px] text-[#5a5348]">
+                          Registered {campaignOutcomes[c.id].registered} · No response {campaignOutcomes[c.id].no_response}
+                        </div>
+                      )}
                     </td>
                     <td className="px-3 py-2 capitalize text-[#3f3a32]">
                       {c.status}
@@ -1453,6 +1537,19 @@ const BulkEmailPage: React.FC = () => {
                             }}
                           >
                             {c.status === 'paused' ? 'Resume' : 'Continue'}
+                          </button>
+                        )}
+                        {c.kind !== 'followup' &&
+                          c.status === 'completed' &&
+                          (c.sent_count || 0) > 0 &&
+                          (campaignOutcomes[c.id]?.no_response ?? 1) > 0 && (
+                          <button
+                            type="button"
+                            disabled={followupBusyId === c.id || sending}
+                            className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-[11px] text-indigo-900 disabled:opacity-50"
+                            onClick={() => void onFollowUpNonResponders(c)}
+                          >
+                            {followupBusyId === c.id ? 'Starting…' : 'Follow up non-responders'}
                           </button>
                         )}
                       </div>

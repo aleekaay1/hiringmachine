@@ -379,6 +379,48 @@ async function emailAlreadySent(
   return Boolean(data?.id);
 }
 
+async function hasWebinarSignup(
+  admin: ReturnType<typeof serviceClient>,
+  email: string,
+): Promise<boolean> {
+  const addr = normalizeEmail(email);
+  if (!addr) return false;
+  const { data } = await admin
+    .from('hm_public_webinar_signups')
+    .select('id')
+    .ilike('email', addr)
+    .limit(1)
+    .maybeSingle();
+  return Boolean(data?.id);
+}
+
+async function loadSignupEmailSet(
+  admin: ReturnType<typeof serviceClient>,
+): Promise<Set<string>> {
+  const emails = new Set<string>();
+  let offset = 0;
+  const pageSize = 1000;
+  for (;;) {
+    const { data, error } = await admin
+      .from('hm_public_webinar_signups')
+      .select('email')
+      .range(offset, offset + pageSize - 1);
+    if (error) throw error;
+    const batch = data || [];
+    for (const row of batch) {
+      const e = normalizeEmail(row.email);
+      if (e) emails.add(e);
+    }
+    if (batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return emails;
+}
+
+function campaignKind(campaign: Record<string, unknown> | null | undefined): 'initial' | 'followup' {
+  return str(campaign?.kind).toLowerCase() === 'followup' ? 'followup' : 'initial';
+}
+
 function applyMerge(template: string, name: string, email: string): string {
   const first = name.trim().split(/\s+/)[0] || 'there';
   return template
@@ -439,7 +481,7 @@ async function campaignProgress(admin: ReturnType<typeof serviceClient>, campaig
   const { data: campaign } = await admin
     .from('hm_bulk_campaigns')
     .select(
-      'id, name, subject, status, total_count, sent_count, failed_count, gap_seconds, daily_cap, provider, from_email, created_at, updated_at, started_at, completed_at, last_error',
+      'id, name, subject, status, total_count, sent_count, failed_count, gap_seconds, daily_cap, provider, from_email, created_at, updated_at, started_at, completed_at, last_error, kind, parent_campaign_id',
     )
     .eq('id', campaignId)
     .maybeSingle();
@@ -635,8 +677,21 @@ async function sendNextForCampaign(
         .eq('status', 'pending');
       continue;
     }
-    // Never re-send to an address that already got a successful bulk send (any campaign).
-    if (await emailAlreadySent(admin, rowEmail)) {
+    if (await hasWebinarSignup(admin, rowEmail)) {
+      const nowSkip = new Date().toISOString();
+      await admin
+        .from('hm_bulk_recipients')
+        .update({
+          status: 'failed',
+          error: 'Skipped: already registered for webinar',
+          updated_at: nowSkip,
+        })
+        .eq('id', row.id)
+        .eq('status', 'pending');
+      continue;
+    }
+    // First campaigns never re-mail an address. Follow-ups may mail people who got the parent email.
+    if (campaignKind(campaign as Record<string, unknown>) !== 'followup' && await emailAlreadySent(admin, rowEmail)) {
       const nowSkip = new Date().toISOString();
       await admin
         .from('hm_bulk_recipients')
@@ -1411,7 +1466,7 @@ Deno.serve(async (req) => {
     if (action === 'list') {
       const { data, error } = await admin
         .from('hm_bulk_campaigns')
-        .select('id, name, subject, status, total_count, sent_count, failed_count, gap_seconds, daily_cap, provider, from_email, created_at, updated_at, started_at, completed_at')
+        .select('id, name, subject, status, total_count, sent_count, failed_count, gap_seconds, daily_cap, provider, from_email, created_at, updated_at, started_at, completed_at, kind, parent_campaign_id')
         .order('created_at', { ascending: false })
         .limit(50);
       if (error) throw error;
@@ -1477,6 +1532,7 @@ Deno.serve(async (req) => {
           offset += pageSize;
         }
       }
+      const signupEmails = await loadSignupEmailSet(admin);
 
       const seen = new Set<string>();
       const recipients: Array<{
@@ -1488,6 +1544,7 @@ Deno.serve(async (req) => {
       }> = [];
       let skippedDupes = 0;
       let skippedUnsub = 0;
+      let skippedRegistered = 0;
       for (let i = 0; i < rawRecipients.length; i++) {
         const row = rawRecipients[i] || {};
         const email = normalizeEmail(row.email);
@@ -1503,6 +1560,10 @@ Deno.serve(async (req) => {
         }
         if (unsubscribedSet.has(email)) {
           skippedUnsub += 1;
+          continue;
+        }
+        if (signupEmails.has(email)) {
+          skippedRegistered += 1;
           continue;
         }
         recipients.push({
@@ -1551,6 +1612,7 @@ Deno.serve(async (req) => {
           daily_cap: dailyCap,
           from_email: preferred,
           provider,
+          kind: 'initial',
           total_count: recipients.length,
           sent_count: 0,
           failed_count: 0,
@@ -1563,6 +1625,7 @@ Deno.serve(async (req) => {
             rotate: preferred === 'auto',
             skipped_duplicates: skippedDupes,
             skipped_unsubscribed: skippedUnsub,
+            skipped_registered: skippedRegistered,
           },
         })
         .select('*')
@@ -1598,6 +1661,262 @@ Deno.serve(async (req) => {
         total: recipients.length,
         skipped_duplicates: skippedDupes,
         skipped_unsubscribed: skippedUnsub,
+        skipped_registered: skippedRegistered,
+        campaign,
+      });
+    }
+
+    if (action === 'campaign_outcomes') {
+      if (!userOk) return json(401, { error: 'Sign in required' });
+      const campaignId = str(body.campaign_id || body.campaignId);
+      const signupEmails = await loadSignupEmailSet(admin);
+      let campsQuery = admin
+        .from('hm_bulk_campaigns')
+        .select('id, name, status, kind, parent_campaign_id, sent_count, total_count')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (campaignId) campsQuery = campsQuery.eq('id', campaignId);
+      const { data: camps, error: campsErr } = await campsQuery;
+      if (campsErr) throw campsErr;
+
+      const outcomes: Array<Record<string, unknown>> = [];
+      for (const camp of camps || []) {
+        const sentEmails = new Set<string>();
+        let offset = 0;
+        const pageSize = 1000;
+        for (;;) {
+          const { data: recs, error: recErr } = await admin
+            .from('hm_bulk_recipients')
+            .select('email')
+            .eq('campaign_id', camp.id)
+            .eq('status', 'sent')
+            .range(offset, offset + pageSize - 1);
+          if (recErr) throw recErr;
+          const batch = recs || [];
+          for (const rec of batch) {
+            const e = normalizeEmail(rec.email);
+            if (e) sentEmails.add(e);
+          }
+          if (batch.length < pageSize) break;
+          offset += pageSize;
+        }
+        let registered = 0;
+        for (const email of sentEmails) {
+          if (signupEmails.has(email)) registered += 1;
+        }
+        const { count: childCount } = await admin
+          .from('hm_bulk_campaigns')
+          .select('id', { count: 'exact', head: true })
+          .eq('parent_campaign_id', camp.id);
+        outcomes.push({
+          campaign_id: camp.id,
+          name: camp.name,
+          status: camp.status,
+          kind: camp.kind || 'initial',
+          parent_campaign_id: camp.parent_campaign_id || null,
+          sent: sentEmails.size,
+          registered,
+          no_response: Math.max(0, sentEmails.size - registered),
+          followup_campaigns: childCount || 0,
+        });
+      }
+      return json(200, { ok: true, outcomes });
+    }
+
+    if (action === 'create_followup') {
+      if (!userOk) return json(401, { error: 'Sign in required' });
+      const parentId = str(body.campaign_id || body.campaignId || body.parent_campaign_id);
+      if (!parentId) return json(400, { error: 'Missing parent campaign_id' });
+      const subject = str(body.subject);
+      const bodyText = rawBodyString(body.body_text, body.bodyText, body.text);
+      const bodyHtml = rawBodyString(body.body_html, body.bodyHtml, body.html);
+      if (!subject || (!bodyText && !bodyHtml)) {
+        return json(400, { error: 'Subject and body are required' });
+      }
+
+      const { data: parent, error: parentErr } = await admin
+        .from('hm_bulk_campaigns')
+        .select('id, name, subject, status, gap_seconds, daily_cap, from_email, kind')
+        .eq('id', parentId)
+        .maybeSingle();
+      if (parentErr) throw parentErr;
+      if (!parent) return json(404, { error: 'Parent campaign not found' });
+      if (campaignKind(parent as Record<string, unknown>) === 'followup') {
+        return json(400, { error: 'Cannot follow up a follow-up campaign. Use the original send.' });
+      }
+
+      const signupEmails = await loadSignupEmailSet(admin);
+      const unsubscribedSet = new Set<string>();
+      {
+        let offset = 0;
+        const pageSize = 1000;
+        for (;;) {
+          const { data: rows, error: unsubErr } = await admin
+            .from('hm_bulk_unsubscribes')
+            .select('email')
+            .range(offset, offset + pageSize - 1);
+          if (unsubErr) throw unsubErr;
+          const batch = rows || [];
+          for (const row of batch) {
+            const e = normalizeEmail(row.email);
+            if (e) unsubscribedSet.add(e);
+          }
+          if (batch.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
+
+      const alreadyFollowed = new Set<string>();
+      const { data: childCamps } = await admin
+        .from('hm_bulk_campaigns')
+        .select('id')
+        .eq('parent_campaign_id', parentId);
+      for (const child of childCamps || []) {
+        let offset = 0;
+        const pageSize = 1000;
+        for (;;) {
+          const { data: recs, error: recErr } = await admin
+            .from('hm_bulk_recipients')
+            .select('email, status')
+            .eq('campaign_id', child.id)
+            .range(offset, offset + pageSize - 1);
+          if (recErr) throw recErr;
+          const batch = recs || [];
+          for (const rec of batch) {
+            if (rec.status === 'sent' || rec.status === 'pending' || rec.status === 'sending') {
+              const e = normalizeEmail(rec.email);
+              if (e) alreadyFollowed.add(e);
+            }
+          }
+          if (batch.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
+
+      const recipients: Array<{
+        full_name: string | null;
+        email: string;
+        row_index: number | null;
+        raw: Record<string, unknown>;
+        status: string;
+      }> = [];
+      let skippedRegistered = 0;
+      let skippedUnsub = 0;
+      let skippedAlreadyFollowed = 0;
+      let sentParent = 0;
+      {
+        let offset = 0;
+        const pageSize = 1000;
+        let idx = 0;
+        for (;;) {
+          const { data: recs, error: recErr } = await admin
+            .from('hm_bulk_recipients')
+            .select('full_name, email, raw')
+            .eq('campaign_id', parentId)
+            .eq('status', 'sent')
+            .order('row_index', { ascending: true })
+            .range(offset, offset + pageSize - 1);
+          if (recErr) throw recErr;
+          const batch = recs || [];
+          for (const rec of batch) {
+            sentParent += 1;
+            const email = normalizeEmail(rec.email);
+            if (!email) continue;
+            if (signupEmails.has(email)) {
+              skippedRegistered += 1;
+              continue;
+            }
+            if (unsubscribedSet.has(email)) {
+              skippedUnsub += 1;
+              continue;
+            }
+            if (alreadyFollowed.has(email)) {
+              skippedAlreadyFollowed += 1;
+              continue;
+            }
+            recipients.push({
+              full_name: str(rec.full_name) || null,
+              email,
+              row_index: idx,
+              raw: rec.raw && typeof rec.raw === 'object' ? rec.raw as Record<string, unknown> : {},
+              status: 'pending',
+            });
+            idx += 1;
+          }
+          if (batch.length < pageSize) break;
+          offset += pageSize;
+        }
+      }
+
+      if (!recipients.length) {
+        return json(400, {
+          error: sentParent === 0
+            ? 'No sent leads on that campaign yet. Finish the first send first.'
+            : skippedRegistered === sentParent
+              ? 'Everyone who received the first email already registered.'
+              : 'No remaining non-responders to follow up.',
+        });
+      }
+
+      const gap = clampGap(body.gap_seconds ?? body.gapSeconds ?? parent.gap_seconds);
+      const dailyCap = clampDailyCap(body.daily_cap ?? body.dailyCap ?? parent.daily_cap);
+      const preferredRaw = str(body.from_email || body.fromEmail) || str(parent.from_email) || 'auto';
+      const preferred = preferredRaw.toLowerCase() === 'auto' ? 'auto' : normalizeEmail(preferredRaw);
+      if (preferred !== 'auto' && !findAccount(preferred)) {
+        return json(400, { error: `SMTP account not configured for ${preferred}` });
+      }
+      const name = str(body.name) || `Follow-up: ${str(parent.name) || 'campaign'}`;
+
+      const { data: campaign, error: campErr } = await admin
+        .from('hm_bulk_campaigns')
+        .insert({
+          name,
+          subject,
+          body_text: bodyText || bodyHtml.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''),
+          body_html: bodyHtml || null,
+          status: 'sending',
+          gap_seconds: gap,
+          daily_cap: dailyCap,
+          from_email: preferred,
+          provider: 'smtp',
+          kind: 'followup',
+          parent_campaign_id: parentId,
+          total_count: recipients.length,
+          sent_count: 0,
+          failed_count: 0,
+          created_by: userId,
+          started_at: new Date().toISOString(),
+          settings: {
+            rotate: preferred === 'auto',
+            followup: true,
+            parent_campaign_id: parentId,
+            skipped_registered: skippedRegistered,
+            skipped_unsubscribed: skippedUnsub,
+            skipped_already_followed: skippedAlreadyFollowed,
+          },
+        })
+        .select('*')
+        .single();
+      if (campErr || !campaign) throw campErr || new Error('Failed to create follow-up campaign');
+
+      const chunkSize = 500;
+      for (let i = 0; i < recipients.length; i += chunkSize) {
+        const chunk = recipients.slice(i, i + chunkSize).map((r) => ({
+          ...r,
+          campaign_id: campaign.id,
+        }));
+        const { error: recErr } = await admin.from('hm_bulk_recipients').insert(chunk);
+        if (recErr) throw recErr;
+      }
+
+      return json(200, {
+        ok: true,
+        campaign_id: campaign.id,
+        total: recipients.length,
+        skipped_registered: skippedRegistered,
+        skipped_unsubscribed: skippedUnsub,
+        skipped_already_followed: skippedAlreadyFollowed,
+        parent_sent: sentParent,
         campaign,
       });
     }
@@ -1751,8 +2070,13 @@ Deno.serve(async (req) => {
           return hay.includes(q);
         });
       }
+      const signupEmails = await loadSignupEmailSet(admin);
+      const recipients = rows.map((row) => ({
+        ...row,
+        registered: signupEmails.has(normalizeEmail(row.email)),
+      }));
       const progress = await campaignProgress(admin, campaignId);
-      return json(200, { ok: true, recipients: rows, ...(progress || {}) });
+      return json(200, { ok: true, recipients, ...(progress || {}) });
     }
 
     if (action === 'tick' || action === 'worker') {

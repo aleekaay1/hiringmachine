@@ -51,6 +51,8 @@ export type BulkCampaign = {
   last_error?: string | null;
   body_text?: string;
   body_html?: string | null;
+  kind?: 'initial' | 'followup' | string;
+  parent_campaign_id?: string | null;
 };
 
 export type BulkProgress = {
@@ -259,6 +261,7 @@ export type BulkRecipientRow = {
   sent_at: string | null;
   created_at: string;
   updated_at: string;
+  registered?: boolean;
 };
 
 export async function listBulkRecipients(
@@ -312,6 +315,66 @@ export async function getBulkEmailStats(campaignId?: string): Promise<BulkEmailS
 export async function processBulkNext(campaignId: string): Promise<BulkProgress> {
   const json = await invokeBulk({ action: 'process', campaign_id: campaignId });
   return json as unknown as BulkProgress;
+}
+
+export type BulkCampaignOutcome = {
+  campaign_id: string;
+  name: string;
+  status: string;
+  kind: string;
+  parent_campaign_id: string | null;
+  sent: number;
+  registered: number;
+  no_response: number;
+  followup_campaigns: number;
+};
+
+export async function listBulkCampaignOutcomes(campaignId?: string): Promise<BulkCampaignOutcome[]> {
+  const json = await invokeBulk({
+    action: 'campaign_outcomes',
+    ...(campaignId ? { campaign_id: campaignId } : {}),
+  });
+  return Array.isArray(json.outcomes) ? (json.outcomes as BulkCampaignOutcome[]) : [];
+}
+
+export async function createBulkFollowupCampaign(input: {
+  parentCampaignId: string;
+  name?: string;
+  subject: string;
+  bodyText: string;
+  bodyHtml?: string;
+  gapSeconds: number;
+  dailyCap: number;
+  fromEmail?: string;
+}): Promise<{
+  campaign_id: string;
+  total: number;
+  skipped_registered: number;
+  skipped_unsubscribed: number;
+  skipped_already_followed: number;
+  parent_sent: number;
+  campaign: BulkCampaign;
+}> {
+  const json = await invokeBulk({
+    action: 'create_followup',
+    campaign_id: input.parentCampaignId,
+    name: input.name,
+    subject: input.subject,
+    body_text: input.bodyText,
+    body_html: input.bodyHtml,
+    gap_seconds: input.gapSeconds,
+    daily_cap: input.dailyCap,
+    from_email: input.fromEmail,
+  });
+  return {
+    campaign_id: String(json.campaign_id),
+    total: Number(json.total) || 0,
+    skipped_registered: Number(json.skipped_registered) || 0,
+    skipped_unsubscribed: Number(json.skipped_unsubscribed) || 0,
+    skipped_already_followed: Number(json.skipped_already_followed) || 0,
+    parent_sent: Number(json.parent_sent) || 0,
+    campaign: json.campaign as BulkCampaign,
+  };
 }
 
 export async function pauseBulkCampaign(campaignId: string): Promise<BulkProgress> {
