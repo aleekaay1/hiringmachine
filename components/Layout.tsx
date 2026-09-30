@@ -265,7 +265,7 @@ const Layout: React.FC<LayoutProps> = ({
         </main>
         {!isAdmin && (
           <footer className="py-4 sm:py-6 text-center text-xs text-gray-400 safe-area-bottom px-4">
-            <p>&copy; {new Date().getFullYear()} AO Paz Globelife</p>
+            <p>&copy; {new Date().getFullYear()} AO Globe Life – Team Paz</p>
           </footer>
         )}
       </div>

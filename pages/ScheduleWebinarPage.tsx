@@ -33,6 +33,7 @@ const ScheduleWebinarPage: React.FC = () => {
     lastName: '',
     email: '',
     phone: '',
+    reference: '',
     broadcastId: '',
   });
 
@@ -93,6 +94,7 @@ const ScheduleWebinarPage: React.FC = () => {
         firstname: form.firstName.trim(),
         surname: form.lastName.trim(),
         phone: form.phone.replace(/\D/g, ''),
+        reference: form.reference.trim() || undefined,
         broadcast_id:
           scheduleMode === 'quick'
             ? selected?.id != null
@@ -180,7 +182,7 @@ const ScheduleWebinarPage: React.FC = () => {
         <div className="mb-3 flex w-full justify-center sm:mb-5">
           <img
             src="/header.PNG"
-            alt="AO Paz Globelife"
+            alt="AO Globe Life – Team Paz"
             className="mx-auto h-auto w-full max-w-[280px] object-contain sm:max-w-md"
             onError={(ev) => {
               (ev.target as HTMLImageElement).style.display = 'none';
@@ -189,12 +191,13 @@ const ScheduleWebinarPage: React.FC = () => {
         </div>
 
         <h2 className="mb-1 w-full text-xl font-bold text-gray-900 sm:mb-2 sm:text-2xl">
-          Schedule a webinar
+          Reserve Your Spot
         </h2>
-        <p className="mb-1 text-sm font-medium text-[#005EB8]">AO Paz Globelife</p>
+        <p className="mb-1 text-sm font-medium text-[#005EB8]">AO Globe Life – Team Paz</p>
         <p className="mb-4 max-w-md text-sm leading-snug text-gray-600 sm:mb-6">
-          Choose a session today or tomorrow — or start soon if you want to watch right away.
-          WebinarGeek emails your join link automatically.
+          See what building a business with Team Paz actually looks like — no pitch, no pressure.
+          Pick a live session today or tomorrow, or jump into a recording right now. We&apos;ll
+          email your link the second you register.
         </p>
 
         {success ? (
@@ -249,7 +252,7 @@ const ScheduleWebinarPage: React.FC = () => {
                     : 'text-gray-600 hover:bg-gray-50'
                 }`}
               >
-                Pick a time
+                Pick a Time
               </button>
               <button
                 type="button"
@@ -264,7 +267,7 @@ const ScheduleWebinarPage: React.FC = () => {
                     : 'text-gray-600 hover:bg-gray-50'
                 }`}
               >
-                Watch now
+                Watch Instantly
               </button>
             </div>
 
@@ -309,7 +312,7 @@ const ScheduleWebinarPage: React.FC = () => {
               <fieldset className="min-w-0">
                 <div className="mb-2 flex items-end justify-between gap-2">
                   <legend className="block text-sm font-medium text-gray-700">
-                    Today &amp; tomorrow <span className="text-red-500">*</span>
+                    This Week&apos;s Sessions <span className="text-red-500">*</span>
                   </legend>
                   {!loadingSessions && broadcasts.length > 0 && (
                     <span className="shrink-0 text-xs text-gray-500">
@@ -357,6 +360,10 @@ const ScheduleWebinarPage: React.FC = () => {
               <p className="text-xs text-red-600">{errors.broadcastId}</p>
             )}
 
+            <p className="text-sm leading-snug text-gray-600">
+              Almost done — enter your info below and we&apos;ll send your link instantly.
+            </p>
+
             <div className="grid grid-cols-1 gap-0 sm:grid-cols-2 sm:gap-4">
               <Input
                 label="First Name"
@@ -399,6 +406,12 @@ const ScheduleWebinarPage: React.FC = () => {
               required
               className="mb-3 sm:mb-0"
             />
+            <Input
+              label="Reference"
+              value={form.reference}
+              onChange={(ev) => setForm({ ...form, reference: ev.target.value })}
+              className="mb-3 sm:mb-0"
+            />
 
             {errors._form && (
               <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -420,7 +433,7 @@ const ScheduleWebinarPage: React.FC = () => {
               >
                 {submitting
                   ? 'Scheduling…'
-                  : 'Register'}
+                  : 'Save My Spot'}
               </Button>
             </div>
           </form>
