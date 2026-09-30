@@ -30,16 +30,44 @@ export type PublicWebinarSignupRow = {
   matched_at: string | null;
 };
 
+const SIGNUP_SELECT_FULL =
+  'id, created_at, first_name, last_name, email, phone, schedule_mode, session_at, session_label, broadcast_id, webinar_id, wg_subscription_id, already_registered, email_verified, watch_link, confirmation_link, custom_field, reference, lead_source, matched_campaign_id, matched_campaign_name, matched_recipient_id, matched_recipient_status, matched_at';
+
+const SIGNUP_SELECT_WITHOUT_REFERENCE =
+  'id, created_at, first_name, last_name, email, phone, schedule_mode, session_at, session_label, broadcast_id, webinar_id, wg_subscription_id, already_registered, email_verified, watch_link, confirmation_link, custom_field, lead_source, matched_campaign_id, matched_campaign_name, matched_recipient_id, matched_recipient_status, matched_at';
+
+const SIGNUP_SELECT_CORE =
+  'id, created_at, first_name, last_name, email, phone, schedule_mode, session_at, session_label, broadcast_id, webinar_id, wg_subscription_id, already_registered, email_verified, watch_link, confirmation_link, custom_field';
+
+function isMissingColumnError(message: string): boolean {
+  return /column|schema cache|does not exist/i.test(message);
+}
+
 export async function listPublicWebinarSignups(limit = 500): Promise<PublicWebinarSignupRow[]> {
-  const { data, error } = await supabase
-    .from('hm_public_webinar_signups')
-    .select(
-      'id, created_at, first_name, last_name, email, phone, schedule_mode, session_at, session_label, broadcast_id, webinar_id, wg_subscription_id, already_registered, email_verified, watch_link, confirmation_link, custom_field, reference, lead_source, matched_campaign_id, matched_campaign_name, matched_recipient_id, matched_recipient_status, matched_at',
-    )
-    .order('created_at', { ascending: false })
-    .limit(limit);
-  if (error) throw error;
-  return (data || []) as PublicWebinarSignupRow[];
+  const selects = [SIGNUP_SELECT_FULL, SIGNUP_SELECT_WITHOUT_REFERENCE, SIGNUP_SELECT_CORE];
+  let lastError: Error | null = null;
+  for (const select of selects) {
+    const { data, error } = await supabase
+      .from('hm_public_webinar_signups')
+      .select(select)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (!error) {
+      return (data || []).map((row) => ({
+        reference: null,
+        lead_source: null,
+        matched_campaign_id: null,
+        matched_campaign_name: null,
+        matched_recipient_id: null,
+        matched_recipient_status: null,
+        matched_at: null,
+        ...(row as PublicWebinarSignupRow),
+      }));
+    }
+    lastError = error;
+    if (!isMissingColumnError(error.message || '')) throw error;
+  }
+  throw lastError || new Error('Could not load webinar form signups');
 }
 
 export type FormSignupMatchResult = {
