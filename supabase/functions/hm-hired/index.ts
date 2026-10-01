@@ -508,6 +508,71 @@ Deno.serve(async (req) => {
       return json(200, { ok: true, ...result });
     }
 
+    if (action === 'delete' || action === 'remove') {
+      const id = str(body.id || body.hired_id);
+      if (!id) return json(400, { error: 'Missing hired agent id' });
+      const { data: row, error } = await admin.from('hm_hired_agents').select('*').eq('id', id).maybeSingle();
+      if (error) throw error;
+      if (!row) return json(404, { error: 'Hired agent not found' });
+
+      const protectedEmails = new Set(
+        ['ali@globelife-paz.com', 'alex@globelife-paz.com', normalizeEmail(user?.email)].filter(Boolean),
+      );
+
+      let portalUserId = str(row.portal_user_id) || '';
+      const portalEmail = normalizeEmail(str(row.portal_email) || str(row.email));
+      if (!portalUserId && portalEmail) {
+        const { data: profile } = await admin
+          .from('user_profiles')
+          .select('user_id, email, role')
+          .ilike('email', portalEmail)
+          .maybeSingle();
+        if (profile?.user_id) portalUserId = String(profile.user_id);
+      }
+
+      let accountDeleted = false;
+      let accountSkipped: string | null = null;
+      if (portalUserId) {
+        if (user?.id && portalUserId === user.id) {
+          accountSkipped = 'Would delete the signed-in staff account, so only the hired record was removed.';
+        } else {
+          const { data: profile } = await admin
+            .from('user_profiles')
+            .select('user_id, email, role')
+            .eq('user_id', portalUserId)
+            .maybeSingle();
+          const profileEmail = normalizeEmail(profile?.email || portalEmail);
+          const role = str(profile?.role).toLowerCase();
+          const { data: authUser } = await admin.auth.admin.getUserById(portalUserId);
+          const authCreated = authUser?.user?.created_at ? Date.parse(authUser.user.created_at) : 0;
+          const hiredAt = row.hired_at ? Date.parse(String(row.hired_at)) : Date.now();
+          const existedBeforeHire = Boolean(authCreated && hiredAt && authCreated < hiredAt - 2 * 60 * 1000);
+          if (protectedEmails.has(profileEmail) || role === 'admin' || role === 'leadership' || existedBeforeHire) {
+            accountSkipped = existedBeforeHire
+              ? 'Portal login already existed, so the account was left. Hired record was removed.'
+              : 'Portal account was left in place (staff/admin). Hired record was removed.';
+          } else {
+            const { error: delAuthErr } = await admin.auth.admin.deleteUser(portalUserId);
+            if (delAuthErr) {
+              await admin.from('user_profiles').delete().eq('user_id', portalUserId);
+              accountSkipped = delAuthErr.message;
+            } else {
+              accountDeleted = true;
+            }
+          }
+        }
+      }
+
+      const { error: delRowErr } = await admin.from('hm_hired_agents').delete().eq('id', id);
+      if (delRowErr) throw delRowErr;
+      return json(200, {
+        ok: true,
+        deleted: true,
+        account_deleted: accountDeleted,
+        account_skipped: accountSkipped,
+      });
+    }
+
     return json(400, { error: `Unknown action: ${action || '(empty)'}` });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

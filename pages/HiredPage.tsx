@@ -1,5 +1,5 @@
 import React from 'react';
-import { BadgeCheck, Plus, RefreshCw, Search, Send, UserPlus } from 'lucide-react';
+import { BadgeCheck, Plus, RefreshCw, Search, Send, Trash2, UserPlus } from 'lucide-react';
 import { Button } from '../components/UI';
 import {
   AGENT_OFFICE_DEFAULT,
@@ -8,6 +8,7 @@ import {
 import {
   listHiredAgents,
   markCandidateHired,
+  deleteHiredAgent,
   resendHiredEmail,
   searchHiredCandidates,
   type HiredAgent,
@@ -21,6 +22,7 @@ const HiredPage: React.FC = () => {
   const [agents, setAgents] = React.useState<HiredAgent[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
+  const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [msg, setMsg] = React.useState<string | null>(null);
 
@@ -123,6 +125,34 @@ const HiredPage: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Could not mark hired');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const onDelete = async (row: HiredAgent) => {
+    setError(null);
+    setMsg(null);
+    if (
+      !window.confirm(
+        `Delete ${row.full_name} from Hired?\n\nThis removes them from this list and deletes their portal login if one was created. Your own staff account will not be deleted.`,
+      )
+    ) {
+      return;
+    }
+    setDeletingId(row.id);
+    try {
+      const result = await deleteHiredAgent(row.id);
+      setMsg(
+        result.account_deleted
+          ? `Removed ${row.full_name} and deleted their portal account.`
+          : result.account_skipped
+            ? `Removed ${row.full_name} from Hired. ${result.account_skipped}`
+            : `Removed ${row.full_name} from Hired.`,
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -289,6 +319,15 @@ const HiredPage: React.FC = () => {
                     </button>
                     <button type="button" className="rounded-full border border-[#ddd5c6] px-2 py-1 text-[11px]" onClick={() => void onResend(row.id, 'invite')}>
                       Portal
+                    </button>
+                    <button
+                      type="button"
+                      disabled={deletingId === row.id}
+                      className="rounded-full border border-red-200 bg-red-50 px-2 py-1 text-[11px] text-red-800 disabled:opacity-50"
+                      onClick={() => void onDelete(row)}
+                    >
+                      <Trash2 size={10} className="mr-1 inline" />
+                      {deletingId === row.id ? 'Deleting…' : 'Delete'}
                     </button>
                   </div>
                 </td>

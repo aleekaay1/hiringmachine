@@ -115,6 +115,17 @@ export async function resendHiredEmail(
   await invokeHired({ action: 'resend', id, which });
 }
 
+export async function deleteHiredAgent(id: string): Promise<{
+  account_deleted: boolean;
+  account_skipped: string | null;
+}> {
+  const json = await invokeHired({ action: 'delete', id });
+  return {
+    account_deleted: Boolean(json.account_deleted),
+    account_skipped: json.account_skipped ? String(json.account_skipped) : null,
+  };
+}
+
 export async function loadPublicAgentCard(slug: string): Promise<{
   card: HiredPublicCard;
   signature_html: string;
