@@ -28,12 +28,18 @@ import {
 } from '../_shared/agentOnboardingHtml.ts';
 import { WELCOME_PDF_BASE64 } from './welcomePdfB64.ts';
 
+const PRODUCTION_APP_URL = 'https://aopaz.vercel.app';
+
 function siteOrigin(): string {
-  const raw =
+  const raw = (
     Deno.env.get('OPS_APP_URL')?.trim() ||
     Deno.env.get('PUBLIC_SITE_URL')?.trim() ||
-    'https://aopaz.vercel.app';
-  return raw.replace(/\/$/, '');
+    PRODUCTION_APP_URL
+  ).replace(/\/$/, '');
+  if (!raw || /localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]/i.test(raw)) {
+    return PRODUCTION_APP_URL;
+  }
+  return raw;
 }
 
 function decodePdfBase64(b64: string): Uint8Array {
@@ -127,7 +133,7 @@ function cardFromRow(row: Record<string, unknown>, origin: string): AgentCardInp
     directPhone: str(row.direct_phone) || null,
     address: str(row.address) || AGENT_ADDRESS_DEFAULT,
     websiteUrl: str(row.website_url) || AGENT_WEBSITE_URL,
-    logoUrl: `${origin}/logo.png`,
+    logoUrl: AGENT_LOGO_URL,
     contactUrl: `${origin}/agent/${slug}`,
   };
 }
@@ -376,7 +382,7 @@ Deno.serve(async (req) => {
       if (!data) return json(404, { error: 'Contact not found' });
       const origin = siteOrigin();
       const card = cardFromRow(data as Record<string, unknown>, origin);
-      card.logoUrl = `${origin}/logo.png`;
+      card.logoUrl = '/logo.png';
       return json(200, {
         ok: true,
         card,

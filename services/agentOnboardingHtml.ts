@@ -97,14 +97,19 @@ export function buildAgentVcard(input: AgentCardInput): string {
   return lines.join('\r\n');
 }
 
-function greenIcon(src: string, alt: string): string {
-  return `<td width="36" valign="middle" style="width:36px;padding:0 10px 10px 0;">
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="32" height="32" style="width:32px;height:32px;background-color:#21c45a;border-radius:16px;">
-      <tr><td align="center" valign="middle" style="background-color:#21c45a;border-radius:16px;width:32px;height:32px;">
-        <img src="${src}" width="16" height="16" alt="${escapeHtml(alt)}" style="display:block;border:0;width:16px;height:16px;" />
-      </td></tr>
-    </table>
-  </td>`;
+function contactLine(iconSrc: string, alt: string, bodyHtml: string): string {
+  return `<tr>
+    <td width="36" valign="top" style="width:36px;padding:0 10px 12px 0;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="28" height="28" bgcolor="#21c45a" style="width:28px;height:28px;background-color:#21c45a;border-radius:14px;">
+        <tr><td align="center" valign="middle" bgcolor="#21c45a" style="background-color:#21c45a;width:28px;height:28px;">
+          <img src="${iconSrc}" width="14" height="14" alt="${escapeHtml(alt)}" style="display:block;border:0;width:14px;height:14px;" />
+        </td></tr>
+      </table>
+    </td>
+    <td valign="top" style="padding:0 0 12px 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.4;color:#111827;word-break:break-word;">
+      ${bodyHtml}
+    </td>
+  </tr>`;
 }
 
 export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
@@ -124,85 +129,78 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
   const contactUrl = input.contactUrl;
   const confidentiality = escapeHtml(buildConfidentialityStatement(input.fullName.trim(), emailRaw));
 
-  const officeRow = officeRaw
-    ? `<tr>
-        ${greenIcon(ICONS.phone, 'Office')}
-        <td style="padding:0 0 10px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111827;">
-          <a href="${telHref(officeRaw)}" style="color:#111827;text-decoration:none;">${escapeHtml(officeLabel)}</a>
-          <div style="font-size:11px;color:#6b7280;">Office</div>
-        </td>
-        ${
-          directRaw
-            ? `${greenIcon(ICONS.phone, 'Direct')}
-        <td style="padding:0 0 10px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111827;">
-          <a href="${telHref(directRaw)}" style="color:#111827;text-decoration:none;">${escapeHtml(formatPhone(directRaw))}</a>
-          <div style="font-size:11px;color:#6b7280;">Direct</div>
-        </td>`
-            : '<td></td><td></td>'
-        }
-      </tr>`
-    : '';
+  const lines = [
+    officeRaw
+      ? contactLine(
+          ICONS.phone,
+          'Office',
+          `<a href="${telHref(officeRaw)}" style="color:#111827;text-decoration:none;">${escapeHtml(officeLabel)}</a><div style="font-size:11px;color:#6b7280;">Office</div>`,
+        )
+      : '',
+    directRaw
+      ? contactLine(
+          ICONS.phone,
+          'Direct',
+          `<a href="${telHref(directRaw)}" style="color:#111827;text-decoration:none;">${escapeHtml(formatPhone(directRaw))}</a><div style="font-size:11px;color:#6b7280;">Direct</div>`,
+        )
+      : '',
+    contactLine(
+      ICONS.email,
+      'Email',
+      `<a href="mailto:${email}" style="color:#111827;text-decoration:none;word-break:break-all;">${email}</a>`,
+    ),
+    contactLine(
+      ICONS.web,
+      'Website',
+      `<a href="${escapeHtml(siteUrl)}" style="color:#111827;text-decoration:none;">AO Globe Life Website</a>`,
+    ),
+    contactLine(ICONS.pin, 'Address', address),
+  ].join('');
 
   return `
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="640" style="max-width:640px;width:100%;font-family:Arial,Helvetica,sans-serif;background:#ffffff;color:#111827;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;max-width:480px;font-family:Arial,Helvetica,sans-serif;background:#ffffff;color:#111827;">
   <tr>
-    <td valign="top" width="110" style="padding:8px 16px 8px 0;">
-      <img src="${escapeHtml(logo)}" alt="AO Globe Life" width="96" style="display:block;max-width:96px;height:auto;border:0;" />
-    </td>
-    <td valign="top" style="padding:8px 0;">
-      <div style="font-size:22px;font-weight:700;color:#111827;line-height:1.2;">${name}</div>
-      <div style="font-size:14px;color:#4b5563;margin-top:4px;">${title}</div>
-      <div style="font-size:14px;color:#111827;margin-top:6px;">${team}</div>
-      <div style="font-size:13px;color:#4b5563;margin-top:2px;">${tagline}</div>
+    <td style="padding:0 0 10px 0;">
+      <img src="${escapeHtml(logo)}" alt="AO Globe Life" width="72" style="display:block;max-width:72px;height:auto;border:0;" />
     </td>
   </tr>
   <tr>
-    <td colspan="2" style="padding:12px 0 4px 0;border-top:2px solid #21c45a;"></td>
+    <td style="padding:0 0 12px 0;">
+      <div style="font-size:18px;font-weight:700;color:#111827;line-height:1.25;word-break:break-word;">${name}</div>
+      <div style="font-size:13px;color:#4b5563;margin-top:4px;">${title}</div>
+      <div style="font-size:13px;color:#111827;margin-top:6px;">${team}</div>
+      <div style="font-size:12px;color:#4b5563;margin-top:2px;">${tagline}</div>
+    </td>
   </tr>
   <tr>
-    <td colspan="2" style="padding:8px 0 0 0;">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-        ${officeRow}
-        <tr>
-          ${greenIcon(ICONS.email, 'Email')}
-          <td style="padding:0 0 10px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111827;">
-            <a href="mailto:${email}" style="color:#111827;text-decoration:none;">${email}</a>
-          </td>
-          ${greenIcon(ICONS.web, 'Website')}
-          <td style="padding:0 0 10px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111827;">
-            <a href="${escapeHtml(siteUrl)}" style="color:#111827;text-decoration:none;">AO Globe Life Website</a>
-          </td>
-        </tr>
-        <tr>
-          ${greenIcon(ICONS.pin, 'Address')}
-          <td colspan="3" style="padding:0 0 12px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111827;">${address}</td>
-        </tr>
+    <td style="padding:8px 0;border-top:2px solid #21c45a;"></td>
+  </tr>
+  <tr>
+    <td style="padding:8px 0 0 0;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;">
+        ${lines}
       </table>
     </td>
   </tr>
   <tr>
-    <td colspan="2" style="padding:8px 0 4px 0;border-top:2px solid #21c45a;"></td>
+    <td style="padding:8px 0;border-top:2px solid #21c45a;"></td>
   </tr>
   <tr>
-    <td colspan="2" style="padding:10px 0 4px 0;">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-        <tr>
-          <td>
-            <a href="${SOCIAL.instagram}"><img src="${ICONS.instagram}" width="28" height="28" alt="Instagram" style="border:0;margin-right:8px;" /></a>
-            <a href="${SOCIAL.linkedin}"><img src="${ICONS.linkedin}" width="28" height="28" alt="LinkedIn" style="border:0;margin-right:8px;" /></a>
-            <a href="${SOCIAL.facebook}"><img src="${ICONS.facebook}" width="28" height="28" alt="Facebook" style="border:0;margin-right:8px;" /></a>
-            <a href="${SOCIAL.youtube}"><img src="${ICONS.youtube}" width="28" height="28" alt="YouTube" style="border:0;margin-right:8px;" /></a>
-            <a href="${SOCIAL.tiktok}"><img src="${ICONS.tiktok}" width="28" height="28" alt="TikTok" style="border:0;" /></a>
-          </td>
-          <td align="right">
-            <a href="${escapeHtml(contactUrl)}" style="display:inline-block;background:#21c45a;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:700;text-decoration:none;padding:10px 18px;border-radius:22px;">Save contact</a>
-          </td>
-        </tr>
-      </table>
+    <td style="padding:8px 0 12px 0;">
+      <a href="${SOCIAL.instagram}"><img src="${ICONS.instagram}" width="26" height="26" alt="Instagram" style="border:0;margin:0 6px 6px 0;" /></a>
+      <a href="${SOCIAL.linkedin}"><img src="${ICONS.linkedin}" width="26" height="26" alt="LinkedIn" style="border:0;margin:0 6px 6px 0;" /></a>
+      <a href="${SOCIAL.facebook}"><img src="${ICONS.facebook}" width="26" height="26" alt="Facebook" style="border:0;margin:0 6px 6px 0;" /></a>
+      <a href="${SOCIAL.youtube}"><img src="${ICONS.youtube}" width="26" height="26" alt="YouTube" style="border:0;margin:0 6px 6px 0;" /></a>
+      <a href="${SOCIAL.tiktok}"><img src="${ICONS.tiktok}" width="26" height="26" alt="TikTok" style="border:0;margin:0 6px 6px 0;" /></a>
     </td>
   </tr>
   <tr>
-    <td colspan="2" style="padding:18px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.5;color:#6b7280;">
+    <td style="padding:0 0 14px 0;">
+      <a href="${escapeHtml(contactUrl)}" style="display:inline-block;background:#21c45a;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:700;text-decoration:none;padding:10px 16px;border-radius:22px;">Save contact</a>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:10px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.5;color:#6b7280;word-break:break-word;">
       ${confidentiality}
     </td>
   </tr>
@@ -344,14 +342,16 @@ export function buildSignatureSetupEmailHtml(input: AgentCardInput): string {
   const card = buildAgentSignatureCardHtml(input);
   const contactUrl = escapeHtml(input.contactUrl);
   return `
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:680px;font-family:Arial,Helvetica,sans-serif;color:#1f2937;font-size:15px;line-height:1.5;">
-  <tr><td>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;max-width:520px;font-family:Arial,Helvetica,sans-serif;color:#1f2937;font-size:15px;line-height:1.5;">
+  <tr><td style="padding:0;">
     <p>Hi ${first},</p>
     <p>Here is your <strong>AO Globe Life</strong> email signature. Paste the card below into Gmail (Settings → See all settings → Signature) or Outlook. You can also open the attached HTML file and copy from there.</p>
-    <p>View my contact details here: <a href="${contactUrl}">${contactUrl}</a></p>
-    <div style="margin:20px 0;padding:16px;border:1px solid #e5e7eb;border-radius:12px;">
+    <p style="word-break:break-all;">View my contact details here: <a href="${contactUrl}">${contactUrl}</a></p>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;margin:16px 0;border:1px solid #e5e7eb;">
+      <tr><td style="padding:12px;">
       ${card}
-    </div>
+      </td></tr>
+    </table>
     <p style="font-size:13px;color:#4b5563;">Tip: in Gmail, paste with original formatting so the logo and buttons stay intact.</p>
   </td></tr>
 </table>`.trim();
