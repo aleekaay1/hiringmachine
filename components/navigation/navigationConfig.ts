@@ -1,6 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   BarChart3,
+  BadgeCheck,
   ClipboardList,
   Home,
   Mail,
@@ -58,6 +59,13 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: Mails,
     tourId: 'nav-bulk-email',
     items: [{ name: 'Bulk email', route: '/bulk-email', icon: Mails, section: 'bulk-email' }],
+  },
+  {
+    id: 'hired',
+    label: 'Hired',
+    icon: BadgeCheck,
+    tourId: 'nav-hired',
+    items: [{ name: 'Hired', route: '/hired', icon: BadgeCheck, section: 'hired' }],
   },
   {
     id: 'call',

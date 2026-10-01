@@ -462,6 +462,9 @@ verify_jwt = false
 [functions.hm-public-webinar-schedule]
 verify_jwt = false
 
+[functions.hm-hired]
+verify_jwt = false
+
 [functions.checkin-staff-notify]
 verify_jwt = false
 

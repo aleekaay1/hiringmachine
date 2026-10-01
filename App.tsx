@@ -31,6 +31,8 @@ const SentAheadPage = React.lazy(() => import('./pages/SentAheadPage'));
 const CheckInsPage = React.lazy(() => import('./pages/CheckInsPage'));
 const InstantlyRepliesPage = React.lazy(() => import('./pages/InstantlyRepliesPage'));
 const BulkEmailPage = React.lazy(() => import('./pages/BulkEmailPage'));
+const HiredPage = React.lazy(() => import('./pages/HiredPage'));
+const AgentContactPage = React.lazy(() => import('./pages/AgentContactPage'));
 const ScheduleWebinarSignupsPage = React.lazy(() => import('./pages/ScheduleWebinarSignupsPage'));
 const PipelinePerformance = React.lazy(() => import('./pages/PipelinePerformance'));
 const PipelineEmailWorkspace = React.lazy(() => import('./pages/PipelineEmailWorkspace'));
@@ -62,6 +64,7 @@ const App: React.FC = () => {
         <Route path="/checkin" element={<Navigate to="/schedule-webinar" replace />} />
         <Route path="/schedule-webinar" element={<ScheduleWebinarPage />} />
         <Route path="/unsubscribe" element={<UnsubscribePage />} />
+        <Route path="/agent/:slug" element={<Lazy><AgentContactPage /></Lazy>} />
         <Route path="/webinar" element={<Navigate to="/schedule-webinar" replace />} />
         <Route path="/interview" element={<Navigate to="/schedule-webinar" replace />} />
         <Route path="/check-status" element={<CheckStatus />} />
@@ -78,6 +81,7 @@ const App: React.FC = () => {
           <Route path="/check-ins" element={<Lazy><CheckInsPage /></Lazy>} />
           <Route path="/replies" element={<Lazy><InstantlyRepliesPage /></Lazy>} />
           <Route path="/bulk-email" element={<Lazy><BulkEmailPage /></Lazy>} />
+          <Route path="/hired" element={<Lazy><HiredPage /></Lazy>} />
           <Route path="/schedule-webinar-signups" element={<Lazy><ScheduleWebinarSignupsPage /></Lazy>} />
           <Route path="/sent-ahead" element={<Lazy><SentAheadPage /></Lazy>} />
           <Route path="/dashboard" element={<Lazy><AdminDashboard /></Lazy>} />

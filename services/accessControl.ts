@@ -39,7 +39,8 @@ export type AppSection =
   | 'check-ins'
   | 'replies'
   | 'bulk-email'
-  | 'schedule-webinar-signups';
+  | 'schedule-webinar-signups'
+  | 'hired';
 
 export interface UserProfile {
   user_id: string;
@@ -319,6 +320,7 @@ const HIRING_MACHINE_SECTIONS: AppSection[] = [
   'check-ins',
   'replies',
   'bulk-email',
+  'hired',
   'account',
   'pipeline-settings',
 ];
@@ -399,6 +401,7 @@ export function resolveAppSectionFromLocation(pathname: string, search: string):
   if (pathname === '/check-ins') return 'check-ins';
   if (pathname === '/replies') return 'replies';
   if (pathname === '/bulk-email') return 'bulk-email';
+  if (pathname === '/hired') return 'hired';
   if (pathname === '/pipeline') return 'pipeline';
   if (pathname === '/pipeline/lead-manager' || pathname.startsWith('/pipeline/lead-manager/')) {
     return 'pipeline-lead-manager';
