@@ -209,24 +209,132 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
 </table>`.trim();
 }
 
+function stepRow(num: string, title: string, body: string): string {
+  return `<tr>
+    <td valign="top" width="56" style="padding:14px 12px 14px 0;">
+      <div style="width:44px;height:44px;border-radius:22px;background:#0A2F5C;color:#ffffff;font-family:Georgia,Times,serif;font-size:16px;font-weight:700;line-height:44px;text-align:center;">${num}</div>
+    </td>
+    <td valign="top" style="padding:14px 0;border-bottom:1px solid #ece7dc;">
+      <div style="font-size:16px;font-weight:700;color:#0A2F5C;margin:0 0 4px 0;">${title}</div>
+      <div style="font-size:14px;line-height:1.5;color:#3f3a32;">${body}</div>
+    </td>
+  </tr>`;
+}
+
+function meetRow(name: string, when: string, access: string): string {
+  return `<tr>
+    <td valign="top" style="padding:10px 8px;border-bottom:1px solid #ece7dc;font-size:13px;font-weight:700;color:#0A2F5C;">${name}</td>
+    <td valign="top" style="padding:10px 8px;border-bottom:1px solid #ece7dc;font-size:13px;color:#3f3a32;">${when}</td>
+    <td valign="top" style="padding:10px 8px;border-bottom:1px solid #ece7dc;font-size:13px;color:#3f3a32;">${access}</td>
+  </tr>`;
+}
+
 export function defaultWelcomePackageHtml(firstName: string, portalLink?: string | null): string {
   const first = escapeHtml(firstName || 'there');
   const portal = portalLink
-    ? `<p style="margin:20px 0;"><a href="${escapeHtml(portalLink)}" style="display:inline-block;background:#005EB8;color:#ffffff;text-decoration:none;padding:12px 20px;border-radius:999px;font-weight:700;">Open the hiring portal</a></p>
-       <p style="font-size:13px;color:#4b5563;">Use that button to set your password and start tracking your candidates.</p>`
-    : `<p style="font-size:13px;color:#4b5563;">Your hiring-portal invite is on the way. Use it to track your candidates.</p>`;
+    ? `<p style="margin:18px 0 0 0;"><a href="${escapeHtml(portalLink)}" style="display:inline-block;background:#0A2F5C;color:#ffffff;text-decoration:none;padding:11px 18px;border-radius:999px;font-weight:700;font-size:13px;">Open the hiring portal</a></p>
+       <p style="margin:8px 0 0 0;font-size:13px;color:#5a5348;">Use this to set your password and track your candidates.</p>`
+    : '';
   return `
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:640px;font-family:Arial,Helvetica,sans-serif;color:#1f2937;font-size:15px;line-height:1.55;">
-  <tr><td>
-    <p>Hi ${first},</p>
-    <p>Welcome to <strong>AO Globe Life – Team Paz</strong>. You are hired, and we are glad you are here.</p>
-    <p>This email is your welcome package. A second email follows with your personalized email signature (copy it into Gmail / Outlook, or save the attached HTML).</p>
-    ${portal}
-    <div style="margin:24px 0;padding:16px;border:1px dashed #c4b8a1;border-radius:12px;background:#fbf8f2;">
-      <p style="margin:0 0 8px 0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#8a8276;"><strong>Welcome package</strong></p>
-      <p style="margin:0;">The full welcome-packet HTML will be dropped in here. Until then, reply to this email if you need licensing, contracting, or first-week details.</p>
-    </div>
-    <p>Talk soon,<br/>Team Paz</p>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f4f1ea;padding:0;margin:0;">
+  <tr><td align="center" style="padding:24px 12px;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="640" style="max-width:640px;width:100%;background:#ffffff;font-family:Arial,Helvetica,sans-serif;color:#1f2a24;">
+      <tr>
+        <td style="background:#0A2F5C;padding:22px 28px;">
+          <div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#d4c4a0;">AO Globe Life</div>
+          <div style="font-size:20px;font-weight:700;color:#ffffff;margin-top:6px;">AO Globe Life • Paz Team</div>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:28px 28px 8px 28px;">
+          <div style="font-family:Georgia,Times,serif;font-size:28px;line-height:1.25;color:#0A2F5C;font-weight:700;">Welcome to AO Globe Life, ${first}.</div>
+          <p style="margin:14px 0 0 0;font-size:15px;line-height:1.6;color:#3f3a32;">You are officially beginning your launch with AO. The priority now is simple: follow the system, move through licensing with urgency, and get ready to serve clients and build your business.</p>
+          <p style="margin:12px 0 0 0;font-size:15px;font-weight:700;color:#0A2F5C;">Ready to serve clients and build your business.</p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:8px 28px 0 28px;font-size:15px;line-height:1.65;color:#3f3a32;">
+          <p style="margin:0 0 12px 0;">Hi ${first},</p>
+          <p style="margin:0 0 12px 0;">Congratulations and welcome to AO Globe Life and the Paz Team. We are excited to support you as you begin your licensing journey and prepare to build a business through AO's proven systems.</p>
+          <p style="margin:0 0 12px 0;"><strong>Your AO Globe Life New Agent Welcome Guide is attached.</strong> Please review it today. It outlines your first steps, the licensing process, the AO support rhythm, and the expectations for new builders.</p>
+          <p style="margin:0 0 12px 0;">Your path is <strong>AO-first</strong>, supported by the Paz Team.</p>
+          <p style="margin:0;">Globe Life Inc. is the parent company, AO Globe Life is the platform you are joining, and the Paz Team is here to help you plug into the process, stay accountable, and move quickly from licensing to production. American Income Life Insurance Company remains the underwriting company for policies sold through AO Globe Life.</p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:18px 28px 8px 28px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+            ${stepRow('01', 'Get set up', 'Verify AO Planet, join Slack, complete the Agent Onboarding Kit, and save the required meetings.')}
+            ${stepRow('02', 'Get licensed', 'Complete certification, book and pass provincial exams, complete background check, and submit licensing.')}
+            ${stepRow('03', 'Build', 'Attend training, serve clients, recruit builders, and start building your business with consistency.')}
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:18px 28px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#fbf8f2;border-left:4px solid #B8954A;">
+            <tr><td style="padding:18px 18px 8px 18px;font-size:16px;font-weight:700;color:#0A2F5C;">Complete these steps today</td></tr>
+            <tr><td style="padding:0 18px 18px 18px;font-size:14px;line-height:1.65;color:#3f3a32;">
+              <p style="margin:0 0 10px 0;"><strong>Confirm your pre-licensing course enrollment.</strong><br/>Use the current AO-provided REMIC HLLQP link or access your account here: <a href="https://shop.remic.ca/my-account/" style="color:#005EB8;">https://shop.remic.ca/my-account/</a></p>
+              <p style="margin:0 0 10px 0;"><strong>Start certification immediately.</strong><br/>Complete at least one focused 90-minute study block today so you build momentum from day one.</p>
+              <p style="margin:0 0 10px 0;"><strong>Verify your AO Planet account.</strong><br/>Check your inbox for the verification email from <a href="mailto:recruiting@aoglobelife.com" style="color:#005EB8;">recruiting@aoglobelife.com</a>. If you do not see it, check spam or junk.</p>
+              <p style="margin:0 0 10px 0;"><strong>Join the AO Nation Slack workspace.</strong><br/>Accept the invitation from no-reply@slack.com and monitor the appropriate channels for announcements, links, and daily updates.</p>
+              <p style="margin:0 0 10px 0;"><strong>Complete your Agent Onboarding Kit.</strong><br/>Set aside 20-25 minutes to complete the required onboarding paperwork and appointment documents. Watch for the subject line: <em>Globe Life: American Income Division Agent Appointment Invitation</em>.</p>
+              <p style="margin:0;"><strong>Add the AO meetings to your calendar.</strong><br/>Show up at least 5 minutes early, be seated, and be ready to take notes.</p>
+              <p style="margin:12px 0 0 0;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#8a8276;">REMIC Course Access · Business Builders Forum · Canadian LLQP Requirements</p>
+            </td></tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:0 28px 8px 28px;font-size:16px;font-weight:700;color:#0A2F5C;">Your AO support rhythm</td>
+      </tr>
+      <tr>
+        <td style="padding:0 28px 18px 28px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #ece7dc;">
+            <tr style="background:#0A2F5C;color:#ffffff;">
+              <td style="padding:10px 8px;font-size:12px;font-weight:700;">Meeting</td>
+              <td style="padding:10px 8px;font-size:12px;font-weight:700;">When</td>
+              <td style="padding:10px 8px;font-size:12px;font-weight:700;">Link / Access</td>
+            </tr>
+            ${meetRow('Career Meeting', '—', 'See current AO onboarding email / Slack')}
+            ${meetRow('HLLQP Study Help &amp; Support', 'Mon/Wed/Fri', 'AO Nation Zoom Office<br/>Meeting ID: 403 836 9488<br/>Password: Winning<br/>Breakout:')}
+            ${meetRow('Business Builders Forum', 'Every Monday<br/>2:00 PM EST', '<a href="https://www.planetaltig.com/sales-calls" style="color:#005EB8;">https://www.planetaltig.com/sales-calls</a>')}
+            ${meetRow('All Agency Meeting', 'Every Thursday<br/>2:00 PM EST', 'Also check Slack #announcements every Thursday morning.')}
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:0 28px 8px 28px;font-size:16px;font-weight:700;color:#0A2F5C;">The standard</td>
+      </tr>
+      <tr>
+        <td style="padding:0 28px 18px 28px;font-size:15px;line-height:1.65;color:#3f3a32;">
+          <p style="margin:0 0 12px 0;">Your licensing path is straightforward: complete certification, book and pass your provincial exams, complete the background check where required, and finalize your licensing application and fee. Delays in this process delay your ability to earn, serve clients, recruit builders, and build your business.</p>
+          <p style="margin:0 0 12px 0;"><strong>Daily communication standard:</strong> send your manager or pipeline manager what you completed today, what challenges came up, and your plan for tomorrow. What gets scheduled gets done.</p>
+          <p style="margin:0;">If you need help with any item above, reach out right away. AO provides the system, training, and support, but your progress will depend on urgency, consistency, and follow-through.</p>
+          <p style="margin:18px 0 0 0;font-family:Georgia,Times,serif;font-size:18px;color:#0A2F5C;font-weight:700;">AO Let's Grow!</p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:8px 28px 8px 28px;font-size:15px;line-height:1.55;color:#1f2a24;">
+          Best regards,<br/>
+          <strong>Alex Paz</strong><br/>
+          Life Insurance Agent<br/>
+          Paz Team • AO Globe Life
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:8px 28px 22px 28px;">
+          <p style="margin:0;font-size:13px;color:#5a5348;"><strong>Attachment:</strong> AO Globe Life New Agent Welcome Guide</p>
+          ${portal}
+        </td>
+      </tr>
+      <tr>
+        <td style="background:#f7f3eb;padding:16px 28px;font-size:11px;line-height:1.5;color:#6f675c;">
+          American Income Life Insurance Company remains the underwriting company for policies sold through AO Globe Life.
+        </td>
+      </tr>
+    </table>
   </td></tr>
 </table>`.trim();
 }

@@ -4,7 +4,6 @@ import { Button } from '../components/UI';
 import {
   AGENT_OFFICE_DEFAULT,
   AGENT_TITLE_DEFAULT,
-  defaultWelcomePackageHtml,
 } from '../services/agentOnboardingHtml';
 import {
   listHiredAgents,
@@ -34,7 +33,6 @@ const HiredPage: React.FC = () => {
   const [directPhone, setDirectPhone] = React.useState('');
   const [source, setSource] = React.useState<'manual' | 'signup' | 'pipeline'>('manual');
   const [sourceId, setSourceId] = React.useState('');
-  const [welcomeHtml, setWelcomeHtml] = React.useState(() => defaultWelcomePackageHtml('there'));
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -75,8 +73,6 @@ const HiredPage: React.FC = () => {
     setDirectPhone(String(row.phone || ''));
     setSource(row.source === 'signup' || row.source === 'pipeline' ? row.source : 'manual');
     setSourceId(String(row.id || ''));
-    const first = String(row.full_name || 'there').trim().split(/\s+/)[0] || 'there';
-    setWelcomeHtml(defaultWelcomePackageHtml(first));
     setMsg(`Filled from ${row.source === 'signup' ? 'form signup' : 'call queue'}. Add phone numbers, then mark hired.`);
   };
 
@@ -90,7 +86,6 @@ const HiredPage: React.FC = () => {
     setDirectPhone('');
     setSource('manual');
     setSourceId('');
-    setWelcomeHtml(defaultWelcomePackageHtml('there'));
   };
 
   const onHire = async () => {
@@ -120,7 +115,6 @@ const HiredPage: React.FC = () => {
         source,
         signupId: source === 'signup' ? sourceId : undefined,
         personId: source === 'pipeline' ? sourceId : undefined,
-        welcomeHtml: welcomeHtml.trim(),
       });
       setMsg(`Hired ${created.agent.full_name}. Welcome, signature, and portal invite were sent to ${created.agent.email}.`);
       resetForm();
@@ -155,8 +149,8 @@ const HiredPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-slate-900">Hired</h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-600">
             Find someone from webinar form signups or the call queue, or add them by hand. Marking
-            hired sends the welcome package, a personal email signature they can paste, and hiring-portal access.
-            Drop the final welcome-packet HTML in the box below when you have it.
+            hired sends the AO welcome letter with the New Agent Welcome Guide PDF, a personal email
+            signature they can paste, and hiring-portal access.
           </p>
         </div>
         <Button type="button" variant="outline" className="!min-h-0 h-10 px-3" onClick={() => void load()} disabled={loading}>
@@ -238,14 +232,6 @@ const HiredPage: React.FC = () => {
             <input className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm" value={directPhone} onChange={(e) => setDirectPhone(e.target.value)} />
           </label>
         </div>
-        <label className="block text-xs text-[#6f675c]">
-          Welcome package HTML
-          <textarea
-            className="mt-1 min-h-[140px] w-full rounded-lg border border-[#e0d8ca] px-3 py-2 font-mono text-xs"
-            value={welcomeHtml}
-            onChange={(e) => setWelcomeHtml(e.target.value)}
-          />
-        </label>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"

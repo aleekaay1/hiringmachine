@@ -26,6 +26,7 @@ import {
   defaultWelcomePackageHtml,
   type AgentCardInput,
 } from '../_shared/agentOnboardingHtml.ts';
+import { WELCOME_PDF_BASE64 } from './welcomePdfB64.ts';
 
 function siteOrigin(): string {
   const raw =
@@ -33,6 +34,32 @@ function siteOrigin(): string {
     Deno.env.get('PUBLIC_SITE_URL')?.trim() ||
     'https://aopaz.vercel.app';
   return raw.replace(/\/$/, '');
+}
+
+function decodePdfBase64(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function loadWelcomePdf(): Promise<Uint8Array | null> {
+  try {
+    if (WELCOME_PDF_BASE64) return decodePdfBase64(WELCOME_PDF_BASE64);
+  } catch {
+    /* fall through */
+  }
+  try {
+    return await Deno.readFile(new URL('./AO-Welcome-Package.pdf', import.meta.url));
+  } catch {
+    try {
+      const res = await fetch(`${siteOrigin()}/AO-Welcome-Package.pdf`);
+      if (!res.ok) return null;
+      return new Uint8Array(await res.arrayBuffer());
+    } catch {
+      return null;
+    }
+  }
 }
 
 function getTransport() {
@@ -113,7 +140,12 @@ async function sendAgentMail(opts: {
   userId: string | null;
   trigger: string;
   hiredId: string;
-  attachments?: Array<{ filename: string; content: string; contentType?: string }>;
+  attachments?: Array<{
+    filename: string;
+    content: string | Uint8Array;
+    contentType?: string;
+    encoding?: string;
+  }>;
 }): Promise<void> {
   const { from, fromEmail } = fromIdentity();
   const transport = getTransport();
@@ -262,21 +294,28 @@ async function sendOnboardingBundle(
   }
 
   if (opts.welcome) {
-    const html =
-      (opts.welcomeHtml && opts.welcomeHtml.trim()) ||
-      str(row.welcome_html) ||
-      defaultWelcomePackageHtml(first, portalLink);
+    const html = defaultWelcomePackageHtml(first, portalLink);
+    const pdf = await loadWelcomePdf();
     await sendAgentMail({
       admin,
       to,
-      subject: 'Welcome to Team Paz — your welcome package',
+      subject: 'Welcome to AO Globe Life',
       html,
       userId,
       trigger: 'hired_welcome',
       hiredId,
+      attachments: pdf
+        ? [
+            {
+              filename: 'AO Globe Life New Agent Welcome Guide.pdf',
+              content: pdf,
+              contentType: 'application/pdf',
+            },
+          ]
+        : undefined,
     });
     patch.welcome_sent_at = now;
-    if (opts.welcomeHtml && opts.welcomeHtml.trim()) patch.welcome_html = opts.welcomeHtml.trim();
+    patch.welcome_html = html;
   }
 
   if (opts.signature) {

@@ -88,7 +88,6 @@ export async function markCandidateHired(input: {
   source?: string;
   signupId?: string;
   personId?: string;
-  welcomeHtml?: string;
 }): Promise<{ agent: HiredAgent }> {
   const json = await invokeHired({
     action: 'mark_hired',
@@ -102,7 +101,6 @@ export async function markCandidateHired(input: {
     source: input.source || 'manual',
     signup_id: input.signupId,
     person_id: input.personId,
-    welcome_html: input.welcomeHtml,
     send_welcome: true,
     send_signature: true,
     invite_portal: true,
