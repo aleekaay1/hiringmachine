@@ -25,6 +25,7 @@ import {
   buildSignatureSetupEmailHtml,
   defaultWelcomePackageHtml,
   type AgentCardInput,
+  type PortalLoginInfo,
 } from '../_shared/agentOnboardingHtml.ts';
 import { WELCOME_PDF_BASE64 } from './welcomePdfB64.ts';
 
@@ -191,81 +192,193 @@ async function sendAgentMail(opts: {
   }
 }
 
-async function ensurePortalInvite(
+const STAFF_ROLES = new Set(['admin', 'leadership', 'hr', 'webinar']);
+const PROTECTED_PORTAL_EMAILS = new Set(['ali@globelife-paz.com', 'alex@globelife-paz.com']);
+
+function randomTempPassword(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('');
+}
+
+async function ensureAgentCode(
   admin: ReturnType<typeof serviceClient>,
-  input: { fullName: string; portalEmail: string; phone?: string | null },
-): Promise<{ portalUserId: string | null; portalLink: string | null; alreadyHadAccess: boolean; error?: string }> {
+  existing: string | null | undefined,
+): Promise<string> {
+  const current = str(existing).toUpperCase();
+  if (current) return current;
+  for (let i = 0; i < 16; i++) {
+    const code = `PAZ-${crypto.randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase()}`;
+    const { data } = await admin.from('hm_hired_agents').select('id').eq('agent_code', code).maybeSingle();
+    if (!data) return code;
+  }
+  return `PAZ-${crypto.randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase()}`;
+}
+
+function isProtectedStaff(email: string, role: string): boolean {
+  if (PROTECTED_PORTAL_EMAILS.has(email)) return true;
+  return STAFF_ROLES.has(role);
+}
+
+async function upsertHiredProfile(
+  admin: ReturnType<typeof serviceClient>,
+  input: {
+    userId: string;
+    email: string;
+    fullName: string;
+    phone?: string | null;
+    hiredId: string;
+    agentCode: string;
+  },
+): Promise<void> {
+  const now = new Date().toISOString();
+  await admin.from('user_profiles').upsert({
+    user_id: input.userId,
+    email: input.email,
+    full_name: input.fullName,
+    role: 'viewer',
+    phone: input.phone || null,
+    hired_agent_id: input.hiredId,
+    agent_code: input.agentCode,
+    updated_at: now,
+  });
+  await admin
+    .from('user_profiles')
+    .update({
+      role: 'viewer',
+      hired_agent_id: input.hiredId,
+      agent_code: input.agentCode,
+      full_name: input.fullName,
+      updated_at: now,
+    })
+    .eq('user_id', input.userId);
+}
+
+async function ensurePortalAccount(
+  admin: ReturnType<typeof serviceClient>,
+  input: {
+    hiredId: string;
+    fullName: string;
+    portalEmail: string;
+    phone?: string | null;
+    agentCode: string;
+    existingPortalUserId?: string | null;
+  },
+): Promise<{
+  portalUserId: string | null;
+  login: PortalLoginInfo;
+  alreadyHadAccess: boolean;
+  error?: string;
+}> {
   const origin = siteOrigin();
   const email = normalizeEmail(input.portalEmail);
+  const loginUrl = `${origin}/home`;
+  const baseLogin: PortalLoginInfo = {
+    loginUrl,
+    email,
+    agentCode: input.agentCode,
+  };
+
   const { data: existingProfile } = await admin
     .from('user_profiles')
-    .select('user_id, email')
+    .select('user_id, email, role, hired_agent_id')
     .ilike('email', email)
     .maybeSingle();
+
   if (existingProfile?.user_id) {
-    await admin
-      .from('user_profiles')
-      .update({
-        role: 'recruiter',
-        full_name: input.fullName,
-        phone: input.phone || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('user_id', existingProfile.user_id);
+    const userId = String(existingProfile.user_id);
+    const role = str(existingProfile.role).toLowerCase();
+    const profileEmail = normalizeEmail(existingProfile.email || email);
+    const hiredFlag = str(existingProfile.hired_agent_id);
+    const sameHired = hiredFlag === input.hiredId;
+    const knownPortalUser = Boolean(input.existingPortalUserId && input.existingPortalUserId === userId);
+    if (
+      (isProtectedStaff(profileEmail, role) || role === 'recruiter') &&
+      !sameHired &&
+      !hiredFlag &&
+      !knownPortalUser
+    ) {
+      return {
+        portalUserId: userId,
+        login: { ...baseLogin, alreadyHadAccess: true },
+        alreadyHadAccess: true,
+      };
+    }
+
+    const password = randomTempPassword();
+    const { error: pwErr } = await admin.auth.admin.updateUserById(userId, {
+      password,
+      email_confirm: true,
+      user_metadata: { full_name: input.fullName, hired_agent: true, agent_code: input.agentCode },
+    });
+    await upsertHiredProfile(admin, {
+      userId,
+      email,
+      fullName: input.fullName,
+      phone: input.phone,
+      hiredId: input.hiredId,
+      agentCode: input.agentCode,
+    });
     return {
-      portalUserId: String(existingProfile.user_id),
-      portalLink: `${origin}/home`,
+      portalUserId: userId,
+      login: { ...baseLogin, password: pwErr ? null : password, alreadyHadAccess: true },
       alreadyHadAccess: true,
+      error: pwErr?.message,
     };
   }
 
-  const { data, error } = await admin.auth.admin.generateLink({
-    type: 'invite',
+  const password = randomTempPassword();
+  const created = await admin.auth.admin.createUser({
     email,
-    options: {
-      data: { full_name: input.fullName, role: 'recruiter' },
-      redirectTo: `${origin}/home`,
-    },
+    password,
+    email_confirm: true,
+    user_metadata: { full_name: input.fullName, hired_agent: true, agent_code: input.agentCode },
   });
-  if (error) {
-    const { data: mag } = await admin.auth.admin.generateLink({
+  let userId = created.data.user?.id || null;
+  if (created.error || !userId) {
+    const mag = await admin.auth.admin.generateLink({
       type: 'magiclink',
       email,
-      options: { redirectTo: `${origin}/home` },
+      options: { redirectTo: loginUrl },
     });
-    const userId = mag?.user?.id || data?.user?.id || null;
+    userId = mag.data?.user?.id || mag.user?.id || null;
     if (userId) {
-      await admin.from('user_profiles').upsert({
-        user_id: userId,
+      const { error: pwErr } = await admin.auth.admin.updateUserById(userId, { password, email_confirm: true });
+      await upsertHiredProfile(admin, {
+        userId,
         email,
-        full_name: input.fullName,
-        role: 'recruiter',
-        phone: input.phone || null,
-        updated_at: new Date().toISOString(),
+        fullName: input.fullName,
+        phone: input.phone,
+        hiredId: input.hiredId,
+        agentCode: input.agentCode,
       });
+      return {
+        portalUserId: userId,
+        login: { ...baseLogin, password: pwErr ? null : password },
+        alreadyHadAccess: false,
+        error: created.error?.message,
+      };
     }
     return {
-      portalUserId: userId,
-      portalLink: mag?.properties?.action_link || null,
-      alreadyHadAccess: Boolean(userId),
-      error: error.message,
+      portalUserId: null,
+      login: baseLogin,
+      alreadyHadAccess: false,
+      error: created.error?.message || 'Could not create portal account',
     };
   }
-  const userId = data.user?.id || null;
-  if (userId) {
-    await admin.from('user_profiles').upsert({
-      user_id: userId,
-      email,
-      full_name: input.fullName,
-      role: 'recruiter',
-      phone: input.phone || null,
-      updated_at: new Date().toISOString(),
-    });
-    await admin.from('user_profiles').update({ role: 'recruiter' }).eq('user_id', userId);
-  }
+
+  await upsertHiredProfile(admin, {
+    userId,
+    email,
+    fullName: input.fullName,
+    phone: input.phone,
+    hiredId: input.hiredId,
+    agentCode: input.agentCode,
+  });
   return {
     portalUserId: userId,
-    portalLink: data.properties?.action_link || null,
+    login: { ...baseLogin, password },
     alreadyHadAccess: false,
   };
 }
@@ -284,23 +397,30 @@ async function sendOnboardingBundle(
   const hiredId = String(row.id);
   const now = new Date().toISOString();
   const patch: Record<string, unknown> = { updated_at: now, last_error: null };
-  let portalLink: string | null = null;
+  let portalLink: string | null = `${siteOrigin()}/home`;
+  let login: PortalLoginInfo | null = null;
+  const agentCode = await ensureAgentCode(admin, str(row.agent_code));
+  patch.agent_code = agentCode;
 
-  if (opts.invite) {
+  if (opts.invite || opts.welcome) {
     const portalEmail = normalizeEmail(str(row.portal_email) || to);
-    const invite = await ensurePortalInvite(admin, {
+    const invite = await ensurePortalAccount(admin, {
+      hiredId,
       fullName: card.fullName,
       portalEmail,
       phone: str(row.direct_phone) || str(row.office_phone) || null,
+      agentCode,
+      existingPortalUserId: str(row.portal_user_id) || null,
     });
-    portalLink = invite.portalLink;
+    login = invite.login;
+    portalLink = invite.login.loginUrl;
     if (invite.portalUserId) patch.portal_user_id = invite.portalUserId;
-    patch.invite_sent_at = now;
+    if (opts.invite) patch.invite_sent_at = now;
     if (invite.error) patch.last_error = invite.error;
   }
 
   if (opts.welcome) {
-    const html = defaultWelcomePackageHtml(first, portalLink);
+    const html = defaultWelcomePackageHtml(first, portalLink, login);
     const pdf = await loadWelcomePdf();
     await sendAgentMail({
       admin,
@@ -456,7 +576,7 @@ Deno.serve(async (req) => {
       }
       const { data: already } = await admin
         .from('hm_hired_agents')
-        .select('id, full_name, email, contact_slug')
+        .select('id, full_name, email, contact_slug, agent_code')
         .ilike('email', email)
         .maybeSingle();
       if (already?.id) {
@@ -484,6 +604,7 @@ Deno.serve(async (req) => {
         signup_id: source === 'signup' ? str(body.signup_id || body.signupId) || null : null,
         person_id: source === 'pipeline' ? str(body.person_id || body.personId) || null : null,
         contact_slug: makeSlug(fullName),
+        agent_code: await ensureAgentCode(admin, null),
         hired_by: user?.id || null,
         welcome_html: str(body.welcome_html || body.welcomeHtml) || null,
       };
@@ -544,16 +665,23 @@ Deno.serve(async (req) => {
         } else {
           const { data: profile } = await admin
             .from('user_profiles')
-            .select('user_id, email, role')
+            .select('user_id, email, role, hired_agent_id')
             .eq('user_id', portalUserId)
             .maybeSingle();
           const profileEmail = normalizeEmail(profile?.email || portalEmail);
           const role = str(profile?.role).toLowerCase();
+          const hiredFlag = str(profile?.hired_agent_id);
           const { data: authUser } = await admin.auth.admin.getUserById(portalUserId);
           const authCreated = authUser?.user?.created_at ? Date.parse(authUser.user.created_at) : 0;
           const hiredAt = row.hired_at ? Date.parse(String(row.hired_at)) : Date.now();
           const existedBeforeHire = Boolean(authCreated && hiredAt && authCreated < hiredAt - 2 * 60 * 1000);
-          if (protectedEmails.has(profileEmail) || role === 'admin' || role === 'leadership' || existedBeforeHire) {
+          const createdForThisHire = hiredFlag === id;
+          if (
+            protectedEmails.has(profileEmail) ||
+            role === 'admin' ||
+            role === 'leadership' ||
+            (existedBeforeHire && !createdForThisHire)
+          ) {
             accountSkipped = existedBeforeHire
               ? 'Portal login already existed, so the account was left. Hired record was removed.'
               : 'Portal account was left in place (staff/admin). Hired record was removed.';

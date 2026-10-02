@@ -11,6 +11,8 @@ export type StaffSessionSnapshot = {
   userEmail: string | null;
   displayName: string;
   avatarUrl: string | null;
+  hiredAgentId: string | null;
+  agentCode: string | null;
   resolved: boolean;
 };
 
@@ -22,6 +24,8 @@ let profileSnapshot: StaffSessionSnapshot = {
   userEmail: null,
   displayName: 'Staff',
   avatarUrl: null,
+  hiredAgentId: null,
+  agentCode: null,
   resolved: false,
 };
 
@@ -35,7 +39,12 @@ function readPersistedSnapshot(): StaffSessionSnapshot | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StaffSessionSnapshot;
     if (!parsed || typeof parsed !== 'object') return null;
-    return { ...parsed, resolved: true };
+    return {
+      ...parsed,
+      hiredAgentId: parsed.hiredAgentId ?? null,
+      agentCode: parsed.agentCode ?? null,
+      resolved: true,
+    };
   } catch {
     return null;
   }
@@ -70,6 +79,8 @@ function applyProfile(profile: Awaited<ReturnType<typeof getCurrentUserProfile>>
     userEmail: email ?? profile?.email ?? null,
     displayName: profile?.full_name || email || 'Staff',
     avatarUrl: profile?.avatar_url ?? null,
+    hiredAgentId: profile?.hired_agent_id ?? null,
+    agentCode: profile?.agent_code ?? null,
     resolved: true,
   };
   persistSnapshot(profileSnapshot);
@@ -86,6 +97,8 @@ export function primeStaffAuth(session: Session | null): void {
       userEmail: null,
       displayName: 'Staff',
       avatarUrl: null,
+      hiredAgentId: null,
+      agentCode: null,
       resolved: false,
     };
   }
@@ -132,6 +145,8 @@ export function clearStaffSessionCache(): void {
     userEmail: null,
     displayName: 'Staff',
     avatarUrl: null,
+    hiredAgentId: null,
+    agentCode: null,
     resolved: false,
   };
   authInflight = null;
@@ -156,6 +171,8 @@ export function subscribeStaffAuth(onChange: () => void): () => void {
         userEmail: null,
         displayName: 'Staff',
         avatarUrl: null,
+        hiredAgentId: null,
+        agentCode: null,
         resolved: true,
       };
       onChange();

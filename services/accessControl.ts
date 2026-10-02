@@ -52,6 +52,8 @@ export interface UserProfile {
   avatar_url?: string | null;
   phone?: string | null;
   extension?: string | null;
+  hired_agent_id?: string | null;
+  agent_code?: string | null;
 }
 
 /** Training / sandbox accounts (demo-*@globelife-paz.com) — hidden from leaderboard, reports, and staff lists. */
@@ -68,8 +70,10 @@ export function isDemoStaffProfile(profile: Pick<UserProfile, 'email' | 'full_na
   return name === 'demo leadership' || name === 'demo admin' || name.startsWith('demo ');
 }
 
-export function filterProductionStaffProfiles<T extends Pick<UserProfile, 'email' | 'full_name'>>(profiles: T[]): T[] {
-  return profiles.filter((p) => !isDemoStaffProfile(p));
+export function filterProductionStaffProfiles<
+  T extends Pick<UserProfile, 'email' | 'full_name'> & { hired_agent_id?: string | null },
+>(profiles: T[]): T[] {
+  return profiles.filter((p) => !isDemoStaffProfile(p) && !p.hired_agent_id);
 }
 
 /** When `public.user_profiles` is not in PostgREST (404 / PGRST205), avoid hammering a missing table every layout mount. */
@@ -144,7 +148,7 @@ async function fetchCurrentUserProfileUncached(): Promise<UserProfile | null> {
 
   const { data, error } = await supabase
     .from('user_profiles')
-    .select('user_id, email, full_name, role, points, points_updated_at, avatar_url, phone, extension')
+    .select('user_id, email, full_name, role, points, points_updated_at, avatar_url, phone, extension, hired_agent_id, agent_code')
     .eq('user_id', userId)
     .maybeSingle();
 
@@ -315,6 +319,7 @@ const HIRING_MACHINE_SECTIONS: AppSection[] = [
   'pipeline-call',
   'pipeline-webinar-verify',
   'webinar-geek',
+  'webinar-questionnaires',
   'schedule-webinar-signups',
   'sent-ahead',
   'check-ins',
@@ -330,9 +335,11 @@ export function canAccessSection(
   section: AppSection,
   _email?: string | null,
   _fullName?: string | null,
+  hiredAgentId?: string | null,
 ): boolean {
   void _email;
   void _fullName;
+  if (hiredAgentId) return section === 'home' || section === 'account';
   if (!role) return section === 'overview' || section === 'home';
   return HIRING_MACHINE_SECTIONS.includes(section);
 }
@@ -361,7 +368,9 @@ export function getStaffRoleLabel(
   role: AppRole | null,
   email?: string | null,
   fullName?: string | null,
+  hiredAgentId?: string | null,
 ): string {
+  if (hiredAgentId) return 'Agent';
   const normalized = String(email || '').trim().toLowerCase();
   const custom = normalized ? STAFF_ROLE_LABEL_BY_EMAIL[normalized] : undefined;
   if (custom) return custom;
@@ -446,7 +455,7 @@ export async function listAllUserProfiles(force = false): Promise<UserProfile[]>
   allProfilesInflight = (async () => {
     const full = await supabase
       .from('user_profiles')
-      .select('user_id, email, full_name, role, points, points_updated_at, avatar_url, phone, extension')
+      .select('user_id, email, full_name, role, points, points_updated_at, avatar_url, phone, extension, hired_agent_id, agent_code')
       .order('full_name', { ascending: true })
       .order('email', { ascending: true });
     if (!full.error) {

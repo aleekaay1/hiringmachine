@@ -1,5 +1,5 @@
 import React from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { COLORS } from '../constants';
 import { supabase } from '../services/supabaseClient';
 import {
@@ -46,7 +46,8 @@ const Layout: React.FC<LayoutProps> = ({
   const [displayName, setDisplayName] = React.useState(cachedSession.displayName);
   const [avatarUrl, setAvatarUrl] = React.useState<string | null>(cachedSession.avatarUrl);
   const [roleResolved, setRoleResolved] = React.useState(cachedSession.resolved);
-  const [userId, setUserId] = React.useState<string | null>(cachedSession.userId);
+  const [hiredAgentId, setHiredAgentId] = React.useState<string | null>(cachedSession.hiredAgentId);
+  const [agentCode, setAgentCode] = React.useState<string | null>(cachedSession.agentCode);
 
   const currentSection = React.useMemo<AppSection>(
     () => resolveAppSectionFromLocation(location.pathname, location.search),
@@ -59,6 +60,8 @@ const Layout: React.FC<LayoutProps> = ({
     setUserEmail(snapshot.userEmail);
     setDisplayName(snapshot.displayName);
     setAvatarUrl(snapshot.avatarUrl);
+    setHiredAgentId(snapshot.hiredAgentId);
+    setAgentCode(snapshot.agentCode);
     setRoleResolved(snapshot.resolved);
   }, []);
 
@@ -90,12 +93,12 @@ const Layout: React.FC<LayoutProps> = ({
   React.useEffect(() => {
     if (!isAdmin || !roleResolved) return;
     const currentPath = `${location.pathname}${location.search}`;
-    if (canAccessSection(role, currentSection, userEmail, displayName)) return;
+    if (canAccessSection(role, currentSection, userEmail, displayName, hiredAgentId)) return;
     const fallback = defaultRouteForRole(role);
     if (fallback !== currentPath) {
       navigate(fallback, { replace: true });
     }
-  }, [isAdmin, roleResolved, role, userEmail, displayName, currentSection, location.pathname, location.search, navigate]);
+  }, [isAdmin, roleResolved, role, userEmail, displayName, hiredAgentId, currentSection, location.pathname, location.search, navigate]);
 
   const handleLogout = React.useCallback(async () => {
     try {
@@ -126,7 +129,8 @@ const Layout: React.FC<LayoutProps> = ({
     }
   }, [navigate]);
 
-  const roleLabel = getStaffRoleLabel(role, userEmail, displayName);
+  const roleLabel = getStaffRoleLabel(role, userEmail, displayName, hiredAgentId);
+  const isHiredAgent = Boolean(hiredAgentId);
 
   const headerRef = React.useRef<HTMLElement | null>(null);
   const [headerHeight, setHeaderHeight] = React.useState(0);
@@ -195,18 +199,19 @@ const Layout: React.FC<LayoutProps> = ({
       className="min-h-screen flex items-start font-sans text-gray-800"
       style={{ backgroundColor: isAdmin ? '#f4efe6' : COLORS.background }}
     >
-      {isAdmin && (
+      {isAdmin && !isHiredAgent && (
         <AppSidebar
           role={role}
           userEmail={userEmail}
           displayName={displayName}
           roleLabel={roleLabel}
           avatarUrl={avatarUrl}
+          hiredAgentId={hiredAgentId}
           onLogout={() => void handleLogout()}
         />
       )}
       <div className="min-h-screen flex flex-col flex-1 min-w-0">
-        {isAdmin && userId && (
+        {isAdmin && userId && !isHiredAgent && (
           <div className="pointer-events-none fixed inset-x-0 top-0 z-[100] flex justify-end px-3 pt-2 safe-area-top sm:px-4">
             <div className="pointer-events-auto">
               <NotificationBell
@@ -260,7 +265,31 @@ const Layout: React.FC<LayoutProps> = ({
             </header>
           </>
         )}
-        <main className={`flex-grow flex flex-col min-h-0 relative overflow-x-hidden px-safe-area ${isAdmin ? 'max-lg:pl-[4.75rem]' : ''}`}>
+        {isAdmin && isHiredAgent && (
+          <header className="sticky top-0 z-50 border-b border-[#eadfce] bg-[#0a0a0a] text-white">
+            <div className="flex items-center justify-between gap-3 px-4 py-3">
+              <div className="min-w-0">
+                <img src="/logo.png" alt="AO Paz Globelife" className="h-10 w-auto object-contain" />
+                {agentCode ? (
+                  <p className="mt-1 text-[11px] uppercase tracking-wide text-white/70">Agent ID {agentCode}</p>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 items-center gap-2 text-xs">
+                <Link to="/account" className="rounded-full border border-white/20 px-3 py-1.5 text-white/90 hover:bg-white/10">
+                  Account
+                </Link>
+                <button
+                  type="button"
+                  className="rounded-full border border-white/20 px-3 py-1.5 text-white/90 hover:bg-white/10"
+                  onClick={() => void handleLogout()}
+                >
+                  Sign out
+                </button>
+              </div>
+            </div>
+          </header>
+        )}
+        <main className={`flex-grow flex flex-col min-h-0 relative overflow-x-hidden px-safe-area ${isAdmin && !isHiredAgent ? 'max-lg:pl-[4.75rem]' : ''}`}>
           {children}
         </main>
         {!isAdmin && (

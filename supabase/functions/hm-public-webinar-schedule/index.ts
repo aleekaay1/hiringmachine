@@ -651,6 +651,7 @@ async function logPublicSignup(input: {
   watchLink?: string | null;
   confirmationLink?: string | null;
   customField?: string | null;
+  reference?: string | null;
 }): Promise<void> {
   try {
     const admin = serviceClient();
@@ -670,8 +671,10 @@ async function logPublicSignup(input: {
       watch_link: input.watchLink || null,
       confirmation_link: input.confirmationLink || null,
       custom_field: input.customField || null,
+      reference: input.reference || null,
       metadata: {
         source: 'hm-public-webinar-schedule',
+        reference: input.reference || null,
       },
     });
     if (error) console.error('hm_public_webinar_signups insert failed', error);
@@ -727,6 +730,7 @@ async function upsertHmPersonFromPublicWebinarSignup(input: {
   webinarTitle?: string | null;
   subscriptionId?: string | null;
   customField?: string | null;
+  reference?: string | null;
 }): Promise<void> {
   try {
     const admin = serviceClient();
@@ -753,7 +757,9 @@ async function upsertHmPersonFromPublicWebinarSignup(input: {
       campaign_name: 'Public webinar form',
       reply_snippet: summary.slice(0, 280),
       last_reply_text: summary,
-      ai_summary: `Registered via /schedule-webinar (${mode}). Session: ${when}.`,
+      ai_summary: `Registered via /schedule-webinar (${mode}). Session: ${when}.${
+        input.reference ? ` Reference: ${input.reference}.` : ''
+      }`,
       raw_lead: {
         source: 'hm_public_webinar_signups',
         broadcast_id: input.broadcastId,
@@ -761,6 +767,7 @@ async function upsertHmPersonFromPublicWebinarSignup(input: {
         webinar_title: input.webinarTitle || null,
         subscription_id: input.subscriptionId || null,
         custom_field: input.customField || null,
+        reference: input.reference || null,
         schedule_mode: input.wantQuick ? 'quick' : 'pick',
         session_label: when,
       },
@@ -841,6 +848,7 @@ async function notifyStaffPublicWebinarSignup(input: {
     ['Subscription ID', input.subscriptionId || '—'],
     ['Email verified', input.emailVerified === true ? 'Yes' : input.emailVerified === false ? 'No' : '—'],
     ['Tag', input.customField || '—'],
+    ['Reference', input.reference || '—'],
     ['Watch link', input.watchLink || '—'],
     ['Confirmation link', input.confirmationLink || '—'],
   ];
@@ -995,6 +1003,7 @@ Deno.serve(async (req) => {
         str(body.custom_field) ||
         Deno.env.get('PUBLIC_WEBINAR_CUSTOM_FIELD')?.trim() ||
         'cold-email';
+      const reference = str(body.reference).slice(0, 200);
 
       if (!email || !firstname) {
         return json(400, { error: 'email and firstname are required.' });

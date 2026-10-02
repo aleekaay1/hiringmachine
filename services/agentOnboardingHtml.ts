@@ -227,12 +227,48 @@ function meetRow(name: string, when: string, access: string): string {
   </tr>`;
 }
 
-export function defaultWelcomePackageHtml(firstName: string, portalLink?: string | null): string {
+export type PortalLoginInfo = {
+  loginUrl: string;
+  email: string;
+  agentCode: string;
+  password?: string | null;
+  alreadyHadAccess?: boolean;
+};
+
+export function defaultWelcomePackageHtml(
+  firstName: string,
+  portalLink?: string | null,
+  login?: PortalLoginInfo | null,
+): string {
   const first = escapeHtml(firstName || 'there');
-  const portal = portalLink
-    ? `<p style="margin:18px 0 0 0;"><a href="${escapeHtml(portalLink)}" style="display:inline-block;background:#0A2F5C;color:#ffffff;text-decoration:none;padding:11px 18px;border-radius:999px;font-weight:700;font-size:13px;">Open the hiring portal</a></p>
-       <p style="margin:8px 0 0 0;font-size:13px;color:#5a5348;">Use this to set your password and track your candidates.</p>`
-    : '';
+  const loginUrl = escapeHtml(login?.loginUrl || portalLink || '');
+  const agentCode = escapeHtml(login?.agentCode || '');
+  const loginEmail = escapeHtml(login?.email || '');
+  const password = login?.password ? escapeHtml(login.password) : '';
+  const creds = login
+    ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:18px 0 0 0;background:#f4f7fb;border:1px solid #d7e2ef;border-radius:12px;">
+        <tr><td style="padding:16px 18px;">
+          <p style="margin:0 0 8px 0;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6f675c;font-weight:700;">Your Team Paz portal</p>
+          ${agentCode ? `<p style="margin:0 0 6px 0;font-size:14px;color:#1f2a24;"><strong>Agent ID:</strong> ${agentCode}</p>` : ''}
+          ${loginEmail ? `<p style="margin:0 0 6px 0;font-size:14px;color:#1f2a24;"><strong>Email:</strong> ${loginEmail}</p>` : ''}
+          ${
+            password
+              ? `<p style="margin:0 0 6px 0;font-size:14px;color:#1f2a24;"><strong>Temporary password:</strong> <span style="font-family:Consolas,Menlo,monospace;">${password}</span></p>
+                 <p style="margin:0 0 10px 0;font-size:13px;color:#5a5348;">Sign in, then change this password under Account. Keep it private.</p>`
+              : login.alreadyHadAccess
+                ? `<p style="margin:0 0 10px 0;font-size:13px;color:#5a5348;">Use the same login you already have. You can change your password anytime under Account.</p>`
+                : `<p style="margin:0 0 10px 0;font-size:13px;color:#5a5348;">Use the login details from your welcome message. You can change your password under Account after you sign in.</p>`
+          }
+          ${
+            loginUrl
+              ? `<p style="margin:0;"><a href="${loginUrl}" style="display:inline-block;background:#0A2F5C;color:#ffffff;text-decoration:none;padding:11px 18px;border-radius:999px;font-weight:700;font-size:13px;">Sign in to your portal</a></p>`
+              : ''
+          }
+        </td></tr>
+      </table>`
+    : portalLink
+      ? `<p style="margin:18px 0 0 0;"><a href="${escapeHtml(portalLink)}" style="display:inline-block;background:#0A2F5C;color:#ffffff;text-decoration:none;padding:11px 18px;border-radius:999px;font-weight:700;font-size:13px;">Sign in to your portal</a></p>`
+      : '';
   return `
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f4f1ea;padding:0;margin:0;">
   <tr><td align="center" style="padding:24px 12px;">
@@ -240,23 +276,22 @@ export function defaultWelcomePackageHtml(firstName: string, portalLink?: string
       <tr>
         <td style="background:#0A2F5C;padding:22px 28px;">
           <div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#d4c4a0;">AO Globe Life</div>
-          <div style="font-size:20px;font-weight:700;color:#ffffff;margin-top:6px;">AO Globe Life • Paz Team</div>
+          <div style="font-size:20px;font-weight:700;color:#ffffff;margin-top:6px;">AO Globe Life • Team Paz</div>
         </td>
       </tr>
       <tr>
         <td style="padding:28px 28px 8px 28px;">
           <div style="font-family:Georgia,Times,serif;font-size:28px;line-height:1.25;color:#0A2F5C;font-weight:700;">Welcome to AO Globe Life, ${first}.</div>
-          <p style="margin:14px 0 0 0;font-size:15px;line-height:1.6;color:#3f3a32;">You are officially beginning your launch with AO. The priority now is simple: follow the system, move through licensing with urgency, and get ready to serve clients and build your business.</p>
+          <p style="margin:14px 0 0 0;font-size:15px;line-height:1.6;color:#3f3a32;">You are officially beginning your launch with AO. The priority now is simple: follow the system, and move through licensing with urgency.</p>
           <p style="margin:12px 0 0 0;font-size:15px;font-weight:700;color:#0A2F5C;">Ready to serve clients and build your business.</p>
         </td>
       </tr>
       <tr>
         <td style="padding:8px 28px 0 28px;font-size:15px;line-height:1.65;color:#3f3a32;">
-          <p style="margin:0 0 12px 0;">Hi ${first},</p>
-          <p style="margin:0 0 12px 0;">Congratulations and welcome to AO Globe Life and the Paz Team. We are excited to support you as you begin your licensing journey and prepare to build a business through AO's proven systems.</p>
+          <p style="margin:0 0 12px 0;">Congratulations and welcome to AO Globe Life and Team Paz. We are excited to support you as you begin your licensing journey and prepare to build a business through AO's proven systems.</p>
           <p style="margin:0 0 12px 0;"><strong>Your AO Globe Life New Agent Welcome Guide is attached.</strong> Please review it today. It outlines your first steps, the licensing process, the AO support rhythm, and the expectations for new builders.</p>
-          <p style="margin:0 0 12px 0;">Your path is <strong>AO-first</strong>, supported by the Paz Team.</p>
-          <p style="margin:0;">Globe Life Inc. is the parent company, AO Globe Life is the platform you are joining, and the Paz Team is here to help you plug into the process, stay accountable, and move quickly from licensing to production. American Income Life Insurance Company remains the underwriting company for policies sold through AO Globe Life.</p>
+          <p style="margin:0 0 12px 0;">Your path is <strong>AO-first</strong>, supported by Team Paz.</p>
+          <p style="margin:0;">Globe Life Inc. is the parent company, AO Globe Life is the platform you are joining, and Team Paz is here to help you plug into the process, stay accountable, and move quickly from licensing to production. American Income Life Insurance Company remains the underwriting company for policies sold through AO Globe Life.</p>
         </td>
       </tr>
       <tr>
@@ -318,13 +353,13 @@ export function defaultWelcomePackageHtml(firstName: string, portalLink?: string
           Best regards,<br/>
           <strong>Alex Paz</strong><br/>
           Life Insurance Agent<br/>
-          Paz Team • AO Globe Life
+          Team Paz • AO Globe Life
         </td>
       </tr>
       <tr>
         <td style="padding:8px 28px 22px 28px;">
           <p style="margin:0;font-size:13px;color:#5a5348;"><strong>Attachment:</strong> AO Globe Life New Agent Welcome Guide</p>
-          ${portal}
+          ${creds}
         </td>
       </tr>
       <tr>

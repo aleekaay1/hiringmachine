@@ -18,6 +18,7 @@ type AppSidebarProps = {
   displayName: string;
   roleLabel: string;
   avatarUrl: string | null;
+  hiredAgentId?: string | null;
   onLogout: () => void;
 };
 
@@ -41,6 +42,7 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
   displayName,
   roleLabel,
   avatarUrl,
+  hiredAgentId,
   onLogout,
 }) => {
   const location = useLocation();
@@ -69,14 +71,15 @@ const AppSidebar: React.FC<AppSidebarProps> = ({
 
   const menuName = displayName || sessionSnapshot.displayName;
 
+  const hiredId = hiredAgentId ?? sessionSnapshot.hiredAgentId;
   const visibleGroups = React.useMemo(() => {
     return NAV_GROUPS.map((group) => ({
       ...group,
       items: group.items.filter((item) =>
-        canAccessSection(menuRole, item.section, menuEmail, menuName),
+        canAccessSection(menuRole, item.section, menuEmail, menuName, hiredId),
       ),
     })).filter((group) => group.items.length > 0);
-  }, [menuRole, menuEmail, menuName]);
+  }, [menuRole, menuEmail, menuName, hiredId]);
 
   React.useEffect(() => {
     const active = visibleGroups.find((group) => isGroupActive(group, pathname, search));

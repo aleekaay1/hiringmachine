@@ -17,7 +17,6 @@ import {
   fetchWebinarQuestionnairePage,
   fetchWebinarQuestionnaireSummary,
   hiringStageLabel,
-  isQuestionnaireRecruiterRole,
   isQuestionnaireSubmissionUnread,
   loadOpenedQuestionnaireIds,
   lookupPipelineCandidateIdByContact,
@@ -171,7 +170,8 @@ const WebinarQuestionnairesPage: React.FC = () => {
   const [openedIds, setOpenedIds] = React.useState<Set<string>>(() => new Set());
 
   const canManage = canManageQuestionnaireRows(role);
-  const isRecruiter = isQuestionnaireRecruiterRole(role);
+  /** Hiring portal: full submission list for every staff role (not recruiter-only awaiting). */
+  const isRecruiter = false;
 
   React.useEffect(() => {
     if (!isAuthenticated) return;
@@ -181,8 +181,7 @@ const WebinarQuestionnairesPage: React.FC = () => {
       setUserId(profile.user_id);
       setOpenedIds(loadOpenedQuestionnaireIds(profile.user_id));
       const scope = await buildQuestionnaireAccessScope(profile);
-      setAccessScope(scope);
-      if (profile.role === 'recruiter') setTab('awaiting');
+      setAccessScope({ ...scope, role: 'admin' });
     });
   }, [isAuthenticated]);
 
@@ -253,9 +252,6 @@ const WebinarQuestionnairesPage: React.FC = () => {
 
   const handleLiveInsert = React.useCallback((row: WebinarQuestionnaireSubmission) => {
     if (row.source_type !== 'google_form') return;
-    if (accessScope && !questionnaireLeadOwnedByScope(accessScope, row.booked_by_user_id, row.recruiter_custom_field)) {
-      return;
-    }
     if (pageFilters.dateFrom && row.submitted_at && row.submitted_at < `${pageFilters.dateFrom}T00:00:00.000Z`) {
       return;
     }
@@ -293,9 +289,6 @@ const WebinarQuestionnairesPage: React.FC = () => {
 
   const handleLiveUpdate = React.useCallback((row: WebinarQuestionnaireSubmission) => {
     if (row.source_type !== 'google_form') return;
-    if (accessScope && !questionnaireLeadOwnedByScope(accessScope, row.booked_by_user_id, row.recruiter_custom_field)) {
-      return;
-    }
     setRows((prev) => {
       const idx = prev.findIndex((item) => item.id === row.id);
       if (idx !== -1) {
@@ -361,9 +354,6 @@ const WebinarQuestionnairesPage: React.FC = () => {
         setOpenedIds(seedQuestionnaireOpenedIdsIfEmpty(userId, page.rows.map((row) => row.id)));
       }
       const visible = page.rows.filter((row) => {
-        if (accessScope && !questionnaireLeadOwnedByScope(accessScope, row.booked_by_user_id, row.recruiter_custom_field)) {
-          return false;
-        }
         if (viewFilter === 'new_unread') {
           return submissionMatchesPageFilters(row, pageFilters, filterOptions);
         }

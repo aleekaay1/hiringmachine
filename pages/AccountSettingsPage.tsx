@@ -1,10 +1,11 @@
 import React from 'react';
-import { Camera, Hash, Mail, Phone, Save, User } from 'lucide-react';
+import { Camera, Hash, KeyRound, Mail, Phone, Save, User } from 'lucide-react';
 import { Button } from '../components/UI';
 import RecruiterCallSettingsPanel from '../components/account/RecruiterCallSettingsPanel';
 import { canAccessSection, getCurrentUserProfile, getStaffRoleLabel, type AppRole } from '../services/accessControl';
 import { removeProfileAvatar, uploadProfileAvatar } from '../services/profileAvatarService';
 import { updateUserProfileDetails } from '../services/profileService';
+import { supabase } from '../services/supabaseClient';
 
 const AccountSettingsPage: React.FC = () => {
   const [loading, setLoading] = React.useState(true);
@@ -19,7 +20,11 @@ const AccountSettingsPage: React.FC = () => {
   const [phone, setPhone] = React.useState('');
   const [extension, setExtension] = React.useState('');
   const [avatarUrl, setAvatarUrl] = React.useState<string | null>(null);
-  const [showCallSettings, setShowCallSettings] = React.useState(false);
+  const [hiredAgentId, setHiredAgentId] = React.useState<string | null>(null);
+  const [agentCode, setAgentCode] = React.useState('');
+  const [newPassword, setNewPassword] = React.useState('');
+  const [confirmPassword, setConfirmPassword] = React.useState('');
+  const [passwordSaving, setPasswordSaving] = React.useState(false);
 
   const loadProfile = React.useCallback(async () => {
     const profile = await getCurrentUserProfile();
@@ -29,7 +34,9 @@ const AccountSettingsPage: React.FC = () => {
     setPhone(profile?.phone || '');
     setExtension(profile?.extension || '');
     setAvatarUrl(profile?.avatar_url || null);
-    setShowCallSettings(canAccessSection(profile?.role ?? null, 'pipeline-settings', profile?.email));
+    setHiredAgentId(profile?.hired_agent_id ?? null);
+    setAgentCode(profile?.agent_code || '');
+    setShowCallSettings(canAccessSection(profile?.role ?? null, 'pipeline-settings', profile?.email, profile?.full_name, profile?.hired_agent_id));
     setLoading(false);
   }, []);
 
@@ -53,7 +60,7 @@ const AccountSettingsPage: React.FC = () => {
     .map((part) => part[0]?.toUpperCase() || '')
     .join('') || 'U';
 
-  const roleLabel = getStaffRoleLabel(role || null, email, fullName);
+  const roleLabel = getStaffRoleLabel(role || null, email, fullName, hiredAgentId);
 
   const onSaveProfile = async () => {
     setSaving(true);
@@ -115,7 +122,8 @@ const AccountSettingsPage: React.FC = () => {
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400">Account</p>
             <h1 className="mt-1 text-2xl font-bold tracking-tight md:text-3xl">My profile</h1>
             <p className="mt-2 max-w-xl text-sm text-slate-300">
-              Update how you appear in the app, contact details, and recruiter call settings in one place.
+              Update how you appear in the app
+              {hiredAgentId ? ', and change the temporary password from your welcome email.' : ', contact details, and recruiter call settings in one place.'}
             </p>
 
             <div className="mt-6 flex flex-col gap-5 sm:flex-row sm:items-end" data-tour="profile-avatar">
@@ -145,6 +153,9 @@ const AccountSettingsPage: React.FC = () => {
                 <span className="mt-2 inline-flex rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-medium capitalize text-slate-100">
                   {roleLabel}
                 </span>
+                {agentCode ? (
+                  <p className="mt-2 text-xs text-slate-300">Agent ID {agentCode}</p>
+                ) : null}
                 <div className="mt-3 flex flex-wrap gap-2">
                   <label className="inline-flex cursor-pointer items-center rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/10">
                     {photoSaving ? 'Uploading…' : 'Change photo'}
@@ -255,6 +266,68 @@ const AccountSettingsPage: React.FC = () => {
               </div>
             </div>
           )}
+        </section>
+
+        <section className="rounded-2xl border border-[#d6deea] bg-white p-6 shadow-sm md:p-8">
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold text-[#0B1B34]">Password</h2>
+            <p className="mt-1 text-sm text-[#6b84a8]">
+              {hiredAgentId
+                ? 'Change the temporary password from your welcome email. Use at least 8 characters.'
+                : 'Set a new password for this login.'}
+            </p>
+          </div>
+          <div className="space-y-4">
+            <label className="block">
+              <span className="mb-1.5 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[#6b84a8]">
+                <KeyRound size={14} />
+                New password
+              </span>
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                autoComplete="new-password"
+                className="w-full rounded-xl border border-[#c8ddf4] bg-[#f8fbff] px-4 py-3 text-sm text-[#0B1B34] outline-none transition focus:border-[#005EB8] focus:ring-2 focus:ring-[#005EB8]/20"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[#6b84a8]">Confirm password</span>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                autoComplete="new-password"
+                className="w-full rounded-xl border border-[#c8ddf4] bg-[#f8fbff] px-4 py-3 text-sm text-[#0B1B34] outline-none transition focus:border-[#005EB8] focus:ring-2 focus:ring-[#005EB8]/20"
+              />
+            </label>
+            <Button
+              disabled={passwordSaving}
+              onClick={() => {
+                void (async () => {
+                  setPasswordSaving(true);
+                  setError(null);
+                  setMessage(null);
+                  try {
+                    if (newPassword.length < 8) throw new Error('Use at least 8 characters.');
+                    if (newPassword !== confirmPassword) throw new Error('Passwords do not match.');
+                    const { error: pwErr } = await supabase.auth.updateUser({ password: newPassword });
+                    if (pwErr) throw pwErr;
+                    setNewPassword('');
+                    setConfirmPassword('');
+                    setMessage('Password updated.');
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : String(e));
+                  } finally {
+                    setPasswordSaving(false);
+                  }
+                })();
+              }}
+              className="inline-flex items-center gap-2"
+            >
+              {passwordSaving ? 'Updating…' : 'Update password'}
+            </Button>
+          </div>
         </section>
 
         {showCallSettings && <RecruiterCallSettingsPanel />}

@@ -25,7 +25,7 @@ async function redirectAfterStaffLogin(
   const snapshot = await resolveStaffSession();
   const currentPath = `${pathname}${search}`;
   const section = resolveAppSectionFromLocation(pathname, search);
-  if (canAccessSection(snapshot.role, section, snapshot.userEmail, snapshot.displayName)) return;
+  if (canAccessSection(snapshot.role, section, snapshot.userEmail, snapshot.displayName, snapshot.hiredAgentId)) return;
   const fallback = defaultRouteForRole(snapshot.role);
   if (fallback !== currentPath) {
     navigate(fallback, { replace: true });

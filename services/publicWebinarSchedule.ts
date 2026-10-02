@@ -91,6 +91,7 @@ export async function bookPublicWebinar(input: {
   firstname: string;
   surname: string;
   phone?: string;
+  reference?: string;
   broadcast_id?: string;
   webinar_id?: string;
   quick?: boolean;

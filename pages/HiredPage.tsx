@@ -99,7 +99,7 @@ const HiredPage: React.FC = () => {
     }
     if (
       !window.confirm(
-        `Mark ${fullName.trim()} as hired?\n\nThis emails the welcome package, the signature card, and a hiring-portal invite.`,
+        `Mark ${fullName.trim()} as hired?\n\nThis emails the welcome package, the signature card, and a portal login with a temporary password.`,
       )
     ) {
       return;
@@ -118,7 +118,7 @@ const HiredPage: React.FC = () => {
         signupId: source === 'signup' ? sourceId : undefined,
         personId: source === 'pipeline' ? sourceId : undefined,
       });
-      setMsg(`Hired ${created.agent.full_name}. Welcome, signature, and portal invite were sent to ${created.agent.email}.`);
+      setMsg(`Hired ${created.agent.full_name}. Welcome, signature, and portal login were sent to ${created.agent.email}.`);
       resetForm();
       await load();
     } catch (err) {
@@ -180,7 +180,8 @@ const HiredPage: React.FC = () => {
           <p className="mt-1 max-w-2xl text-sm text-slate-600">
             Find someone from webinar form signups or the call queue, or add them by hand. Marking
             hired sends the AO welcome letter with the New Agent Welcome Guide PDF, a personal email
-            signature they can paste, and hiring-portal access.
+            signature they can paste, and a portal login (Agent ID + temporary password). They see an empty
+            workspace until we add agent tools.
           </p>
         </div>
         <Button type="button" variant="outline" className="!min-h-0 h-10 px-3" onClick={() => void load()} disabled={loading}>
@@ -287,6 +288,7 @@ const HiredPage: React.FC = () => {
           <thead className="bg-[#f7f3eb] text-[#6f675c]">
             <tr>
               <th className="px-3 py-2">Agent</th>
+              <th className="px-3 py-2">ID</th>
               <th className="px-3 py-2">Welcome</th>
               <th className="px-3 py-2">Signature</th>
               <th className="px-3 py-2">Portal</th>
@@ -301,9 +303,10 @@ const HiredPage: React.FC = () => {
                   <div className="font-medium text-[#1f2a24]">{row.full_name}</div>
                   <div className="text-[#6f675c]">{row.email}</div>
                 </td>
+                <td className="px-3 py-2 font-mono text-[11px] text-[#0A2F5C]">{row.agent_code || '—'}</td>
                 <td className="px-3 py-2 text-[#5a5348]">{row.welcome_sent_at ? 'Sent' : '—'}</td>
                 <td className="px-3 py-2 text-[#5a5348]">{row.signature_sent_at ? 'Sent' : '—'}</td>
-                <td className="px-3 py-2 text-[#5a5348]">{row.invite_sent_at ? 'Invited' : '—'}</td>
+                <td className="px-3 py-2 text-[#5a5348]">{row.invite_sent_at ? 'Login sent' : '—'}</td>
                 <td className="px-3 py-2">
                   <a className="text-[#005EB8] underline" href={`/agent/${row.contact_slug}`} target="_blank" rel="noreferrer">
                     Open
@@ -335,7 +338,7 @@ const HiredPage: React.FC = () => {
             ))}
             {!loading && !agents.length && (
               <tr>
-                <td colSpan={6} className="px-3 py-6 text-[#8a8276]">
+                <td colSpan={7} className="px-3 py-6 text-[#8a8276]">
                   No hired agents yet.
                 </td>
               </tr>

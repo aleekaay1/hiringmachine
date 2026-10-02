@@ -1,7 +1,8 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ClipboardList, Mail, PhoneCall, RefreshCw, Send } from 'lucide-react';
+import { ClipboardList, FileQuestion, Mail, PhoneCall, RefreshCw, Send } from 'lucide-react';
 import { getCurrentUserProfile, type UserProfile } from '../services/accessControl';
+import { getStaffSessionSnapshot } from '../services/staffSessionCache';
 import {
   displayName,
   displayPhone,
@@ -159,9 +160,12 @@ const HiringMachineHome: React.FC<{ profile: UserProfile | null }> = ({ profile 
           <KpiCard label="Bounced" value={data?.instantly.bounced ?? '—'} />
           <KpiCard label="Unsubs" value={data?.instantly.unsubscribed ?? '—'} />
         </div>
-        <div className="mt-3">
+        <div className="mt-3 flex flex-wrap gap-2">
           <Link to="/replies" className="hm-btn-brass inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs">
             <Mail size={14} /> Open Instantly replies
+          </Link>
+          <Link to="/webinar-questionnaires" className="hm-btn-ghost inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs">
+            <FileQuestion size={14} /> Webinar questionnaires
           </Link>
         </div>
       </section>
@@ -254,11 +258,36 @@ const HiringMachineHome: React.FC<{ profile: UserProfile | null }> = ({ profile 
 };
 
 const RoleHome: React.FC = () => {
+  const cached = React.useMemo(() => getStaffSessionSnapshot(), []);
   const [profile, setProfile] = React.useState<UserProfile | null>(null);
+  const hiredAgentId = profile?.hired_agent_id ?? cached.hiredAgentId;
 
   React.useEffect(() => {
     void getCurrentUserProfile().then(setProfile);
   }, []);
+
+  if (hiredAgentId) {
+    const name = profile?.full_name || cached.displayName;
+    const code = profile?.agent_code || cached.agentCode;
+    return (
+      <div className="mx-auto flex min-h-[70vh] max-w-xl flex-col justify-center p-6 text-center">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8a8276]">Agent portal</p>
+        <h1 className="mt-2 font-display text-3xl text-[#1c1915]">Welcome{name ? `, ${name.split(/\s+/)[0]}` : ''}</h1>
+        {code ? (
+          <p className="mt-3 text-sm text-[#5a5348]">
+            Agent ID <span className="font-semibold tabular-nums text-[#0A2F5C]">{code}</span>
+          </p>
+        ) : null}
+        <p className="mt-4 text-sm leading-6 text-[#6f675c]">
+          Your workspace is ready. Tools and details will show here later. For now you can change your
+          password on Account.
+        </p>
+        <Link to="/account" className="hm-btn-brass mx-auto mt-6 inline-flex rounded-full px-5 py-2 text-sm">
+          Account & password
+        </Link>
+      </div>
+    );
+  }
 
   return <HiringMachineHome profile={profile} />;
 };
