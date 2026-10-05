@@ -45,6 +45,7 @@ const Layout: React.FC<LayoutProps> = ({
   const [userEmail, setUserEmail] = React.useState<string | null>(cachedSession.userEmail);
   const [displayName, setDisplayName] = React.useState(cachedSession.displayName);
   const [avatarUrl, setAvatarUrl] = React.useState<string | null>(cachedSession.avatarUrl);
+  const [userId, setUserId] = React.useState<string | null>(cachedSession.userId);
   const [roleResolved, setRoleResolved] = React.useState(cachedSession.resolved);
   const [hiredAgentId, setHiredAgentId] = React.useState<string | null>(cachedSession.hiredAgentId);
   const [agentCode, setAgentCode] = React.useState<string | null>(cachedSession.agentCode);

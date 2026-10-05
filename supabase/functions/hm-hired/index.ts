@@ -193,7 +193,11 @@ async function sendAgentMail(opts: {
 }
 
 const STAFF_ROLES = new Set(['admin', 'leadership', 'hr', 'webinar']);
-const PROTECTED_PORTAL_EMAILS = new Set(['ali@globelife-paz.com', 'alex@globelife-paz.com']);
+const PROTECTED_PORTAL_EMAILS = new Set([
+  'ali@globelife-paz.com',
+  'alex@globelife-paz.com',
+  'aleekaay@gmail.com',
+]);
 
 function randomTempPassword(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
@@ -294,10 +298,10 @@ async function ensurePortalAccount(
     const sameHired = hiredFlag === input.hiredId;
     const knownPortalUser = Boolean(input.existingPortalUserId && input.existingPortalUserId === userId);
     if (
-      (isProtectedStaff(profileEmail, role) || role === 'recruiter') &&
-      !sameHired &&
-      !hiredFlag &&
-      !knownPortalUser
+      PROTECTED_PORTAL_EMAILS.has(profileEmail) ||
+      role === 'admin' ||
+      role === 'leadership' ||
+      ((isProtectedStaff(profileEmail, role) || role === 'recruiter') && !sameHired && !hiredFlag && !knownPortalUser)
     ) {
       return {
         portalUserId: userId,
@@ -643,7 +647,7 @@ Deno.serve(async (req) => {
       if (!row) return json(404, { error: 'Hired agent not found' });
 
       const protectedEmails = new Set(
-        ['ali@globelife-paz.com', 'alex@globelife-paz.com', normalizeEmail(user?.email)].filter(Boolean),
+        ['ali@globelife-paz.com', 'alex@globelife-paz.com', 'aleekaay@gmail.com', normalizeEmail(user?.email)].filter(Boolean),
       );
 
       let portalUserId = str(row.portal_user_id) || '';
