@@ -24,6 +24,10 @@ export type HiredAgent = {
   office_phone: string | null;
   office_ext: string | null;
   direct_phone: string | null;
+  team_line?: string | null;
+  tagline?: string | null;
+  address?: string | null;
+  website_url?: string | null;
   contact_slug: string;
   agent_code?: string | null;
   portal_user_id: string | null;

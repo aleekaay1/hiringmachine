@@ -2,9 +2,21 @@ import React from 'react';
 import { BadgeCheck, Plus, RefreshCw, Search, Send, Trash2, UserPlus } from 'lucide-react';
 import { Button } from '../components/UI';
 import {
+  AGENT_ADDRESS_DEFAULT,
   AGENT_OFFICE_DEFAULT,
+  AGENT_TAGLINE_DEFAULT,
+  AGENT_TEAM_DEFAULT,
   AGENT_TITLE_DEFAULT,
+  AGENT_WEBSITE_URL,
+  SIGNATURE_ASSET_ORIGIN,
+  alexPazSignatureInput,
+  buildAgentSignatureCardHtml,
+  buildAgentVcard,
+  buildAlexPazSignatureCardHtml,
+  buildStandaloneSignatureEmailHtml,
 } from '../services/agentOnboardingHtml';
+import { sendEmail } from '../services/emailService';
+import { supabase } from '../services/supabaseClient';
 import {
   listHiredAgents,
   markCandidateHired,
@@ -15,6 +27,26 @@ import {
   type HiredMatch,
 } from '../services/hiredAgentsService';
 
+function signaturePreviewDoc(cardHtml: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8" /></head><body style="margin:0;padding:16px;background:#ffffff;">${cardHtml}</body></html>`;
+}
+
+function agentSignatureHtml(row: HiredAgent): string {
+  return buildAgentSignatureCardHtml({
+    fullName: row.full_name,
+    title: row.title,
+    teamLine: row.team_line || AGENT_TEAM_DEFAULT,
+    tagline: row.tagline || AGENT_TAGLINE_DEFAULT,
+    email: row.email,
+    officePhone: row.office_phone || AGENT_OFFICE_DEFAULT,
+    officeExt: row.office_ext,
+    directPhone: row.direct_phone,
+    address: row.address || AGENT_ADDRESS_DEFAULT,
+    websiteUrl: row.website_url || AGENT_WEBSITE_URL,
+    contactUrl: `${SIGNATURE_ASSET_ORIGIN}/agent/${row.contact_slug}`,
+  });
+}
+
 const HiredPage: React.FC = () => {
   const [query, setQuery] = React.useState('');
   const [matches, setMatches] = React.useState<HiredMatch[]>([]);
@@ -22,9 +54,17 @@ const HiredPage: React.FC = () => {
   const [agents, setAgents] = React.useState<HiredAgent[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
+  const [signatureOnlyBusy, setSignatureOnlyBusy] = React.useState(false);
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [msg, setMsg] = React.useState<string | null>(null);
+  const [pendingSend, setPendingSend] = React.useState<{
+    id: string;
+    which: 'welcome' | 'signature';
+    label: string;
+    html: string;
+  } | null>(null);
+  const alexSignatureHtml = React.useMemo(() => buildAlexPazSignatureCardHtml(), []);
 
   const [fullName, setFullName] = React.useState('');
   const [email, setEmail] = React.useState('');
@@ -162,9 +202,64 @@ const HiredPage: React.FC = () => {
     try {
       await resendHiredEmail(id, which);
       setMsg(`Resent ${which}.`);
+      setPendingSend(null);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Resend failed');
+    }
+  };
+
+  const openSendPreview = (row: HiredAgent, which: 'welcome' | 'signature') => {
+    setPendingSend({
+      id: row.id,
+      which,
+      label:
+        which === 'welcome'
+          ? `Welcome package for ${row.full_name}`
+          : `Email signature for ${row.full_name}`,
+      html: which === 'welcome' ? alexSignatureHtml : agentSignatureHtml(row),
+    });
+  };
+
+  const onSendSignatureOnly = async () => {
+    setError(null);
+    setMsg(null);
+    if (!email.trim()) {
+      setError('Enter the recipient email before sending the signature.');
+      return;
+    }
+    if (
+      !window.confirm(
+        `Send only the email signature to ${email.trim()}?\n\nThe welcome package will not be sent.`,
+      )
+    ) {
+      return;
+    }
+    setSignatureOnlyBusy(true);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('Sign in required to send email.');
+      const vcf = buildAgentVcard(alexPazSignatureInput());
+      const result = await sendEmail(token, {
+        to: email.trim(),
+        subject: 'Alex Paz — AO Globe Life',
+        bodyHtml: buildStandaloneSignatureEmailHtml(alexSignatureHtml),
+        trigger: 'alex_signature_only',
+        attachments: [
+          {
+            filename: 'Alex-Paz.vcf',
+            contentBase64: btoa(vcf),
+            contentType: 'text/vcard',
+          },
+        ],
+      });
+      if ('error' in result) throw new Error(result.error);
+      setMsg(`Signature sent to ${email.trim()}. The welcome package was not included.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not send signature');
+    } finally {
+      setSignatureOnlyBusy(false);
     }
   };
 
@@ -179,9 +274,9 @@ const HiredPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-slate-900">Hired</h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-600">
             Find someone from webinar form signups or the call queue, or add them by hand. Marking
-            hired sends the AO welcome letter with the New Agent Welcome Guide PDF, a personal email
-            signature they can paste, and a portal login (Agent ID + temporary password). They see an empty
-            workspace until we add agent tools.
+            hired sends the AO welcome letter with the New Agent Welcome Guide PDF, Alex Paz’s email
+            signature on that letter, a personal signature card they can paste, and a portal login. Preview
+            the welcome signature below before you send it.
           </p>
         </div>
         <Button type="button" variant="outline" className="!min-h-0 h-10 px-3" onClick={() => void load()} disabled={loading}>
@@ -263,6 +358,18 @@ const HiredPage: React.FC = () => {
             <input className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm" value={directPhone} onChange={(e) => setDirectPhone(e.target.value)} />
           </label>
         </div>
+        <div className="rounded-xl border border-[#e6e0d4] bg-[#fbf8f2] p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#8a8276]">Signature the candidate will see</p>
+          <p className="mt-1 text-xs text-[#5a5348]">
+            This card is appended to the welcome package. Send signature only emails this same card without the welcome letter.
+          </p>
+          <iframe
+            title="Welcome package signature preview"
+            sandbox=""
+            srcDoc={signaturePreviewDoc(alexSignatureHtml)}
+            className="mt-3 h-[680px] w-full rounded-lg border border-[#e6e0d4] bg-white"
+          />
+        </div>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
@@ -272,6 +379,15 @@ const HiredPage: React.FC = () => {
           >
             <UserPlus size={14} />
             {busy ? 'Sending…' : 'Mark hired & send emails'}
+          </button>
+          <button
+            type="button"
+            disabled={signatureOnlyBusy}
+            onClick={() => void onSendSignatureOnly()}
+            className="inline-flex items-center gap-2 rounded-full border border-[#389C50] bg-[#389C50] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
+          >
+            <Send size={14} />
+            {signatureOnlyBusy ? 'Sending signature…' : 'Send signature only'}
           </button>
           <button
             type="button"
@@ -314,10 +430,10 @@ const HiredPage: React.FC = () => {
                 </td>
                 <td className="px-3 py-2">
                   <div className="flex flex-wrap gap-1">
-                    <button type="button" className="rounded-full border border-[#ddd5c6] px-2 py-1 text-[11px]" onClick={() => void onResend(row.id, 'welcome')}>
+                    <button type="button" className="rounded-full border border-[#ddd5c6] px-2 py-1 text-[11px]" onClick={() => openSendPreview(row, 'welcome')}>
                       <Send size={10} className="mr-1 inline" /> Welcome
                     </button>
-                    <button type="button" className="rounded-full border border-[#ddd5c6] px-2 py-1 text-[11px]" onClick={() => void onResend(row.id, 'signature')}>
+                    <button type="button" className="rounded-full border border-[#ddd5c6] px-2 py-1 text-[11px]" onClick={() => openSendPreview(row, 'signature')}>
                       Signature
                     </button>
                     <button type="button" className="rounded-full border border-[#ddd5c6] px-2 py-1 text-[11px]" onClick={() => void onResend(row.id, 'invite')}>
@@ -346,6 +462,43 @@ const HiredPage: React.FC = () => {
           </tbody>
         </table>
       </section>
+
+      {pendingSend && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#1c1915]/40 p-4 sm:items-center">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-[#e6e0d4] bg-white shadow-xl">
+            <div className="border-b border-[#eee7db] px-4 py-3">
+              <p className="text-sm font-semibold text-[#1f2a24]">{pendingSend.label}</p>
+              <p className="mt-1 text-xs text-[#5a5348]">
+                {pendingSend.which === 'welcome'
+                  ? 'The welcome letter includes this signature at the bottom. Confirm it before sending.'
+                  : 'This is the signature email, sent without the welcome package.'}
+              </p>
+            </div>
+            <iframe
+              title="Signature preview before send"
+              sandbox=""
+              srcDoc={signaturePreviewDoc(pendingSend.html)}
+              className="h-[560px] w-full bg-white"
+            />
+            <div className="flex flex-wrap justify-end gap-2 border-t border-[#eee7db] px-4 py-3">
+              <button
+                type="button"
+                className="rounded-full border border-[#ddd5c6] px-4 py-2 text-xs text-[#5a5348]"
+                onClick={() => setPendingSend(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-full bg-[#389C50] px-4 py-2 text-xs font-semibold text-white"
+                onClick={() => void onResend(pendingSend.id, pendingSend.which)}
+              >
+                Send {pendingSend.which === 'welcome' ? 'welcome package' : 'signature'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

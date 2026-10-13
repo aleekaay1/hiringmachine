@@ -506,7 +506,7 @@ Deno.serve(async (req) => {
       if (!data) return json(404, { error: 'Contact not found' });
       const origin = siteOrigin();
       const card = cardFromRow(data as Record<string, unknown>, origin);
-      card.logoUrl = '/logo.png';
+      card.logoUrl = '/brand/ao-globe-life-mark.png';
       return json(200, {
         ok: true,
         card,

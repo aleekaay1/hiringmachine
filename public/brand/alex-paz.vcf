@@ -1,0 +1,13 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:Alex Paz
+N:Paz;Alex;;;
+ORG:AO Globe Life - Team Paz
+TITLE:Life Insurance Producer
+EMAIL;TYPE=WORK:alex@globelife-paz.com
+TEL;TYPE=WORK,VOICE:+12898123930
+TEL;TYPE=CELL,VOICE:+16478311787
+NOTE:Office Ext. 5201
+ADR;TYPE=WORK:;;59-700 Third Line;Oakville;ON;L6L 4B1;Canada
+URL:https://globelife-paz.com
+END:VCARD

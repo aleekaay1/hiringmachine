@@ -79,7 +79,7 @@ const AgentContactPage: React.FC = () => {
             <img
               src={card.logoUrl || '/logo.png'}
               alt="AO Globe Life"
-              className="mb-3 h-16 w-auto max-w-full object-contain"
+              className="mb-3 h-auto w-[120px] max-w-full object-contain"
             />
             <h1 className="break-words text-xl font-bold leading-snug text-slate-900">{card.fullName}</h1>
             <p className="mt-1 break-words text-sm text-slate-600">{card.title}</p>

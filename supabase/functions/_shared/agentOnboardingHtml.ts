@@ -5,8 +5,19 @@ export const AGENT_ADDRESS_DEFAULT = '59-700 Third Line, Oakville, ON. L6L 4B1';
 export const AGENT_WEBSITE_URL = 'https://globelife-paz.com';
 export const AGENT_OFFICE_DEFAULT = '+12898123930';
 
-export const AGENT_LOGO_URL =
-  'https://globelife-paz.com/wp-content/uploads/2026/02/Globe_Life_AIL_CD_NZ_Paz-Organization_Stacked_Logo_RGB_COLOR_BLUE_TEXT_TEMPLATE.png';
+/** Production origin so email clients can load the PNG mark. AVIF stays in /brand for the source file. */
+export const SIGNATURE_ASSET_ORIGIN = 'https://aopaz.vercel.app';
+export const SIGNATURE_GREEN = '#389C50';
+/** PNG generated from public/brand/ao-globe-life-mark.avif. Width 150px, height 185px (300×369 source). */
+export const SIGNATURE_MARK_URL = `${SIGNATURE_ASSET_ORIGIN}/brand/ao-globe-life-mark.png`;
+export const SIGNATURE_MARK_WIDTH = 150;
+export const SIGNATURE_MARK_HEIGHT = 185;
+export const ALEX_PAZ_EMAIL = 'alex@globelife-paz.com';
+export const ALEX_PAZ_OFFICE_EXT = '5201';
+export const ALEX_PAZ_DIRECT_PHONE = '+16478311787';
+export const ALEX_PAZ_VCARD_URL = `${SIGNATURE_ASSET_ORIGIN}/brand/alex-paz.vcf`;
+
+export const AGENT_LOGO_URL = SIGNATURE_MARK_URL;
 
 const SOCIAL = {
   instagram: 'https://www.instagram.com/paz_organization/',
@@ -17,15 +28,15 @@ const SOCIAL = {
 } as const;
 
 const ICONS = {
-  instagram: 'https://img.icons8.com/color/48/instagram-new.png',
-  linkedin: 'https://img.icons8.com/color/48/linkedin.png',
-  facebook: 'https://img.icons8.com/color/48/facebook.png',
-  youtube: 'https://img.icons8.com/color/48/youtube-play.png',
-  tiktok: 'https://img.icons8.com/color/48/tiktok.png',
-  phone: 'https://img.icons8.com/fluency-systems-filled/48/ffffff/phone.png',
-  email: 'https://img.icons8.com/fluency-systems-filled/48/ffffff/new-post.png',
-  web: 'https://img.icons8.com/fluency-systems-filled/48/ffffff/domain.png',
-  pin: 'https://img.icons8.com/fluency-systems-filled/48/ffffff/marker.png',
+  instagram: `${SIGNATURE_ASSET_ORIGIN}/brand/icons/instagram.png`,
+  linkedin: `${SIGNATURE_ASSET_ORIGIN}/brand/icons/linkedin.png`,
+  facebook: `${SIGNATURE_ASSET_ORIGIN}/brand/icons/facebook.png`,
+  youtube: `${SIGNATURE_ASSET_ORIGIN}/brand/icons/youtube.png`,
+  tiktok: `${SIGNATURE_ASSET_ORIGIN}/brand/icons/tiktok.png`,
+  phone: `${SIGNATURE_ASSET_ORIGIN}/brand/icons/phone.png`,
+  email: `${SIGNATURE_ASSET_ORIGIN}/brand/icons/email.png`,
+  website: `${SIGNATURE_ASSET_ORIGIN}/brand/icons/website.png`,
+  pin: `${SIGNATURE_ASSET_ORIGIN}/brand/icons/pin.png`,
 } as const;
 
 export type AgentCardInput = {
@@ -58,13 +69,11 @@ function telHref(raw: string): string {
 
 function formatPhone(raw: string): string {
   const digits = raw.replace(/\D/g, '');
-  if (digits.length === 11 && digits.startsWith('1')) {
-    return `+1 ${digits.slice(1, 4)}${digits.slice(4, 7)}${digits.slice(7)}`;
-  }
-  if (digits.length === 10) {
-    return `+1 ${digits.slice(0, 3)}${digits.slice(3, 6)}${digits.slice(6)}`;
-  }
-  return raw.trim();
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  if (digits.length === 10) return `+1${digits}`;
+  const trimmed = raw.trim();
+  if (!digits) return trimmed;
+  return trimmed.startsWith('+') ? `+${digits}` : trimmed;
 }
 
 export function buildConfidentialityStatement(fullName: string, email: string): string {
@@ -91,25 +100,59 @@ export function buildAgentVcard(input: AgentCardInput): string {
   ];
   if (office) lines.push(`TEL;TYPE=WORK,VOICE:${office.replace(/\s+/g, '')}`);
   if (direct) lines.push(`TEL;TYPE=CELL,VOICE:${direct.replace(/\s+/g, '')}`);
+  const ext = (input.officeExt || '').trim();
+  if (ext) lines.push(`NOTE:Office Ext. ${ext}`);
   lines.push('ADR;TYPE=WORK:;;59-700 Third Line;Oakville;ON;L6L 4B1;Canada');
   lines.push(`URL:${input.websiteUrl || AGENT_WEBSITE_URL}`);
   lines.push('END:VCARD');
   return lines.join('\r\n');
 }
 
-function contactLine(iconSrc: string, alt: string, bodyHtml: string): string {
+function iconImg(src: string, alt: string, size: number): string {
+  return `<img src="${src}" width="${size}" height="${size}" alt="${escapeHtml(alt)}" style="display:block;border:0;outline:none;text-decoration:none;width:${size}px;height:${size}px;" />`;
+}
+
+function contactBits(iconSrc: string, alt: string, bodyHtml: string): string {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0">
+    <tr>
+      <td width="36" valign="middle" style="width:36px;padding:0 8px 0 0;">${iconImg(iconSrc, alt, 28)}</td>
+      <td valign="middle" style="padding:0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.3;color:#1f2937;">${bodyHtml}</td>
+    </tr>
+  </table>`;
+}
+
+function pairRow(left: string, right: string): string {
   return `<tr>
-    <td width="36" valign="top" style="width:36px;padding:0 10px 12px 0;">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="28" height="28" bgcolor="#21c45a" style="width:28px;height:28px;background-color:#21c45a;border-radius:14px;">
-        <tr><td align="center" valign="middle" bgcolor="#21c45a" style="background-color:#21c45a;width:28px;height:28px;">
-          <img src="${iconSrc}" width="14" height="14" alt="${escapeHtml(alt)}" style="display:block;border:0;width:14px;height:14px;" />
-        </td></tr>
-      </table>
-    </td>
-    <td valign="top" style="padding:0 0 12px 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.4;color:#111827;word-break:break-word;">
-      ${bodyHtml}
-    </td>
+    <td width="50%" valign="middle" style="width:50%;padding:0 10px 14px 0;">${left}</td>
+    <td width="50%" valign="middle" style="width:50%;padding:0 0 14px 6px;">${right}</td>
   </tr>`;
+}
+
+function fullRow(inner: string): string {
+  return `<tr><td colspan="2" valign="middle" style="padding:0 0 14px 0;">${inner}</td></tr>`;
+}
+
+function greenRule(): string {
+  return `<tr><td style="padding:0 0 12px 0;line-height:0;font-size:0;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
+      <tr><td height="2" bgcolor="${SIGNATURE_GREEN}" style="height:2px;line-height:2px;font-size:1px;background-color:${SIGNATURE_GREEN};">&nbsp;</td></tr>
+    </table>
+  </td></tr>`;
+}
+
+function socialCell(href: string, src: string, alt: string): string {
+  return `<td style="padding:0 8px 0 0;line-height:0;font-size:0;"><a href="${href}" target="_blank" style="text-decoration:none;">${iconImg(src, alt, 32)}</a></td>`;
+}
+
+function confidentialityHtml(fullName: string, email: string): string {
+  const statement = buildConfidentialityStatement(fullName, email);
+  const safeEmail = escapeHtml(email);
+  const escaped = escapeHtml(statement);
+  const linked = escaped.replace(
+    safeEmail,
+    `<a href="mailto:${safeEmail}" style="color:#1d4ed8;text-decoration:underline;">${safeEmail}</a>`,
+  );
+  return linked;
 }
 
 export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
@@ -117,94 +160,124 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
   const title = escapeHtml(input.title || AGENT_TITLE_DEFAULT);
   const team = escapeHtml(input.teamLine || AGENT_TEAM_DEFAULT);
   const tagline = escapeHtml(input.tagline || AGENT_TAGLINE_DEFAULT);
-  const email = escapeHtml(input.email.trim());
   const emailRaw = input.email.trim();
+  const email = escapeHtml(emailRaw);
   const officeRaw = (input.officePhone || AGENT_OFFICE_DEFAULT).trim();
   const ext = (input.officeExt || '').trim();
-  const officeLabel = `${formatPhone(officeRaw)}${ext ? ` Ext. ${escapeHtml(ext)}` : ''}`;
+  const officeLabel = officeRaw ? `${formatPhone(officeRaw)}${ext ? ` Ext. ${ext}` : ''}` : '';
   const directRaw = (input.directPhone || '').trim();
   const address = escapeHtml(input.address || AGENT_ADDRESS_DEFAULT);
   const siteUrl = input.websiteUrl || AGENT_WEBSITE_URL;
-  const logo = input.logoUrl || AGENT_LOGO_URL;
   const contactUrl = input.contactUrl;
-  const confidentiality = escapeHtml(buildConfidentialityStatement(input.fullName.trim(), emailRaw));
+  const linkStyle = 'color:#1f2937;text-decoration:none;';
+  const subStyle = 'font-size:11px;line-height:1.2;color:#6b7280;';
 
-  const lines = [
-    officeRaw
-      ? contactLine(
-          ICONS.phone,
-          'Office',
-          `<a href="${telHref(officeRaw)}" style="color:#111827;text-decoration:none;">${escapeHtml(officeLabel)}</a><div style="font-size:11px;color:#6b7280;">Office</div>`,
-        )
-      : '',
-    directRaw
-      ? contactLine(
-          ICONS.phone,
-          'Direct',
-          `<a href="${telHref(directRaw)}" style="color:#111827;text-decoration:none;">${escapeHtml(formatPhone(directRaw))}</a><div style="font-size:11px;color:#6b7280;">Direct</div>`,
-        )
-      : '',
-    contactLine(
-      ICONS.email,
-      'Email',
-      `<a href="mailto:${email}" style="color:#111827;text-decoration:none;word-break:break-all;">${email}</a>`,
-    ),
-    contactLine(
-      ICONS.web,
-      'Website',
-      `<a href="${escapeHtml(siteUrl)}" style="color:#111827;text-decoration:none;">AO Globe Life Website</a>`,
-    ),
-    contactLine(ICONS.pin, 'Address', address),
-  ].join('');
+  const officeCell = officeRaw
+    ? contactBits(
+        ICONS.phone,
+        'Office',
+        `<a href="${telHref(officeRaw)}" style="${linkStyle}">${escapeHtml(officeLabel)}</a><div style="${subStyle}">Office</div>`,
+      )
+    : '';
+  const directCell = directRaw
+    ? contactBits(
+        ICONS.phone,
+        'Direct',
+        `<a href="${telHref(directRaw)}" style="${linkStyle}">${escapeHtml(formatPhone(directRaw))}</a><div style="${subStyle}">Direct</div>`,
+      )
+    : '';
+  const emailCell = contactBits(
+    ICONS.email,
+    'Email',
+    `<a href="mailto:${email}" style="${linkStyle}word-break:break-all;">${email}</a>`,
+  );
+  const webCell = contactBits(
+    ICONS.website,
+    'Website',
+    `<a href="${escapeHtml(siteUrl)}" target="_blank" style="${linkStyle}">AO Globe Life Website</a>`,
+  );
+  const addressCell = contactBits(ICONS.pin, 'Address', address);
 
-  return `
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;max-width:480px;font-family:Arial,Helvetica,sans-serif;background:#ffffff;color:#111827;">
+  const phoneRow =
+    officeCell && directCell
+      ? pairRow(officeCell, directCell)
+      : fullRow(officeCell || directCell);
+  const webRow = pairRow(emailCell, webCell);
+
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="560" style="width:100%;max-width:560px;border-collapse:collapse;background-color:#ffffff;font-family:Arial,Helvetica,sans-serif;">
   <tr>
-    <td style="padding:0 0 10px 0;">
-      <img src="${escapeHtml(logo)}" alt="AO Globe Life" width="72" style="display:block;max-width:72px;height:auto;border:0;" />
+    <td width="168" valign="top" style="width:168px;padding:2px 12px 0 0;">
+      <img src="${SIGNATURE_MARK_URL}" width="${SIGNATURE_MARK_WIDTH}" height="${SIGNATURE_MARK_HEIGHT}" alt="AO Globe Life" style="display:block;border:0;outline:none;text-decoration:none;width:${SIGNATURE_MARK_WIDTH}px;height:auto;" />
     </td>
-  </tr>
-  <tr>
-    <td style="padding:0 0 12px 0;">
-      <div style="font-size:18px;font-weight:700;color:#111827;line-height:1.25;word-break:break-word;">${name}</div>
-      <div style="font-size:13px;color:#4b5563;margin-top:4px;">${title}</div>
-      <div style="font-size:13px;color:#111827;margin-top:6px;">${team}</div>
-      <div style="font-size:12px;color:#4b5563;margin-top:2px;">${tagline}</div>
-    </td>
-  </tr>
-  <tr>
-    <td style="padding:8px 0;border-top:2px solid #21c45a;"></td>
-  </tr>
-  <tr>
-    <td style="padding:8px 0 0 0;">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;">
-        ${lines}
+    <td valign="top" style="padding:0;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
+        <tr><td style="padding:0 0 2px 0;font-family:Arial,Helvetica,sans-serif;font-size:20px;line-height:1.2;font-weight:700;color:#1a1a1a;">${name}</td></tr>
+        <tr><td style="padding:0 0 1px 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.35;color:#6b7280;">${title}</td></tr>
+        <tr><td style="padding:1px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.35;color:#1f2937;">${team}</td></tr>
+        <tr><td style="padding:1px 0 10px 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.35;color:#6b7280;">${tagline}</td></tr>
+        ${greenRule()}
+        <tr><td style="padding:12px 0 0 0;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
+            ${phoneRow}
+            ${webRow}
+            ${fullRow(addressCell)}
+          </table>
+        </td></tr>
+        ${greenRule()}
+        <tr><td style="padding:4px 0 0 0;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
+            <tr>
+              <td valign="middle" style="padding:0;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+                  <tr>
+                    ${socialCell(SOCIAL.instagram, ICONS.instagram, 'Instagram')}
+                    ${socialCell(SOCIAL.linkedin, ICONS.linkedin, 'LinkedIn')}
+                    ${socialCell(SOCIAL.facebook, ICONS.facebook, 'Facebook')}
+                    ${socialCell(SOCIAL.youtube, ICONS.youtube, 'YouTube')}
+                    ${socialCell(SOCIAL.tiktok, ICONS.tiktok, 'TikTok')}
+                  </tr>
+                </table>
+              </td>
+              <td valign="middle" align="right" style="padding:0;text-align:right;">
+                <a href="${escapeHtml(contactUrl)}" target="_blank" style="display:inline-block;background-color:${SIGNATURE_GREEN};color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:700;line-height:1;text-decoration:none;padding:12px 16px;border-radius:8px;">Save contact</a>
+              </td>
+            </tr>
+          </table>
+        </td></tr>
       </table>
     </td>
   </tr>
   <tr>
-    <td style="padding:8px 0;border-top:2px solid #21c45a;"></td>
-  </tr>
-  <tr>
-    <td style="padding:8px 0 12px 0;">
-      <a href="${SOCIAL.instagram}"><img src="${ICONS.instagram}" width="26" height="26" alt="Instagram" style="border:0;margin:0 6px 6px 0;" /></a>
-      <a href="${SOCIAL.linkedin}"><img src="${ICONS.linkedin}" width="26" height="26" alt="LinkedIn" style="border:0;margin:0 6px 6px 0;" /></a>
-      <a href="${SOCIAL.facebook}"><img src="${ICONS.facebook}" width="26" height="26" alt="Facebook" style="border:0;margin:0 6px 6px 0;" /></a>
-      <a href="${SOCIAL.youtube}"><img src="${ICONS.youtube}" width="26" height="26" alt="YouTube" style="border:0;margin:0 6px 6px 0;" /></a>
-      <a href="${SOCIAL.tiktok}"><img src="${ICONS.tiktok}" width="26" height="26" alt="TikTok" style="border:0;margin:0 6px 6px 0;" /></a>
+    <td colspan="2" style="padding:16px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.45;color:#6b7280;">
+      ${confidentialityHtml(input.fullName.trim(), emailRaw)}
     </td>
   </tr>
-  <tr>
-    <td style="padding:0 0 14px 0;">
-      <a href="${escapeHtml(contactUrl)}" style="display:inline-block;background:#21c45a;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:700;text-decoration:none;padding:10px 16px;border-radius:22px;">Save contact</a>
-    </td>
-  </tr>
-  <tr>
-    <td style="padding:10px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.5;color:#6b7280;word-break:break-word;">
-      ${confidentiality}
-    </td>
-  </tr>
-</table>`.trim();
+</table>`;
+}
+
+export function alexPazSignatureInput(): AgentCardInput {
+  return {
+    fullName: 'Alex Paz',
+    title: AGENT_TITLE_DEFAULT,
+    teamLine: AGENT_TEAM_DEFAULT,
+    tagline: AGENT_TAGLINE_DEFAULT,
+    email: ALEX_PAZ_EMAIL,
+    officePhone: AGENT_OFFICE_DEFAULT,
+    officeExt: ALEX_PAZ_OFFICE_EXT,
+    directPhone: ALEX_PAZ_DIRECT_PHONE,
+    address: AGENT_ADDRESS_DEFAULT,
+    websiteUrl: AGENT_WEBSITE_URL,
+    logoUrl: SIGNATURE_MARK_URL,
+    contactUrl: ALEX_PAZ_VCARD_URL,
+  };
+}
+
+export function buildAlexPazSignatureCardHtml(): string {
+  return buildAgentSignatureCardHtml(alexPazSignatureInput());
+}
+
+export function buildStandaloneSignatureEmailHtml(cardHtml: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /></head><body style="margin:0;padding:16px;background:#ffffff;">${cardHtml}</body></html>`;
 }
 
 function stepRow(num: string, title: string, body: string): string {
@@ -349,11 +422,8 @@ export function defaultWelcomePackageHtml(
         </td>
       </tr>
       <tr>
-        <td style="padding:8px 28px 8px 28px;font-size:15px;line-height:1.55;color:#1f2a24;">
-          Best regards,<br/>
-          <strong>Alex Paz</strong><br/>
-          Life Insurance Agent<br/>
-          Team Paz • AO Globe Life
+        <td style="padding:12px 28px 8px 28px;">
+          ${buildAlexPazSignatureCardHtml()}
         </td>
       </tr>
       <tr>
