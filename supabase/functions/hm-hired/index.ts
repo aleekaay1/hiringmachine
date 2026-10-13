@@ -136,6 +136,20 @@ function cardFromRow(row: Record<string, unknown>, origin: string): AgentCardInp
     websiteUrl: str(row.website_url) || AGENT_WEBSITE_URL,
     logoUrl: AGENT_LOGO_URL,
     contactUrl: `${origin}/agent/${slug}`,
+    socials: socialsFromRow(row),
+  };
+}
+
+function socialsFromRow(row: Record<string, unknown>) {
+  const keys = ['instagram', 'linkedin', 'facebook', 'youtube', 'tiktok'] as const;
+  const explicit = keys.some((key) => `${key}_url` in row || key in row);
+  if (!explicit) return undefined;
+  return {
+    instagram: str(row.instagram_url || row.instagram),
+    linkedin: str(row.linkedin_url || row.linkedin),
+    facebook: str(row.facebook_url || row.facebook),
+    youtube: str(row.youtube_url || row.youtube),
+    tiktok: str(row.tiktok_url || row.tiktok),
   };
 }
 
@@ -424,7 +438,7 @@ async function sendOnboardingBundle(
   }
 
   if (opts.welcome) {
-    const html = defaultWelcomePackageHtml(first, portalLink, login);
+    const html = defaultWelcomePackageHtml(first, portalLink, login, card);
     const pdf = await loadWelcomePdf();
     await sendAgentMail({
       admin,
@@ -614,7 +628,13 @@ Deno.serve(async (req) => {
       };
       const { data: created, error } = await admin.from('hm_hired_agents').insert(row).select('*').single();
       if (error || !created) throw error || new Error('Could not save hired agent');
-      const result = await sendOnboardingBundle(admin, created as Record<string, unknown>, user?.id || null, {
+      const createdRow = created as Record<string, unknown>;
+      for (const key of ['instagram', 'linkedin', 'facebook', 'youtube', 'tiktok']) {
+        if (body[`${key}_url`] != null || body[key] != null) {
+          createdRow[`${key}_url`] = str(body[`${key}_url`] || body[key]);
+        }
+      }
+      const result = await sendOnboardingBundle(admin, createdRow, user?.id || null, {
         welcome: body.send_welcome !== false,
         signature: body.send_signature !== false,
         invite: body.invite_portal !== false,

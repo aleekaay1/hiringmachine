@@ -28,6 +28,11 @@ export type HiredAgent = {
   tagline?: string | null;
   address?: string | null;
   website_url?: string | null;
+  instagram_url?: string | null;
+  linkedin_url?: string | null;
+  facebook_url?: string | null;
+  youtube_url?: string | null;
+  tiktok_url?: string | null;
   contact_slug: string;
   agent_code?: string | null;
   portal_user_id: string | null;
@@ -93,6 +98,11 @@ export async function markCandidateHired(input: {
   source?: string;
   signupId?: string;
   personId?: string;
+  instagram?: string;
+  linkedin?: string;
+  facebook?: string;
+  youtube?: string;
+  tiktok?: string;
 }): Promise<{ agent: HiredAgent }> {
   const json = await invokeHired({
     action: 'mark_hired',
@@ -106,6 +116,11 @@ export async function markCandidateHired(input: {
     source: input.source || 'manual',
     signup_id: input.signupId,
     person_id: input.personId,
+    instagram_url: input.instagram || '',
+    linkedin_url: input.linkedin || '',
+    facebook_url: input.facebook || '',
+    youtube_url: input.youtube || '',
+    tiktok_url: input.tiktok || '',
     send_welcome: true,
     send_signature: true,
     invite_portal: true,

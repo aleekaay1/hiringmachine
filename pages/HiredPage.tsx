@@ -8,12 +8,13 @@ import {
   AGENT_TEAM_DEFAULT,
   AGENT_TITLE_DEFAULT,
   AGENT_WEBSITE_URL,
+  ORG_SOCIAL_LINKS,
   SIGNATURE_ASSET_ORIGIN,
-  alexPazSignatureInput,
   buildAgentSignatureCardHtml,
   buildAgentVcard,
-  buildAlexPazSignatureCardHtml,
   buildStandaloneSignatureEmailHtml,
+  type AgentCardInput,
+  type SignatureSocials,
 } from '../services/agentOnboardingHtml';
 import { sendEmail } from '../services/emailService';
 import { supabase } from '../services/supabaseClient';
@@ -44,7 +45,19 @@ function agentSignatureHtml(row: HiredAgent): string {
     address: row.address || AGENT_ADDRESS_DEFAULT,
     websiteUrl: row.website_url || AGENT_WEBSITE_URL,
     contactUrl: `${SIGNATURE_ASSET_ORIGIN}/agent/${row.contact_slug}`,
+    socials: storedSocials(row),
   });
+}
+
+function storedSocials(row: HiredAgent): SignatureSocials | undefined {
+  const socials: SignatureSocials = {
+    instagram: row.instagram_url,
+    linkedin: row.linkedin_url,
+    facebook: row.facebook_url,
+    youtube: row.youtube_url,
+    tiktok: row.tiktok_url,
+  };
+  return Object.values(socials).some((value) => (value || '').trim()) ? socials : undefined;
 }
 
 const HiredPage: React.FC = () => {
@@ -64,7 +77,6 @@ const HiredPage: React.FC = () => {
     label: string;
     html: string;
   } | null>(null);
-  const alexSignatureHtml = React.useMemo(() => buildAlexPazSignatureCardHtml(), []);
 
   const [fullName, setFullName] = React.useState('');
   const [email, setEmail] = React.useState('');
@@ -73,8 +85,33 @@ const HiredPage: React.FC = () => {
   const [officePhone, setOfficePhone] = React.useState(AGENT_OFFICE_DEFAULT);
   const [officeExt, setOfficeExt] = React.useState('');
   const [directPhone, setDirectPhone] = React.useState('');
+  const [instagram, setInstagram] = React.useState(ORG_SOCIAL_LINKS.instagram);
+  const [linkedin, setLinkedin] = React.useState(ORG_SOCIAL_LINKS.linkedin);
+  const [facebook, setFacebook] = React.useState(ORG_SOCIAL_LINKS.facebook);
+  const [youtube, setYoutube] = React.useState(ORG_SOCIAL_LINKS.youtube);
+  const [tiktok, setTiktok] = React.useState(ORG_SOCIAL_LINKS.tiktok);
   const [source, setSource] = React.useState<'manual' | 'signup' | 'pipeline'>('manual');
   const [sourceId, setSourceId] = React.useState('');
+
+  const signatureInput = React.useMemo<AgentCardInput>(() => {
+    const socials: SignatureSocials = { instagram, linkedin, facebook, youtube, tiktok };
+    return {
+      fullName: fullName.trim() || 'Your name',
+      title: title.trim() || AGENT_TITLE_DEFAULT,
+      teamLine: AGENT_TEAM_DEFAULT,
+      tagline: AGENT_TAGLINE_DEFAULT,
+      email: email.trim() || 'name@email.com',
+      officePhone: officePhone.trim() || AGENT_OFFICE_DEFAULT,
+      officeExt: officeExt.trim(),
+      directPhone: directPhone.trim(),
+      address: AGENT_ADDRESS_DEFAULT,
+      websiteUrl: AGENT_WEBSITE_URL,
+      contactUrl: AGENT_WEBSITE_URL,
+      socials,
+    };
+  }, [directPhone, email, facebook, fullName, instagram, linkedin, officeExt, officePhone, tiktok, title, youtube]);
+
+  const signatureHtml = React.useMemo(() => buildAgentSignatureCardHtml(signatureInput), [signatureInput]);
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -126,6 +163,11 @@ const HiredPage: React.FC = () => {
     setOfficePhone(AGENT_OFFICE_DEFAULT);
     setOfficeExt('');
     setDirectPhone('');
+    setInstagram(ORG_SOCIAL_LINKS.instagram);
+    setLinkedin(ORG_SOCIAL_LINKS.linkedin);
+    setFacebook(ORG_SOCIAL_LINKS.facebook);
+    setYoutube(ORG_SOCIAL_LINKS.youtube);
+    setTiktok(ORG_SOCIAL_LINKS.tiktok);
     setSource('manual');
     setSourceId('');
   };
@@ -154,6 +196,11 @@ const HiredPage: React.FC = () => {
         officePhone: officePhone.trim(),
         officeExt: officeExt.trim(),
         directPhone: directPhone.trim(),
+        instagram: instagram.trim(),
+        linkedin: linkedin.trim(),
+        facebook: facebook.trim(),
+        youtube: youtube.trim(),
+        tiktok: tiktok.trim(),
         source,
         signupId: source === 'signup' ? sourceId : undefined,
         personId: source === 'pipeline' ? sourceId : undefined,
@@ -217,20 +264,20 @@ const HiredPage: React.FC = () => {
         which === 'welcome'
           ? `Welcome package for ${row.full_name}`
           : `Email signature for ${row.full_name}`,
-      html: which === 'welcome' ? alexSignatureHtml : agentSignatureHtml(row),
+      html: agentSignatureHtml(row),
     });
   };
 
   const onSendSignatureOnly = async () => {
     setError(null);
     setMsg(null);
-    if (!email.trim()) {
-      setError('Enter the recipient email before sending the signature.');
+    if (!fullName.trim() || !email.trim()) {
+      setError('Name and email are required before sending the signature.');
       return;
     }
     if (
       !window.confirm(
-        `Send only the email signature to ${email.trim()}?\n\nThe welcome package will not be sent.`,
+        `Send ${fullName.trim()}'s email signature to ${email.trim()}?\n\nThe welcome package will not be sent.`,
       )
     ) {
       return;
@@ -240,16 +287,22 @@ const HiredPage: React.FC = () => {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
       if (!token) throw new Error('Sign in required to send email.');
-      const vcf = buildAgentVcard(alexPazSignatureInput());
+      const card: AgentCardInput = {
+        ...signatureInput,
+        fullName: fullName.trim(),
+        email: email.trim(),
+      };
+      const vcf = buildAgentVcard(card);
+      const safeName = fullName.trim().replace(/[^\w.-]+/g, '-') || 'signature';
       const result = await sendEmail(token, {
         to: email.trim(),
-        subject: 'Alex Paz — AO Globe Life',
-        bodyHtml: buildStandaloneSignatureEmailHtml(alexSignatureHtml),
-        trigger: 'alex_signature_only',
+        subject: `${fullName.trim()} — AO Globe Life`,
+        bodyHtml: buildStandaloneSignatureEmailHtml(buildAgentSignatureCardHtml(card)),
+        trigger: 'hired_signature_only',
         attachments: [
           {
-            filename: 'Alex-Paz.vcf',
-            contentBase64: btoa(vcf),
+            filename: `${safeName}.vcf`,
+            contentBase64: btoa(unescape(encodeURIComponent(vcf))),
             contentType: 'text/vcard',
           },
         ],
@@ -274,9 +327,8 @@ const HiredPage: React.FC = () => {
           <h1 className="text-2xl font-bold text-slate-900">Hired</h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-600">
             Find someone from webinar form signups or the call queue, or add them by hand. Marking
-            hired sends the AO welcome letter with the New Agent Welcome Guide PDF, Alex Paz’s email
-            signature on that letter, a personal signature card they can paste, and a portal login. Preview
-            the welcome signature below before you send it.
+            hired sends the AO welcome letter, this person’s signature, and a portal login. The preview
+            below updates as you type their name, designation, phones, and social links.
           </p>
         </div>
         <Button type="button" variant="outline" className="!min-h-0 h-10 px-3" onClick={() => void load()} disabled={loading}>
@@ -342,8 +394,8 @@ const HiredPage: React.FC = () => {
             <input type="email" className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm" value={portalEmail} onChange={(e) => setPortalEmail(e.target.value)} placeholder="Same as above unless they have a company inbox" />
           </label>
           <label className="block text-xs text-[#6f675c]">
-            Title
-            <input className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm" value={title} onChange={(e) => setTitle(e.target.value)} />
+            Designation
+            <input className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Life Insurance Producer" />
           </label>
           <label className="block text-xs text-[#6f675c]">
             Office phone
@@ -354,19 +406,39 @@ const HiredPage: React.FC = () => {
             <input className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm" value={officeExt} onChange={(e) => setOfficeExt(e.target.value)} placeholder="5201" />
           </label>
           <label className="block text-xs text-[#6f675c] sm:col-span-2">
-            Direct / mobile (candidate can add this)
+            Direct / mobile
             <input className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm" value={directPhone} onChange={(e) => setDirectPhone(e.target.value)} />
+          </label>
+          <label className="block text-xs text-[#6f675c] sm:col-span-2">
+            Instagram
+            <input className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm" value={instagram} onChange={(e) => setInstagram(e.target.value)} placeholder="Leave blank to hide" />
+          </label>
+          <label className="block text-xs text-[#6f675c]">
+            LinkedIn
+            <input className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm" value={linkedin} onChange={(e) => setLinkedin(e.target.value)} placeholder="Leave blank to hide" />
+          </label>
+          <label className="block text-xs text-[#6f675c]">
+            Facebook
+            <input className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm" value={facebook} onChange={(e) => setFacebook(e.target.value)} placeholder="Leave blank to hide" />
+          </label>
+          <label className="block text-xs text-[#6f675c]">
+            YouTube
+            <input className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm" value={youtube} onChange={(e) => setYoutube(e.target.value)} placeholder="Leave blank to hide" />
+          </label>
+          <label className="block text-xs text-[#6f675c]">
+            TikTok
+            <input className="mt-1 w-full rounded-lg border border-[#e0d8ca] px-3 py-2 text-sm" value={tiktok} onChange={(e) => setTiktok(e.target.value)} placeholder="Leave blank to hide" />
           </label>
         </div>
         <div className="rounded-xl border border-[#e6e0d4] bg-[#fbf8f2] p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-[#8a8276]">Signature the candidate will see</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#8a8276]">Signature preview</p>
           <p className="mt-1 text-xs text-[#5a5348]">
-            This card is appended to the welcome package. Send signature only emails this same card without the welcome letter.
+            This is {fullName.trim() || 'this person'}’s card. It updates as you edit the form. Send signature only emails this card. Mark hired appends the same details to the welcome package.
           </p>
           <iframe
-            title="Welcome package signature preview"
+            title="Signature preview"
             sandbox=""
-            srcDoc={signaturePreviewDoc(alexSignatureHtml)}
+            srcDoc={signaturePreviewDoc(signatureHtml)}
             className="mt-3 h-[680px] w-full rounded-lg border border-[#e6e0d4] bg-white"
           />
         </div>
@@ -470,8 +542,8 @@ const HiredPage: React.FC = () => {
               <p className="text-sm font-semibold text-[#1f2a24]">{pendingSend.label}</p>
               <p className="mt-1 text-xs text-[#5a5348]">
                 {pendingSend.which === 'welcome'
-                  ? 'The welcome letter includes this signature at the bottom. Confirm it before sending.'
-                  : 'This is the signature email, sent without the welcome package.'}
+                  ? 'The welcome letter includes this person’s signature at the bottom. Confirm it before sending.'
+                  : 'This person’s signature is sent on its own, without the welcome package.'}
               </p>
             </div>
             <iframe

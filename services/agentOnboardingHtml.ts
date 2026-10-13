@@ -19,13 +19,23 @@ export const ALEX_PAZ_VCARD_URL = `${SIGNATURE_ASSET_ORIGIN}/brand/alex-paz.vcf`
 
 export const AGENT_LOGO_URL = SIGNATURE_MARK_URL;
 
-const SOCIAL = {
+export const ORG_SOCIAL_LINKS = {
   instagram: 'https://www.instagram.com/paz_organization/',
   linkedin: 'https://www.linkedin.com/company/globe-life-ail-division-paz-organization/',
   facebook: 'https://www.facebook.com/profile.php?id=61584527937036',
   youtube: 'https://www.youtube.com/results?search_query=AO+Globe+Life+Paz',
   tiktok: 'https://www.tiktok.com/@paz_organization',
 } as const;
+
+const SOCIAL = ORG_SOCIAL_LINKS;
+
+export type SignatureSocials = {
+  instagram?: string | null;
+  linkedin?: string | null;
+  facebook?: string | null;
+  youtube?: string | null;
+  tiktok?: string | null;
+};
 
 const ICONS = {
   instagram: `${SIGNATURE_ASSET_ORIGIN}/brand/icons/instagram.png`,
@@ -52,6 +62,8 @@ export type AgentCardInput = {
   websiteUrl?: string | null;
   logoUrl?: string | null;
   contactUrl: string;
+  /** When set, only non-empty links are shown. When omitted, the org profiles are used. */
+  socials?: SignatureSocials | null;
 };
 
 export function escapeHtml(value: string): string {
@@ -141,7 +153,25 @@ function greenRule(): string {
 }
 
 function socialCell(href: string, src: string, alt: string): string {
-  return `<td style="padding:0 8px 0 0;line-height:0;font-size:0;"><a href="${href}" target="_blank" style="text-decoration:none;">${iconImg(src, alt, 32)}</a></td>`;
+  return `<td style="padding:0 8px 0 0;line-height:0;font-size:0;"><a href="${escapeHtml(href)}" target="_blank" style="text-decoration:none;">${iconImg(src, alt, 32)}</a></td>`;
+}
+
+function socialCells(input: AgentCardInput): string {
+  const source = input.socials ?? SOCIAL;
+  const items: Array<[string, string, string]> = [
+    [source.instagram || '', ICONS.instagram, 'Instagram'],
+    [source.linkedin || '', ICONS.linkedin, 'LinkedIn'],
+    [source.facebook || '', ICONS.facebook, 'Facebook'],
+    [source.youtube || '', ICONS.youtube, 'YouTube'],
+    [source.tiktok || '', ICONS.tiktok, 'TikTok'],
+  ];
+  return items
+    .map(([href, src, alt]) => {
+      const url = href.trim();
+      if (!url) return '';
+      return socialCell(url, src, alt);
+    })
+    .join('');
 }
 
 function confidentialityHtml(fullName: string, email: string): string {
@@ -230,11 +260,7 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
               <td valign="middle" style="padding:0;">
                 <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
                   <tr>
-                    ${socialCell(SOCIAL.instagram, ICONS.instagram, 'Instagram')}
-                    ${socialCell(SOCIAL.linkedin, ICONS.linkedin, 'LinkedIn')}
-                    ${socialCell(SOCIAL.facebook, ICONS.facebook, 'Facebook')}
-                    ${socialCell(SOCIAL.youtube, ICONS.youtube, 'YouTube')}
-                    ${socialCell(SOCIAL.tiktok, ICONS.tiktok, 'TikTok')}
+                    ${socialCells(input)}
                   </tr>
                 </table>
               </td>
@@ -312,6 +338,7 @@ export function defaultWelcomePackageHtml(
   firstName: string,
   portalLink?: string | null,
   login?: PortalLoginInfo | null,
+  signature?: AgentCardInput | null,
 ): string {
   const first = escapeHtml(firstName || 'there');
   const loginUrl = escapeHtml(login?.loginUrl || portalLink || '');
@@ -423,7 +450,7 @@ export function defaultWelcomePackageHtml(
       </tr>
       <tr>
         <td style="padding:12px 28px 8px 28px;">
-          ${buildAlexPazSignatureCardHtml()}
+          ${signature ? buildAgentSignatureCardHtml(signature) : buildAlexPazSignatureCardHtml()}
         </td>
       </tr>
       <tr>
