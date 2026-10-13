@@ -8,10 +8,10 @@ export const AGENT_OFFICE_DEFAULT = '+12898123930';
 /** Production origin so email clients can load the PNG mark. AVIF stays in /brand for the source file. */
 export const SIGNATURE_ASSET_ORIGIN = 'https://aopaz.vercel.app';
 export const SIGNATURE_GREEN = '#389C50';
-/** PNG generated from public/brand/ao-globe-life-mark.avif. Width 150px, height 185px (300×369 source). */
-export const SIGNATURE_MARK_URL = `${SIGNATURE_ASSET_ORIGIN}/brand/ao-globe-life-mark.png`;
-export const SIGNATURE_MARK_WIDTH = 150;
-export const SIGNATURE_MARK_HEIGHT = 185;
+/** Full-resolution PNG from the AVIF, displayed small so phone screens stay sharp. */
+export const SIGNATURE_MARK_URL = `${SIGNATURE_ASSET_ORIGIN}/brand/ao-globe-life-mark-hq.png`;
+export const SIGNATURE_MARK_WIDTH = 96;
+export const SIGNATURE_MARK_HEIGHT = 119;
 export const ALEX_PAZ_EMAIL = 'alex@globelife-paz.com';
 export const ALEX_PAZ_OFFICE_EXT = '5201';
 export const ALEX_PAZ_DIRECT_PHONE = '+16478311787';
@@ -127,21 +127,21 @@ function iconImg(src: string, alt: string, size: number): string {
 function contactBits(iconSrc: string, alt: string, bodyHtml: string): string {
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0">
     <tr>
-      <td width="36" valign="middle" style="width:36px;padding:0 8px 0 0;">${iconImg(iconSrc, alt, 28)}</td>
-      <td valign="middle" style="padding:0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.3;color:#1f2937;">${bodyHtml}</td>
+      <td width="30" valign="middle" style="width:30px;padding:0 6px 0 0;">${iconImg(iconSrc, alt, 22)}</td>
+      <td valign="middle" style="padding:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.25;color:#1f2937;">${bodyHtml}</td>
     </tr>
   </table>`;
 }
 
 function pairRow(left: string, right: string): string {
   return `<tr>
-    <td width="50%" valign="middle" style="width:50%;padding:0 10px 14px 0;">${left}</td>
-    <td width="50%" valign="middle" style="width:50%;padding:0 0 14px 6px;">${right}</td>
+    <td width="50%" valign="middle" style="width:50%;padding:0 6px 8px 0;">${left}</td>
+    <td width="50%" valign="middle" style="width:50%;padding:0 0 8px 4px;">${right}</td>
   </tr>`;
 }
 
 function fullRow(inner: string): string {
-  return `<tr><td colspan="2" valign="middle" style="padding:0 0 14px 0;">${inner}</td></tr>`;
+  return `<tr><td colspan="2" valign="middle" style="padding:0 0 8px 0;">${inner}</td></tr>`;
 }
 
 function greenRule(): string {
@@ -153,7 +153,7 @@ function greenRule(): string {
 }
 
 function socialCell(href: string, src: string, alt: string): string {
-  return `<td style="padding:0 8px 0 0;line-height:0;font-size:0;"><a href="${escapeHtml(href)}" target="_blank" style="text-decoration:none;">${iconImg(src, alt, 32)}</a></td>`;
+  return `<td style="padding:0 6px 0 0;line-height:0;font-size:0;"><a href="${escapeHtml(href)}" target="_blank" style="text-decoration:none;">${iconImg(src, alt, 26)}</a></td>`;
 }
 
 function socialCells(input: AgentCardInput): string {
@@ -219,7 +219,7 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
   const emailCell = contactBits(
     ICONS.email,
     'Email',
-    `<a href="mailto:${email}" style="${linkStyle}word-break:break-all;">${email}</a>`,
+    `<a href="mailto:${email}" style="${linkStyle}">${email}</a>`,
   );
   const webCell = contactBits(
     ICONS.website,
@@ -234,17 +234,17 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
       : fullRow(officeCell || directCell);
   const webRow = pairRow(emailCell, webCell);
 
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="560" style="width:100%;max-width:560px;border-collapse:collapse;background-color:#ffffff;font-family:Arial,Helvetica,sans-serif;">
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="480" style="width:100%;max-width:480px;border-collapse:collapse;background-color:#ffffff;font-family:Arial,Helvetica,sans-serif;">
   <tr>
-    <td width="168" valign="top" style="width:168px;padding:2px 12px 0 0;">
-      <img src="${SIGNATURE_MARK_URL}" width="${SIGNATURE_MARK_WIDTH}" height="${SIGNATURE_MARK_HEIGHT}" alt="AO Globe Life" style="display:block;border:0;outline:none;text-decoration:none;width:${SIGNATURE_MARK_WIDTH}px;height:auto;" />
+    <td width="104" valign="top" style="width:104px;padding:2px 8px 0 0;">
+      <img src="${SIGNATURE_MARK_URL}" width="${SIGNATURE_MARK_WIDTH}" height="${SIGNATURE_MARK_HEIGHT}" alt="AO Globe Life" style="display:block;border:0;outline:none;text-decoration:none;width:${SIGNATURE_MARK_WIDTH}px;max-width:100%;height:auto;" />
     </td>
     <td valign="top" style="padding:0;">
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
-        <tr><td style="padding:0 0 2px 0;font-family:Arial,Helvetica,sans-serif;font-size:20px;line-height:1.2;font-weight:700;color:#1a1a1a;">${name}</td></tr>
-        <tr><td style="padding:0 0 1px 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.35;color:#6b7280;">${title}</td></tr>
-        <tr><td style="padding:1px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.35;color:#1f2937;">${team}</td></tr>
-        <tr><td style="padding:1px 0 10px 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.35;color:#6b7280;">${tagline}</td></tr>
+        <tr><td style="padding:0 0 1px 0;font-family:Arial,Helvetica,sans-serif;font-size:18px;line-height:1.2;font-weight:700;color:#1a1a1a;">${name}</td></tr>
+        <tr><td style="padding:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;color:#6b7280;">${title}</td></tr>
+        <tr><td style="padding:1px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;color:#1f2937;">${team}</td></tr>
+        <tr><td style="padding:1px 0 8px 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;color:#6b7280;">${tagline}</td></tr>
         ${greenRule()}
         <tr><td style="padding:12px 0 0 0;">
           <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
@@ -265,7 +265,7 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
                 </table>
               </td>
               <td valign="middle" align="right" style="padding:0;text-align:right;">
-                <a href="${escapeHtml(contactUrl)}" target="_blank" style="display:inline-block;background-color:${SIGNATURE_GREEN};color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:700;line-height:1;text-decoration:none;padding:12px 16px;border-radius:8px;">Save contact</a>
+                <a href="${escapeHtml(contactUrl)}" target="_blank" style="display:inline-block;background-color:${SIGNATURE_GREEN};color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:700;line-height:1;text-decoration:none;white-space:nowrap;padding:9px 12px;border-radius:8px;">Save contact</a>
               </td>
             </tr>
           </table>
@@ -274,7 +274,7 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
     </td>
   </tr>
   <tr>
-    <td colspan="2" style="padding:16px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:1.45;color:#6b7280;">
+    <td colspan="2" style="padding:12px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;color:#6b7280;">
       ${confidentialityHtml(input.fullName.trim(), emailRaw)}
     </td>
   </tr>
