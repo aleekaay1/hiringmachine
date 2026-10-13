@@ -94,6 +94,35 @@ export function buildConfidentialityStatement(fullName: string, email: string): 
   );
 }
 
+function vcardFileSlug(name: string): string {
+  const slug = name
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  return slug || 'contact';
+}
+
+/** HTTPS .vcf link for the Save contact button. The card layout stays the same. */
+export function buildSaveContactUrl(input: AgentCardInput): string {
+  const name = input.fullName.trim();
+  const params = new URLSearchParams();
+  params.set('n', name);
+  params.set('t', (input.title || AGENT_TITLE_DEFAULT).trim());
+  params.set('o', (input.teamLine || AGENT_TEAM_DEFAULT).trim());
+  params.set('e', input.email.trim());
+  const office = (input.officePhone || AGENT_OFFICE_DEFAULT).trim();
+  const direct = (input.directPhone || '').trim();
+  const ext = (input.officeExt || '').trim();
+  if (office) params.set('p', office);
+  if (ext) params.set('x', ext);
+  if (direct) params.set('d', direct);
+  params.set('a', (input.address || AGENT_ADDRESS_DEFAULT).trim());
+  params.set('w', (input.websiteUrl || AGENT_WEBSITE_URL).trim());
+  return `${SIGNATURE_ASSET_ORIGIN}/v/${vcardFileSlug(name)}.vcf?${params.toString()}`;
+}
+
 export function buildAgentVcard(input: AgentCardInput): string {
   const name = input.fullName.trim();
   const parts = name.split(/\s+/);
@@ -198,7 +227,7 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
   const directRaw = (input.directPhone || '').trim();
   const address = escapeHtml(input.address || AGENT_ADDRESS_DEFAULT);
   const siteUrl = input.websiteUrl || AGENT_WEBSITE_URL;
-  const contactUrl = input.contactUrl;
+  const saveContactUrl = buildSaveContactUrl(input);
   const linkStyle = 'color:#1f2937;text-decoration:none;';
   const subStyle = 'font-size:11px;line-height:1.2;color:#6b7280;';
 
@@ -265,7 +294,7 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
                 </table>
               </td>
               <td valign="middle" align="right" style="padding:0;text-align:right;">
-                <a href="${escapeHtml(contactUrl)}" target="_blank" style="display:inline-block;background-color:${SIGNATURE_GREEN};color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:700;line-height:1;text-decoration:none;white-space:nowrap;padding:9px 12px;border-radius:8px;">Save contact</a>
+                <a href="${escapeHtml(saveContactUrl)}" target="_blank" style="display:inline-block;background-color:${SIGNATURE_GREEN};color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:700;line-height:1;text-decoration:none;white-space:nowrap;padding:9px 12px;border-radius:8px;">Save contact</a>
               </td>
             </tr>
           </table>

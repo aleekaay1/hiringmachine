@@ -6,6 +6,10 @@
   "framework": "vite",
   "rewrites": [
     {
+      "source": "/v/:file.vcf",
+      "destination": "/api/vcard"
+    },
+    {
       "source": "/((?!assets/|models/|onnxruntime-web/|.*\\..*).*)",
       "destination": "/index.html"
     }

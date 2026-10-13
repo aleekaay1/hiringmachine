@@ -437,7 +437,7 @@ const HiredPage: React.FC = () => {
           </p>
           <iframe
             title="Signature preview"
-            sandbox=""
+            sandbox="allow-popups allow-popups-to-escape-sandbox allow-downloads"
             srcDoc={signaturePreviewDoc(signatureHtml)}
             className="mt-3 h-[680px] w-full rounded-lg border border-[#e6e0d4] bg-white"
           />
@@ -548,7 +548,7 @@ const HiredPage: React.FC = () => {
             </div>
             <iframe
               title="Signature preview before send"
-              sandbox=""
+              sandbox="allow-popups allow-popups-to-escape-sandbox allow-downloads"
               srcDoc={signaturePreviewDoc(pendingSend.html)}
               className="h-[560px] w-full bg-white"
             />
