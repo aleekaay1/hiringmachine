@@ -149,40 +149,50 @@ export function buildAgentVcard(input: AgentCardInput): string {
   return lines.join('\r\n');
 }
 
+const PAPER = '#ffffff';
+const INK = '#1a1a1a';
+const MUTED = '#6b7280';
+
 function iconImg(src: string, alt: string, size: number): string {
-  return `<img src="${src}" width="${size}" height="${size}" alt="${escapeHtml(alt)}" style="display:block;border:0;outline:none;text-decoration:none;width:${size}px;height:${size}px;" />`;
+  return `<img src="${src}" width="${size}" height="${size}" alt="${escapeHtml(alt)}" style="display:block;border:0;outline:none;text-decoration:none;width:${size}px;height:${size}px;background-color:${PAPER};" />`;
+}
+
+/** Dark text on white, repeated on the cell and the span so paste cannot inherit a green fill or a light color. */
+function textSpan(color: string, inner: string): string {
+  return `<span style="color:${color};background-color:${PAPER};">${inner}</span>`;
+}
+
+function cellStyle(extra: string, color: string = INK): string {
+  return `background-color:${PAPER};color:${color};${extra}`;
 }
 
 function contactBits(iconSrc: string, alt: string, bodyHtml: string): string {
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0">
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" bgcolor="${PAPER}" style="background-color:${PAPER};color:${INK};">
     <tr>
-      <td width="30" valign="middle" style="width:30px;padding:0 6px 0 0;">${iconImg(iconSrc, alt, 22)}</td>
-      <td valign="middle" style="padding:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.25;color:#1f2937;">${bodyHtml}</td>
+      <td width="30" valign="middle" bgcolor="${PAPER}" style="${cellStyle('width:30px;padding:0 6px 0 0;')}">${iconImg(iconSrc, alt, 22)}</td>
+      <td valign="middle" bgcolor="${PAPER}" style="${cellStyle('padding:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.25;')}">${bodyHtml}</td>
     </tr>
   </table>`;
 }
 
 function pairRow(left: string, right: string): string {
   return `<tr>
-    <td width="50%" valign="middle" style="width:50%;padding:0 6px 8px 0;">${left}</td>
-    <td width="50%" valign="middle" style="width:50%;padding:0 0 8px 4px;">${right}</td>
+    <td width="50%" valign="middle" bgcolor="${PAPER}" style="${cellStyle('width:50%;padding:0 6px 8px 0;')}">${left}</td>
+    <td width="50%" valign="middle" bgcolor="${PAPER}" style="${cellStyle('width:50%;padding:0 0 8px 4px;')}">${right}</td>
   </tr>`;
 }
 
 function fullRow(inner: string): string {
-  return `<tr><td colspan="2" valign="middle" style="padding:0 0 8px 0;">${inner}</td></tr>`;
+  return `<tr><td colspan="2" valign="middle" bgcolor="${PAPER}" style="${cellStyle('padding:0 0 8px 0;')}">${inner}</td></tr>`;
 }
 
 function greenRule(): string {
-  return `<tr><td style="padding:0 0 12px 0;line-height:0;font-size:0;">
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
-      <tr><td height="2" bgcolor="${SIGNATURE_GREEN}" style="height:2px;line-height:2px;font-size:1px;background-color:${SIGNATURE_GREEN};">&nbsp;</td></tr>
-    </table>
-  </td></tr>`;
+  // A border, not a green-filled cell. Paste drops height and font-size but keeps bgcolor, which turned the old 2px rules into solid bars.
+  return `<tr><td bgcolor="${PAPER}" style="${cellStyle('padding:2px 0 10px 0;border-bottom:2px solid ' + SIGNATURE_GREEN + ';font-size:1px;line-height:1px;')}">&nbsp;</td></tr>`;
 }
 
 function socialCell(href: string, src: string, alt: string): string {
-  return `<td style="padding:0 6px 0 0;line-height:0;font-size:0;"><a href="${escapeHtml(href)}" target="_blank" style="text-decoration:none;">${iconImg(src, alt, 26)}</a></td>`;
+  return `<td bgcolor="${PAPER}" style="${cellStyle('padding:0 6px 0 0;')}"><a href="${escapeHtml(href)}" target="_blank" style="text-decoration:none;color:${INK};background-color:${PAPER};">${iconImg(src, alt, 26)}</a></td>`;
 }
 
 function socialCells(input: AgentCardInput): string {
@@ -209,9 +219,9 @@ function confidentialityHtml(fullName: string, email: string): string {
   const escaped = escapeHtml(statement);
   const linked = escaped.replace(
     safeEmail,
-    `<a href="mailto:${safeEmail}" style="color:#1d4ed8;text-decoration:underline;">${safeEmail}</a>`,
+    `<a href="mailto:${safeEmail}" style="color:#1d4ed8;background-color:${PAPER};text-decoration:underline;"><span style="color:#1d4ed8;background-color:${PAPER};">${safeEmail}</span></a>`,
   );
-  return linked;
+  return `<span style="color:${MUTED};background-color:${PAPER};">${linked}</span>`;
 }
 
 export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
@@ -228,34 +238,34 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
   const address = escapeHtml(input.address || AGENT_ADDRESS_DEFAULT);
   const siteUrl = input.websiteUrl || AGENT_WEBSITE_URL;
   const saveContactUrl = buildSaveContactUrl(input);
-  const linkStyle = 'color:#1f2937;text-decoration:none;';
-  const subStyle = 'font-size:11px;line-height:1.2;color:#6b7280;';
+  const linkStyle = `color:${INK};background-color:${PAPER};text-decoration:none;`;
+  const subStyle = `font-size:11px;line-height:1.2;color:${MUTED};background-color:${PAPER};`;
 
   const officeCell = officeRaw
     ? contactBits(
         ICONS.phone,
         'Office',
-        `<a href="${telHref(officeRaw)}" style="${linkStyle}">${escapeHtml(officeLabel)}</a><div style="${subStyle}">Office</div>`,
+        `<a href="${telHref(officeRaw)}" style="${linkStyle}">${textSpan(INK, escapeHtml(officeLabel))}</a><div style="${subStyle}">${textSpan(MUTED, 'Office')}</div>`,
       )
     : '';
   const directCell = directRaw
     ? contactBits(
         ICONS.phone,
         'Direct',
-        `<a href="${telHref(directRaw)}" style="${linkStyle}">${escapeHtml(formatPhone(directRaw))}</a><div style="${subStyle}">Direct</div>`,
+        `<a href="${telHref(directRaw)}" style="${linkStyle}">${textSpan(INK, escapeHtml(formatPhone(directRaw)))}</a><div style="${subStyle}">${textSpan(MUTED, 'Direct')}</div>`,
       )
     : '';
   const emailCell = contactBits(
     ICONS.email,
     'Email',
-    `<a href="mailto:${email}" style="${linkStyle}">${email}</a>`,
+    `<a href="mailto:${email}" style="${linkStyle}">${textSpan(INK, email)}</a>`,
   );
   const webCell = contactBits(
     ICONS.website,
     'Website',
-    `<a href="${escapeHtml(siteUrl)}" target="_blank" style="${linkStyle}">AO Globe Life Website</a>`,
+    `<a href="${escapeHtml(siteUrl)}" target="_blank" style="${linkStyle}">${textSpan(INK, 'AO Globe Life Website')}</a>`,
   );
-  const addressCell = contactBits(ICONS.pin, 'Address', address);
+  const addressCell = contactBits(ICONS.pin, 'Address', textSpan(INK, address));
 
   const phoneRow =
     officeCell && directCell
@@ -263,38 +273,38 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
       : fullRow(officeCell || directCell);
   const webRow = pairRow(emailCell, webCell);
 
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="480" style="width:100%;max-width:480px;border-collapse:collapse;background-color:#ffffff;font-family:Arial,Helvetica,sans-serif;">
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="480" bgcolor="${PAPER}" style="width:100%;max-width:480px;border-collapse:collapse;background-color:${PAPER};color:${INK};font-family:Arial,Helvetica,sans-serif;">
   <tr>
-    <td width="104" valign="top" style="width:104px;padding:2px 8px 0 0;">
-      <img src="${SIGNATURE_MARK_URL}" width="${SIGNATURE_MARK_WIDTH}" height="${SIGNATURE_MARK_HEIGHT}" alt="AO Globe Life" style="display:block;border:0;outline:none;text-decoration:none;width:${SIGNATURE_MARK_WIDTH}px;max-width:100%;height:auto;" />
+    <td width="104" valign="top" bgcolor="${PAPER}" style="${cellStyle('width:104px;padding:2px 8px 0 0;')}">
+      <img src="${SIGNATURE_MARK_URL}" width="${SIGNATURE_MARK_WIDTH}" height="${SIGNATURE_MARK_HEIGHT}" alt="AO Globe Life" style="display:block;border:0;outline:none;text-decoration:none;width:${SIGNATURE_MARK_WIDTH}px;max-width:100%;height:auto;background-color:${PAPER};" />
     </td>
-    <td valign="top" style="padding:0;">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
-        <tr><td style="padding:0 0 1px 0;font-family:Arial,Helvetica,sans-serif;font-size:18px;line-height:1.2;font-weight:700;color:#1a1a1a;">${name}</td></tr>
-        <tr><td style="padding:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;color:#6b7280;">${title}</td></tr>
-        <tr><td style="padding:1px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;color:#1f2937;">${team}</td></tr>
-        <tr><td style="padding:1px 0 8px 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;color:#6b7280;">${tagline}</td></tr>
+    <td valign="top" bgcolor="${PAPER}" style="${cellStyle('padding:0;')}">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="${PAPER}" style="width:100%;border-collapse:collapse;background-color:${PAPER};color:${INK};">
+        <tr><td bgcolor="${PAPER}" style="${cellStyle('padding:0 0 1px 0;font-family:Arial,Helvetica,sans-serif;font-size:18px;line-height:1.2;font-weight:700;')}">${textSpan(INK, name)}</td></tr>
+        <tr><td bgcolor="${PAPER}" style="${cellStyle('padding:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;', MUTED)}">${textSpan(MUTED, title)}</td></tr>
+        <tr><td bgcolor="${PAPER}" style="${cellStyle('padding:1px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;')}">${textSpan(INK, team)}</td></tr>
+        <tr><td bgcolor="${PAPER}" style="${cellStyle('padding:1px 0 8px 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;', MUTED)}">${textSpan(MUTED, tagline)}</td></tr>
         ${greenRule()}
-        <tr><td style="padding:12px 0 0 0;">
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
+        <tr><td bgcolor="${PAPER}" style="${cellStyle('padding:12px 0 0 0;')}">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="${PAPER}" style="width:100%;border-collapse:collapse;background-color:${PAPER};color:${INK};">
             ${phoneRow}
             ${webRow}
             ${fullRow(addressCell)}
           </table>
         </td></tr>
         ${greenRule()}
-        <tr><td style="padding:4px 0 0 0;">
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
+        <tr><td bgcolor="${PAPER}" style="${cellStyle('padding:4px 0 0 0;')}">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="${PAPER}" style="width:100%;border-collapse:collapse;background-color:${PAPER};color:${INK};">
             <tr>
-              <td valign="middle" style="padding:0;">
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+              <td valign="middle" bgcolor="${PAPER}" style="${cellStyle('padding:0;')}">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" bgcolor="${PAPER}" style="border-collapse:collapse;background-color:${PAPER};color:${INK};">
                   <tr>
                     ${socialCells(input)}
                   </tr>
                 </table>
               </td>
-              <td valign="middle" align="right" style="padding:0;text-align:right;">
-                <a href="${escapeHtml(saveContactUrl)}" target="_blank" style="display:inline-block;background-color:${SIGNATURE_GREEN};color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:700;line-height:1;text-decoration:none;white-space:nowrap;padding:9px 12px;border-radius:8px;">Save contact</a>
+              <td valign="middle" align="right" bgcolor="${PAPER}" style="${cellStyle('padding:0;text-align:right;')}">
+                <a href="${escapeHtml(saveContactUrl)}" target="_blank" style="display:inline-block;background-color:${SIGNATURE_GREEN};color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:700;line-height:1;text-decoration:none;white-space:nowrap;padding:9px 12px;border-radius:8px;"><span style="color:#ffffff;background-color:${SIGNATURE_GREEN};">Save contact</span></a>
               </td>
             </tr>
           </table>
@@ -303,7 +313,7 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
     </td>
   </tr>
   <tr>
-    <td colspan="2" style="padding:12px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;color:#6b7280;">
+    <td colspan="2" bgcolor="${PAPER}" style="${cellStyle('padding:12px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;', MUTED)}">
       ${confidentialityHtml(input.fullName.trim(), emailRaw)}
     </td>
   </tr>
@@ -331,8 +341,41 @@ export function buildAlexPazSignatureCardHtml(): string {
   return buildAgentSignatureCardHtml(alexPazSignatureInput());
 }
 
+export function buildAgentSignaturePlainText(input: AgentCardInput): string {
+  const name = input.fullName.trim();
+  const title = (input.title || AGENT_TITLE_DEFAULT).trim();
+  const team = (input.teamLine || AGENT_TEAM_DEFAULT).trim();
+  const tagline = (input.tagline || AGENT_TAGLINE_DEFAULT).trim();
+  const email = input.email.trim();
+  const officeRaw = (input.officePhone || AGENT_OFFICE_DEFAULT).trim();
+  const ext = (input.officeExt || '').trim();
+  const directRaw = (input.directPhone || '').trim();
+  const address = (input.address || AGENT_ADDRESS_DEFAULT).trim();
+  const siteUrl = input.websiteUrl || AGENT_WEBSITE_URL;
+  const lines = [name, title, team, tagline, ''];
+  if (officeRaw) lines.push(`Office: ${formatPhone(officeRaw)}${ext ? ` Ext. ${ext}` : ''}`);
+  if (directRaw) lines.push(`Direct: ${formatPhone(directRaw)}`);
+  if (email) lines.push(`Email: ${email}`);
+  lines.push(`Website: ${siteUrl}`, `Address: ${address}`, '');
+  const source = input.socials ?? SOCIAL;
+  const socials: Array<[string, string]> = [
+    ['Instagram', source.instagram || ''],
+    ['LinkedIn', source.linkedin || ''],
+    ['Facebook', source.facebook || ''],
+    ['YouTube', source.youtube || ''],
+    ['TikTok', source.tiktok || ''],
+  ];
+  for (const [label, href] of socials) {
+    const url = href.trim();
+    if (url) lines.push(`${label}: ${url}`);
+  }
+  lines.push(`Save contact: ${buildSaveContactUrl(input)}`);
+  lines.push('', buildConfidentialityStatement(name, email));
+  return lines.join('\n');
+}
+
 export function buildStandaloneSignatureEmailHtml(cardHtml: string): string {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /></head><body style="margin:0;padding:16px;background:#ffffff;">${cardHtml}</body></html>`;
+  return `<!DOCTYPE html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /></head><body style="margin:0;padding:16px;background-color:#ffffff;color:#1a1a1a;">${cardHtml}</body></html>`;
 }
 
 function stepRow(num: string, title: string, body: string): string {

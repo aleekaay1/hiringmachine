@@ -1,5 +1,5 @@
 import React from 'react';
-import { BadgeCheck, Plus, RefreshCw, Search, Send, Trash2, UserPlus } from 'lucide-react';
+import { BadgeCheck, Copy, Plus, RefreshCw, Search, Send, Trash2, UserPlus } from 'lucide-react';
 import { Button } from '../components/UI';
 import {
   AGENT_ADDRESS_DEFAULT,
@@ -11,6 +11,7 @@ import {
   ORG_SOCIAL_LINKS,
   SIGNATURE_ASSET_ORIGIN,
   buildAgentSignatureCardHtml,
+  buildAgentSignaturePlainText,
   buildAgentVcard,
   buildStandaloneSignatureEmailHtml,
   type AgentCardInput,
@@ -29,7 +30,37 @@ import {
 } from '../services/hiredAgentsService';
 
 function signaturePreviewDoc(cardHtml: string): string {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8" /></head><body style="margin:0;padding:16px;background:#ffffff;">${cardHtml}</body></html>`;
+  return `<!DOCTYPE html><html><head><meta charset="utf-8" /></head><body style="margin:0;padding:16px;background-color:#ffffff;color:#1a1a1a;">${cardHtml}</body></html>`;
+}
+
+async function copySignature(html: string, text: string): Promise<void> {
+  if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'text/html': new Blob([html], { type: 'text/html' }),
+        'text/plain': new Blob([text], { type: 'text/plain' }),
+      }),
+    ]);
+    return;
+  }
+  const host = document.createElement('div');
+  host.setAttribute('contenteditable', 'true');
+  host.style.position = 'fixed';
+  host.style.left = '-9999px';
+  host.style.top = '0';
+  host.style.backgroundColor = '#ffffff';
+  host.style.color = '#1a1a1a';
+  host.innerHTML = html;
+  document.body.appendChild(host);
+  const range = document.createRange();
+  range.selectNodeContents(host);
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  const ok = document.execCommand('copy');
+  selection?.removeAllRanges();
+  host.remove();
+  if (!ok) throw new Error('Could not copy the signature');
 }
 
 function agentSignatureHtml(row: HiredAgent): string {
@@ -68,6 +99,7 @@ const HiredPage: React.FC = () => {
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
   const [signatureOnlyBusy, setSignatureOnlyBusy] = React.useState(false);
+  const [copyNote, setCopyNote] = React.useState<string | null>(null);
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [msg, setMsg] = React.useState<string | null>(null);
@@ -268,6 +300,17 @@ const HiredPage: React.FC = () => {
     });
   };
 
+  const onCopySignature = async () => {
+    setCopyNote(null);
+    setError(null);
+    try {
+      await copySignature(signatureHtml, buildAgentSignaturePlainText(signatureInput));
+      setCopyNote('Signature copied. Paste it into Gmail or Outlook.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not copy the signature');
+    }
+  };
+
   const onSendSignatureOnly = async () => {
     setError(null);
     setMsg(null);
@@ -454,6 +497,14 @@ const HiredPage: React.FC = () => {
           </button>
           <button
             type="button"
+            onClick={() => void onCopySignature()}
+            className="inline-flex items-center gap-2 rounded-full border border-[#0A2F5C] px-4 py-2 text-xs font-semibold text-[#0A2F5C]"
+          >
+            <Copy size={14} />
+            Copy signature
+          </button>
+          <button
+            type="button"
             disabled={signatureOnlyBusy}
             onClick={() => void onSendSignatureOnly()}
             className="inline-flex items-center gap-2 rounded-full border border-[#389C50] bg-[#389C50] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50"
@@ -469,6 +520,7 @@ const HiredPage: React.FC = () => {
             <Plus size={14} /> New blank person
           </button>
         </div>
+        {copyNote && <p className="text-xs text-[#0A2F5C]">{copyNote}</p>}
       </section>
 
       <section className="overflow-auto rounded-2xl border border-[#e6e0d4] bg-white">
