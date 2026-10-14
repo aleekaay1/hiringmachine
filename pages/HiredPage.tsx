@@ -1,5 +1,5 @@
 import React from 'react';
-import { BadgeCheck, Copy, Plus, RefreshCw, Search, Send, Trash2, UserPlus } from 'lucide-react';
+import { BadgeCheck, Copy, Download, Plus, RefreshCw, Search, Send, Trash2, UserPlus } from 'lucide-react';
 import { Button } from '../components/UI';
 import {
   AGENT_ADDRESS_DEFAULT,
@@ -13,6 +13,7 @@ import {
   buildAgentSignatureCardHtml,
   buildAgentSignaturePlainText,
   buildAgentVcard,
+  buildSignatureInstallHtml,
   buildStandaloneSignatureEmailHtml,
   type AgentCardInput,
   type SignatureSocials,
@@ -30,7 +31,7 @@ import {
 } from '../services/hiredAgentsService';
 
 function signaturePreviewDoc(cardHtml: string): string {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8" /></head><body style="margin:0;padding:16px;background-color:#ffffff;color:#1a1a1a;">${cardHtml}</body></html>`;
+  return `<!DOCTYPE html><html><head><meta charset="utf-8" /></head><body bgcolor="#ffffff" style="margin:0;padding:16px;">${cardHtml}</body></html>`;
 }
 
 async function copySignature(html: string, text: string): Promise<void> {
@@ -300,6 +301,20 @@ const HiredPage: React.FC = () => {
     });
   };
 
+  const onDownloadSignature = () => {
+    const page = buildSignatureInstallHtml(signatureHtml);
+    const blob = new Blob([page], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const slug = (fullName.trim() || 'signature').replace(/[^\w.-]+/g, '-') || 'signature';
+    link.href = url;
+    link.download = `${slug}-signature.html`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const onCopySignature = async () => {
     setCopyNote(null);
     setError(null);
@@ -495,6 +510,15 @@ const HiredPage: React.FC = () => {
             <UserPlus size={14} />
             {busy ? 'Sending…' : 'Mark hired & send emails'}
           </button>
+          <button
+            type="button"
+            onClick={onDownloadSignature}
+            className="inline-flex items-center gap-2 rounded-full border border-[#0A2F5C] px-4 py-2 text-xs font-semibold text-[#0A2F5C]"
+          >
+            <Download size={14} />
+            Download signature
+          </button>
+          <span className="self-center text-xs text-[#5a5348]">Open the file in Chrome, select the card with the mouse, copy it, then paste into Gmail → Settings → See all settings → Signature, and save.</span>
           <button
             type="button"
             onClick={() => void onCopySignature()}

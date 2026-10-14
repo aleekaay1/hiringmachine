@@ -149,50 +149,51 @@ export function buildAgentVcard(input: AgentCardInput): string {
   return lines.join('\r\n');
 }
 
-const PAPER = '#ffffff';
-const INK = '#1a1a1a';
-const MUTED = '#6b7280';
+const FONT_FACE = 'Arial, Helvetica, sans-serif';
+const FONT_COLOR = '#222222';
 
 function iconImg(src: string, alt: string, size: number): string {
-  return `<img src="${src}" width="${size}" height="${size}" alt="${escapeHtml(alt)}" style="display:block;border:0;outline:none;text-decoration:none;width:${size}px;height:${size}px;background-color:${PAPER};" />`;
+  return `<img src="${src}" width="${size}" height="${size}" alt="${escapeHtml(alt)}" style="display:block;border:0;width:${size}px;height:${size}px;" />`;
 }
 
-/** Dark text on white, repeated on the cell and the span so paste cannot inherit a green fill or a light color. */
-function textSpan(color: string, inner: string): string {
-  return `<span style="color:${color};background-color:${PAPER};">${inner}</span>`;
+/** Gmail's signature editor keeps font color and drops CSS-colored spans. */
+function fontText(escaped: string, px: number, bold = false): string {
+  const body = bold ? `<b>${escaped}</b>` : escaped;
+  return `<font color="${FONT_COLOR}" face="${FONT_FACE}" style="font-size:${px}px;line-height:1.3;color:${FONT_COLOR};">${body}</font>`;
 }
 
-function cellStyle(extra: string, color: string = INK): string {
-  return `background-color:${PAPER};color:${color};${extra}`;
+function fontLink(href: string, escapedLabel: string, px: number): string {
+  return `<a href="${escapeHtml(href)}" style="text-decoration:none;">${fontText(escapedLabel, px)}</a>`;
 }
 
 function contactBits(iconSrc: string, alt: string, bodyHtml: string): string {
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" bgcolor="${PAPER}" style="background-color:${PAPER};color:${INK};">
+  return `<table cellpadding="0" cellspacing="0" border="0">
     <tr>
-      <td width="30" valign="middle" bgcolor="${PAPER}" style="${cellStyle('width:30px;padding:0 6px 0 0;')}">${iconImg(iconSrc, alt, 22)}</td>
-      <td valign="middle" bgcolor="${PAPER}" style="${cellStyle('padding:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.25;')}">${bodyHtml}</td>
+      <td width="30" valign="middle" style="padding:0 6px 0 0;">${iconImg(iconSrc, alt, 22)}</td>
+      <td valign="middle">${bodyHtml}</td>
     </tr>
   </table>`;
 }
 
 function pairRow(left: string, right: string): string {
   return `<tr>
-    <td width="50%" valign="middle" bgcolor="${PAPER}" style="${cellStyle('width:50%;padding:0 6px 8px 0;')}">${left}</td>
-    <td width="50%" valign="middle" bgcolor="${PAPER}" style="${cellStyle('width:50%;padding:0 0 8px 4px;')}">${right}</td>
+    <td width="50%" valign="middle" style="padding:0 6px 8px 0;">${left}</td>
+    <td width="50%" valign="middle" style="padding:0 0 8px 4px;">${right}</td>
   </tr>`;
 }
 
 function fullRow(inner: string): string {
-  return `<tr><td colspan="2" valign="middle" bgcolor="${PAPER}" style="${cellStyle('padding:0 0 8px 0;')}">${inner}</td></tr>`;
+  return `<tr><td colspan="2" valign="middle" style="padding:0 0 8px 0;">${inner}</td></tr>`;
 }
 
 function greenRule(): string {
-  // A border, not a green-filled cell. Paste drops height and font-size but keeps bgcolor, which turned the old 2px rules into solid bars.
-  return `<tr><td bgcolor="${PAPER}" style="${cellStyle('padding:2px 0 10px 0;border-bottom:2px solid ' + SIGNATURE_GREEN + ';font-size:1px;line-height:1px;')}">&nbsp;</td></tr>`;
+  return `<tr><td height="8" style="height:8px;font-size:0;line-height:0;padding:0;">&nbsp;</td></tr>
+    <tr><td height="2" bgcolor="${SIGNATURE_GREEN}" style="height:2px;font-size:2px;line-height:2px;padding:0;background-color:${SIGNATURE_GREEN};">&nbsp;</td></tr>
+    <tr><td height="8" style="height:8px;font-size:0;line-height:0;padding:0;">&nbsp;</td></tr>`;
 }
 
 function socialCell(href: string, src: string, alt: string): string {
-  return `<td bgcolor="${PAPER}" style="${cellStyle('padding:0 6px 0 0;')}"><a href="${escapeHtml(href)}" target="_blank" style="text-decoration:none;color:${INK};background-color:${PAPER};">${iconImg(src, alt, 26)}</a></td>`;
+  return `<td valign="middle" style="padding:0 6px 0 0;"><a href="${escapeHtml(href)}" style="text-decoration:none;">${iconImg(src, alt, 26)}</a></td>`;
 }
 
 function socialCells(input: AgentCardInput): string {
@@ -215,13 +216,12 @@ function socialCells(input: AgentCardInput): string {
 
 function confidentialityHtml(fullName: string, email: string): string {
   const statement = buildConfidentialityStatement(fullName, email);
-  const safeEmail = escapeHtml(email);
-  const escaped = escapeHtml(statement);
-  const linked = escaped.replace(
-    safeEmail,
-    `<a href="mailto:${safeEmail}" style="color:#1d4ed8;background-color:${PAPER};text-decoration:underline;"><span style="color:#1d4ed8;background-color:${PAPER};">${safeEmail}</span></a>`,
-  );
-  return `<span style="color:${MUTED};background-color:${PAPER};">${linked}</span>`;
+  const at = statement.indexOf(email);
+  if (at < 0) return fontText(escapeHtml(statement), 10);
+  const before = escapeHtml(statement.slice(0, at));
+  const after = escapeHtml(statement.slice(at + email.length));
+  const link = `<a href="mailto:${escapeHtml(email)}" style="text-decoration:underline;">${fontText(escapeHtml(email), 10)}</a>`;
+  return `${fontText(before, 10)}${link}${fontText(after, 10)}`;
 }
 
 export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
@@ -238,34 +238,32 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
   const address = escapeHtml(input.address || AGENT_ADDRESS_DEFAULT);
   const siteUrl = input.websiteUrl || AGENT_WEBSITE_URL;
   const saveContactUrl = buildSaveContactUrl(input);
-  const linkStyle = `color:${INK};background-color:${PAPER};text-decoration:none;`;
-  const subStyle = `font-size:11px;line-height:1.2;color:${MUTED};background-color:${PAPER};`;
 
   const officeCell = officeRaw
     ? contactBits(
         ICONS.phone,
         'Office',
-        `<a href="${telHref(officeRaw)}" style="${linkStyle}">${textSpan(INK, escapeHtml(officeLabel))}</a><div style="${subStyle}">${textSpan(MUTED, 'Office')}</div>`,
+        `${fontLink(telHref(officeRaw), escapeHtml(officeLabel), 12)}<br>${fontText('Office', 11)}`,
       )
     : '';
   const directCell = directRaw
     ? contactBits(
         ICONS.phone,
         'Direct',
-        `<a href="${telHref(directRaw)}" style="${linkStyle}">${textSpan(INK, escapeHtml(formatPhone(directRaw)))}</a><div style="${subStyle}">${textSpan(MUTED, 'Direct')}</div>`,
+        `${fontLink(telHref(directRaw), escapeHtml(formatPhone(directRaw)), 12)}<br>${fontText('Direct', 11)}`,
       )
     : '';
   const emailCell = contactBits(
     ICONS.email,
     'Email',
-    `<a href="mailto:${email}" style="${linkStyle}">${textSpan(INK, email)}</a>`,
+    fontLink(`mailto:${emailRaw}`, email, 12),
   );
   const webCell = contactBits(
     ICONS.website,
     'Website',
-    `<a href="${escapeHtml(siteUrl)}" target="_blank" style="${linkStyle}">${textSpan(INK, 'AO Globe Life Website')}</a>`,
+    fontLink(siteUrl, 'AO Globe Life Website', 12),
   );
-  const addressCell = contactBits(ICONS.pin, 'Address', textSpan(INK, address));
+  const addressCell = contactBits(ICONS.pin, 'Address', fontText(address, 12));
 
   const phoneRow =
     officeCell && directCell
@@ -273,38 +271,44 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
       : fullRow(officeCell || directCell);
   const webRow = pairRow(emailCell, webCell);
 
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="480" bgcolor="${PAPER}" style="width:100%;max-width:480px;border-collapse:collapse;background-color:${PAPER};color:${INK};font-family:Arial,Helvetica,sans-serif;">
+  return `<table cellpadding="0" cellspacing="0" border="0" width="480" style="width:100%;max-width:480px;border-collapse:collapse;">
   <tr>
-    <td width="104" valign="top" bgcolor="${PAPER}" style="${cellStyle('width:104px;padding:2px 8px 0 0;')}">
-      <img src="${SIGNATURE_MARK_URL}" width="${SIGNATURE_MARK_WIDTH}" height="${SIGNATURE_MARK_HEIGHT}" alt="AO Globe Life" style="display:block;border:0;outline:none;text-decoration:none;width:${SIGNATURE_MARK_WIDTH}px;max-width:100%;height:auto;background-color:${PAPER};" />
+    <td width="104" valign="top" style="width:104px;padding:2px 8px 0 0;">
+      <img src="${SIGNATURE_MARK_URL}" width="${SIGNATURE_MARK_WIDTH}" height="${SIGNATURE_MARK_HEIGHT}" alt="AO Globe Life" style="display:block;border:0;width:${SIGNATURE_MARK_WIDTH}px;height:${SIGNATURE_MARK_HEIGHT}px;" />
     </td>
-    <td valign="top" bgcolor="${PAPER}" style="${cellStyle('padding:0;')}">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="${PAPER}" style="width:100%;border-collapse:collapse;background-color:${PAPER};color:${INK};">
-        <tr><td bgcolor="${PAPER}" style="${cellStyle('padding:0 0 1px 0;font-family:Arial,Helvetica,sans-serif;font-size:18px;line-height:1.2;font-weight:700;')}">${textSpan(INK, name)}</td></tr>
-        <tr><td bgcolor="${PAPER}" style="${cellStyle('padding:0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;', MUTED)}">${textSpan(MUTED, title)}</td></tr>
-        <tr><td bgcolor="${PAPER}" style="${cellStyle('padding:1px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;')}">${textSpan(INK, team)}</td></tr>
-        <tr><td bgcolor="${PAPER}" style="${cellStyle('padding:1px 0 8px 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.3;', MUTED)}">${textSpan(MUTED, tagline)}</td></tr>
+    <td valign="top">
+      <table cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
+        <tr><td style="padding:0 0 1px 0;">${fontText(name, 18, true)}</td></tr>
+        <tr><td>${fontText(title, 12)}</td></tr>
+        <tr><td style="padding:1px 0 0 0;">${fontText(team, 12)}</td></tr>
+        <tr><td style="padding:1px 0 0 0;">${fontText(tagline, 12)}</td></tr>
         ${greenRule()}
-        <tr><td bgcolor="${PAPER}" style="${cellStyle('padding:12px 0 0 0;')}">
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="${PAPER}" style="width:100%;border-collapse:collapse;background-color:${PAPER};color:${INK};">
+        <tr><td>
+          <table cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
             ${phoneRow}
             ${webRow}
             ${fullRow(addressCell)}
           </table>
         </td></tr>
         ${greenRule()}
-        <tr><td bgcolor="${PAPER}" style="${cellStyle('padding:4px 0 0 0;')}">
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="${PAPER}" style="width:100%;border-collapse:collapse;background-color:${PAPER};color:${INK};">
+        <tr><td>
+          <table cellpadding="0" cellspacing="0" border="0" width="100%" style="width:100%;border-collapse:collapse;">
             <tr>
-              <td valign="middle" bgcolor="${PAPER}" style="${cellStyle('padding:0;')}">
-                <table role="presentation" cellpadding="0" cellspacing="0" border="0" bgcolor="${PAPER}" style="border-collapse:collapse;background-color:${PAPER};color:${INK};">
+              <td valign="middle">
+                <table cellpadding="0" cellspacing="0" border="0">
                   <tr>
                     ${socialCells(input)}
                   </tr>
                 </table>
               </td>
-              <td valign="middle" align="right" bgcolor="${PAPER}" style="${cellStyle('padding:0;text-align:right;')}">
-                <a href="${escapeHtml(saveContactUrl)}" target="_blank" style="display:inline-block;background-color:${SIGNATURE_GREEN};color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:700;line-height:1;text-decoration:none;white-space:nowrap;padding:9px 12px;border-radius:8px;"><span style="color:#ffffff;background-color:${SIGNATURE_GREEN};">Save contact</span></a>
+              <td valign="middle" align="right">
+                <table cellpadding="0" cellspacing="0" border="0" align="right">
+                  <tr>
+                    <td bgcolor="${SIGNATURE_GREEN}" style="background-color:${SIGNATURE_GREEN};padding:8px 12px;border-radius:8px;">
+                      <a href="${escapeHtml(saveContactUrl)}" style="text-decoration:none;">${fontText('Save contact', 13, true)}</a>
+                    </td>
+                  </tr>
+                </table>
               </td>
             </tr>
           </table>
@@ -313,7 +317,7 @@ export function buildAgentSignatureCardHtml(input: AgentCardInput): string {
     </td>
   </tr>
   <tr>
-    <td colspan="2" bgcolor="${PAPER}" style="${cellStyle('padding:12px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:10px;line-height:1.4;', MUTED)}">
+    <td colspan="2" style="padding:12px 0 0 0;">
       ${confidentialityHtml(input.fullName.trim(), emailRaw)}
     </td>
   </tr>
@@ -375,7 +379,12 @@ export function buildAgentSignaturePlainText(input: AgentCardInput): string {
 }
 
 export function buildStandaloneSignatureEmailHtml(cardHtml: string): string {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /></head><body style="margin:0;padding:16px;background-color:#ffffff;color:#1a1a1a;">${cardHtml}</body></html>`;
+  return `<!DOCTYPE html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /></head><body bgcolor="#ffffff" style="margin:0;padding:16px;">${cardHtml}</body></html>`;
+}
+
+/** White page containing only the signature, for Chrome select-copy into Gmail settings. */
+export function buildSignatureInstallHtml(cardHtml: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Signature</title></head><body bgcolor="#ffffff">${cardHtml}</body></html>`;
 }
 
 function stepRow(num: string, title: string, body: string): string {
