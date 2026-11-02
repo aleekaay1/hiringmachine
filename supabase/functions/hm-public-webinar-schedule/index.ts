@@ -749,10 +749,21 @@ async function findAnySubscriptionForEmail(
   return null;
 }
 
+function rememberSubscription(
+  merged: Map<string, Record<string, unknown>>,
+  row: Record<string, unknown>,
+) {
+  const id = row.id != null ? String(row.id) : '';
+  const key = id || `${String(row.email || '')}|${String(row.created_at || '')}`;
+  if (!merged.has(key)) merged.set(key, row);
+}
+
 /**
- * Same WebinarGeek lookup as the staff Webinar verify page
+ * Email-filtered WebinarGeek lookup used first by the staff Webinar verify page
  * (integrations-webinar-geek GET ?mode=verify → findSubscriptionsByEmail).
- * Default list omits unverified subscribers, so the extra passes are required.
+ * That filter often omits people who have not confirmed yet. The caller then
+ * reads the public signup row (and its live subscription) before the staff
+ * page's recent-subscription scan, so a known booking is not reported missing.
  */
 async function findSubscriptionsByEmail(email: string): Promise<{
   ok: boolean;
@@ -772,14 +783,101 @@ async function findSubscriptionsByEmail(email: string): Promise<{
     const res = await wgGet('/subscriptions', params);
     if (!res.ok) continue;
     anyOk = true;
-    for (const row of subscriptionRowsFromWgJson(res.json)) {
-      const id = row.id != null ? String(row.id) : '';
-      const key = id || `${String(row.email || '')}|${String(row.created_at || '')}`;
-      if (!merged.has(key)) merged.set(key, row);
-    }
+    for (const row of subscriptionRowsFromWgJson(res.json)) rememberSubscription(merged, row);
     if (merged.size > 0) break;
   }
   return { ok: anyOk, rows: [...merged.values()] };
+}
+
+/** Staff verify fallback: page recent subscriptions, including the unverified pass. */
+async function scanRecentSubscriptionsForEmail(email: string): Promise<{
+  ok: boolean;
+  rows: Array<Record<string, unknown>>;
+}> {
+  const sinceMs = Date.now() - 45 * 24 * 60 * 60 * 1000;
+  const passes: Array<Record<string, string | number | boolean | undefined>> = [
+    {},
+    { email_verified: false },
+    { include_unverified: true },
+  ];
+  const matched: Array<Record<string, unknown>> = [];
+  let anyOk = false;
+  for (const extra of passes) {
+    let page = 1;
+    let foundOnPass = false;
+    for (let guard = 0; guard < 10; guard++) {
+      const res = await wgGet('/subscriptions', {
+        per_page: 100,
+        page,
+        nested_resources: 'broadcast,webinar',
+        ...extra,
+      });
+      if (!res.ok) break;
+      anyOk = true;
+      const pageRows = subscriptionRowsFromWgJson(res.json);
+      if (!pageRows.length) break;
+      for (const row of pageRows) {
+        if (normalizeEmail(row.email) !== email) continue;
+        matched.push(row);
+        foundOnPass = true;
+      }
+      const times = pageRows
+        .map((row) => unixMsFromField(row.created_at))
+        .filter((ms): ms is number => ms != null);
+      const newest = times.length ? Math.max(...times) : null;
+      if (newest != null && newest < sinceMs) break;
+      const pages =
+        res.json.pages && typeof res.json.pages === 'object'
+          ? (res.json.pages as Record<string, unknown>)
+          : {};
+      const totalPages = Number(pages.total_pages || 1);
+      if (!pages.next || page >= totalPages) break;
+      page += 1;
+    }
+    if (foundOnPass) break;
+  }
+  return { ok: anyOk, rows: matched };
+}
+
+/** Booking row from /schedule-webinar, then the live WebinarGeek subscription it points at. */
+async function subscriptionFromPublicSignup(
+  email: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const admin = serviceClient();
+    const { data, error } = await admin
+      .from('hm_public_webinar_signups')
+      .select('broadcast_id, wg_subscription_id, email_verified, email')
+      .ilike('email', email)
+      .order('created_at', { ascending: false })
+      .limit(10);
+    if (error) {
+      console.error('verification signup lookup failed', error);
+      return null;
+    }
+    const signup = (data || []).find((row) => str(row.wg_subscription_id)) || data?.[0];
+    if (!signup) return null;
+    const subscriptionId = str(signup.wg_subscription_id);
+    if (subscriptionId) {
+      const res = await wgGet(`/subscriptions/${encodeURIComponent(subscriptionId)}`, {
+        nested_resources: 'broadcast,webinar',
+      });
+      if (res.ok) {
+        const row = subscriptionRowsFromWgJson(res.json)[0];
+        if (row) return row;
+        if (res.json.id != null) return res.json;
+      }
+    }
+    return {
+      id: signup.wg_subscription_id ?? null,
+      email,
+      email_verified: signup.email_verified === true,
+      broadcast_id: signup.broadcast_id ?? null,
+    };
+  } catch (err) {
+    console.error('verification signup lookup failed', err);
+    return null;
+  }
 }
 
 function subscriptionSortMs(row: Record<string, unknown>): number {
@@ -797,16 +895,25 @@ async function handleBotVerification(url: URL): Promise<Response> {
     return respond(400, { error: 'email is invalid.' });
   }
   const lookedUp = await findSubscriptionsByEmail(email);
-  if (!lookedUp.ok && lookedUp.rows.length === 0) {
+  let rows = lookedUp.rows;
+  let lookupOk = lookedUp.ok;
+  if (rows.length === 0) {
+    const fromSignup = await subscriptionFromPublicSignup(email);
+    if (fromSignup) rows = [fromSignup];
+  }
+  if (rows.length === 0) {
+    const scanned = await scanRecentSubscriptionsForEmail(email);
+    if (scanned.ok) lookupOk = true;
+    rows = scanned.rows;
+  }
+  if (rows.length === 0 && !lookupOk) {
     return respond(502, { error: 'Unable to check WebinarGeek verification.' });
   }
-  if (lookedUp.rows.length === 0) {
+  if (rows.length === 0) {
     return respond(404, { error: 'No signup found for this email.' });
   }
-  const verified = lookedUp.rows.some((row) => row.email_verified === true);
-  const pool = verified
-    ? lookedUp.rows.filter((row) => row.email_verified === true)
-    : lookedUp.rows;
+  const verified = rows.some((row) => row.email_verified === true);
+  const pool = verified ? rows.filter((row) => row.email_verified === true) : rows;
   const chosen = [...pool].sort((a, b) => subscriptionSortMs(b) - subscriptionSortMs(a))[0];
   return respond(200, {
     email,
