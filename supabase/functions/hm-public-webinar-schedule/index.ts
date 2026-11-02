@@ -1,7 +1,13 @@
 // Public webinar self-schedule for cold-email candidates (no staff auth).
-// Deploy: supabase functions deploy hm-public-webinar-schedule --project-ref ofhcnsuwrhyvxtvtdunw
+// Deploy: supabase functions deploy hm-public-webinar-schedule --project-ref ofhcnsuwrhyvxtvtdunw --no-verify-jwt
 // Requires Edge secret: WEBINARGEEK_API_TOKEN
 // Optional: WEBINARGEEK_API_BASE_URL, PUBLIC_WEBINAR_GEEK_WEBINAR_ID, PUBLIC_WEBINAR_CUSTOM_FIELD
+//
+// Calling-bot API (same schedule + subscribe path as /schedule-webinar).
+// Vercel: GET /api/webinar/sessions  POST /api/webinar/registrations
+// This function: GET /sessions  POST /registrations
+// Auth: Authorization: Bearer <key> or X-API-Key: <key>
+// Secret: WEBINAR_BOOKING_API_KEY
 
 import nodemailer from 'npm:nodemailer@6.9.10';
 import { corsHeaders, json, normalizeEmail, serviceClient, str } from '../_shared/hiringMachine.ts';
@@ -73,6 +79,132 @@ async function wgPost(path: string, body: Record<string, unknown>) {
 const SCHEDULE_TZ = 'America/Toronto';
 /** Fallback “soon” window when JIT virtual broadcast is not available. */
 const QUICK_WINDOW_MS = 90 * 60 * 1000;
+
+function numericId(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return value;
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+    const n = Number(value.trim());
+    if (Number.isSafeInteger(n) && n > 0) return n;
+  }
+  return null;
+}
+
+function positiveInt(value: unknown): number | null {
+  const n = numericId(value);
+  return n;
+}
+
+function nonNegativeInt(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return value;
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+    const n = Number(value.trim());
+    if (Number.isSafeInteger(n) && n >= 0) return n;
+  }
+  return null;
+}
+
+/** True when WebinarGeek's per-broadcast subscriber cap is already reached. */
+function sessionIsFull(count: number | null, maximum: number | null): boolean {
+  if (maximum == null || maximum <= 0 || count == null) return false;
+  return count >= maximum;
+}
+
+function sessionClosed(row: Record<string, unknown>): boolean {
+  return row.cancelled === true || row.has_ended === true;
+}
+
+function nestedRecord(row: Record<string, unknown>, key: string): Record<string, unknown> | null {
+  const value = row[key];
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function maximumSubscribersFor(row: Record<string, unknown>): number | null {
+  const webinar = nestedRecord(row, 'webinar');
+  const episode = nestedRecord(row, 'episode');
+  return (
+    positiveInt(webinar?.maximum_number_of_subscribers) ??
+    positiveInt(episode?.maximum_number_of_subscribers) ??
+    positiveInt(row.maximum_number_of_subscribers)
+  );
+}
+
+/** ISO 8601 in the session timezone, with that instant's real UTC offset. */
+function isoOffset(value: unknown, timeZone = SCHEDULE_TZ): string | null {
+  let ms = unixMsFromField(value);
+  if (ms == null && typeof value === 'string' && value.trim()) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) ms = parsed;
+  }
+  if (ms == null) return null;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(ms));
+  const get = (type: string) => parts.find((p) => p.type === type)?.value || '00';
+  const year = get('year');
+  const month = get('month');
+  const day = get('day');
+  let hour = get('hour');
+  if (hour === '24') hour = '00';
+  const minute = get('minute');
+  const second = get('second');
+  const asUtc = Date.UTC(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+  );
+  const offsetMin = Math.round((asUtc - ms) / 60000);
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMin);
+  const hh = String(Math.floor(abs / 60)).padStart(2, '0');
+  const mm = String(abs % 60).padStart(2, '0');
+  return `${year}-${month}-${day}T${hour}:${minute}:${second}${sign}${hh}:${mm}`;
+}
+
+function respond(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+}
+
+function providedApiKey(req: Request): string {
+  const header = req.headers.get('x-api-key')?.trim() || '';
+  if (header) return header;
+  const auth = req.headers.get('authorization')?.trim() || '';
+  const match = /^Bearer\s+(\S.*)$/i.exec(auth);
+  return match ? match[1].trim() : '';
+}
+
+function bookingApiKeyOk(req: Request): boolean {
+  const expected = Deno.env.get('WEBINAR_BOOKING_API_KEY')?.trim() || '';
+  const provided = providedApiKey(req);
+  if (!expected || !provided) return false;
+  const a = new TextEncoder().encode(expected);
+  const b = new TextEncoder().encode(provided);
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
+  return diff === 0;
+}
+
+function botEndpoint(pathname: string): 'sessions' | 'registrations' | null {
+  const path = pathname.replace(/\/+$/, '').toLowerCase();
+  if (path.endsWith('/sessions')) return 'sessions';
+  if (path.endsWith('/registrations')) return 'registrations';
+  return null;
+}
 
 function unixMsFromField(value: unknown): number | null {
   const n = Number(value);
@@ -395,9 +527,15 @@ async function resolveBroadcastContext(broadcastId: string, webinarIdHint?: stri
   if (!registrationFields.length && nestedWebinar) {
     registrationFields = registrationFieldsFromJson(nestedWebinar);
   }
-  if (!registrationFields.length && resolvedWebinarId) {
+  let maximumSubscribers = maximumSubscribersFor(broadcast);
+  if ((!registrationFields.length || maximumSubscribers == null) && resolvedWebinarId) {
     const webinarRes = await wgGet(`/webinars/${encodeURIComponent(resolvedWebinarId)}`);
-    if (webinarRes.ok) registrationFields = registrationFieldsFromJson(webinarRes.json);
+    if (webinarRes.ok) {
+      if (!registrationFields.length) registrationFields = registrationFieldsFromJson(webinarRes.json);
+      if (maximumSubscribers == null) {
+        maximumSubscribers = positiveInt(webinarRes.json.maximum_number_of_subscribers);
+      }
+    }
   }
 
   if (broadcast.cancelled === true && broadcast.active_jit !== true) {
@@ -421,6 +559,8 @@ async function resolveBroadcastContext(broadcastId: string, webinarIdHint?: stri
     registrationFields,
     title: str(broadcast.title || broadcast.name) || null,
     date: broadcast.date ?? null,
+    subscriptionsCount: nonNegativeInt(broadcast.subscriptions_count),
+    maximumSubscribers,
   };
 }
 
@@ -513,7 +653,7 @@ async function findExistingPublicSignup(
   const { data: byEmail, error } = await admin
     .from('hm_public_webinar_signups')
     .select(
-      'id, first_name, last_name, email, phone, session_at, session_label, broadcast_id, webinar_id, watch_link, confirmation_link, email_verified, created_at, already_registered',
+      'id, first_name, last_name, email, phone, session_at, session_label, broadcast_id, webinar_id, wg_subscription_id, watch_link, confirmation_link, email_verified, created_at, already_registered',
     )
     .ilike('email', email)
     .order('created_at', { ascending: false })
@@ -532,7 +672,7 @@ async function findExistingPublicSignup(
   const { data: phoneRows, error: phoneErr } = await admin
     .from('hm_public_webinar_signups')
     .select(
-      'id, first_name, last_name, email, phone, session_at, session_label, broadcast_id, webinar_id, watch_link, confirmation_link, email_verified, created_at, already_registered',
+      'id, first_name, last_name, email, phone, session_at, session_label, broadcast_id, webinar_id, wg_subscription_id, watch_link, confirmation_link, email_verified, created_at, already_registered',
     )
     .not('phone', 'is', null)
     .order('created_at', { ascending: false })
@@ -608,7 +748,51 @@ async function findAnySubscriptionForEmail(
   return null;
 }
 
-function alreadyRegisteredResponse(input: {
+type BookResult = { status: number; payload: Record<string, unknown> };
+
+async function hydrateRegistration(input: {
+  email: string;
+  broadcastId: string | null;
+  webinarId: string | null;
+  registrationId: unknown;
+  watchLink: string | null;
+  confirmationLink: string | null;
+  date: unknown;
+}): Promise<{
+  registrationId: unknown;
+  watchLink: string | null;
+  confirmationLink: string | null;
+  date: unknown;
+  broadcastId: string | null;
+}> {
+  let registrationId = input.registrationId;
+  let watchLink = input.watchLink;
+  let confirmationLink = input.confirmationLink;
+  let date = input.date;
+  let broadcastId = input.broadcastId;
+  if (numericId(registrationId) != null && watchLink) {
+    return { registrationId, watchLink, confirmationLink, date, broadcastId };
+  }
+
+  let row: Record<string, unknown> | null = null;
+  if (broadcastId) {
+    const rows = await findSubscriptionForBroadcast(input.email, broadcastId);
+    row = rows[0] || null;
+  }
+  if (!row) row = await findAnySubscriptionForEmail(input.email, input.webinarId);
+  if (row) {
+    const links = linksFromSubscription(row);
+    if (numericId(registrationId) == null) registrationId = row.id;
+    watchLink = watchLink || links.watch_link;
+    confirmationLink = confirmationLink || links.confirmation_link;
+    if (date == null) date = links.broadcast_date;
+    broadcastId = links.broadcast_id || broadcastId;
+  }
+  return { registrationId, watchLink, confirmationLink, date, broadcastId };
+}
+
+async function alreadyRegisteredResponse(input: {
+  email: string;
   whenLabel: string;
   broadcastId: string | null;
   title: string | null;
@@ -617,23 +801,466 @@ function alreadyRegisteredResponse(input: {
   emailVerified?: boolean;
   watchLink?: string | null;
   confirmationLink?: string | null;
-}) {
-  const when = input.whenLabel || 'the session you already chose';
-  return json(200, {
-    ok: true,
-    booked: false,
-    already_registered: true,
-    email_verified: input.emailVerified === true,
-    watch_link: input.watchLink || null,
-    confirmation_link: input.confirmationLink || null,
-    broadcast: {
-      id: input.broadcastId,
-      title: input.title,
-      date: input.date,
-      webinar_id: input.webinarId,
-    },
-    message: `You have already registered for the webinar on ${when}. Please check your email for the WebinarGeek confirmation and join link (and spam/promotions if you do not see it).`,
+  registrationId?: unknown;
+}): Promise<BookResult> {
+  const hydrated = await hydrateRegistration({
+    email: input.email,
+    broadcastId: input.broadcastId,
+    webinarId: input.webinarId,
+    registrationId: input.registrationId ?? null,
+    watchLink: input.watchLink || null,
+    confirmationLink: input.confirmationLink || null,
+    date: input.date,
   });
+  const when = input.whenLabel || 'the session you already chose';
+  return {
+    status: 200,
+    payload: {
+      ok: true,
+      booked: false,
+      already_registered: true,
+      registration_id: numericId(hydrated.registrationId),
+      email_verified: input.emailVerified === true,
+      watch_link: hydrated.watchLink,
+      confirmation_link: hydrated.confirmationLink,
+      broadcast: {
+        id: hydrated.broadcastId,
+        title: input.title,
+        date: hydrated.date ?? input.date,
+        webinar_id: input.webinarId,
+      },
+      message: `You have already registered for the webinar on ${when}. Please check your email for the WebinarGeek confirmation and join link (and spam/promotions if you do not see it).`,
+    },
+  };
+}
+
+/** Same validation, WebinarGeek subscribe, and signup records as POST ?mode=book. */
+async function bookFromPublicBody(
+  body: Record<string, unknown>,
+  options?: { channel?: string | null },
+): Promise<BookResult> {
+  const email = normalizeEmail(body.email);
+  const firstname = str(body.firstname || body.first_name || body.firstName);
+  const surname = str(body.surname || body.last_name || body.lastName);
+  const phone = str(body.phone);
+  const wantQuick =
+    body.quick === true ||
+    body.quick === 1 ||
+    body.quick === '1' ||
+    String(body.quick || '').toLowerCase() === 'true' ||
+    body.mode === 'quick' ||
+    str(body.schedule_mode) === 'quick';
+  let broadcastId = String(body.broadcast_id ?? body.broadcastId ?? '').trim();
+  let webinarId = String(body.webinar_id ?? body.webinarId ?? '').trim();
+  const customField =
+    str(body.custom_field) ||
+    Deno.env.get('PUBLIC_WEBINAR_CUSTOM_FIELD')?.trim() ||
+    'cold-email';
+  const reference = str(body.reference).slice(0, 200);
+  const channel = str(options?.channel) || null;
+
+  if (!email || !firstname) {
+    return { status: 400, payload: { error: 'email and firstname are required.' } };
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { status: 400, payload: { error: 'Please enter a valid email address.' } };
+  }
+
+  // Always re-resolve JIT from the preferred published webinar (ignore stale client ids).
+  if (wantQuick) {
+    const schedule = await loadPublicSchedule();
+    if (!schedule.ok) {
+      return { status: schedule.status, payload: { error: schedule.error } };
+    }
+    if (!schedule.quick?.id) {
+      return {
+        status: 409,
+        payload: {
+          error:
+            'Watch now is unavailable right now. Enable Just-in-time on your published AO webinar, or pick a time from today’s / tomorrow’s list.',
+          quick_available: false,
+        },
+      };
+    }
+    broadcastId = String(schedule.quick.id ?? '').trim();
+    webinarId = String(schedule.quick.webinar_id ?? '').trim() || webinarId;
+  }
+
+  if (!broadcastId) {
+    return {
+      status: 400,
+      payload: {
+        error: wantQuick
+          ? 'Could not resolve a Just-in-time session. Try again or pick a time from the list.'
+          : 'email, firstname, and broadcast_id are required.',
+      },
+    };
+  }
+
+  // Block duplicate form submissions (any upcoming session for this email/phone).
+  const existingSignup = await findExistingPublicSignup(email, phone);
+  if (existingSignup) {
+    const sessionAt = existingSignup.session_at != null ? String(existingSignup.session_at) : null;
+    const whenLabel =
+      str(existingSignup.session_label) || formatSessionWhen(sessionAt) || 'your selected time';
+    return alreadyRegisteredResponse({
+      email,
+      whenLabel,
+      broadcastId: existingSignup.broadcast_id != null ? String(existingSignup.broadcast_id) : null,
+      title: null,
+      date: sessionAt,
+      webinarId: existingSignup.webinar_id != null ? String(existingSignup.webinar_id) : null,
+      emailVerified: existingSignup.email_verified === true,
+      watchLink: existingSignup.watch_link != null ? String(existingSignup.watch_link) : null,
+      confirmationLink:
+        existingSignup.confirmation_link != null ? String(existingSignup.confirmation_link) : null,
+      registrationId: existingSignup.wg_subscription_id,
+    });
+  }
+
+  // For JIT virtual broadcasts, skip "already registered" lookup on the virtual id —
+  // WebinarGeek creates a real broadcast on subscribe and handles duplicates itself.
+  const broadcastContext = await resolveBroadcastContext(broadcastId, webinarId || undefined);
+  if (!broadcastContext.ok) {
+    const status = broadcastContext.status === 404 ? 404 : broadcastContext.status === 422 ? 422 : 502;
+    return { status, payload: { error: broadcastContext.error } };
+  }
+
+  // Also block if WebinarGeek already has an active subscription for this email.
+  const existingWg = await findAnySubscriptionForEmail(email, broadcastContext.webinarId);
+  if (existingWg) {
+    const links = linksFromSubscription(existingWg);
+    const effectiveBroadcastId = links.broadcast_id || broadcastId;
+    const effectiveDate = links.broadcast_date ?? broadcastContext.date;
+    const whenLabel = formatSessionWhen(effectiveDate) || 'your selected time';
+    return alreadyRegisteredResponse({
+      email,
+      whenLabel,
+      broadcastId: effectiveBroadcastId,
+      title: broadcastContext.title,
+      date: effectiveDate,
+      webinarId: broadcastContext.webinarId,
+      emailVerified: existingWg.email_verified === true,
+      watchLink: links.watch_link,
+      confirmationLink: links.confirmation_link,
+      registrationId: existingWg.id,
+    });
+  }
+
+  if (!wantQuick) {
+    const existingRows = await findSubscriptionForBroadcast(email, broadcastId);
+    if (existingRows.length > 0) {
+      const row = existingRows[0];
+      const links = linksFromSubscription(row);
+      const effectiveBroadcastId = links.broadcast_id || broadcastId;
+      const effectiveDate = links.broadcast_date ?? broadcastContext.date;
+      const whenLabel = formatSessionWhen(effectiveDate) || 'your selected time';
+      return alreadyRegisteredResponse({
+        email,
+        whenLabel,
+        broadcastId: effectiveBroadcastId,
+        title: broadcastContext.title,
+        date: effectiveDate,
+        webinarId: broadcastContext.webinarId,
+        emailVerified: row.email_verified === true,
+        watchLink: links.watch_link,
+        confirmationLink: links.confirmation_link,
+        registrationId: row.id,
+      });
+    }
+  }
+
+  if (sessionIsFull(broadcastContext.subscriptionsCount, broadcastContext.maximumSubscribers)) {
+    return { status: 409, payload: { error: 'This session is full.' } };
+  }
+
+  let payload = buildSubscriptionPayload({
+    email,
+    firstname,
+    surname,
+    phone,
+    customField,
+    registrationFields: broadcastContext.registrationFields,
+  });
+  // Explicitly ensure WG sends confirmation (default is true; set false only if needed).
+  payload.skip_confirmation_mail = false;
+
+  let bookRes = await wgPost(
+    `/broadcasts/${encodeURIComponent(broadcastId)}/subscriptions`,
+    payload,
+  );
+
+  if (!bookRes.ok && bookRes.status === 422 && customField) {
+    const withoutTag = { ...payload };
+    delete withoutTag.custom_field;
+    const retry = await wgPost(
+      `/broadcasts/${encodeURIComponent(broadcastId)}/subscriptions`,
+      withoutTag,
+    );
+    if (retry.ok) {
+      bookRes = retry;
+      payload = withoutTag;
+    }
+  }
+
+  if (!bookRes.ok && bookRes.status === 422 && !surname) {
+    const withSurname = buildSubscriptionPayload({
+      email,
+      firstname,
+      surname: '.',
+      phone,
+      customField: payload.custom_field ? String(payload.custom_field) : null,
+      registrationFields: broadcastContext.registrationFields,
+    });
+    withSurname.skip_confirmation_mail = false;
+    const retry = await wgPost(
+      `/broadcasts/${encodeURIComponent(broadcastId)}/subscriptions`,
+      withSurname,
+    );
+    if (retry.ok) {
+      bookRes = retry;
+      payload = withSurname;
+    }
+  }
+
+  if (!bookRes.ok) {
+    const wgMsg = wgErrorMessage(bookRes.json, `WebinarGeek booking failed (${bookRes.status})`);
+    const looksDuplicate =
+      bookRes.status === 422 &&
+      /already|registered|subscribed|exists|duplicate/i.test(wgMsg);
+    if (looksDuplicate) {
+      const confirmed = await findAnySubscriptionForEmail(email, broadcastContext.webinarId);
+      const links = linksFromSubscription(confirmed);
+      const effectiveDate = links.broadcast_date ?? broadcastContext.date;
+      return alreadyRegisteredResponse({
+        email,
+        whenLabel: formatSessionWhen(effectiveDate) || 'your selected time',
+        broadcastId: links.broadcast_id || broadcastId,
+        title: broadcastContext.title,
+        date: effectiveDate,
+        webinarId: broadcastContext.webinarId,
+        emailVerified: confirmed?.email_verified === true,
+        watchLink: links.watch_link,
+        confirmationLink: links.confirmation_link,
+        registrationId: confirmed?.id,
+      });
+    }
+    if (/full|limit|maximum|no longer possible|sold out/i.test(wgMsg)) {
+      return { status: 409, payload: { error: 'This session is full.' } };
+    }
+    return { status: 502, payload: { error: wgMsg, source_status: bookRes.status } };
+  }
+
+  let subscriptionRow = subscriptionRowsFromWgJson(bookRes.json)[0] || null;
+  if (!subscriptionRow) {
+    const confirmed = await findSubscriptionForBroadcast(email, broadcastId);
+    subscriptionRow = confirmed[0] || null;
+  }
+  const links = linksFromSubscription(subscriptionRow);
+  let effectiveBroadcastId = links.broadcast_id || broadcastId;
+  let effectiveDate = links.broadcast_date ?? broadcastContext.date;
+  let registrationId: unknown = subscriptionRow?.id ?? null;
+  let watchLink = links.watch_link;
+  let confirmationLink = links.confirmation_link;
+  if (numericId(registrationId) == null || !watchLink) {
+    const hydrated = await hydrateRegistration({
+      email,
+      broadcastId: effectiveBroadcastId,
+      webinarId: broadcastContext.webinarId,
+      registrationId,
+      watchLink,
+      confirmationLink,
+      date: effectiveDate,
+    });
+    registrationId = hydrated.registrationId;
+    watchLink = hydrated.watchLink;
+    confirmationLink = hydrated.confirmationLink;
+    effectiveBroadcastId = hydrated.broadcastId || effectiveBroadcastId;
+    effectiveDate = hydrated.date ?? effectiveDate;
+  }
+
+  await logPublicSignup({
+    firstname,
+    surname,
+    email,
+    phone,
+    wantQuick,
+    sessionDate: effectiveDate,
+    broadcastId: effectiveBroadcastId,
+    webinarId: broadcastContext.webinarId,
+    subscriptionId: registrationId != null ? String(registrationId) : null,
+    alreadyRegistered: false,
+    emailVerified: subscriptionRow?.email_verified === true,
+    watchLink,
+    confirmationLink,
+    customField,
+    reference,
+    channel,
+  });
+
+  // Fire-and-forget staff alert + call-workspace lead — never block the registrant response.
+  void upsertHmPersonFromPublicWebinarSignup({
+    firstname,
+    surname,
+    email,
+    phone,
+    wantQuick,
+    sessionDate: effectiveDate,
+    broadcastId: effectiveBroadcastId,
+    webinarId: broadcastContext.webinarId,
+    webinarTitle: broadcastContext.title,
+    subscriptionId: registrationId != null ? String(registrationId) : null,
+    customField,
+    reference,
+  }).catch((err) => console.error('public webinar hm_people upsert error', err));
+  void notifyStaffPublicWebinarSignup({
+    firstname,
+    surname,
+    email,
+    phone,
+    wantQuick,
+    sessionDate: effectiveDate,
+    broadcastId: effectiveBroadcastId,
+    webinarId: broadcastContext.webinarId,
+    webinarTitle: broadcastContext.title,
+    subscriptionId: registrationId != null ? String(registrationId) : null,
+    emailVerified: subscriptionRow?.email_verified === true,
+    watchLink,
+    confirmationLink,
+    customField,
+    reference,
+  }).catch((err) => console.error('public webinar signup notify error', err));
+
+  return {
+    status: 200,
+    payload: {
+      ok: true,
+      booked: true,
+      already_registered: false,
+      registration_id: numericId(registrationId),
+      quick: wantQuick,
+      email_verified: subscriptionRow?.email_verified === true,
+      watch_link: watchLink,
+      confirmation_link: confirmationLink,
+      broadcast: {
+        id: effectiveBroadcastId,
+        title: broadcastContext.title,
+        date: effectiveDate,
+        webinar_id: broadcastContext.webinarId,
+      },
+      message: wantQuick
+        ? 'You are registered for the soonest available session. Check your email for the WebinarGeek join link — it starts shortly.'
+        : 'You are registered. WebinarGeek will email you a confirmation with the join link shortly.',
+    },
+  };
+}
+
+function botSessionFromBroadcast(row: Record<string, unknown>): Record<string, unknown> | null {
+  const sessionId = numericId(row.id);
+  const start = isoOffset(row.date);
+  if (sessionId == null || !start) return null;
+  const available =
+    !sessionClosed(row) &&
+    !sessionIsFull(nonNegativeInt(row.subscriptions_count), maximumSubscribersFor(row));
+  return {
+    session_id: sessionId,
+    start_time: start,
+    available,
+    title: str(row.title || row.name) || 'Live webinar',
+    timezone: SCHEDULE_TZ,
+  };
+}
+
+async function handleBotSessions(): Promise<Response> {
+  const schedule = await loadPublicSchedule();
+  if (!schedule.ok) {
+    return respond(schedule.status === 503 ? 503 : 502, { error: schedule.error });
+  }
+  const sessions: Array<Record<string, unknown>> = [];
+  for (const row of schedule.broadcasts) {
+    const session = botSessionFromBroadcast(row);
+    if (session) sessions.push(session);
+  }
+  return respond(200, sessions);
+}
+
+function botErrorFromBook(status: number, payload: Record<string, unknown>): Response {
+  const error = str(payload.error) || 'Request failed.';
+  if (status === 400) return respond(400, { error });
+  if (status === 404) return respond(404, { error: 'Unknown session.' });
+  if (status === 409 || status === 422) return respond(409, { error });
+  if (/not found/i.test(error)) return respond(404, { error: 'Unknown session.' });
+  if (/full|limit|maximum|no longer possible|sold out/i.test(error)) {
+    return respond(409, { error: 'This session is not bookable.' });
+  }
+  return respond(status >= 400 && status < 600 ? status : 502, { error });
+}
+
+function botRegistrationResponse(payload: Record<string, unknown>, fallbackSessionId: number): Response {
+  const broadcast =
+    payload.broadcast && typeof payload.broadcast === 'object'
+      ? (payload.broadcast as Record<string, unknown>)
+      : {};
+  const sessionId = numericId(broadcast.id) ?? fallbackSessionId;
+  const start = isoOffset(broadcast.date);
+  const registrationId = numericId(payload.registration_id);
+  const watch = str(payload.watch_link) || null;
+  if (registrationId == null || !start) {
+    return respond(502, { error: 'Registration succeeded but the booking record was incomplete.' });
+  }
+  return respond(200, {
+    registration_id: registrationId,
+    session_id: sessionId,
+    start_time: start,
+    watch_link: watch,
+  });
+}
+
+async function handleBotRegistration(req: Request): Promise<Response> {
+  let parsed: unknown;
+  try {
+    parsed = await req.json();
+  } catch {
+    return respond(400, { error: 'Invalid JSON body.' });
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return respond(400, { error: 'Invalid request body.' });
+  }
+  const record = parsed as Record<string, unknown>;
+  if (record.session_id == null || record.session_id === '') {
+    return respond(400, { error: 'session_id is required.' });
+  }
+  const sessionId = numericId(record.session_id);
+  if (sessionId == null) return respond(400, { error: 'session_id must be a number.' });
+  const firstname = str(record.firstname);
+  const surname = str(record.surname);
+  const email = normalizeEmail(record.email);
+  const phoneRaw = str(record.phone);
+  const phone = phoneRaw.replace(/\D/g, '');
+  if (!firstname) return respond(400, { error: 'firstname is required.' });
+  if (!surname) return respond(400, { error: 'surname is required.' });
+  if (!email) return respond(400, { error: 'email is required.' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return respond(400, { error: 'email is invalid.' });
+  }
+  if (!phoneRaw) return respond(400, { error: 'phone is required.' });
+  if (!phone) return respond(400, { error: 'phone is invalid.' });
+
+  const result = await bookFromPublicBody(
+    {
+      email,
+      firstname,
+      surname,
+      phone,
+      broadcast_id: String(sessionId),
+      quick: false,
+    },
+    { channel: 'booking-api' },
+  );
+  if (result.status === 200 && result.payload.ok === true) {
+    return botRegistrationResponse(result.payload, sessionId);
+  }
+  return botErrorFromBook(result.status, result.payload);
 }
 
 async function logPublicSignup(input: {
@@ -652,6 +1279,7 @@ async function logPublicSignup(input: {
   confirmationLink?: string | null;
   customField?: string | null;
   reference?: string | null;
+  channel?: string | null;
 }): Promise<void> {
   try {
     const admin = serviceClient();
@@ -675,6 +1303,7 @@ async function logPublicSignup(input: {
       metadata: {
         source: 'hm-public-webinar-schedule',
         reference: input.reference || null,
+        ...(input.channel ? { channel: input.channel } : {}),
       },
     });
     if (error) console.error('hm_public_webinar_signups insert failed', error);
@@ -827,6 +1456,7 @@ async function notifyStaffPublicWebinarSignup(input: {
   watchLink?: string | null;
   confirmationLink?: string | null;
   customField?: string | null;
+  reference?: string | null;
 }): Promise<void> {
   const toList = notifyRecipients();
   if (!toList.length) return;
@@ -931,6 +1561,26 @@ Deno.serve(async (req) => {
 
   try {
     const url = new URL(req.url);
+    const modeParam = (url.searchParams.get('mode') || '').trim();
+    const bot =
+      botEndpoint(url.pathname) ||
+      (modeParam === 'bot-sessions'
+        ? 'sessions'
+        : modeParam === 'bot-register'
+          ? 'registrations'
+          : null);
+    if (bot) {
+      if (!bookingApiKeyOk(req)) {
+        return respond(401, { error: 'Missing or invalid API key.' });
+      }
+      if (bot === 'sessions') {
+        if (req.method !== 'GET') return respond(405, { error: 'Method not allowed.' });
+        return await handleBotSessions();
+      }
+      if (req.method !== 'POST') return respond(405, { error: 'Method not allowed.' });
+      return await handleBotRegistration(req);
+    }
+
     const mode = (url.searchParams.get('mode') || '').trim() || (req.method === 'GET' ? 'upcoming' : 'book');
 
     if (req.method === 'GET' && (mode === 'upcoming' || mode === 'upcoming-broadcasts')) {
@@ -986,273 +1636,8 @@ Deno.serve(async (req) => {
 
     if (req.method === 'POST' && mode === 'book') {
       const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-      const email = normalizeEmail(body.email);
-      const firstname = str(body.firstname || body.first_name || body.firstName);
-      const surname = str(body.surname || body.last_name || body.lastName);
-      const phone = str(body.phone);
-      const wantQuick =
-        body.quick === true ||
-        body.quick === 1 ||
-        body.quick === '1' ||
-        String(body.quick || '').toLowerCase() === 'true' ||
-        body.mode === 'quick' ||
-        str(body.schedule_mode) === 'quick';
-      let broadcastId = String(body.broadcast_id ?? body.broadcastId ?? '').trim();
-      let webinarId = String(body.webinar_id ?? body.webinarId ?? '').trim();
-      const customField =
-        str(body.custom_field) ||
-        Deno.env.get('PUBLIC_WEBINAR_CUSTOM_FIELD')?.trim() ||
-        'cold-email';
-      const reference = str(body.reference).slice(0, 200);
-
-      if (!email || !firstname) {
-        return json(400, { error: 'email and firstname are required.' });
-      }
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        return json(400, { error: 'Please enter a valid email address.' });
-      }
-
-      // Always re-resolve JIT from the preferred published webinar (ignore stale client ids).
-      if (wantQuick) {
-        const schedule = await loadPublicSchedule();
-        if (!schedule.ok) {
-          return json(schedule.status, { error: schedule.error });
-        }
-        if (!schedule.quick?.id) {
-          return json(409, {
-            error:
-              'Watch now is unavailable right now. Enable Just-in-time on your published AO webinar, or pick a time from today’s / tomorrow’s list.',
-            quick_available: false,
-          });
-        }
-        broadcastId = String(schedule.quick.id ?? '').trim();
-        webinarId = String(schedule.quick.webinar_id ?? '').trim() || webinarId;
-      }
-
-      if (!broadcastId) {
-        return json(400, {
-          error: wantQuick
-            ? 'Could not resolve a Just-in-time session. Try again or pick a time from the list.'
-            : 'email, firstname, and broadcast_id are required.',
-        });
-      }
-
-      // Block duplicate form submissions (any upcoming session for this email/phone).
-      const existingSignup = await findExistingPublicSignup(email, phone);
-      if (existingSignup) {
-        const sessionAt = existingSignup.session_at != null ? String(existingSignup.session_at) : null;
-        const whenLabel =
-          str(existingSignup.session_label) || formatSessionWhen(sessionAt) || 'your selected time';
-        return alreadyRegisteredResponse({
-          whenLabel,
-          broadcastId: existingSignup.broadcast_id != null ? String(existingSignup.broadcast_id) : null,
-          title: null,
-          date: sessionAt,
-          webinarId: existingSignup.webinar_id != null ? String(existingSignup.webinar_id) : null,
-          emailVerified: existingSignup.email_verified === true,
-          watchLink: existingSignup.watch_link != null ? String(existingSignup.watch_link) : null,
-          confirmationLink:
-            existingSignup.confirmation_link != null ? String(existingSignup.confirmation_link) : null,
-        });
-      }
-
-      // For JIT virtual broadcasts, skip "already registered" lookup on the virtual id —
-      // WebinarGeek creates a real broadcast on subscribe and handles duplicates itself.
-      const broadcastContext = await resolveBroadcastContext(broadcastId, webinarId || undefined);
-      if (!broadcastContext.ok) {
-        return json(broadcastContext.status === 404 ? 404 : broadcastContext.status === 422 ? 422 : 502, {
-          error: broadcastContext.error,
-        });
-      }
-
-      // Also block if WebinarGeek already has an active subscription for this email.
-      const existingWg = await findAnySubscriptionForEmail(email, broadcastContext.webinarId);
-      if (existingWg) {
-        const links = linksFromSubscription(existingWg);
-        const effectiveBroadcastId = links.broadcast_id || broadcastId;
-        const effectiveDate = links.broadcast_date ?? broadcastContext.date;
-        const whenLabel = formatSessionWhen(effectiveDate) || 'your selected time';
-        return alreadyRegisteredResponse({
-          whenLabel,
-          broadcastId: effectiveBroadcastId,
-          title: broadcastContext.title,
-          date: effectiveDate,
-          webinarId: broadcastContext.webinarId,
-          emailVerified: existingWg.email_verified === true,
-          watchLink: links.watch_link,
-          confirmationLink: links.confirmation_link,
-        });
-      }
-
-      if (!wantQuick) {
-        const existingRows = await findSubscriptionForBroadcast(email, broadcastId);
-        if (existingRows.length > 0) {
-          const row = existingRows[0];
-          const links = linksFromSubscription(row);
-          const effectiveBroadcastId = links.broadcast_id || broadcastId;
-          const effectiveDate = links.broadcast_date ?? broadcastContext.date;
-          const whenLabel = formatSessionWhen(effectiveDate) || 'your selected time';
-          return alreadyRegisteredResponse({
-            whenLabel,
-            broadcastId: effectiveBroadcastId,
-            title: broadcastContext.title,
-            date: effectiveDate,
-            webinarId: broadcastContext.webinarId,
-            emailVerified: row.email_verified === true,
-            watchLink: links.watch_link,
-            confirmationLink: links.confirmation_link,
-          });
-        }
-      }
-
-      let payload = buildSubscriptionPayload({
-        email,
-        firstname,
-        surname,
-        phone,
-        customField,
-        registrationFields: broadcastContext.registrationFields,
-      });
-      // Explicitly ensure WG sends confirmation (default is true; set false only if needed).
-      payload.skip_confirmation_mail = false;
-
-      let bookRes = await wgPost(
-        `/broadcasts/${encodeURIComponent(broadcastId)}/subscriptions`,
-        payload,
-      );
-
-      if (!bookRes.ok && bookRes.status === 422 && customField) {
-        const withoutTag = { ...payload };
-        delete withoutTag.custom_field;
-        const retry = await wgPost(
-          `/broadcasts/${encodeURIComponent(broadcastId)}/subscriptions`,
-          withoutTag,
-        );
-        if (retry.ok) {
-          bookRes = retry;
-          payload = withoutTag;
-        }
-      }
-
-      if (!bookRes.ok && bookRes.status === 422 && !surname) {
-        const withSurname = buildSubscriptionPayload({
-          email,
-          firstname,
-          surname: '.',
-          phone,
-          customField: payload.custom_field ? String(payload.custom_field) : null,
-          registrationFields: broadcastContext.registrationFields,
-        });
-        withSurname.skip_confirmation_mail = false;
-        const retry = await wgPost(
-          `/broadcasts/${encodeURIComponent(broadcastId)}/subscriptions`,
-          withSurname,
-        );
-        if (retry.ok) {
-          bookRes = retry;
-          payload = withSurname;
-        }
-      }
-
-      if (!bookRes.ok) {
-        const wgMsg = wgErrorMessage(bookRes.json, `WebinarGeek booking failed (${bookRes.status})`);
-        const looksDuplicate =
-          bookRes.status === 422 &&
-          /already|registered|subscribed|exists|duplicate/i.test(wgMsg);
-        if (looksDuplicate) {
-          const confirmed = await findAnySubscriptionForEmail(email, broadcastContext.webinarId);
-          const links = linksFromSubscription(confirmed);
-          const effectiveDate = links.broadcast_date ?? broadcastContext.date;
-          return alreadyRegisteredResponse({
-            whenLabel: formatSessionWhen(effectiveDate) || 'your selected time',
-            broadcastId: links.broadcast_id || broadcastId,
-            title: broadcastContext.title,
-            date: effectiveDate,
-            webinarId: broadcastContext.webinarId,
-            emailVerified: confirmed?.email_verified === true,
-            watchLink: links.watch_link,
-            confirmationLink: links.confirmation_link,
-          });
-        }
-        return json(502, {
-          error: wgMsg,
-          source_status: bookRes.status,
-        });
-      }
-
-      let subscriptionRow = subscriptionRowsFromWgJson(bookRes.json)[0] || null;
-      if (!subscriptionRow) {
-        const confirmed = await findSubscriptionForBroadcast(email, broadcastId);
-        subscriptionRow = confirmed[0] || null;
-      }
-      const links = linksFromSubscription(subscriptionRow);
-      const effectiveBroadcastId = links.broadcast_id || broadcastId;
-      const effectiveDate = links.broadcast_date ?? broadcastContext.date;
-
-      await logPublicSignup({
-        firstname,
-        surname,
-        email,
-        phone,
-        wantQuick,
-        sessionDate: effectiveDate,
-        broadcastId: effectiveBroadcastId,
-        webinarId: broadcastContext.webinarId,
-        subscriptionId: subscriptionRow?.id != null ? String(subscriptionRow.id) : null,
-        alreadyRegistered: false,
-        emailVerified: subscriptionRow?.email_verified === true,
-        watchLink: links.watch_link,
-        confirmationLink: links.confirmation_link,
-        customField,
-      });
-
-      // Fire-and-forget staff alert + call-workspace lead — never block the registrant response.
-      void upsertHmPersonFromPublicWebinarSignup({
-        firstname,
-        surname,
-        email,
-        phone,
-        wantQuick,
-        sessionDate: effectiveDate,
-        broadcastId: effectiveBroadcastId,
-        webinarId: broadcastContext.webinarId,
-        webinarTitle: broadcastContext.title,
-        subscriptionId: subscriptionRow?.id != null ? String(subscriptionRow.id) : null,
-        customField,
-      }).catch((err) => console.error('public webinar hm_people upsert error', err));
-      void notifyStaffPublicWebinarSignup({
-        firstname,
-        surname,
-        email,
-        phone,
-        wantQuick,
-        sessionDate: effectiveDate,
-        broadcastId: effectiveBroadcastId,
-        webinarId: broadcastContext.webinarId,
-        webinarTitle: broadcastContext.title,
-        subscriptionId: subscriptionRow?.id != null ? String(subscriptionRow.id) : null,
-        emailVerified: subscriptionRow?.email_verified === true,
-        watchLink: links.watch_link,
-        confirmationLink: links.confirmation_link,
-        customField,
-      }).catch((err) => console.error('public webinar signup notify error', err));
-
-      return json(200, {
-        ok: true,
-        booked: true,
-        already_registered: false,
-        quick: wantQuick,
-        email_verified: subscriptionRow?.email_verified === true,
-        broadcast: {
-          id: effectiveBroadcastId,
-          title: broadcastContext.title,
-          date: effectiveDate,
-          webinar_id: broadcastContext.webinarId,
-        },
-        message: wantQuick
-          ? 'You are registered for the soonest available session. Check your email for the WebinarGeek join link — it starts shortly.'
-          : 'You are registered. WebinarGeek will email you a confirmation with the join link shortly.',
-      });
+      const result = await bookFromPublicBody(body);
+      return json(result.status, result.payload);
     }
 
     return json(405, { error: 'Method not allowed. Use GET ?mode=upcoming or POST ?mode=book.' });

@@ -10,7 +10,7 @@
       "destination": "/api/vcard"
     },
     {
-      "source": "/((?!assets/|models/|onnxruntime-web/|.*\\..*).*)",
+      "source": "/((?!api/|assets/|models/|onnxruntime-web/|.*\\..*).*)",
       "destination": "/index.html"
     }
   ]
