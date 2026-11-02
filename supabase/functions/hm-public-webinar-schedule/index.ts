@@ -4,8 +4,8 @@
 // Optional: WEBINARGEEK_API_BASE_URL, PUBLIC_WEBINAR_GEEK_WEBINAR_ID, PUBLIC_WEBINAR_CUSTOM_FIELD
 //
 // Calling-bot API (same schedule + subscribe path as /schedule-webinar).
-// Vercel: GET /api/webinar/sessions  POST /api/webinar/registrations
-// This function: GET /sessions  POST /registrations
+// Vercel: GET /api/webinar/sessions  POST /api/webinar/registrations  GET /api/webinar/verification
+// This function: GET /sessions  POST /registrations  GET /verification
 // Auth: Authorization: Bearer <key> or X-API-Key: <key>
 // Secret: WEBINAR_BOOKING_API_KEY
 
@@ -199,10 +199,11 @@ function bookingApiKeyOk(req: Request): boolean {
   return diff === 0;
 }
 
-function botEndpoint(pathname: string): 'sessions' | 'registrations' | null {
+function botEndpoint(pathname: string): 'sessions' | 'registrations' | 'verification' | null {
   const path = pathname.replace(/\/+$/, '').toLowerCase();
   if (path.endsWith('/sessions')) return 'sessions';
   if (path.endsWith('/registrations')) return 'registrations';
+  if (path.endsWith('/verification')) return 'verification';
   return null;
 }
 
@@ -746,6 +747,73 @@ async function findAnySubscriptionForEmail(
     }
   }
   return null;
+}
+
+/**
+ * Same WebinarGeek lookup as the staff Webinar verify page
+ * (integrations-webinar-geek GET ?mode=verify → findSubscriptionsByEmail).
+ * Default list omits unverified subscribers, so the extra passes are required.
+ */
+async function findSubscriptionsByEmail(email: string): Promise<{
+  ok: boolean;
+  rows: Array<Record<string, unknown>>;
+}> {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return { ok: true, rows: [] };
+  const nested = { nested_resources: 'broadcast,webinar', per_page: 50 };
+  const passes: Array<Record<string, string | number | boolean | undefined>> = [
+    { ...nested, email: normalized },
+    { ...nested, email: normalized, email_verified: false },
+    { ...nested, email: normalized, include_unverified: true },
+  ];
+  const merged = new Map<string, Record<string, unknown>>();
+  let anyOk = false;
+  for (const params of passes) {
+    const res = await wgGet('/subscriptions', params);
+    if (!res.ok) continue;
+    anyOk = true;
+    for (const row of subscriptionRowsFromWgJson(res.json)) {
+      const id = row.id != null ? String(row.id) : '';
+      const key = id || `${String(row.email || '')}|${String(row.created_at || '')}`;
+      if (!merged.has(key)) merged.set(key, row);
+    }
+    if (merged.size > 0) break;
+  }
+  return { ok: anyOk, rows: [...merged.values()] };
+}
+
+function subscriptionSortMs(row: Record<string, unknown>): number {
+  const broadcast =
+    row.broadcast && typeof row.broadcast === 'object'
+      ? (row.broadcast as Record<string, unknown>)
+      : null;
+  return unixMsFromField(broadcast?.date) ?? unixMsFromField(row.created_at) ?? 0;
+}
+
+async function handleBotVerification(url: URL): Promise<Response> {
+  const email = normalizeEmail(url.searchParams.get('email') || '');
+  if (!email) return respond(400, { error: 'email is required.' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return respond(400, { error: 'email is invalid.' });
+  }
+  const lookedUp = await findSubscriptionsByEmail(email);
+  if (!lookedUp.ok && lookedUp.rows.length === 0) {
+    return respond(502, { error: 'Unable to check WebinarGeek verification.' });
+  }
+  if (lookedUp.rows.length === 0) {
+    return respond(404, { error: 'No signup found for this email.' });
+  }
+  const verified = lookedUp.rows.some((row) => row.email_verified === true);
+  const pool = verified
+    ? lookedUp.rows.filter((row) => row.email_verified === true)
+    : lookedUp.rows;
+  const chosen = [...pool].sort((a, b) => subscriptionSortMs(b) - subscriptionSortMs(a))[0];
+  return respond(200, {
+    email,
+    verified,
+    registration_id: numericId(chosen?.id),
+    session_id: numericId(subscriptionBroadcastId(chosen || {})),
+  });
 }
 
 type BookResult = { status: number; payload: Record<string, unknown> };
@@ -1568,7 +1636,9 @@ Deno.serve(async (req) => {
         ? 'sessions'
         : modeParam === 'bot-register'
           ? 'registrations'
-          : null);
+          : modeParam === 'bot-verify'
+            ? 'verification'
+            : null);
     if (bot) {
       if (!bookingApiKeyOk(req)) {
         return respond(401, { error: 'Missing or invalid API key.' });
@@ -1576,6 +1646,10 @@ Deno.serve(async (req) => {
       if (bot === 'sessions') {
         if (req.method !== 'GET') return respond(405, { error: 'Method not allowed.' });
         return await handleBotSessions();
+      }
+      if (bot === 'verification') {
+        if (req.method !== 'GET') return respond(405, { error: 'Method not allowed.' });
+        return await handleBotVerification(url);
       }
       if (req.method !== 'POST') return respond(405, { error: 'Method not allowed.' });
       return await handleBotRegistration(req);
