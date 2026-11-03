@@ -43,6 +43,21 @@ function isMissingColumnError(message: string): boolean {
   return /column|schema cache|does not exist/i.test(message);
 }
 
+/** Removes one hm_public_webinar_signups row. Does not delete hm_people or the WebinarGeek subscription. */
+export async function deletePublicWebinarSignup(id: string): Promise<void> {
+  const signupId = id.trim();
+  if (!signupId) throw new Error('Missing signup id.');
+  const { data, error } = await supabase
+    .from('hm_public_webinar_signups')
+    .delete()
+    .eq('id', signupId)
+    .select('id');
+  if (error) throw new Error(error.message);
+  if (!data?.length) {
+    throw new Error('That signup could not be deleted. Refresh and try again.');
+  }
+}
+
 export async function listPublicWebinarSignups(limit = 500): Promise<PublicWebinarSignupRow[]> {
   const selects = [SIGNUP_SELECT_FULL, SIGNUP_SELECT_WITHOUT_REFERENCE, SIGNUP_SELECT_CORE];
   let lastError: Error | null = null;

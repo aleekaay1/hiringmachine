@@ -1,7 +1,8 @@
 import React from 'react';
-import { ClipboardList, Link2, RefreshCw, Search } from 'lucide-react';
+import { ClipboardList, Link2, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { Button } from '../components/UI';
 import {
+  deletePublicWebinarSignup,
   formatSignupSessionAt,
   formatSignupSubmittedAt,
   listPublicWebinarSignups,
@@ -42,6 +43,7 @@ const ScheduleWebinarSignupsPage: React.FC = () => {
   const [msg, setMsg] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState('');
   const [sourceFilter, setSourceFilter] = React.useState<SourceFilter>('all');
+  const [deletingId, setDeletingId] = React.useState<string | null>(null);
 
   const load = React.useCallback(async () => {
     setError(null);
@@ -95,6 +97,31 @@ const ScheduleWebinarSignupsPage: React.FC = () => {
       return hay.includes(q);
     });
   }, [rows, query, sourceFilter]);
+
+  const signupLabel = (row: PublicWebinarSignupRow) => {
+    const name = [row.first_name, row.last_name].filter(Boolean).join(' ').trim();
+    return name || row.email || 'this signup';
+  };
+
+  const onDelete = async (row: PublicWebinarSignupRow) => {
+    const label = signupLabel(row);
+    const confirmed = window.confirm(
+      `Delete the signup for ${label} (${row.email})? This removes that form signup row only. The call-workspace person and the WebinarGeek registration stay.`,
+    );
+    if (!confirmed) return;
+    setError(null);
+    setMsg(null);
+    setDeletingId(row.id);
+    try {
+      await deletePublicWebinarSignup(row.id);
+      setRows((prev) => prev.filter((item) => item.id !== row.id));
+      setMsg(`Deleted the signup for ${label}. The call-workspace person and WebinarGeek registration were left in place.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete this signup');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const onMatch = async () => {
     setError(null);
@@ -209,19 +236,20 @@ const ScheduleWebinarSignupsPage: React.FC = () => {
               <th className="px-3 py-2.5 font-semibold">Source</th>
               <th className="px-3 py-2.5 font-semibold">Reference</th>
               <th className="px-3 py-2.5 font-semibold">Status</th>
+              <th className="px-3 py-2.5 font-semibold"> </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {loading && (
               <tr>
-                <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={9} className="px-3 py-8 text-center text-slate-500">
                   Loading signups…
                 </td>
               </tr>
             )}
             {!loading && filtered.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={9} className="px-3 py-8 text-center text-slate-500">
                   No schedule-form submissions yet.
                 </td>
               </tr>
@@ -276,6 +304,18 @@ const ScheduleWebinarSignupsPage: React.FC = () => {
                       Email verified:{' '}
                       {row.email_verified === true ? 'Yes' : row.email_verified === false ? 'No' : '—'}
                     </p>
+                  </td>
+                  <td className="px-3 py-3">
+                    <button
+                      type="button"
+                      onClick={() => void onDelete(row)}
+                      disabled={deletingId != null}
+                      className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                      title={`Delete signup for ${signupLabel(row)}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      {deletingId === row.id ? 'Deleting…' : 'Delete'}
+                    </button>
                   </td>
                 </tr>
               ))}
