@@ -8,7 +8,9 @@
 // This function: GET /sessions  POST /registrations  GET /verification
 // Auth: Authorization: Bearer <key> or X-API-Key: <key>
 // Secret: WEBINAR_BOOKING_API_KEY
+// Staff delete: POST ?mode=delete-signup { id } with the signed-in user session.
 
+import { createClient } from 'npm:@supabase/supabase-js@2';
 import nodemailer from 'npm:nodemailer@6.9.10';
 import { corsHeaders, json, normalizeEmail, serviceClient, str } from '../_shared/hiringMachine.ts';
 import { insertEmailSendLog } from '../_shared/emailSendLog.ts';
@@ -1729,6 +1731,188 @@ async function notifyStaffPublicWebinarSignup(input: {
   }
 }
 
+async function requireSignedInUser(req: Request): Promise<Response | null> {
+  const authHeader = req.headers.get('Authorization') || '';
+  if (!authHeader.startsWith('Bearer ')) {
+    return json(401, { error: 'Sign in again to delete a signup.' });
+  }
+  const url = Deno.env.get('SUPABASE_URL') || '';
+  const anon = Deno.env.get('SUPABASE_ANON_KEY') || '';
+  if (!url || !anon) return json(500, { error: 'Missing Supabase auth config.' });
+  const supabase = createClient(url, anon, {
+    global: { headers: { Authorization: authHeader } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data.user) return json(401, { error: 'Sign in again to delete a signup.' });
+  return null;
+}
+
+/** Removes the registration. Does not cancel or delete the broadcast. */
+async function unsubscribeWebinarGeekSubscription(
+  subscriptionId: string,
+): Promise<'removed' | 'already_gone'> {
+  const res = await wgPost(`/subscriptions/${encodeURIComponent(subscriptionId)}/unsubscribe`, {});
+  if (res.ok) return 'removed';
+  const message = wgErrorMessage(res.json, `WebinarGeek unsubscribe failed (${res.status})`);
+  if (res.status === 404 || /already unsubscrib|not found/i.test(message)) return 'already_gone';
+  throw new Error(message);
+}
+
+async function countMatching(
+  admin: ReturnType<typeof serviceClient>,
+  table: string,
+  column: string,
+  value: string,
+): Promise<number | null> {
+  const { count, error } = await admin
+    .from(table)
+    .select('id', { count: 'exact', head: true })
+    .ilike(column, value);
+  if (error) return null;
+  return count || 0;
+}
+
+async function portalPersonDeletePlan(
+  admin: ReturnType<typeof serviceClient>,
+  email: string,
+  signupId: string,
+): Promise<{ personId: string | null; person: 'kept' | 'none'; person_kept_reason: string | null }> {
+  const { data: person, error } = await admin
+    .from('hm_people')
+    .select(
+      'id, stage, pipeline_candidate_id, instantly_lead_id, instantly_email_id, campaign_id, campaign_name, unibox_url, positive_source, last_called_at, sent_to_hub_at, shortlisted_email_sent_at, qualify_status, raw_lead',
+    )
+    .ilike('email', email)
+    .maybeSingle();
+  if (error) return { personId: null, person: 'kept', person_kept_reason: 'the portal contact could not be checked' };
+  if (!person?.id) return { personId: null, person: 'none', person_kept_reason: null };
+
+  const raw =
+    person.raw_lead && typeof person.raw_lead === 'object'
+      ? (person.raw_lead as Record<string, unknown>)
+      : {};
+  const fromThisSignup =
+    str(raw.source) === 'hm_public_webinar_signups' || str(person.campaign_name) === 'Public webinar form';
+
+  const { count: otherSignups, error: signupCountError } = await admin
+    .from('hm_public_webinar_signups')
+    .select('id', { count: 'exact', head: true })
+    .ilike('email', email)
+    .neq('id', signupId);
+  if (signupCountError) {
+    return { personId: null, person: 'kept', person_kept_reason: 'other signups could not be checked' };
+  }
+  if ((otherSignups || 0) > 0) {
+    return { personId: null, person: 'kept', person_kept_reason: 'they have another webinar signup' };
+  }
+
+  if (
+    str(person.instantly_lead_id) ||
+    str(person.instantly_email_id) ||
+    str(person.campaign_id) ||
+    str(person.unibox_url) ||
+    str(person.positive_source)
+  ) {
+    return { personId: null, person: 'kept', person_kept_reason: 'they are an Instantly or campaign contact' };
+  }
+  if (str(person.pipeline_candidate_id)) {
+    return { personId: null, person: 'kept', person_kept_reason: 'they are linked to a pipeline candidate' };
+  }
+  if (person.last_called_at || person.sent_to_hub_at || person.shortlisted_email_sent_at) {
+    return { personId: null, person: 'kept', person_kept_reason: 'they have call or hiring history' };
+  }
+  const stage = str(person.stage);
+  if (stage && !['call_ready', 'replied', 'ooo', 'shortlisted'].includes(stage)) {
+    return { personId: null, person: 'kept', person_kept_reason: 'they have been worked in the call workspace' };
+  }
+  if (str(person.qualify_status) && str(person.qualify_status) !== 'none') {
+    return { personId: null, person: 'kept', person_kept_reason: 'they have qualify history' };
+  }
+  if (!fromThisSignup) {
+    return { personId: null, person: 'kept', person_kept_reason: 'they existed in the portal before this signup' };
+  }
+
+  const [pipelineHits, checkInHits, hiredByPerson, emailSends] = await Promise.all([
+    countMatching(admin, 'pipeline_candidates', 'email', email),
+    countMatching(admin, 'candidates', 'email', email),
+    admin
+      .from('hm_hired_agents')
+      .select('id', { count: 'exact', head: true })
+      .or(`person_id.eq.${person.id},email.ilike.${email}`),
+    admin.from('hm_email_sends').select('id', { count: 'exact', head: true }).eq('person_id', person.id),
+  ]);
+  if (pipelineHits == null || pipelineHits > 0) {
+    return { personId: null, person: 'kept', person_kept_reason: 'they match a pipeline candidate' };
+  }
+  if (checkInHits == null || checkInHits > 0) {
+    return { personId: null, person: 'kept', person_kept_reason: 'they have a check-in' };
+  }
+  if (hiredByPerson.error || (hiredByPerson.count || 0) > 0) {
+    return { personId: null, person: 'kept', person_kept_reason: 'they are a hired agent' };
+  }
+  if (emailSends.error || (emailSends.count || 0) > 0) {
+    return { personId: null, person: 'kept', person_kept_reason: 'they have portal emails' };
+  }
+
+  return { personId: String(person.id), person: 'none', person_kept_reason: null };
+}
+
+async function handleStaffDeleteSignup(req: Request): Promise<Response> {
+  const denied = await requireSignedInUser(req);
+  if (denied) return denied;
+  const body = (await req.json().catch(() => ({}))) as { id?: string };
+  const signupId = str(body.id);
+  if (!signupId) return json(400, { error: 'Signup id is required.' });
+
+  const admin = serviceClient();
+  const { data: signup, error } = await admin
+    .from('hm_public_webinar_signups')
+    .select('id, email, wg_subscription_id')
+    .eq('id', signupId)
+    .maybeSingle();
+  if (error) return json(500, { error: error.message });
+  if (!signup) return json(404, { error: 'Signup not found.' });
+
+  const email = normalizeEmail(signup.email);
+  const subscriptionId = str(signup.wg_subscription_id);
+  let webinargeek: 'removed' | 'already_gone' | 'none' = 'none';
+  if (subscriptionId) {
+    try {
+      webinargeek = await unsubscribeWebinarGeekSubscription(subscriptionId);
+    } catch (err) {
+      return json(502, {
+        error: err instanceof Error ? err.message : 'Could not remove the WebinarGeek registration.',
+      });
+    }
+  }
+
+  const personPlan = email
+    ? await portalPersonDeletePlan(admin, email, signupId)
+    : { personId: null, person: 'none' as const, person_kept_reason: null };
+
+  const { error: deleteError } = await admin.from('hm_public_webinar_signups').delete().eq('id', signupId);
+  if (deleteError) return json(500, { error: deleteError.message });
+
+  let person: 'removed' | 'kept' | 'none' = personPlan.personId ? 'removed' : personPlan.person;
+  let personKeptReason = personPlan.person_kept_reason;
+  if (personPlan.personId) {
+    const { error: personError } = await admin.from('hm_people').delete().eq('id', personPlan.personId);
+    if (personError) {
+      person = 'kept';
+      personKeptReason = personError.message;
+    }
+  }
+
+  return json(200, {
+    ok: true,
+    signup: true,
+    webinargeek,
+    person,
+    person_kept_reason: personKeptReason,
+  });
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -1819,6 +2003,10 @@ Deno.serve(async (req) => {
       const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
       const result = await bookFromPublicBody(body);
       return json(result.status, result.payload);
+    }
+
+    if (req.method === 'POST' && mode === 'delete-signup') {
+      return await handleStaffDeleteSignup(req);
     }
 
     return json(405, { error: 'Method not allowed. Use GET ?mode=upcoming or POST ?mode=book.' });

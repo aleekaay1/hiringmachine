@@ -50,19 +50,56 @@ export function signupBookedViaLabel(row: { metadata?: { channel?: string } | nu
   return channel === 'booking-api' ? 'AI bot' : 'Manual';
 }
 
-/** Removes one hm_public_webinar_signups row. Does not delete hm_people or the WebinarGeek subscription. */
-export async function deletePublicWebinarSignup(id: string): Promise<void> {
+export type SignupDeleteResult = {
+  signup: true;
+  webinargeek: 'removed' | 'already_gone' | 'none';
+  person: 'removed' | 'kept' | 'none';
+  person_kept_reason: string | null;
+};
+
+/** Removes the signup, its WebinarGeek registration, and a portal contact that exists only for this signup. */
+export async function deletePublicWebinarSignup(id: string): Promise<SignupDeleteResult> {
   const signupId = id.trim();
   if (!signupId) throw new Error('Missing signup id.');
-  const { data, error } = await supabase
-    .from('hm_public_webinar_signups')
-    .delete()
-    .eq('id', signupId)
-    .select('id');
-  if (error) throw new Error(error.message);
-  if (!data?.length) {
-    throw new Error('That signup could not be deleted. Refresh and try again.');
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  const anon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+  if (!supabaseUrl || !anon) throw new Error('Missing Supabase env');
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error('Sign in again to delete a signup.');
+  const res = await fetch(`${supabaseUrl}/functions/v1/hm-public-webinar-schedule?mode=delete-signup`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      apikey: anon,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ id: signupId }),
+  });
+  const json = (await res.json().catch(() => ({}))) as Partial<SignupDeleteResult> & { error?: string };
+  if (!res.ok) throw new Error(json.error || `Delete failed (${res.status})`);
+  return {
+    signup: true,
+    webinargeek: json.webinargeek === 'removed' || json.webinargeek === 'already_gone' ? json.webinargeek : 'none',
+    person: json.person === 'removed' || json.person === 'kept' ? json.person : 'none',
+    person_kept_reason: json.person_kept_reason ? String(json.person_kept_reason) : null,
+  };
+}
+
+export function signupDeleteMessage(label: string, result: SignupDeleteResult): string {
+  const parts = [`Removed the signup for ${label}.`];
+  if (result.webinargeek === 'removed') parts.push('Removed their WebinarGeek registration.');
+  else if (result.webinargeek === 'already_gone') parts.push('Their WebinarGeek registration was already gone.');
+  else parts.push('This row had no WebinarGeek registration id.');
+  if (result.person === 'removed') {
+    parts.push('Removed the portal contact because this signup was their only record.');
+  } else if (result.person === 'kept') {
+    parts.push(`Left the portal contact in place because ${result.person_kept_reason || 'they have other records'}.`);
+  } else {
+    parts.push('No portal contact was linked to this email.');
   }
+  parts.push('The webinar session was not cancelled.');
+  return parts.join(' ');
 }
 
 export async function listPublicWebinarSignups(limit = 500): Promise<PublicWebinarSignupRow[]> {

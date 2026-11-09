@@ -8,6 +8,7 @@ import {
   listPublicWebinarSignups,
   matchFormSignupsToCampaignLeads,
   signupBookedViaLabel,
+  signupDeleteMessage,
   type PublicWebinarLeadSource,
   type PublicWebinarSignupRow,
 } from '../services/publicWebinarSignupsAdmin';
@@ -124,16 +125,16 @@ const ScheduleWebinarSignupsPage: React.FC = () => {
   const onDelete = async (row: PublicWebinarSignupRow) => {
     const label = signupLabel(row);
     const confirmed = window.confirm(
-      `Delete the signup for ${label} (${row.email})? This removes that form signup row only. The call-workspace person and the WebinarGeek registration stay.`,
+      `Delete ${label} (${row.email})? This removes the form signup, their WebinarGeek registration, and the portal contact if this signup is the only record for them. The webinar session stays on the schedule.`,
     );
     if (!confirmed) return;
     setError(null);
     setMsg(null);
     setDeletingId(row.id);
     try {
-      await deletePublicWebinarSignup(row.id);
+      const result = await deletePublicWebinarSignup(row.id);
       setRows((prev) => prev.filter((item) => item.id !== row.id));
-      setMsg(`Deleted the signup for ${label}. The call-workspace person and WebinarGeek registration were left in place.`);
+      setMsg(signupDeleteMessage(label, result));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not delete this signup');
     } finally {
