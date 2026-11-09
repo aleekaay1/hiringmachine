@@ -7,6 +7,7 @@ import {
   formatSignupSubmittedAt,
   listPublicWebinarSignups,
   matchFormSignupsToCampaignLeads,
+  signupBookedViaLabel,
   type PublicWebinarLeadSource,
   type PublicWebinarSignupRow,
 } from '../services/publicWebinarSignupsAdmin';
@@ -31,6 +32,22 @@ function sourceBadge(row: PublicWebinarSignupRow) {
   return (
     <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
       Not matched yet
+    </span>
+  );
+}
+
+function bookedViaBadge(row: PublicWebinarSignupRow) {
+  const label = signupBookedViaLabel(row);
+  if (label === 'AI bot') {
+    return (
+      <span className="inline-flex rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-800">
+        AI bot
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+      Manual
     </span>
   );
 }
@@ -91,6 +108,7 @@ const ScheduleWebinarSignupsPage: React.FC = () => {
         row.reference,
         row.lead_source,
         row.matched_campaign_name,
+        signupBookedViaLabel(row),
       ]
         .map((v) => String(v || '').toLowerCase())
         .join(' ');
@@ -232,6 +250,7 @@ const ScheduleWebinarSignupsPage: React.FC = () => {
               <th className="px-3 py-2.5 font-semibold">Name</th>
               <th className="px-3 py-2.5 font-semibold">Email / Phone</th>
               <th className="px-3 py-2.5 font-semibold">Mode</th>
+              <th className="px-3 py-2.5 font-semibold">Booked via</th>
               <th className="px-3 py-2.5 font-semibold">Scheduled session</th>
               <th className="px-3 py-2.5 font-semibold">Source</th>
               <th className="px-3 py-2.5 font-semibold">Reference</th>
@@ -242,14 +261,14 @@ const ScheduleWebinarSignupsPage: React.FC = () => {
           <tbody className="divide-y divide-slate-100">
             {loading && (
               <tr>
-                <td colSpan={9} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
                   Loading signups…
                 </td>
               </tr>
             )}
             {!loading && filtered.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-3 py-8 text-center text-slate-500">
+                <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
                   No schedule-form submissions yet.
                 </td>
               </tr>
@@ -280,6 +299,7 @@ const ScheduleWebinarSignupsPage: React.FC = () => {
                       {row.schedule_mode === 'quick' ? 'Watch now' : 'Pick a time'}
                     </span>
                   </td>
+                  <td className="px-3 py-3">{bookedViaBadge(row)}</td>
                   <td className="px-3 py-3 text-slate-700">
                     {formatSignupSessionAt(row.session_at)}
                   </td>

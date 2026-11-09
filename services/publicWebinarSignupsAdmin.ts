@@ -28,19 +28,26 @@ export type PublicWebinarSignupRow = {
   matched_recipient_id: string | null;
   matched_recipient_status: string | null;
   matched_at: string | null;
+  metadata: { channel?: string } | null;
 };
 
 const SIGNUP_SELECT_FULL =
-  'id, created_at, first_name, last_name, email, phone, schedule_mode, session_at, session_label, broadcast_id, webinar_id, wg_subscription_id, already_registered, email_verified, watch_link, confirmation_link, custom_field, reference, lead_source, matched_campaign_id, matched_campaign_name, matched_recipient_id, matched_recipient_status, matched_at';
+  'id, created_at, first_name, last_name, email, phone, schedule_mode, session_at, session_label, broadcast_id, webinar_id, wg_subscription_id, already_registered, email_verified, watch_link, confirmation_link, custom_field, reference, lead_source, matched_campaign_id, matched_campaign_name, matched_recipient_id, matched_recipient_status, matched_at, metadata';
 
 const SIGNUP_SELECT_WITHOUT_REFERENCE =
-  'id, created_at, first_name, last_name, email, phone, schedule_mode, session_at, session_label, broadcast_id, webinar_id, wg_subscription_id, already_registered, email_verified, watch_link, confirmation_link, custom_field, lead_source, matched_campaign_id, matched_campaign_name, matched_recipient_id, matched_recipient_status, matched_at';
+  'id, created_at, first_name, last_name, email, phone, schedule_mode, session_at, session_label, broadcast_id, webinar_id, wg_subscription_id, already_registered, email_verified, watch_link, confirmation_link, custom_field, lead_source, matched_campaign_id, matched_campaign_name, matched_recipient_id, matched_recipient_status, matched_at, metadata';
 
 const SIGNUP_SELECT_CORE =
-  'id, created_at, first_name, last_name, email, phone, schedule_mode, session_at, session_label, broadcast_id, webinar_id, wg_subscription_id, already_registered, email_verified, watch_link, confirmation_link, custom_field';
+  'id, created_at, first_name, last_name, email, phone, schedule_mode, session_at, session_label, broadcast_id, webinar_id, wg_subscription_id, already_registered, email_verified, watch_link, confirmation_link, custom_field, metadata';
 
 function isMissingColumnError(message: string): boolean {
   return /column|schema cache|does not exist/i.test(message);
+}
+
+/** Bot bookings store metadata.channel = booking-api. The public form leaves channel unset. */
+export function signupBookedViaLabel(row: { metadata?: { channel?: string } | null }): 'AI bot' | 'Manual' {
+  const channel = String(row.metadata?.channel || '').trim();
+  return channel === 'booking-api' ? 'AI bot' : 'Manual';
 }
 
 /** Removes one hm_public_webinar_signups row. Does not delete hm_people or the WebinarGeek subscription. */
@@ -76,6 +83,7 @@ export async function listPublicWebinarSignups(limit = 500): Promise<PublicWebin
         matched_recipient_id: null,
         matched_recipient_status: null,
         matched_at: null,
+        metadata: null,
         ...(row as PublicWebinarSignupRow),
       }));
     }
