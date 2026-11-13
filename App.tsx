@@ -34,6 +34,7 @@ const BulkEmailPage = React.lazy(() => import('./pages/BulkEmailPage'));
 const HiredPage = React.lazy(() => import('./pages/HiredPage'));
 const AgentContactPage = React.lazy(() => import('./pages/AgentContactPage'));
 const ScheduleWebinarSignupsPage = React.lazy(() => import('./pages/ScheduleWebinarSignupsPage'));
+const NurtureSequencePage = React.lazy(() => import('./pages/NurtureSequencePage'));
 const PipelinePerformance = React.lazy(() => import('./pages/PipelinePerformance'));
 const PipelineEmailWorkspace = React.lazy(() => import('./pages/PipelineEmailWorkspace'));
 const PipelineUploadsWorkspace = React.lazy(() => import('./pages/PipelineUploadsWorkspace'));
@@ -90,6 +91,7 @@ const App: React.FC = () => {
           <Route path="/live-sessions/analytics" element={<Lazy><LiveSessionsAnalyticsPage /></Lazy>} />
           <Route path="/webinar-geek" element={<Lazy><WebinarGeekDashboard /></Lazy>} />
           <Route path="/webinar-questionnaires" element={<Lazy><WebinarQuestionnairesPage /></Lazy>} />
+          <Route path="/webinar-nurture" element={<Lazy><NurtureSequencePage /></Lazy>} />
           <Route path="/calls-analytics" element={<Navigate to="/reports" replace />} />
           <Route path="/calls-analytics/leaderboard" element={<Lazy><LeadershipLeaderboard /></Lazy>} />
           <Route path="/leaderboard" element={<Navigate to="/calls-analytics/leaderboard" replace />} />

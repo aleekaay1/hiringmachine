@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ClipboardList, FileQuestion, Mail, PhoneCall, RefreshCw, Send } from 'lucide-react';
+import { ClipboardList, FileQuestion, Mail, MailPlus, PhoneCall, RefreshCw, Send } from 'lucide-react';
 import { getCurrentUserProfile, type UserProfile } from '../services/accessControl';
 import { getStaffSessionSnapshot } from '../services/staffSessionCache';
 import {
@@ -166,6 +166,9 @@ const HiringMachineHome: React.FC<{ profile: UserProfile | null }> = ({ profile 
           </Link>
           <Link to="/webinar-questionnaires" className="hm-btn-ghost inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs">
             <FileQuestion size={14} /> Webinar questionnaires
+          </Link>
+          <Link to="/webinar-nurture" className="hm-btn-ghost inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs">
+            <MailPlus size={14} /> Nurture emails
           </Link>
         </div>
       </section>

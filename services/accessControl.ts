@@ -10,6 +10,7 @@ export type AppSection =
   | 'live-sessions'
   | 'webinar-geek'
   | 'webinar-questionnaires'
+  | 'webinar-nurture'
   | 'calls-analytics'
   | 'analytics'
   | 'settings'
@@ -320,6 +321,7 @@ const HIRING_MACHINE_SECTIONS: AppSection[] = [
   'pipeline-webinar-verify',
   'webinar-geek',
   'webinar-questionnaires',
+  'webinar-nurture',
   'schedule-webinar-signups',
   'sent-ahead',
   'check-ins',
@@ -426,6 +428,7 @@ export function resolveAppSectionFromLocation(pathname: string, search: string):
   if (pathname === '/webinar-geek') return 'webinar-geek';
   if (pathname === '/schedule-webinar-signups') return 'schedule-webinar-signups';
   if (pathname === '/webinar-questionnaires') return 'webinar-questionnaires';
+  if (pathname === '/webinar-nurture') return 'webinar-nurture';
   if (pathname.startsWith('/live-sessions')) return 'live-sessions';
   if (pathname === '/hr-dashboard') return 'hr-dashboard';
   if (pathname === '/hr/lead-distribution' || pathname === '/hr/leads') return 'pipeline-hr-leads';
