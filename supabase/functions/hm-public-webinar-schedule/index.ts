@@ -1759,32 +1759,32 @@ async function requireSignedInUser(req: Request): Promise<Response | null> {
   return null;
 }
 
-function wgRejectedDelete(res: { json: Record<string, unknown>; raw: string }): boolean {
-  const message = wgErrorMessage(res.json, '');
-  return /invalid action/i.test(message) || /invalid action/i.test(res.raw);
+function subscriptionAlreadyGone(status: number, message: string): boolean {
+  return status === 404 || /not found|already (removed|deleted|unsubscribed)|does not exist/i.test(message);
 }
 
 /**
- * Deletes that one subscription (the seat on its broadcast).
- * Unsubscribe only flags the row; the booked session stays in WebinarGeek.
- * This does not call the broadcast delete API, so the time slot remains.
+ * Drops that one subscriber's seat. WebinarGeek v2 has no DELETE on
+ * /subscriptions/{id} (it answers invalid_action). The call this repo already
+ * uses is POST /subscriptions/{id}/unsubscribe, which takes the seat off the
+ * broadcast: they cannot watch and they get no further emails. The broadcast
+ * itself is not deleted.
  */
 async function removeWebinarGeekSubscription(
   subscriptionId: string,
 ): Promise<'removed' | 'already_gone'> {
   const id = numericId(subscriptionId) ?? subscriptionId.trim();
   const path = `/subscriptions/${encodeURIComponent(String(id))}`;
-  let res = await wgDelete(path);
-  // Same resource, still DELETE. Retry with an empty JSON object only when
-  // WebinarGeek rejected the body-less call as an invalid action.
-  if (!res.ok && res.status !== 204 && wgRejectedDelete(res)) {
-    res = await wgDelete(path, '{}');
-  }
-  if (res.ok || res.status === 204) return 'removed';
-  const message = wgErrorMessage(res.json, `WebinarGeek delete subscription failed (${res.status})`);
-  if (res.status === 404 || /not found|already (removed|deleted)|does not exist/i.test(message)) {
-    return 'already_gone';
-  }
+  const deleted = await wgDelete(path);
+  if (deleted.ok || deleted.status === 204) return 'removed';
+  const deleteMessage = wgErrorMessage(deleted.json, '');
+  if (subscriptionAlreadyGone(deleted.status, deleteMessage)) return 'already_gone';
+
+  // DELETE is not a v2 action. Unsubscribe is the call that removes the seat.
+  const res = await wgPost(`${path}/unsubscribe`, {});
+  if (res.ok) return 'removed';
+  const message = wgErrorMessage(res.json, `WebinarGeek unsubscribe failed (${res.status})`);
+  if (subscriptionAlreadyGone(res.status, message)) return 'already_gone';
   throw new Error(message);
 }
 
