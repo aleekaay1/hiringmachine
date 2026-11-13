@@ -30,6 +30,7 @@ type RegistrationFieldRow = {
 async function wgRequest(
   path: string,
   init: RequestInit = {},
+  options: { contentType?: string | null } = {},
 ): Promise<{ ok: boolean; status: number; json: Record<string, unknown>; raw: string }> {
   const token = Deno.env.get('WEBINARGEEK_API_TOKEN')?.trim();
   if (!token) {
@@ -41,13 +42,18 @@ async function wgRequest(
     };
   }
   const url = `${WEBINARGEEK_BASE}${path.startsWith('/') ? '' : '/'}${path}`;
+  const headers: Record<string, string> = { 'Api-Token': token };
+  // Content-Type is only for requests that send JSON. A body-less DELETE
+  // with application/json is parsed as an action payload and WebinarGeek
+  // answers {"code":"invalid_action","message":"Invalid action"}.
+  if (options.contentType !== null) {
+    headers['Content-Type'] = options.contentType || 'application/json';
+  }
+  Object.assign(headers, init.headers || {});
+  if (options.contentType === null) delete headers['Content-Type'];
   const res = await fetch(url, {
     ...init,
-    headers: {
-      'Api-Token': token,
-      'Content-Type': 'application/json',
-      ...(init.headers || {}),
-    },
+    headers,
   });
   const raw = await res.text();
   let parsed: Record<string, unknown> = {};
@@ -78,8 +84,9 @@ async function wgPost(path: string, body: Record<string, unknown>) {
   return wgRequest(path, { method: 'POST', body: JSON.stringify(body) });
 }
 
-async function wgDelete(path: string) {
-  return wgRequest(path, { method: 'DELETE' });
+async function wgDelete(path: string, body?: string) {
+  if (body == null) return wgRequest(path, { method: 'DELETE' }, { contentType: null });
+  return wgRequest(path, { method: 'DELETE', body });
 }
 
 const SCHEDULE_TZ = 'America/Toronto';
@@ -1752,6 +1759,11 @@ async function requireSignedInUser(req: Request): Promise<Response | null> {
   return null;
 }
 
+function wgRejectedDelete(res: { json: Record<string, unknown>; raw: string }): boolean {
+  const message = wgErrorMessage(res.json, '');
+  return /invalid action/i.test(message) || /invalid action/i.test(res.raw);
+}
+
 /**
  * Deletes that one subscription (the seat on its broadcast).
  * Unsubscribe only flags the row; the booked session stays in WebinarGeek.
@@ -1760,7 +1772,14 @@ async function requireSignedInUser(req: Request): Promise<Response | null> {
 async function removeWebinarGeekSubscription(
   subscriptionId: string,
 ): Promise<'removed' | 'already_gone'> {
-  const res = await wgDelete(`/subscriptions/${encodeURIComponent(subscriptionId)}`);
+  const id = numericId(subscriptionId) ?? subscriptionId.trim();
+  const path = `/subscriptions/${encodeURIComponent(String(id))}`;
+  let res = await wgDelete(path);
+  // Same resource, still DELETE. Retry with an empty JSON object only when
+  // WebinarGeek rejected the body-less call as an invalid action.
+  if (!res.ok && res.status !== 204 && wgRejectedDelete(res)) {
+    res = await wgDelete(path, '{}');
+  }
   if (res.ok || res.status === 204) return 'removed';
   const message = wgErrorMessage(res.json, `WebinarGeek delete subscription failed (${res.status})`);
   if (res.status === 404 || /not found|already (removed|deleted)|does not exist/i.test(message)) {
@@ -1930,7 +1949,9 @@ Deno.serve(async (req) => {
 
   try {
     const url = new URL(req.url);
-    const modeParam = (url.searchParams.get('mode') || '').trim();
+    // Staff Form signups posts ?mode=delete-signup. `action` is the same value
+    // when a client sends the mode under that name.
+    const modeParam = (url.searchParams.get('mode') || url.searchParams.get('action') || '').trim();
     const bot =
       botEndpoint(url.pathname) ||
       (modeParam === 'bot-sessions'
@@ -1956,7 +1977,9 @@ Deno.serve(async (req) => {
       return await handleBotRegistration(req);
     }
 
-    const mode = (url.searchParams.get('mode') || '').trim() || (req.method === 'GET' ? 'upcoming' : 'book');
+    const mode =
+      (url.searchParams.get('mode') || url.searchParams.get('action') || '').trim() ||
+      (req.method === 'GET' ? 'upcoming' : 'book');
 
     if (req.method === 'GET' && (mode === 'upcoming' || mode === 'upcoming-broadcasts')) {
       const schedule = await loadPublicSchedule();
@@ -2019,7 +2042,9 @@ Deno.serve(async (req) => {
       return await handleStaffDeleteSignup(req);
     }
 
-    return json(405, { error: 'Method not allowed. Use GET ?mode=upcoming or POST ?mode=book.' });
+    return json(405, {
+      error: 'Method not allowed. Use GET ?mode=upcoming, POST ?mode=book, or POST ?mode=delete-signup.',
+    });
   } catch (err) {
     console.error('hm-public-webinar-schedule error', err);
     return json(500, {
