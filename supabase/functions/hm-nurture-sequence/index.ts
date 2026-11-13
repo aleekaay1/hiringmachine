@@ -13,7 +13,7 @@ import {
   userIsAuthenticated,
 } from '../_shared/hiringMachine.ts';
 import { insertEmailSendLog } from '../_shared/emailSendLog.ts';
-import { buildEmailSignatureHtml } from '../_shared/emailSignatureHtml.ts';
+import { buildAlexPazSignatureCardHtml } from '../_shared/agentOnboardingHtml.ts';
 import { mergePortalBcc } from '../_shared/portalEmailBcc.ts';
 import {
   applyNurtureTokens,
@@ -381,7 +381,7 @@ async function tick(userId: string | null, force: boolean) {
   const counts = { sent: 0, failed: 0, stopped: 0, skipped: 0 };
   if (due.length) {
     const mail = smtpTransport();
-    const signatureHtml = buildEmailSignatureHtml();
+    const signatureHtml = buildAlexPazSignatureCardHtml();
     for (const row of due) {
       const outcome = await sendOne(admin, row, steps, mail, signatureHtml, userId);
       counts[outcome] += 1;

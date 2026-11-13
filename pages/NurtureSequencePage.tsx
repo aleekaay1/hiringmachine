@@ -375,7 +375,7 @@ const NurtureSequencePage: React.FC = () => {
                   />
                 </label>
                 <p className="text-xs text-slate-500">
-                  Tokens: {'{{first_name}}'}, {'{{last_name}}'}, {'{{email}}'}. The company signature is added under the body when it sends.
+                  Tokens: {'{{first_name}}'}, {'{{last_name}}'}, {'{{email}}'}. The Hired email signature is added under the body when it sends.
                 </p>
               </div>
 
@@ -388,7 +388,7 @@ const NurtureSequencePage: React.FC = () => {
                 </div>
                 {!step.subject.trim() && !step.body_html.trim() && !step.vimeo_url.trim() && (
                   <p className="mt-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                    Email {step.step_number} is empty. Paste a subject and HTML when the draft is ready. The signature below is the one already used on candidate email.
+                    Email {step.step_number} is empty. Paste a subject and HTML when the draft is ready. The signature below is the AO Globe Life card from Hired.
                   </p>
                 )}
                 {step.subject.trim() && (

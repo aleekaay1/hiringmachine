@@ -1,5 +1,5 @@
 export const AGENT_TITLE_DEFAULT = 'Life Insurance Producer';
-export const AGENT_TEAM_DEFAULT = 'AO Globe Life - Team Paz';
+export const AGENT_TEAM_DEFAULT = 'AO Paz Globe Life';
 export const AGENT_TAGLINE_DEFAULT = "AO Let's Grow - Make Tomorrow Better";
 export const AGENT_ADDRESS_DEFAULT = '59-700 Third Line, Oakville, ON. L6L 4B1';
 export const AGENT_WEBSITE_URL = 'https://globelife-paz.com';

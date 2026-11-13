@@ -1,5 +1,5 @@
 import { supabase } from './supabaseClient';
-import { buildEmailSignatureHtml } from './emailSignatureHtml';
+import { buildAlexPazSignatureCardHtml } from './agentOnboardingHtml';
 import {
   applyNurtureTokens,
   assembleNurtureHtml,
@@ -92,7 +92,7 @@ export function previewNurtureHtml(step: Pick<NurtureStep, 'body_html' | 'vimeo_
   return assembleNurtureHtml({
     bodyHtml: step.body_html,
     vimeoUrl: step.vimeo_url,
-    signatureHtml: buildEmailSignatureHtml(),
+    signatureHtml: buildAlexPazSignatureCardHtml(),
     person: NURTURE_PREVIEW_PERSON,
   });
 }
