@@ -78,6 +78,10 @@ async function wgPost(path: string, body: Record<string, unknown>) {
   return wgRequest(path, { method: 'POST', body: JSON.stringify(body) });
 }
 
+async function wgDelete(path: string) {
+  return wgRequest(path, { method: 'DELETE' });
+}
+
 const SCHEDULE_TZ = 'America/Toronto';
 /** Fallback “soon” window when JIT virtual broadcast is not available. */
 const QUICK_WINDOW_MS = 90 * 60 * 1000;
@@ -1748,14 +1752,20 @@ async function requireSignedInUser(req: Request): Promise<Response | null> {
   return null;
 }
 
-/** Removes the registration. Does not cancel or delete the broadcast. */
-async function unsubscribeWebinarGeekSubscription(
+/**
+ * Deletes that one subscription (the seat on its broadcast).
+ * Unsubscribe only flags the row; the booked session stays in WebinarGeek.
+ * This does not call the broadcast delete API, so the time slot remains.
+ */
+async function removeWebinarGeekSubscription(
   subscriptionId: string,
 ): Promise<'removed' | 'already_gone'> {
-  const res = await wgPost(`/subscriptions/${encodeURIComponent(subscriptionId)}/unsubscribe`, {});
-  if (res.ok) return 'removed';
-  const message = wgErrorMessage(res.json, `WebinarGeek unsubscribe failed (${res.status})`);
-  if (res.status === 404 || /already unsubscrib|not found/i.test(message)) return 'already_gone';
+  const res = await wgDelete(`/subscriptions/${encodeURIComponent(subscriptionId)}`);
+  if (res.ok || res.status === 204) return 'removed';
+  const message = wgErrorMessage(res.json, `WebinarGeek delete subscription failed (${res.status})`);
+  if (res.status === 404 || /not found|already (removed|deleted)|does not exist/i.test(message)) {
+    return 'already_gone';
+  }
   throw new Error(message);
 }
 
@@ -1879,7 +1889,7 @@ async function handleStaffDeleteSignup(req: Request): Promise<Response> {
   let webinargeek: 'removed' | 'already_gone' | 'none' = 'none';
   if (subscriptionId) {
     try {
-      webinargeek = await unsubscribeWebinarGeekSubscription(subscriptionId);
+      webinargeek = await removeWebinarGeekSubscription(subscriptionId);
     } catch (err) {
       return json(502, {
         error: err instanceof Error ? err.message : 'Could not remove the WebinarGeek registration.',

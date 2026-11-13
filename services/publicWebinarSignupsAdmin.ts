@@ -88,7 +88,7 @@ export async function deletePublicWebinarSignup(id: string): Promise<SignupDelet
 
 export function signupDeleteMessage(label: string, result: SignupDeleteResult): string {
   const parts = [`Removed the signup for ${label}.`];
-  if (result.webinargeek === 'removed') parts.push('Removed their WebinarGeek registration.');
+  if (result.webinargeek === 'removed') parts.push('Removed their WebinarGeek seat on that session.');
   else if (result.webinargeek === 'already_gone') parts.push('Their WebinarGeek registration was already gone.');
   else parts.push('This row had no WebinarGeek registration id.');
   if (result.person === 'removed') {

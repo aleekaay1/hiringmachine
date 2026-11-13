@@ -125,7 +125,7 @@ const ScheduleWebinarSignupsPage: React.FC = () => {
   const onDelete = async (row: PublicWebinarSignupRow) => {
     const label = signupLabel(row);
     const confirmed = window.confirm(
-      `Delete ${label} (${row.email})? This removes the form signup, their WebinarGeek registration, and the portal contact if this signup is the only record for them. The webinar session stays on the schedule.`,
+      `Delete ${label} (${row.email})? This removes the form signup, their seat on that WebinarGeek session, and the portal contact if this signup is the only record for them. The session time stays on the schedule for everyone else.`,
     );
     if (!confirmed) return;
     setError(null);
